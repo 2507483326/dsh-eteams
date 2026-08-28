@@ -80,6 +80,17 @@ export interface EventView {
   text: string;
 }
 
+/** The team leader (项目牧羊人) as projected by the host — not a roster member. */
+export interface CaptainView {
+  name: string;
+  role: string;
+  duty: string;
+  style: string;
+  skills: string;
+  personaMd: string | null;
+  avatar: { seed: number; salt: number };
+}
+
 /** Full team snapshot served by /state. */
 export interface TeamSnapshot {
   teamId: string;
@@ -91,6 +102,7 @@ export interface TeamSnapshot {
   version: number;
   workDir: string | null;
   progress: { completed: number; total: number; cancelled: number; active: number };
+  captain: CaptainView;
   members: MemberView[];
   tasks: TaskView[];
   pendingDecisions: {

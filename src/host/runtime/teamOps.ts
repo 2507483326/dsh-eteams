@@ -176,6 +176,8 @@ export async function addMember(
     style?: string;
     skills?: string;
     rules?: string[];
+    /** Full Markdown role playbook (agency-agents-zh style). */
+    personaMd?: string;
     provider?: string;
     model?: string;
     reasoningEffort?: string;
@@ -229,6 +231,7 @@ export async function addMember(
         ...(params.style !== undefined ? { style: params.style } : {}),
         ...(params.skills !== undefined ? { skills: params.skills } : {}),
         ...(params.rules !== undefined ? { rules: params.rules } : {}),
+        ...(params.personaMd !== undefined ? { personaMd: params.personaMd } : {}),
       }),
       modelRoute: route,
       status: 'staged',
@@ -277,6 +280,7 @@ export async function updateMember(
     skills?: string;
     rules?: string[];
     executionPrompt?: string;
+    personaMd?: string;
   },
 ): Promise<TeamState> {
   const team = params.teamId
@@ -291,6 +295,7 @@ export async function updateMember(
       skills: params.skills,
       rules: params.rules,
       executionPrompt: params.executionPrompt,
+      personaMd: params.personaMd,
     });
     await recordEvent(root, fresh.id, captainActor(fresh), 'member.updated', {
       payload: { name: params.name },

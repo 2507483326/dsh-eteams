@@ -80,6 +80,12 @@ export interface PersonaRecord {
   skills: string;
   rules: string[];
   executionPrompt: string;
+  /**
+   * Optional full role playbook in Markdown (agency-agents-zh style: 使命/
+   * 核心职责/关键规则/交付标准). Injected at spawn via renderPersonaBlock;
+   * members without one run on the fixed fields alone.
+   */
+  personaMd?: string;
 }
 
 /** Snapshot of the LLM route a member runs on (docs/05.3, FR-08). */

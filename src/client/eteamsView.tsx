@@ -1,6 +1,6 @@
 /**
  * The 团队 activity panel (docs/13.3, M4.5 IA): left rail with 看板/团队/成员/
- * 任务/汇报, member-library-first flow (D16), team creation by name only.
+ * 任务/汇报, members-first flow (D16), team creation by name only.
  * Renders over host theme variables so light/dark follows the GUI.
  *
  * @module dsh-eteams/client/eteamsView
@@ -11,6 +11,7 @@ import {
   Button,
   Input,
   IconPlusOutline16,
+  MarkdownText,
   writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives';
 import { Avatar } from './avatar';
@@ -19,6 +20,7 @@ import { addTeamMember, createTeamViaPanel, fetchRoster, type RosterMember } fro
 import {
   relativeTime,
   useActivityMonitor,
+  type CaptainView,
   type MemberView,
   type TaskView,
   type TeamSnapshot,
@@ -33,22 +35,22 @@ const PHASE_LABELS: Record<string, string> = {
   archived: '已归档',
 };
 
-const STATUS_GROUPS: { id: string; label: string; statuses: string[]; tone: string }[] = [
-  { id: 'active', label: '● 执行中', statuses: ['in_progress', 'retrying'], tone: '#2f6fed' },
-  { id: 'assigned', label: '◐ 待接取', statuses: ['assigned'], tone: '#2f6fed' },
-  { id: 'ready', label: '○ 待指派', statuses: ['ready'], tone: '#8a8f98' },
+const STATUS_GROUPS: { id: string; label: string; statuses: string[]; tone: Tone }[] = [
+  { id: 'active', label: '执行中', statuses: ['in_progress', 'retrying'], tone: 'info' },
+  { id: 'assigned', label: '待接取', statuses: ['assigned'], tone: 'info' },
+  { id: 'ready', label: '待指派', statuses: ['ready'], tone: 'muted' },
   {
     id: 'decision',
-    label: '△ 待决策',
+    label: '待决策',
     statuses: ['awaiting_decision', 'needs_user'],
-    tone: '#c78a1d',
+    tone: 'warn',
   },
-  { id: 'paused', label: '◌ 已挂起', statuses: ['paused', 'suspended'], tone: '#c78a1d' },
-  { id: 'blocked', label: '⊘ 被阻断', statuses: ['blocked'], tone: '#b3562d' },
-  { id: 'completed', label: '✔ 已完成', statuses: ['completed'], tone: '#2e8b57' },
-  { id: 'failed', label: '✘ 失败', statuses: ['failed'], tone: '#c04545' },
-  { id: 'cancelled', label: '⊘ 已取消', statuses: ['cancelled'], tone: '#8a8f98' },
-  { id: 'draft', label: '✎ 草稿', statuses: ['draft'], tone: '#8a8f98' },
+  { id: 'paused', label: '已挂起', statuses: ['paused', 'suspended'], tone: 'warn' },
+  { id: 'blocked', label: '被阻断', statuses: ['blocked'], tone: 'err' },
+  { id: 'completed', label: '已完成', statuses: ['completed'], tone: 'ok' },
+  { id: 'failed', label: '失败', statuses: ['failed'], tone: 'err' },
+  { id: 'cancelled', label: '已取消', statuses: ['cancelled'], tone: 'muted' },
+  { id: 'draft', label: '草稿', statuses: ['draft'], tone: 'muted' },
 ];
 
 const STATUS_LABELS: Record<string, string> = {
@@ -67,167 +69,326 @@ const STATUS_LABELS: Record<string, string> = {
   cancelled: '已取消',
 };
 
+/**
+ * Design tokens — UI-Designer pass (docs/13 13.x): host theme aliases first
+ * with safe fallbacks, one source of truth for the whole panel. Light/dark
+ * follows the GUI because every color resolves through --dsw-alias-*.
+ */
+const T = {
+  bg: 'var(--dsw-alias-bg-base, #f6f7f9)',
+  surface: 'var(--dsw-alias-bg-layer-1, #ffffff)',
+  sunken: 'var(--dsw-alias-bg-layer-2, #edf0f4)',
+  border: 'var(--dsw-alias-border-l1, rgba(100,116,139,0.14))',
+  border2: 'var(--dsw-alias-border-l2, rgba(100,116,139,0.26))',
+  text: 'var(--dsw-alias-label-primary, #1c2430)',
+  text2: 'var(--dsw-alias-label-secondary, #47546c)',
+  text3: 'var(--dsw-alias-label-tertiary, #808da4)',
+  accent: 'var(--dsw-alias-brand-primary, #4b7bec)',
+  accentSoft: 'var(--dsw-alias-interactive-bg-active, rgba(75,123,236,0.12))',
+  onAccent: 'var(--dsw-alias-label-primary-foreground, #ffffff)',
+  hover: 'var(--dsw-alias-interactive-bg-hover, rgba(100,116,139,0.08))',
+  ok: 'var(--dsw-alias-state-success-primary, #15803d)',
+  okBg: 'var(--dsw-alias-state-success-secondary, rgba(21,128,61,0.1))',
+  warn: 'var(--dsw-alias-state-warn-primary, #b45309)',
+  warnBg: 'var(--dsw-alias-state-warn-secondary, rgba(180,83,9,0.1))',
+  err: 'var(--dsw-alias-state-error-primary, #b91c1c)',
+  errBg: 'var(--dsw-alias-state-error-secondary, rgba(185,28,28,0.1))',
+  info: 'var(--dsw-alias-state-business-primary, #1d4ed8)',
+  infoBg: 'rgba(29,78,216,0.1)',
+  shadow: '0 1px 2px rgba(15,23,42,0.05), 0 6px 18px rgba(15,23,42,0.06)',
+} as const;
+
+/** Semantic tone — every status color flows through these five buckets. */
+type Tone = 'info' | 'ok' | 'warn' | 'err' | 'muted';
+const TONE_FG: Record<Tone, string> = {
+  info: T.info,
+  ok: T.ok,
+  warn: T.warn,
+  err: T.err,
+  muted: T.text3,
+};
+const TONE_BG: Record<Tone, string> = {
+  info: T.infoBg,
+  ok: T.okBg,
+  warn: T.warnBg,
+  err: T.errBg,
+  muted: T.sunken,
+};
+
+function taskTone(status: string): Tone {
+  if (status === 'in_progress' || status === 'retrying' || status === 'assigned') return 'info';
+  if (status === 'completed') return 'ok';
+  if (
+    status === 'awaiting_decision' ||
+    status === 'needs_user' ||
+    status === 'paused' ||
+    status === 'suspended'
+  )
+    return 'warn';
+  if (status === 'blocked' || status === 'failed') return 'err';
+  return 'muted';
+}
+
+function memberTone(status: string): Tone {
+  if (status === 'working' || status === 'busy') return 'info';
+  if (status === 'ready' || status === 'idle' || status === 'done') return 'ok';
+  if (status === 'paused') return 'warn';
+  if (status === 'failed' || status === 'error') return 'err';
+  return 'muted';
+}
+
 const styles: Record<string, CSSProperties> = {
   root: {
     height: '100%',
     display: 'flex',
-    gap: 14,
+    gap: 16,
     boxSizing: 'border-box',
-    padding: '16px 20px',
+    padding: '14px 18px',
     fontFamily: 'inherit',
-    color: 'var(--dsw-alias-text-primary, inherit)',
+    fontSize: 13,
+    lineHeight: 1.55,
+    color: T.text,
   },
   rail: {
     display: 'flex',
     flexDirection: 'column',
-    gap: 4,
-    width: 76,
+    gap: 3,
+    width: 84,
     flexShrink: 0,
-    borderRight: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.2))',
-    paddingRight: 10,
+    borderRight: `1px solid ${T.border}`,
+    paddingRight: 12,
+    paddingTop: 2,
   },
-  content: { flex: 1, minWidth: 0, overflow: 'auto' },
-  topbar: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' },
+  content: { flex: 1, minWidth: 0, overflowY: 'auto', paddingRight: 2 },
+  topbar: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' },
   select: {
-    padding: '4px 8px',
+    padding: '5px 10px',
     borderRadius: 8,
-    border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.3))',
-    background: 'var(--dsw-alias-bg-base, transparent)',
-    color: 'inherit',
-    fontSize: 13,
+    border: `1px solid ${T.border2}`,
+    background: T.surface,
+    color: T.text,
+    fontSize: 12,
+    fontWeight: 500,
   },
-  title: { margin: 0, fontSize: 17, fontWeight: 600 },
+  title: { margin: 0, fontSize: 16, fontWeight: 700, letterSpacing: 0.2 },
   card: {
-    border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.25))',
-    borderRadius: 10,
+    border: `1px solid ${T.border}`,
+    borderRadius: 12,
     padding: '14px 16px',
     marginBottom: 12,
-    background: 'var(--dsw-alias-bg-base, transparent)',
+    background: T.surface,
+    boxShadow: '0 1px 2px rgba(15,23,42,0.03)',
   },
-  line: { margin: '5px 0', fontSize: 13, lineHeight: 1.6 },
-  muted: { opacity: 0.6, fontSize: 12 },
+  sectionTitle: {
+    margin: '0 0 8px',
+    fontSize: 11,
+    fontWeight: 600,
+    color: T.text3,
+    letterSpacing: 0.5,
+  },
+  line: { margin: '4px 0', fontSize: 13, lineHeight: 1.6, color: T.text2 },
+  muted: { fontSize: 12, color: T.text3 },
   progressTrack: {
     height: 6,
     borderRadius: 999,
-    background: 'var(--dsw-alias-border-l2, rgba(128,128,128,0.25))',
+    background: T.sunken,
     overflow: 'hidden',
-    margin: '8px 0',
+    margin: '10px 0 6px',
   },
   memberGrid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))',
     gap: 10,
   },
   memberCard: {
-    border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.25))',
+    border: `1px solid ${T.border}`,
+    borderRadius: 12,
+    padding: 12,
+    background: T.surface,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+  },
+  memberRow: {
+    width: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    padding: '9px 10px',
     borderRadius: 10,
-    padding: '12px 14px',
+    border: '1px solid transparent',
+    background: 'transparent',
+    cursor: 'pointer',
+    textAlign: 'left',
+    color: T.text,
+  },
+  roleChip: {
+    display: 'inline-block',
+    padding: '2px 9px',
+    borderRadius: 999,
+    fontSize: 11,
+    fontWeight: 600,
+    background: T.accentSoft,
+    color: T.accent,
+  },
+  pill: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 5,
+    padding: '2px 9px',
+    borderRadius: 999,
+    fontSize: 11,
+    fontWeight: 500,
+    width: 'fit-content',
+  },
+  detailRow: {
+    display: 'flex',
+    gap: 10,
+    padding: '7px 0',
+    fontSize: 12,
+    lineHeight: 1.55,
+    borderBottom: `1px solid ${T.border}`,
+  },
+  detailLabel: {
+    width: 64,
+    flexShrink: 0,
+    fontSize: 11,
+    fontWeight: 600,
+    color: T.text3,
+    paddingTop: 1,
   },
   taskRow: {
-    padding: '9px 4px',
-    borderBottom: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.15))',
+    padding: '10px 8px',
+    borderBottom: `1px solid ${T.border}`,
+    borderRadius: 8,
     cursor: 'pointer',
   },
   chip: {
     display: 'inline-block',
-    padding: '0 7px',
+    padding: '1px 7px',
     margin: '0 4px 2px 0',
     borderRadius: 6,
     fontSize: 11,
-    border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.35))',
-    opacity: 0.85,
+    background: T.sunken,
+    color: T.text2,
   },
-  station: { fontSize: 12, opacity: 0.85, marginRight: 6 },
+  station: { fontSize: 12, color: T.text3, marginRight: 6 },
   drawer: {
-    background: 'var(--dsw-alias-bg-subtle, rgba(128,128,128,0.06))',
-    borderRadius: 8,
-    padding: '10px 14px',
-    margin: '6px 0 14px',
+    background: T.sunken,
+    border: `1px solid ${T.border}`,
+    borderRadius: 10,
+    padding: '12px 14px',
+    margin: '8px 0 14px',
   },
   attempt: {
-    borderLeft: '2px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.35))',
+    borderLeft: `2px solid ${T.border2}`,
     padding: '2px 0 2px 12px',
-    margin: '8px 0',
+    margin: '10px 0',
   },
-  empty: { textAlign: 'center', padding: '48px 20px', opacity: 0.7 },
+  empty: {
+    textAlign: 'center',
+    padding: '36px 20px',
+    color: T.text3,
+    border: `1px dashed ${T.border2}`,
+    borderRadius: 12,
+    background: 'transparent',
+  },
   btn: {
-    padding: '4px 12px',
+    padding: '5px 12px',
     fontSize: 12,
     borderRadius: 8,
-    border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.35))',
-    background: 'none',
-    color: 'inherit',
+    border: `1px solid ${T.border2}`,
+    background: T.surface,
+    color: T.text2,
     cursor: 'pointer',
+    fontWeight: 500,
   },
   banner: {
-    border: '1px solid #c78a1d66',
-    background: 'rgba(199,138,29,0.08)',
-    borderRadius: 10,
+    border: `1px solid ${T.warn}`,
+    background: T.warnBg,
+    borderRadius: 12,
     padding: '10px 14px',
     marginBottom: 12,
     fontSize: 13,
+    color: T.text,
   },
   eventRow: {
-    padding: '5px 0',
-    borderBottom: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.12))',
+    padding: '7px 0',
+    borderBottom: `1px solid ${T.border}`,
     fontSize: 13,
+    color: T.text2,
   },
   dialogItem: {
-    padding: '6px 10px',
+    padding: '7px 10px',
     borderRadius: 8,
     margin: '4px 0',
-    fontSize: 13,
-    background: 'var(--dsw-alias-bg-subtle, rgba(128,128,128,0.08))',
+    fontSize: 12.5,
+    background: T.surface,
+    border: `1px solid ${T.border}`,
+    color: T.text2,
   },
-  formRow: { display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 },
-  formLabel: { fontSize: 12, opacity: 0.7 },
+  formRow: { display: 'flex', flexDirection: 'column', gap: 5, marginBottom: 10 },
+  formLabel: { fontSize: 11, fontWeight: 600, color: T.text3, letterSpacing: 0.3 },
   textarea: {
     width: '100%',
     boxSizing: 'border-box',
     minHeight: 56,
-    padding: '6px 10px',
+    padding: '7px 10px',
     borderRadius: 8,
-    border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.35))',
-    background: 'var(--dsw-alias-bg-base, transparent)',
-    color: 'inherit',
-    fontSize: 13,
+    border: `1px solid ${T.border2}`,
+    background: T.surface,
+    color: T.text,
+    fontSize: 12.5,
     fontFamily: 'inherit',
+    lineHeight: 1.5,
     resize: 'vertical',
   },
   formActions: { display: 'flex', gap: 8, justifyContent: 'flex-end' },
-  formError: { fontSize: 12, color: '#c04545', margin: '4px 0 8px' },
+  formError: { fontSize: 12, color: T.err, margin: '4px 0 8px' },
   addRow: { display: 'flex', justifyContent: 'flex-end', marginBottom: 10 },
 };
 
-/** Parameterized style factories (state/phase-toned inline styles). */
+/** Parameterized style factories (tone-mapped, token-driven). */
 const fns = {
   railBtn: (active: boolean): CSSProperties => ({
     display: 'block',
     width: '100%',
-    padding: '8px 10px',
-    fontSize: 13,
+    padding: '7px 10px',
+    fontSize: 12,
     textAlign: 'left',
     cursor: 'pointer',
     border: 'none',
     borderRadius: 8,
-    background: active ? 'var(--dsw-alias-bg-subtle, rgba(128,128,128,0.1))' : 'none',
-    color: 'inherit',
-    fontWeight: active ? 600 : 400,
-    opacity: active ? 1 : 0.7,
+    background: active ? T.accentSoft : 'transparent',
+    color: active ? T.accent : T.text2,
+    fontWeight: active ? 600 : 500,
+    letterSpacing: 0.2,
   }),
   progressFill: (pct: number): CSSProperties => ({
     height: '100%',
     width: `${pct}%`,
-    background: 'var(--dsw-alias-accent, #4b7bec)',
+    background: `linear-gradient(90deg, ${T.accent}, ${T.info})`,
     borderRadius: 999,
   }),
-  dot: (tone: string): CSSProperties => ({
+  pill: (tone: Tone): CSSProperties => ({
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 5,
+    padding: '2px 9px',
+    borderRadius: 999,
+    fontSize: 11,
+    fontWeight: 500,
+    width: 'fit-content',
+    color: TONE_FG[tone],
+    background: TONE_BG[tone],
+  }),
+  dot: (tone: Tone): CSSProperties => ({
     display: 'inline-block',
-    width: 8,
-    height: 8,
+    width: 6,
+    height: 6,
     borderRadius: '50%',
-    background: tone,
-    marginRight: 6,
+    background: TONE_FG[tone],
+    flexShrink: 0,
   }),
 };
 
@@ -309,7 +470,7 @@ function TaskDrawer({
               </div>
             ))}
             {a.error !== undefined && (
-              <div style={{ ...styles.line, color: '#c04545' }}>✘ {a.error}</div>
+              <div style={{ ...styles.line, color: T.err }}>✘ {a.error}</div>
             )}
             {a.result?.output !== undefined && <div style={styles.muted}>✔ {a.result.output}</div>}
           </div>
@@ -348,13 +509,14 @@ function MemberDialog({ team, member }: { team: TeamSnapshot; member: MemberView
   };
   return (
     <div style={styles.drawer}>
-      <div style={{ ...styles.line, fontWeight: 600 }}>
-        汇报记录 · {member.name} <span style={styles.muted}>（只读；直发消息在 M5 开放）</span>
+      <div style={{ ...styles.sectionTitle, fontSize: 12, color: T.text2 }}>
+        汇报记录 · {member.name}
+        <span style={styles.muted}>（只读；直发消息在 M5 开放）</span>
       </div>
       {items.length === 0 && <div style={styles.muted}>暂无消息记录</div>}
       {items.map((it, i) => (
         <div key={i} style={styles.dialogItem}>
-          <span style={styles.muted}>
+          <span style={{ ...styles.muted, color: T.text3 }}>
             [{kindLabel[it.kind] ?? it.kind}] {it.from ?? ''} ·{' '}
           </span>
           {it.text.length > 160 ? `${it.text.slice(0, 160)}…` : it.text}
@@ -458,18 +620,7 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
               }}
             />
           )}
-          {activeTab === 'roster' && (
-            <RosterTab
-              team={team}
-              roster={roster}
-              pool={pool}
-              activeTeamId={team?.teamId ?? null}
-              onOpenReports={(name) => {
-                setDialogMember(name);
-                setTab('reports');
-              }}
-            />
-          )}
+          {activeTab === 'roster' && <MembersTab members={roster} pool={pool} team={team} />}
           {activeTab === 'tasks' && team !== undefined && (
             <TasksTab
               team={team}
@@ -509,7 +660,7 @@ function BoardTab({
       <div style={styles.empty}>
         <p>还没有团队。</p>
         <p style={styles.line}>
-          推荐流程：先到「成员」页把成员加入成员库，再到「团队」页创建团队并把成员拉进去。
+          推荐流程：先到「成员」页新增成员，再到「团队」页创建团队并把成员拉进去。
         </p>
         <p style={styles.line}>
           也可以在对话中说「用 AgentTeams 做某事」或 <code>/agent-teams</code>
@@ -529,8 +680,8 @@ function BoardTab({
         </div>
       )}
       <div style={styles.card}>
-        <div style={styles.line}>
-          <strong>目标</strong>
+        <div style={styles.sectionTitle}>目标</div>
+        <div style={{ fontSize: 14, fontWeight: 600, color: T.text, lineHeight: 1.5 }}>
           {team.goal}
         </div>
         <div style={{ ...styles.progressTrack }}>
@@ -550,7 +701,7 @@ function BoardTab({
         {team.workDir !== null && <div style={styles.muted}>任务文档：{team.workDir}/</div>}
       </div>
       <div style={styles.card}>
-        <div style={{ ...styles.line, fontWeight: 600 }}>最近动态</div>
+        <div style={styles.sectionTitle}>最近动态</div>
         {team.latestEvents
           .slice(-8)
           .reverse()
@@ -571,7 +722,7 @@ function BoardTab({
   );
 }
 
-/** 团队：创建（仅名称）+ 成员栅格 + 从成员库拉人。 */
+/** 团队：创建（仅名称）+ 组建团队（成员栅格 + 从成员列表拉人）。 */
 function TeamTab({
   sessionId,
   team,
@@ -619,7 +770,7 @@ function TeamTab({
   return (
     <div>
       <div style={styles.card}>
-        <div style={{ ...styles.line, fontWeight: 600 }}>新建团队</div>
+        <div style={styles.sectionTitle}>新建团队</div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <Input
             value={name}
@@ -641,11 +792,11 @@ function TeamTab({
       </div>
 
       {team === undefined ? (
-        <div style={styles.empty}>尚未选择团队。创建后在这里把成员库中的成员拉进团队。</div>
+        <div style={styles.empty}>尚未选择团队。创建团队后在这里从「成员」列表拉人组队。</div>
       ) : (
         <>
           <div style={styles.card}>
-            <div style={{ ...styles.line, fontWeight: 600 }}>团队成员（{team.members.length}）</div>
+            <div style={styles.sectionTitle}>团队成员（{team.members.length}）</div>
             {roster.length > 0 && (
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
                 <select
@@ -653,7 +804,7 @@ function TeamTab({
                   value={pick}
                   onChange={(e) => setPick(e.target.value)}
                 >
-                  <option value="">— 从成员库选择 —</option>
+                  <option value="">— 从成员列表选择 —</option>
                   {roster
                     .filter((m) => !team.members.some((t) => t.name === m.name))
                     .map((m) => (
@@ -672,11 +823,14 @@ function TeamTab({
               </div>
             )}
             <div style={styles.memberGrid}>
+              <LeaderCard captain={team.captain} />
               {team.members.map((m) => (
                 <MemberCard key={m.name} member={m} onOpenReports={onOpenReports} />
               ))}
               {team.members.length === 0 && (
-                <div style={styles.muted}>还没有成员——先到「成员」页入库，或从上方成员库拉人。</div>
+                <div style={styles.muted}>
+                  还没有成员——先到「成员」页新增，或从上方成员列表拉人。
+                </div>
               )}
             </div>
           </div>
@@ -686,7 +840,38 @@ function TeamTab({
   );
 }
 
-/** One team-member card: seeded avatar + status + optional 汇报入口. */
+/** The 领队（项目牧羊人）leader card — expands into its Markdown 手册. */
+function LeaderCard({ captain }: { captain: CaptainView }): ReactNode {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ ...styles.memberCard, gridColumn: '1 / -1' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <Avatar name={captain.name} seed={captain.avatar.seed} salt={captain.avatar.salt} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontWeight: 600, fontSize: 13, color: T.text }}>{captain.name}</span>
+            <span style={styles.roleChip}>领队</span>
+          </div>
+          <div style={{ ...styles.muted, marginTop: 1 }}>
+            {captain.role} · 不接任务：负责拆解、指派与调度
+          </div>
+        </div>
+        {captain.personaMd !== null && (
+          <button type="button" style={styles.btn} onClick={() => setOpen(!open)}>
+            {open ? '收起手册' : '查看手册'}
+          </button>
+        )}
+      </div>
+      {open && captain.personaMd !== null && (
+        <div style={{ marginTop: 10, borderTop: `1px solid ${T.border}`, paddingTop: 10 }}>
+          <MarkdownText text={captain.personaMd} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One team-member card: seeded avatar + status pill + optional 汇报入口. */
 function MemberCard({
   member: m,
   onOpenReports,
@@ -694,29 +879,22 @@ function MemberCard({
   member: MemberView;
   onOpenReports?: (name: string) => void;
 }): ReactNode {
-  const tone =
-    m.status === 'working' || m.status === 'busy'
-      ? '#2f6fed'
-      : m.status === 'ready' || m.status === 'idle'
-        ? '#2e8b57'
-        : m.status === 'paused'
-          ? '#c78a1d'
-          : '#8a8f98';
+  const tone = memberTone(m.status);
   return (
     <div style={styles.memberCard}>
-      <div style={{ display: 'flex', alignItems: 'center' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} />
-        <div>
-          <div style={{ fontWeight: 600, fontSize: 13 }}>{m.name}</div>
-          <div style={styles.muted}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 600, fontSize: 13, color: T.text }}>{m.name}</div>
+          <div style={{ ...styles.muted, marginTop: 1 }}>
             {m.role} · {m.model}
           </div>
         </div>
       </div>
-      <div style={{ ...styles.line, fontSize: 12 }}>
+      <div style={fns.pill(tone)}>
         <span style={fns.dot(tone)} />
-        {m.status}
-        {m.currentTaskId !== null && <span> · {m.currentTaskId} 执行中</span>}
+        {STATUS_LABELS[m.status] ?? m.status}
+        {m.currentTaskId !== null && <span style={{ fontWeight: 400 }}>· {m.currentTaskId}</span>}
       </div>
       {onOpenReports !== undefined && (
         <button type="button" style={styles.btn} onClick={() => onOpenReports(m.name)}>
@@ -727,38 +905,47 @@ function MemberCard({
   );
 }
 
-/** 成员：团队成员一览 + 成员库（对话命令创建 + 加入团队）。 */
-function RosterTab({
-  team,
-  roster,
+/** 成员：全体成员（先有员工，再组建团队）——列表 / 新增 / 详情。 */
+function MembersTab({
+  members,
   pool,
-  activeTeamId,
-  onOpenReports,
+  team,
 }: {
-  team: TeamSnapshot | undefined;
-  roster: RosterMember[];
+  members: RosterMember[];
   pool: TeamSnapshot[];
-  activeTeamId: string | null;
-  onOpenReports: (name: string) => void;
+  team: TeamSnapshot | undefined;
 }): ReactNode {
+  const [view, setView] = useState<'list' | 'add' | 'detail'>('list');
+  const [detailName, setDetailName] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [role, setRole] = useState('');
   const [duty, setDuty] = useState('');
   const [style, setStyle] = useState('');
   const [skills, setSkills] = useState('');
   const [executionPrompt, setExecutionPrompt] = useState('');
+  const [personaMd, setPersonaMd] = useState('');
   const [copied, setCopied] = useState(false);
 
   // 通过对话创建（用户要求）：面板生成命令，用户粘贴到会话里由领队执行
-  // eteams_member_save 入库——面板不再直连写成员库。
+  // eteams_member_save 入库——面板不直连写成员。personaMd（完整角色手册）
+  // 以 Markdown 围栏附在命令尾部，由领队原样作为 personaMd 参数传入。
   const command = [
-    '用 eteams_member_save 创建成员库成员：',
+    '用 eteams_member_save 创建成员：',
     `- 名字：${name.trim()}`,
     `- 角色：${role.trim()}`,
     ...(duty.trim() !== '' ? [`- 职责边界：${duty.trim()}`] : []),
     ...(style.trim() !== '' ? [`- 工作风格：${style.trim()}`] : []),
     ...(skills.trim() !== '' ? [`- 能力：${skills.trim()}`] : []),
     ...(executionPrompt.trim() !== '' ? [`- 执行提示：${executionPrompt.trim()}`] : []),
+    ...(personaMd.trim() !== ''
+      ? [
+          '- 人设手册：把下面围栏内的 Markdown 原文作为 personaMd 参数传入',
+          '',
+          '```eteams-persona-md',
+          personaMd.trim(),
+          '```',
+        ]
+      : []),
   ].join('\n');
 
   const copyCommand = (): void => {
@@ -768,156 +955,213 @@ function RosterTab({
     });
   };
 
+  // 该成员已加入的团队（按当前可见团队池计算）。
+  const teamsOf = (memberName: string): string[] =>
+    pool.filter((t) => t.members.some((mm) => mm.name === memberName)).map((t) => t.name);
+
+  const detail = members.find((m) => m.name === detailName) ?? null;
+  const detailMemberView =
+    detail === null ? null : (team?.members.find((m) => m.name === detail.name) ?? null);
+
+  if (view === 'add') {
+    return (
+      <div>
+        <Button size="sm" onClick={() => setView('list')}>
+          ← 返回成员列表
+        </Button>
+        <div style={{ ...styles.card, marginTop: 8 }}>
+          <div style={{ ...styles.line, fontWeight: 600 }}>新增成员</div>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+            <Input
+              value={name}
+              placeholder="成员名，如：alice"
+              onChange={(e) => setName(e.target.value)}
+            />
+            <Input
+              value={role}
+              placeholder="角色：前端开发者 / 后端架构师 / UI 设计师 / 趣味注入师 / researcher / …"
+              onChange={(e) => setRole(e.target.value)}
+            />
+          </div>
+          <details>
+            <summary style={{ cursor: 'pointer', ...styles.muted }}>可选：人设细节</summary>
+            <div style={{ ...styles.formRow, marginTop: 8 }}>
+              <span style={styles.formLabel}>职责边界</span>
+              <textarea
+                style={styles.textarea}
+                value={duty}
+                onChange={(e) => setDuty(e.target.value)}
+              />
+            </div>
+            <div style={styles.formRow}>
+              <span style={styles.formLabel}>工作风格</span>
+              <textarea
+                style={styles.textarea}
+                value={style}
+                onChange={(e) => setStyle(e.target.value)}
+              />
+            </div>
+            <div style={styles.formRow}>
+              <span style={styles.formLabel}>能力</span>
+              <textarea
+                style={styles.textarea}
+                value={skills}
+                onChange={(e) => setSkills(e.target.value)}
+              />
+            </div>
+            <div style={styles.formRow}>
+              <span style={styles.formLabel}>执行提示</span>
+              <textarea
+                style={styles.textarea}
+                value={executionPrompt}
+                onChange={(e) => setExecutionPrompt(e.target.value)}
+              />
+            </div>
+            <div style={styles.formRow}>
+              <span style={styles.formLabel}>
+                角色手册（可选，Markdown：使命/职责/规则/交付标准）
+              </span>
+              <textarea
+                style={{ ...styles.textarea, minHeight: 90 }}
+                value={personaMd}
+                onChange={(e) => setPersonaMd(e.target.value)}
+              />
+            </div>
+          </details>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
+            <Button
+              size="sm"
+              variant="primary"
+              icon={<IconPlusOutline16 />}
+              disabled={name.trim() === '' || role.trim() === ''}
+              onClick={copyCommand}
+            >
+              复制对话命令
+            </Button>
+            <span style={styles.muted}>粘贴到对话发送，领队即创建成员；成功后列表会出现。</span>
+          </div>
+          {copied && (
+            <div style={{ ...styles.muted, marginTop: 6 }}>✓ 已复制——去对话里粘贴发送</div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (view === 'detail' && detail !== null) {
+    const teamNames = teamsOf(detail.name);
+    return (
+      <div>
+        <button type="button" style={styles.btn} onClick={() => setView('list')}>
+          ← 返回成员列表
+        </button>
+        <div style={{ ...styles.card, marginTop: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <Avatar
+              name={detail.name}
+              seed={detail.avatar?.seed}
+              salt={detail.avatar?.salt}
+              size={48}
+            />
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>{detail.name}</div>
+              <div style={{ marginTop: 4 }}>
+                <span style={styles.roleChip}>{detail.role}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style={styles.card}>
+          <div style={styles.sectionTitle}>人设摘要（D13）</div>
+          {(
+            [
+              ['职责边界', detail.duty],
+              ['工作风格', detail.style],
+              ['能力', detail.skills],
+              ['执行提示', detail.executionPrompt],
+            ] as const
+          ).map(([label, value]) => (
+            <div key={label} style={styles.detailRow}>
+              <span style={styles.detailLabel}>{label}</span>
+              <span style={{ ...styles.muted, ...(value?.trim() ? { color: T.text2 } : {}) }}>
+                {value?.trim() || '未填写'}
+              </span>
+            </div>
+          ))}
+        </div>
+        {detail.personaMd !== undefined && detail.personaMd.trim() !== '' && (
+          <div style={styles.card}>
+            <div style={styles.sectionTitle}>角色手册（Markdown）</div>
+            <MarkdownText text={detail.personaMd} />
+          </div>
+        )}
+        <div style={styles.card}>
+          <div style={styles.sectionTitle}>所属团队（{teamNames.length}）</div>
+          {teamNames.length === 0 ? (
+            <div style={styles.muted}>尚未加入任何团队——到「团队」页创建团队后从成员列表拉人。</div>
+          ) : (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {teamNames.map((n) => (
+                <span key={n} style={styles.chip}>
+                  {n}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+        {team !== undefined && detailMemberView !== null && (
+          <MemberDialog team={team} member={detailMemberView} />
+        )}
+      </div>
+    );
+  }
+
   return (
     <div>
       <div style={styles.card}>
-        <div style={{ ...styles.line, fontWeight: 600 }}>新建成员（存入成员库，D16）</div>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-          <Input
-            value={name}
-            placeholder="成员名，如：alice"
-            onChange={(e) => setName(e.target.value)}
-          />
-          <Input
-            value={role}
-            placeholder="角色：前端开发者 / 后端架构师 / UI 设计师 / 趣味注入师 / researcher / …"
-            onChange={(e) => setRole(e.target.value)}
-          />
-        </div>
-        <details>
-          <summary style={{ cursor: 'pointer', ...styles.muted }}>可选：人设细节</summary>
-          <div style={{ ...styles.formRow, marginTop: 8 }}>
-            <span style={styles.formLabel}>职责边界</span>
-            <textarea
-              style={styles.textarea}
-              value={duty}
-              onChange={(e) => setDuty(e.target.value)}
-            />
-          </div>
-          <div style={styles.formRow}>
-            <span style={styles.formLabel}>工作风格</span>
-            <textarea
-              style={styles.textarea}
-              value={style}
-              onChange={(e) => setStyle(e.target.value)}
-            />
-          </div>
-          <div style={styles.formRow}>
-            <span style={styles.formLabel}>能力</span>
-            <textarea
-              style={styles.textarea}
-              value={skills}
-              onChange={(e) => setSkills(e.target.value)}
-            />
-          </div>
-          <div style={styles.formRow}>
-            <span style={styles.formLabel}>执行提示</span>
-            <textarea
-              style={styles.textarea}
-              value={executionPrompt}
-              onChange={(e) => setExecutionPrompt(e.target.value)}
-            />
-          </div>
-        </details>
-        <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+          <div style={{ ...styles.sectionTitle, flex: 1, margin: 0 }}>成员（{members.length}）</div>
           <Button
             size="sm"
             variant="primary"
             icon={<IconPlusOutline16 />}
-            disabled={name.trim() === '' || role.trim() === ''}
-            onClick={copyCommand}
+            onClick={() => setView('add')}
           >
-            复制对话命令
+            新增成员
           </Button>
-          <span style={styles.muted}>
-            粘贴到对话发送，领队即创建成员入库；成功后这里会出现新条目。
-          </span>
         </div>
-        {copied && <div style={{ ...styles.muted, marginTop: 6 }}>✓ 已复制——去对话里粘贴发送</div>}
-      </div>
-
-      <div style={styles.card}>
-        <div style={{ ...styles.line, fontWeight: 600 }}>
-          团队成员（{team?.members.length ?? 0}）
-          {team !== undefined && <span style={styles.muted}> · {team.name}</span>}
-        </div>
-        {team === undefined ? (
-          <div style={styles.muted}>尚未选择团队。</div>
-        ) : team.members.length === 0 ? (
-          <div style={styles.muted}>该团队还没有成员——从下方成员库「加入团队」。</div>
-        ) : (
-          <div style={styles.memberGrid}>
-            {team.members.map((m) => (
-              <MemberCard key={m.name} member={m} onOpenReports={onOpenReports} />
-            ))}
+        {members.length === 0 && (
+          <div style={styles.empty}>
+            还没有成员。先「新增成员」（生成对话命令由领队创建），再到「团队」页组建团队。
           </div>
         )}
+        {members.map((m) => {
+          const teamNames = teamsOf(m.name);
+          return (
+            <button
+              key={m.name}
+              type="button"
+              style={styles.memberRow}
+              onClick={() => {
+                setDetailName(m.name);
+                setView('detail');
+              }}
+            >
+              <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={32} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: T.text }}>
+                  {m.name}
+                  <span style={{ ...styles.muted, fontWeight: 400 }}> · {m.role}</span>
+                </div>
+                <div style={{ ...styles.muted, fontSize: 11, marginTop: 1 }}>
+                  {teamNames.length === 0 ? '尚未加入团队' : `加入团队：${teamNames.join('、')}`}
+                </div>
+              </div>
+              <span style={{ color: T.text3, fontSize: 14 }}>›</span>
+            </button>
+          );
+        })}
       </div>
-
-      <div style={styles.card}>
-        <div style={{ ...styles.line, fontWeight: 600 }}>成员库（{roster.length}）</div>
-        {roster.length === 0 && (
-          <div style={styles.muted}>
-            成员库为空。先在这里生成命令创建成员，再到「团队」页把它们拉进团队。
-          </div>
-        )}
-        {roster.map((m) => (
-          <RosterRow key={m.name} member={m} pool={pool} activeTeamId={activeTeamId} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/** One roster entry with a per-row 加入团队 control. */
-function RosterRow({
-  member,
-  pool,
-  activeTeamId,
-}: {
-  member: RosterMember;
-  pool: TeamSnapshot[];
-  activeTeamId: string | null;
-}): ReactNode {
-  const [teamId, setTeamId] = useState<string>(activeTeamId ?? pool[0]?.teamId ?? '');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const add = async (): Promise<void> => {
-    if (busy || teamId === '') return;
-    setBusy(true);
-    setError(null);
-    try {
-      await addTeamMember(teamId, { name: member.name, fromRoster: true });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div style={{ ...styles.eventRow, display: 'flex', alignItems: 'center', gap: 8 }}>
-      <Avatar name={member.name} seed={member.avatar?.seed} salt={member.avatar?.salt} size={30} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <strong>{member.name}</strong>
-        <span style={styles.muted}> · {member.role}</span>
-        {member.skills !== undefined && member.skills !== '' && (
-          <div style={{ ...styles.muted, fontSize: 11 }}>{member.skills.slice(0, 60)}</div>
-        )}
-        {error !== null && <div style={styles.formError}>{error}</div>}
-      </div>
-      <select style={styles.select} value={teamId} onChange={(e) => setTeamId(e.target.value)}>
-        <option value="">— 选择团队 —</option>
-        {pool.map((t) => (
-          <option key={t.teamId} value={t.teamId}>
-            {t.name}
-          </option>
-        ))}
-      </select>
-      <Button size="sm" disabled={busy || teamId === ''} onClick={() => void add()}>
-        加入团队
-      </Button>
     </div>
   );
 }
@@ -941,8 +1185,11 @@ function TasksTab({
         if (rows.length === 0) return null;
         return (
           <div key={group.id} style={{ marginBottom: 14 }}>
-            <div style={{ ...styles.line, fontWeight: 600, color: group.tone }}>
-              {group.label}（{rows.length}）
+            <div style={{ ...styles.sectionTitle, marginBottom: 4 }}>
+              <span style={fns.pill(group.tone)}>
+                <span style={fns.dot(group.tone)} />
+                {group.label} · {rows.length}
+              </span>
             </div>
             {rows.map((t) => (
               <div key={t.taskId}>

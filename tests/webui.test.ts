@@ -234,8 +234,37 @@ describe('panel write routes (M5 first slice)', () => {
     await handler({ method: 'GET', url: '/eteams-api/roster' }, r);
     expect(r.code).toBe(200);
     const parsed = JSON.parse(r.body) as { members: { name: string; role: string }[] };
-    expect(parsed.members).toHaveLength(1);
-    expect(parsed.members[0]!.role).toBe('writer');
+    // Four presets are seeded on first GET; Alice upserts on top.
+    expect(parsed.members).toHaveLength(5);
+    expect(parsed.members.find((m) => m.name === 'Alice')!.role).toBe('writer');
+  });
+
+  it('seeds preset members once and preserves user edits', async () => {
+    const { handler, res, post } = await installFake();
+    const r1 = res();
+    await handler({ method: 'GET', url: '/eteams-api/roster' }, r1);
+    const first = JSON.parse(r1.body) as { members: { name: string; avatar?: unknown }[] };
+    const presetNames = ['前端开发者', '后端架构师', 'UI 设计师', '趣味注入师'];
+    expect(first.members.map((m) => m.name)).toEqual(expect.arrayContaining(presetNames));
+    expect(first.members).toHaveLength(4);
+    for (const p of first.members) expect(p.avatar).toBeDefined();
+
+    // Second GET is idempotent — no duplicates.
+    const r2 = res();
+    await handler({ method: 'GET', url: '/eteams-api/roster' }, r2);
+    expect((JSON.parse(r2.body) as { members: unknown[] }).members).toHaveLength(4);
+
+    // User edit to a preset is preserved on later GETs.
+    await post('/eteams-api/roster', {
+      name: '前端开发者',
+      role: '前端开发者',
+      duty: '自定义职责',
+    });
+    const r3 = res();
+    await handler({ method: 'GET', url: '/eteams-api/roster' }, r3);
+    const third = JSON.parse(r3.body) as { members: { name: string; duty?: string }[] };
+    expect(third.members).toHaveLength(4);
+    expect(third.members.find((m) => m.name === '前端开发者')!.duty).toBe('自定义职责');
   });
 
   it('creates a staged team via POST /team and adopts a roster member', async () => {
@@ -296,8 +325,38 @@ describe('panel write routes (M5 first slice)', () => {
       (m) => m.name === 'Cara',
     )!;
     expect(member.avatar).toEqual(stored.avatar);
+    // The captain (项目牧羊人) travels with the snapshot for the leader card.
+    const captain = snap.captain as {
+      name: string;
+      role: string;
+      personaMd: string | null;
+      avatar: { seed: number; salt: number };
+    };
+    expect(captain.name).toBe('项目牧羊人');
+    expect(captain.role).toContain('领队');
+    expect(captain.personaMd).toContain('## 使命');
+    expect(typeof captain.avatar.seed).toBe('number');
     void handler;
     void res;
+  });
+
+  it('carries the preset personaMd through adoption and spawn rendering', async () => {
+    const { handler, res, post } = await installFake();
+    // GET /roster triggers the preset seeding, then adopt the preset member.
+    const seeded = res();
+    await handler({ method: 'GET', url: '/eteams-api/roster' }, seeded);
+    const created = await post('/eteams-api/team', { name: '手册团队', sessionId: 'sess-panel' });
+    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
+    await post(`/eteams-api/team/${teamId}/member`, { name: '前端开发者', fromRoster: true });
+    const fresh = readTeamFromDisk(teamId);
+    const md = fresh.members[0]!.persona.personaMd;
+    expect(md).toBeDefined();
+    expect(md).toContain('## 使命');
+    expect(md).toContain('## 交付标准');
+    const { renderPersonaBlock } = await import('../src/host/prompts/persona');
+    const block = renderPersonaBlock(fresh.members[0]!.persona, '前端开发者');
+    expect(block).toContain('# 角色手册');
+    expect(block).toContain('## 核心职责');
   });
 
   it('rejects adding a roster name that does not exist', async () => {

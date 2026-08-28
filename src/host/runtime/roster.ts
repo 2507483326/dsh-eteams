@@ -10,6 +10,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { atomicWriteText } from '../state/store.js';
+import { PRESET_MEMBER_ROLES, ROLE_TEMPLATES } from '../prompts/persona.js';
 
 /** Stored avatar pair (docs/14): deterministic seed for the SVG renderer. */
 export interface AvatarPair {
@@ -29,6 +30,8 @@ export interface RosterMember {
   skills?: string;
   rules?: string[];
   executionPrompt?: string;
+  /** Full Markdown role playbook (agency-agents-zh style) for the detail view. */
+  personaMd?: string;
   /** Optional per-member model route, applied when a team adopts the entry. */
   provider?: string;
   model?: string;
@@ -72,6 +75,11 @@ function hashName(name: string): number {
   return Math.abs(h) % 997;
 }
 
+/** Public avatar-seed helper (captain card in the snapshot reuses it). */
+export function avatarSeedFor(name: string): number {
+  return hashName(name);
+}
+
 /**
  * Insert or update one roster entry (keyed by trimmed name). Returns the
  * stored entry. Throws when name/role are empty after trimming. An entry
@@ -102,4 +110,57 @@ export async function upsertRosterMember(
   const file: RosterFile = { schemaVersion: 1, members };
   await atomicWriteText(rosterFile(stateRoot), `${JSON.stringify(file, null, 2)}\n`);
   return stored;
+}
+
+/** Fixed salts so the four preset members look the same in every workspace. */
+const PRESET_SALTS: Record<string, number> = {
+  前端开发者: 11,
+  后端架构师: 23,
+  'UI 设计师': 37,
+  趣味注入师: 51,
+};
+
+/**
+ * Seed the four preset members (agency-agents-zh roles, name = role) into a
+ * workspace roster on first access. Idempotent and non-destructive: existing
+ * entries (including user edits to a preset) are never overwritten; only
+ * missing presets are inserted.
+ */
+export async function ensurePresetMembers(stateRoot: string): Promise<void> {
+  const members = readRoster(stateRoot);
+  let changed = false;
+  for (const role of PRESET_MEMBER_ROLES) {
+    const template = ROLE_TEMPLATES[role];
+    if (template === undefined) continue;
+    const existing = members.find((m) => m.name === role);
+    if (existing === undefined) {
+      members.push({
+        name: role,
+        role,
+        duty: template.duty,
+        style: template.style,
+        skills: template.skills,
+        ...(template.personaMd !== undefined ? { personaMd: template.personaMd } : {}),
+        avatar: { seed: hashName(role), salt: PRESET_SALTS[role] ?? 0 },
+        updatedAt: Date.now(),
+      });
+      changed = true;
+      continue;
+    }
+    // Backfill the role playbook for untouched presets from earlier versions
+    // (user-edited personas are never overwritten).
+    if (
+      existing.personaMd === undefined &&
+      template.personaMd !== undefined &&
+      existing.duty === template.duty &&
+      existing.style === template.style &&
+      existing.skills === template.skills
+    ) {
+      existing.personaMd = template.personaMd;
+      changed = true;
+    }
+  }
+  if (!changed) return;
+  const file: RosterFile = { schemaVersion: 1, members };
+  await atomicWriteText(rosterFile(stateRoot), `${JSON.stringify(file, null, 2)}\n`);
 }

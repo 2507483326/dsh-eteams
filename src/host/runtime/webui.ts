@@ -25,7 +25,14 @@ import { archiveRoot, readEventsSync, readMailboxSync } from '../state/events.js
 import { listTeamIds, readTeamSync } from '../state/store.js';
 import { joinPath, type RuntimeContext, type RuntimeEnv } from './base.js';
 import { teamWorkDirRel } from './docs.js';
-import { findRosterMember, readRoster, upsertRosterMember } from './roster.js';
+import { composeCaptainPersona } from '../prompts/persona.js';
+import {
+  avatarSeedFor,
+  ensurePresetMembers,
+  findRosterMember,
+  readRoster,
+  upsertRosterMember,
+} from './roster.js';
 import { addMember, createTeam } from './teamOps.js';
 
 /** Web-server service key candidates, newest first. */
@@ -141,6 +148,9 @@ export function teamSnapshot(
   workspacePath: string,
   config: ETeamsResolvedConfig,
 ): Record<string, unknown> {
+  // The captain (项目牧羊人) is rendered as the leader card on the 团队 page;
+  // it is not a roster member, so it travels with the snapshot instead.
+  const captainPersona = composeCaptainPersona(workspacePath, config.stateDir);
   return {
     teamId: team.id,
     name: team.name,
@@ -155,6 +165,15 @@ export function teamSnapshot(
       total: team.tasks.length,
       cancelled: team.tasks.filter((t) => t.status === 'cancelled').length,
       active: team.tasks.filter((t) => ACTIVE_STATUSES.includes(t.status)).length,
+    },
+    captain: {
+      name: '项目牧羊人',
+      role: captainPersona.role,
+      duty: captainPersona.duty,
+      style: captainPersona.style,
+      skills: captainPersona.skills,
+      personaMd: captainPersona.personaMd ?? null,
+      avatar: { seed: avatarSeedFor('项目牧羊人'), salt: 7 },
     },
     members: team.members.filter((m) => m.status !== 'removed').map((m) => memberView(team, m)),
     tasks: team.tasks.map(taskView),
@@ -441,6 +460,7 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                 ...(body.executionPrompt !== undefined
                   ? { executionPrompt: str(body.executionPrompt) }
                   : {}),
+                ...(body.personaMd !== undefined ? { personaMd: str(body.personaMd) } : {}),
                 ...(body.provider !== undefined ? { provider: str(body.provider) } : {}),
                 ...(body.model !== undefined ? { model: str(body.model) } : {}),
                 ...(body.reasoningEffort !== undefined
@@ -526,6 +546,11 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                     : entry?.rules !== undefined
                       ? { rules: entry.rules }
                       : {}),
+                  ...(body.personaMd !== undefined
+                    ? { personaMd: str(body.personaMd) }
+                    : entry?.personaMd !== undefined
+                      ? { personaMd: entry.personaMd }
+                      : {}),
                   ...(entry?.avatar !== undefined ? { avatar: entry.avatar } : {}),
                   ...(body.provider !== undefined && body.model !== undefined
                     ? { provider: str(body.provider), model: str(body.model) }
@@ -556,6 +581,8 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               return;
             }
             if (segments[0] === 'roster' && segments.length === 1) {
+              // Preset members (agency-agents-zh) appear on first access.
+              await ensurePresetMembers(rootForWrites(ctx, config));
               sendJson(res, 200, { members: readRoster(rootForWrites(ctx, config)) });
               return;
             }

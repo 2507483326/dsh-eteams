@@ -24,6 +24,8 @@ export interface RosterMember {
   reasoningEffort?: string;
   /** Pre-generated avatar pair (docs/14); host assigns one when absent. */
   avatar?: { seed: number; salt: number };
+  /** Full Markdown role playbook (agency-agents-zh style). */
+  personaMd?: string;
   updatedAt: number;
 }
 

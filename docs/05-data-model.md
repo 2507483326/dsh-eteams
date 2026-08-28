@@ -8,7 +8,11 @@
 <workspace>/.eteams/                      # stateDir，可配置
   roster.json                             # 工作区成员库（D16，5.11；工作区级，团队共享）
   logs/client.log                         # 渲染端诊断遥测（环形 400 行）
+
+**预置成员（2026-08-28）**：工作区首次访问 GET /roster 时，宿主自动种入四个预置成员（名字=角色）：前端开发者 / 后端架构师 / UI 设计师 / 趣味注入师（agency-agents-zh 蒸馏人设 + 固定 salt 头像）。幂等且不破坏：已存在的条目（含用户对预置成员的修改）永不覆盖，只补缺失项；`ensurePresetMembers`（roster.ts）。
   <teamId>/                               # teamId = sanitizeKey(团队名)，全局唯一
+
+**角色手册 personaMd（2026-08-28，参考 agency-agents-zh）**：PersonaRecord 增加可选 `personaMd` 字段——完整 Markdown 角色手册（使命/核心职责/关键规则/交付标准）。四个预置成员与领队模板（项目牧羊人）均内置；`renderPersonaBlock` 在 spawn 注入时以「# 角色手册」小节追加全文；成员库 upsert / add_member / update_member / 面板采纳均透传；成员详情页用宿主 MarkdownText 渲染。摘要字段（duty/style/skills）保持不变。
     team.json                             # 全量快照（TeamState，下述全部记录都在此）
     events.jsonl                          # append-only 事件日志（审计+恢复重放）
     inbox/

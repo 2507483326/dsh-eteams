@@ -158,6 +158,7 @@ export function createCaptainTools(
       style: str('工作风格（覆盖角色模板默认人设）'),
       skills: str('能力（覆盖角色模板默认人设）'),
       rules: strArr('工作纪律列表（覆盖角色模板默认人设）'),
+      personaMd: str('完整角色手册（Markdown），或成员库已有同名定义则自动带入'),
       provider: str('LLM provider（与 model 同给才生效，覆盖继承路线）'),
       model: str('LLM model'),
       reasoningEffort: str('推理力度（可选）'),
@@ -187,6 +188,7 @@ export function createCaptainTools(
         style: args.style,
         skills: args.skills,
         rules: args.rules,
+        personaMd: args.personaMd,
         provider: args.provider,
         model: args.model,
         reasoningEffort: args.reasoningEffort,
@@ -207,6 +209,7 @@ export function createCaptainTools(
       skills: str('能力'),
       rules: strArr('工作纪律列表（整体替换）'),
       executionPrompt: str('执行提示'),
+      personaMd: str('完整角色手册（Markdown：使命/核心职责/关键规则/交付标准）'),
       provider: str('LLM provider（与 model 同给才生效）'),
       model: str('LLM model'),
       reasoningEffort: str('推理力度（可选）'),
@@ -233,6 +236,7 @@ export function createCaptainTools(
         ...(args.skills !== undefined ? { skills: args.skills } : {}),
         ...(args.rules !== undefined ? { rules: args.rules } : {}),
         ...(args.executionPrompt !== undefined ? { executionPrompt: args.executionPrompt } : {}),
+        ...(args.personaMd !== undefined ? { personaMd: args.personaMd } : {}),
         ...(args.provider !== undefined ? { provider: args.provider } : {}),
         ...(args.model !== undefined ? { model: args.model } : {}),
         ...(args.reasoningEffort !== undefined ? { reasoningEffort: args.reasoningEffort } : {}),
@@ -300,7 +304,7 @@ export function createCaptainTools(
   const updateMemberTool = defineTool({
     name: 'eteams_update_member',
     description:
-      '更新成员人设（固定框架、可改内容）：role/duty/style/skills/rules/executionPrompt。',
+      '更新成员人设（固定框架、可改内容）：role/duty/style/skills/rules/executionPrompt/personaMd。',
     parameters: {
       name: strR('成员名'),
       role: str('新角色'),
@@ -309,6 +313,7 @@ export function createCaptainTools(
       skills: str('能力'),
       rules: strArr('工作纪律列表（整体替换）'),
       executionPrompt: str('执行提示'),
+      personaMd: str('完整角色手册（Markdown：使命/核心职责/关键规则/交付标准）'),
       teamId: str('团队 id（默认当前团队）'),
     },
     output: {
