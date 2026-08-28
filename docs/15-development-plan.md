@@ -2,6 +2,8 @@
 
 WBS 拆解原则：每个里程碑交付**可安装、可演示**的增量；先核心闭环后界面；每步都有明确验收标准（DoD）。工期为单人专注估算（相对值，非日历承诺）。
 
+> **运行时契约门禁（全里程碑适用）**：任何涉及生命周期（effect/卸载）、服务（inject/ctx 访问）、事件、配置、HTTP 路由或客户端模块的改动，必须先对照 [18 Cordis 运行时契约](18-cordis-contract.md)（官方 cordis 教程对齐版）自检；交付前 verifyM0 会机器校验其中可自动化项（信封形态、`exports.inject` 声明完整性、manifest 对齐等）。
+
 ## 15.0 前置事项（M0 内完成）
 
 - 卸载旧 `dsh-eteams` 0.1.1 失效引用：`dsh plugin --profile desktop remove dsh-eteams`（清理 `file:C:/Users/epat/eTeam/...tgz` 残留依赖）。
