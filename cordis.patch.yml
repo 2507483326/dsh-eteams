@@ -1,0 +1,27 @@
+# dsh-eteams bundle patch: mounts the eteams plugin into the host composition
+# of a dsh profile. The plugin registers its `eteams_*` tools into the shared
+# `tools` registry (M0 ships `eteams_ping` only; the team lifecycle tools land
+# in M1+), and its client bundle adds the 团队 tab and the composer 团队 button.
+#
+# Install: `dsh plugin --profile <name> add <this package>` (npm or a local
+# path). The `dsh plugin` command pnpm-installs the package into the profile
+# and reconciles it into the profile's `dsh.profile.bundles` layer list.
+- insert:
+    - id: eteams
+      # Node-resolvable package name — must stay in sync with package.json
+      # `name`. Quoted because `@` is a reserved indicator in YAML and cannot
+      # open a plain scalar (kept quoted for uniformity with the reference).
+      name: 'dsh-eteams'
+      config:
+        # Team state lives under `<session workspace>/<stateDir>/` (index.json
+        # + teams/<slug>/... from M1 on).
+        stateDir: .eteams
+        # Per-team working directory root: `<workspace>/<workRoot>/<team-slug>/`
+        # (README.md, tasks/, notes.md — see docs/12).
+        workRoot: teams
+        # Hard cap on concurrently existing members per team.
+        maxMembers: 8
+        # Same-member auto-retry budget before a task fails hard (D6).
+        maxRetries: 3
+        # Provider used to spawn member subagents ('spawn' or 'fork').
+        memberProvider: spawn
