@@ -35,7 +35,9 @@ export const ETeamsConfig = z
   .description('dsh-eteams plugin configuration');
 
 /** Apply defaults for a (possibly partial) raw config object. */
-export function resolveConfig(raw: Partial<ETeamsResolvedConfig> | undefined): ETeamsResolvedConfig {
+export function resolveConfig(
+  raw: Partial<ETeamsResolvedConfig> | undefined,
+): ETeamsResolvedConfig {
   return {
     stateDir: raw?.stateDir ?? '.eteams',
     workRoot: raw?.workRoot ?? 'teams',

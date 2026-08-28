@@ -58,10 +58,17 @@ console.log('package.json manifest');
 const pkg = JSON.parse(read('package.json'));
 ok('dsh.bundle.patch', pkg.dsh?.bundle?.patch === './cordis.patch.yml');
 ok('dsh.client.platform web', pkg.dsh?.client?.platform === 'web');
-ok('dsh.client.inject lists slots deps', Array.isArray(pkg.dsh?.client?.inject) && pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-primitives'));
+ok(
+  'dsh.client.inject lists slots deps',
+  Array.isArray(pkg.dsh?.client?.inject) &&
+    pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-primitives'),
+);
 ok('exports ./cordis.patch.yml', pkg.exports?.['./cordis.patch.yml'] === './cordis.patch.yml');
 ok('exports ./client', Boolean(pkg.exports?.['./client']));
-ok('host lib/index.js within size budget', !exists('lib/index.js') || statSync(new URL('lib/index.js', root)).size < 1024 * 1024);
+ok(
+  'host lib/index.js within size budget',
+  !exists('lib/index.js') || statSync(new URL('lib/index.js', root)).size < 1024 * 1024,
+);
 
 if (failures > 0) {
   console.error(`\nverify-m0: ${failures} check(s) failed`);

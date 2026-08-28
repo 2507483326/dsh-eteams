@@ -55,11 +55,15 @@
     }
   },
   "scripts": {
-    "build": "node scripts/clean.mjs && tsc -p tsconfig.host.json && tsc -p tsconfig.client.json && tsdown && node scripts/wrap-client.mjs",
+    "build": "node scripts/clean.mjs && tsc -p tsconfig.host.json && tsc -p tsconfig.client.json && tsdown && node scripts/wrapClient.mjs",
     "typecheck": "tsc -p tsconfig.host.json --noEmit && tsc -p tsconfig.client.json --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "test": "vitest run",
-    "verify": "node scripts/verify-m0.mjs",
-    "prepublishOnly": "pnpm build && pnpm typecheck && pnpm test"
+    "verify": "node scripts/verifyM0.mjs",
+    "prepublishOnly": "pnpm build && pnpm typecheck && pnpm lint && pnpm test"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1-rc.1",

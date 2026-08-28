@@ -1,5 +1,3 @@
-import { defineConfig } from 'tsdown';
-
 const external = [/^@deepseek-ai\//, 'react', 'react/jsx-runtime', 'react-dom'];
 
 export default [
@@ -16,7 +14,7 @@ export default [
   },
   {
     // CJS output drops into the ModuleLoader envelope verbatim: the wrapper
-    // (scripts/wrap-client.mjs) provides `module`/`exports`/`require`.
+    // (scripts/wrapClient.mjs) provides `module`/`exports`/`require`.
     entry: { client: 'src/client/index.tsx' },
     outDir: 'lib',
     format: 'cjs',

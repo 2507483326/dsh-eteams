@@ -1,0 +1,14 @@
+# Build artifacts and dependency trees — never format.
+.npm-cache/
+node_modules/
+lib/
+
+# Design docs are hand-maintained Chinese markdown; formatting churns them.
+docs/
+
+# Generated lockfile and tool-owned files.
+package-lock.json
+debug.log
+
+# Bundle patch carries load-bearing comments; keep hand-formatted.
+cordis.patch.yml

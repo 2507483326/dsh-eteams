@@ -38,7 +38,10 @@ if (body.includes('__ModuleLoader__')) {
 }
 
 const stripped = body.replace(/\n\/\/# sourceMappingURL=.*?\s*$/, '\n');
-const indented = stripped.split('\n').map((line) => (line.length > 0 ? `\t${line}` : line)).join('\n');
+const indented = stripped
+  .split('\n')
+  .map((line) => (line.length > 0 ? `\t${line}` : line))
+  .join('\n');
 
 const wrapped = [
   'window.__ModuleLoader__.load({',

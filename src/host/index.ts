@@ -68,9 +68,18 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
         properties: {
           plugin: { type: 'string', description: 'Plugin identity.' },
           version: { type: 'string', description: 'Plugin version.' },
-          stateSchemaVersion: { type: 'integer', description: 'On-disk state schema version this build reads/writes.' },
-          caller: { type: 'string', description: 'Calling agent label (name or session id), or "unknown" when agentless.' },
-          stateDir: { type: 'string', description: 'Configured state directory under the session workspace.' },
+          stateSchemaVersion: {
+            type: 'integer',
+            description: 'On-disk state schema version this build reads/writes.',
+          },
+          caller: {
+            type: 'string',
+            description: 'Calling agent label (name or session id), or "unknown" when agentless.',
+          },
+          stateDir: {
+            type: 'string',
+            description: 'Configured state directory under the session workspace.',
+          },
           workRoot: { type: 'string', description: 'Configured per-team working directory root.' },
           maxMembers: { type: 'integer', description: 'Configured member cap per team.' },
           maxRetries: { type: 'integer', description: 'Configured same-member auto-retry budget.' },
@@ -78,7 +87,9 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
         },
         additionalProperties: false,
       },
-      render: (_args, value): ContentBlock[] => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
+      render: (_args, value): ContentBlock[] => [
+        { type: 'text', text: JSON.stringify(value, null, 2) },
+      ],
     },
     execute: async (_args, exec) => {
       const value = {

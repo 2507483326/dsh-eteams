@@ -48,12 +48,7 @@ export function TeamsButton(_props: TeamsButtonProps): React.ReactNode {
         }}
         onClose={() => setOpen(false)}
         anchor={
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-label="团队"
-            onClick={() => setOpen((v) => !v)}
-          >
+          <Button variant="ghost" size="sm" aria-label="团队" onClick={() => setOpen((v) => !v)}>
             团队
           </Button>
         }
