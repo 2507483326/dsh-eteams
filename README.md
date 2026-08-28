@@ -4,7 +4,16 @@ ETeams for DeepSeek Harness — 领队（captain）把目标拆解为任务、�
 执行的多智能体团队插件，含会话内「团队」面板与执行槽 UI。
 
 - 设计文档：[`docs/README.md`](docs/README.md)（决策表 D1–D15、里程碑计划 M0–M8）
-- 当前里程碑：**M0 工程脚手架**（插件骨架 + `eteams_ping` 冒烟工具 + 团队 tab/按钮）
+- 当前里程碑：**M1 状态与核心工具**（团队全生命周期：staged→批准→指派→执行链→完成/升级）
+
+## M1 能力一览
+
+- **状态**：`<workspace>/.eteams/<teamId>/`（team.json 快照 + events.jsonl 事件 + inbox/ 邮箱），原子写 + 每团队/每领队进程锁（docs/09）
+- **领队工具**：`eteams_create_team / add_member / remove_member / update_member / create_task / update_task / delete_task / assign_task / advance_task / reassign_task / suspend_task / resume_task / cancel_task / send_message / team_status / task_board / list_teams / archive_team / delete_team / mailbox`
+- **成员工具**：`eteams_claim_task / decline_task / append_progress / complete_task / fail_task / task_board / send_message / team_status`（经 `registerContinuableSetup` 注入子作用域；领队工具在 spawn 时 `toolFilter.deny` 屏蔽）
+- **执行链（D11）**：`chain` 站点按序接力；偏离必须 `deviationNote`（chain.deviated 事件）；attempt token 在 claim 时签发、改派/取消即吊销
+- **完成即续派（FR-36）**：站点完成当轮通知领队「下一站 + 续派提示」；重试超限进入 `awaiting_decision` + DecisionRecord（M2 接决策工具）
+- **任务文档（D12）**：批准时生成 `teams/<team-slug>/README.md + tasks/tN-slug/contract.md（幂等渲染）+ notes.md（create-only）`
 
 ## 构建
 
@@ -29,7 +38,8 @@ dsh --profile desktop --dump-config   # 应看到 id 为 eteams 的插件行
 
 - 对话区头部出现「团队」tab（位于 对话 / 轨迹 旁）；
 - 输入区工具行右侧出现「团队」按钮，弹层 v1 含「＋ 新增团队」，点击跳转团队 tab；
-- 会话内可调用 `eteams_ping` 冒烟工具验证宿主端连通性。
+- 会话内可调用 `eteams_ping` 冒烟工具验证宿主端连通性；
+- 说「用 AgentTeams 做X」或 `/agent-teams`：领队建队 → 问询 → 拆解 → 等你批准 → 派活执行。
 
 ## 结构
 

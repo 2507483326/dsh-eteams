@@ -1,7 +1,8 @@
 # dsh-eteams bundle patch: mounts the eteams plugin into the host composition
-# of a dsh profile. The plugin registers its `eteams_*` tools into the shared
-# `tools` registry (M0 ships `eteams_ping` only; the team lifecycle tools land
-# in M1+), and its client bundle adds the 团队 tab and the composer 团队 button.
+# of a dsh profile. The plugin injects tools/subagents/agents/systemPrompt and
+# registers the full `eteams_*` captain+member tool face (team lifecycle,
+# execution chains, mailboxes), and its client bundle adds the 团队 tab and the
+# composer 团队 button.
 #
 # Install: `dsh plugin --profile <name> add <this package>` (npm or a local
 # path). The `dsh plugin` command pnpm-installs the package into the profile

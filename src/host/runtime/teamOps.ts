@@ -1,0 +1,351 @@
+/**
+ * Team-level operations (docs/07.2): create → plan → approve → run, member
+ * roster management, mailbox messaging, and read-only views. Every mutation
+ * runs inside the team lock with events-then-snapshot ordering (docs/09.2).
+ *
+ * @module dsh-eteams/runtime/teamOps
+ */
+import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import type { Agent } from '@deepseek-ai/dsh-agent';
+import type { JsonValue } from '@deepseek-ai/dsh-session';
+import { mergePersona, defaultPersonaFor } from '../prompts/persona.js';
+import type { Actor, MemberRecord, ModelRouteSnapshot, TeamState } from '../model/types.js';
+import { locks, teamLockKey } from '../state/lock.js';
+import { readTeam, writeTeam, allocateTeamDir, findTeamByCaptain, listTeams } from '../state/store.js';
+import { recordEvent } from '../state/events.js';
+import { sanitizeKey } from '../model/taskMachine.js';
+import { ETeamsError, captainActor, memberActor, stateRootOf, type RuntimeEnv } from './base.js';
+import { renderTeamDocs, teamWorkDirRel } from './docs.js';
+import { spawnTeamMembers, interruptMember } from './members.js';
+import { deliverMail, notifyCaptain, readBox, requireMember, wakeMember } from './notifier.js';
+
+/** Read one team under its lock and hand it to `fn` for mutation. */
+export async function withTeam<T>(env: RuntimeEnv, teamId: string, fn: (team: TeamState, root: string) => Promise<T>): Promise<T> {
+  const root = stateRootOf(env);
+  return locks.withLock(teamLockKey(root, teamId), async () => {
+    const team = await readTeam(root, teamId);
+    if (!team) throw new ETeamsError(`团队「${teamId}」不存在`, '用 eteams_team_status 查看当前团队，或先 eteams_create_team');
+    return fn(team, root);
+  });
+}
+
+/** The team led by this captain (identity guard, docs/05.8). */
+export async function requireCaptainTeam(env: RuntimeEnv, captain: Agent): Promise<TeamState> {
+  const root = stateRootOf(env);
+  const team = await findTeamByCaptain(root, String(captain.id));
+  if (!team) throw new ETeamsError('你还没有团队', '先用 eteams_create_team 建队（多代理请求时自动建队）');
+  return team;
+}
+
+/** Create a team (docs/07.2 step 1-2). approval=automatic skips staging. */
+export async function createTeam(
+  env: RuntimeEnv,
+  captain: Agent,
+  params: { name: string; goal: string; approval?: 'required' | 'automatic'; questionnaire?: string[]; maxRetries?: number },
+): Promise<TeamState> {
+  const root = stateRootOf(env);
+  return locks.withLock(`captain:${root}:${String(captain.id)}`, async () => {
+    const existing = await findTeamByCaptain(root, String(captain.id));
+    if (existing && existing.phase !== 'completed' && existing.phase !== 'halted') {
+      throw new ETeamsError(`你已领队「${existing.name}」（${existing.phase}）`, '一个领队同时只带一个团队；先完成或归档现有团队');
+    }
+    const id = await allocateTeamDir(root, params.name);
+    const now = Date.now();
+    const team: TeamState = {
+      schemaVersion: 2,
+      id,
+      name: params.name.trim(),
+      goal: params.goal.trim(),
+      captainSessionId: String(captain.id),
+      phase: 'staged',
+      planReviewState: 'awaiting_review',
+      createdAt: now,
+      updatedAt: now,
+      version: 0,
+      taskSeq: 0,
+      attemptSeq: 0,
+      mailSeq: 0,
+      maxRetries: params.maxRetries ?? env.config.maxRetries,
+      members: [],
+      tasks: [],
+      pendingDecisions: [],
+    };
+    await recordEvent(root, id, captainActor(team), 'team.created', { payload: { name: team.name, goal: team.goal, approval: params.approval ?? 'required' } });
+    if (params.questionnaire && params.questionnaire.length > 0) {
+      await recordEvent(root, id, captainActor(team), 'plan.questionnaire', { payload: { questions: params.questionnaire } });
+    }
+    await writeTeam(root, team);
+    if (params.approval === 'automatic') {
+      const fresh = await readTeam(root, id);
+      if (fresh) return approvePlan(env, captain, fresh.id);
+    }
+    return (await readTeam(root, id))!;
+  });
+}
+
+/** Approve a staged plan (user/panel action; NEVER a captain tool, docs/11). */
+export async function approvePlan(env: RuntimeEnv, captain: Agent, teamId: string): Promise<TeamState> {
+  return withTeam(env, teamId, async (team, root) => {
+    if (team.captainSessionId !== String(captain.id)) throw new ETeamsError('只有该团队的领队会话可以批准');
+    if (team.phase !== 'staged') throw new ETeamsError(`团队处于 ${team.phase}，无需批准`);
+    // Work dir allocation (D12): disambiguate against other teams' dirs.
+    let workDir = teamWorkDirRel(team);
+    const others = await listTeams(root);
+    const taken = new Set(others.filter((t) => t.id !== team.id).map((t) => t.workDir));
+    if (taken.has(workDir) || existsSync(join(env.workspace, workDir))) {
+      let n = 2;
+      while (taken.has(`${teamWorkDirRel(team)}-${n}`)) n++;
+      workDir = `${teamWorkDirRel(team)}-${n}`;
+    }
+    team.workDir = workDir;
+    // Tasks: draft → ready (docs/06.2 approve edge).
+    const now = Date.now();
+    for (const task of team.tasks) {
+      if (task.status === 'draft') {
+        task.status = 'ready';
+        task.updatedAt = now;
+        await recordEvent(root, team.id, captainActor(team), 'task.ready', { taskId: task.id, payload: { via: 'plan.approved' } });
+      }
+    }
+    await recordEvent(root, team.id, captainActor(team), 'plan.approved', { payload: { workDir } });
+    // Spawn all staged members atomically (rollback keeps them staged).
+    await spawnTeamMembers(env, team, captain);
+    team.phase = 'running';
+    team.planReviewState = 'approved';
+    await writeTeam(root, team);
+    renderTeamDocs(env.workspace, team, (msg) => env.ctx.logger.warn(msg));
+    return team;
+  });
+}
+
+/** Add one member (staged plan or running team, FR-15). */
+export async function addMember(
+  env: RuntimeEnv,
+  captain: Agent,
+  params: { teamId?: string; name: string; role: string; executionPrompt?: string; provider?: string; model?: string; reasoningEffort?: string },
+): Promise<{ team: TeamState; member: MemberRecord }> {
+  const resolve = async (): Promise<TeamState> => {
+    if (params.teamId) {
+      const t = await readTeam(stateRootOf(env), params.teamId);
+      if (!t) throw new ETeamsError(`团队「${params.teamId}」不存在`);
+      if (t.captainSessionId !== String(captain.id)) throw new ETeamsError('只有该团队的领队可以添加成员');
+      return t;
+    }
+    return requireCaptainTeam(env, captain);
+  };
+  const team = await resolve();
+  return withTeam(env, team.id, async (fresh, root) => {
+    if (fresh.captainSessionId !== String(captain.id)) throw new ETeamsError('只有该团队的领队可以添加成员');
+    const name = params.name.trim();
+    if (name === '') throw new ETeamsError('成员名不能为空');
+    if (fresh.members.some((m) => m.name === name && m.status !== 'removed')) {
+      throw new ETeamsError(`成员「${name}」已在团队中`);
+    }
+    const active = fresh.members.filter((m) => m.status !== 'removed');
+    if (active.length >= env.config.maxMembers) {
+      throw new ETeamsError(`成员数已达上限（${env.config.maxMembers}）`, '先 eteams_remove_member 再添加，或调整配置 maxMembers');
+    }
+    const route: ModelRouteSnapshot =
+      params.provider && params.model
+        ? { provider: params.provider, model: params.model, ...(params.reasoningEffort ? { reasoningEffort: params.reasoningEffort } : {}), source: 'override' }
+        : { provider: 'inherit', model: 'inherit', source: 'inherited' };
+    const member: MemberRecord = {
+      id: '',
+      name,
+      role: params.role.trim() || 'member',
+      persona: defaultPersonaFor(name, params.role, params.executionPrompt),
+      modelRoute: route,
+      status: 'staged',
+      avatar: { seed: hashName(name), salt: Math.floor(Math.random() * 1000) },
+      createdAt: Date.now(),
+    };
+    fresh.members.push(member);
+    await recordEvent(root, fresh.id, captainActor(fresh), 'member.added', { payload: { name, role: member.role, route } });
+    if (fresh.phase === 'running') {
+      // FR-15 mid-run addition: spawn immediately.
+      const captainAgent = env.ctx.agents.get(fresh.captainSessionId) ?? captain;
+      await spawnTeamMembers(env, fresh, captainAgent);
+      await recordEvent(root, fresh.id, captainActor(fresh), 'member.spawned', { payload: { name, childId: member.id } });
+    }
+    await writeTeam(root, fresh);
+    renderTeamDocs(env.workspace, fresh, (msg) => env.ctx.logger.warn(msg));
+    return { team: fresh, member };
+  });
+}
+
+function hashName(name: string): number {
+  let h = 0;
+  for (const ch of name) h = (h * 31 + ch.codePointAt(0)!) | 0;
+  return Math.abs(h) % 997;
+}
+
+/** Update a member's persona fields (docs/11.2). */
+export async function updateMember(
+  env: RuntimeEnv,
+  captain: Agent,
+  params: { teamId?: string; name: string; role?: string; duty?: string; style?: string; skills?: string; rules?: string[]; executionPrompt?: string },
+): Promise<TeamState> {
+  const team = params.teamId ? await requireTeamById(env, captain, params.teamId) : await requireCaptainTeam(env, captain);
+  return withTeam(env, team.id, async (fresh, root) => {
+    const member = requireMember(fresh, params.name);
+    if (params.role !== undefined) member.role = params.role.trim() || member.role;
+    member.persona = mergePersona(member.persona, {
+      duty: params.duty,
+      style: params.style,
+      skills: params.skills,
+      rules: params.rules,
+      executionPrompt: params.executionPrompt,
+    });
+    await recordEvent(root, fresh.id, captainActor(fresh), 'member.updated', { payload: { name: params.name } });
+    await writeTeam(root, fresh);
+    renderTeamDocs(env.workspace, fresh, (msg) => env.ctx.logger.warn(msg));
+    return fresh;
+  });
+}
+
+/** Remove a member: staged drop, or revoke work + interrupt when running. */
+export async function removeMember(env: RuntimeEnv, captain: Agent, name: string, teamId?: string): Promise<TeamState> {
+  const team = teamId ? await requireTeamById(env, captain, teamId) : await requireCaptainTeam(env, captain);
+  return withTeam(env, team.id, async (fresh, root) => {
+    const member = requireMember(fresh, name);
+    const now = Date.now();
+    if (member.currentAttemptId) {
+      // Revoke open work (docs/06.4): attempt revoked, task back to ready.
+      const task = fresh.tasks.find((t) => t.currentAttemptId === member.currentAttemptId);
+      if (task) {
+        const attempt = task.attempts.find((a) => a.id === member.currentAttemptId);
+        if (attempt && (attempt.status === 'pending_accept' || attempt.status === 'running')) {
+          attempt.status = 'revoked';
+          attempt.endedAt = now;
+        }
+        if (task.status === 'assigned' || task.status === 'in_progress' || task.status === 'retrying') {
+          task.status = 'ready';
+          task.assignee = undefined;
+          task.currentAttemptId = undefined;
+          task.updatedAt = now;
+        }
+        await recordEvent(root, fresh.id, captainActor(fresh), 'task.unassigned', { taskId: task.id, attemptId: member.currentAttemptId, payload: { reason: 'member.removed', member: name } });
+      }
+    }
+    if (member.status !== 'staged' && member.id) {
+      const captainAgent = env.ctx.agents.get(fresh.captainSessionId) ?? captain;
+      interruptMember(env, member, captainAgent);
+    }
+    member.status = 'removed';
+    member.currentAttemptId = undefined;
+    member.removedAt = now;
+    await recordEvent(root, fresh.id, captainActor(fresh), 'member.removed', { payload: { name } });
+    await writeTeam(root, fresh);
+    renderTeamDocs(env.workspace, fresh, (msg) => env.ctx.logger.warn(msg));
+    return fresh;
+  });
+}
+
+async function requireTeamById(env: RuntimeEnv, captain: Agent, teamId: string): Promise<TeamState> {
+  const team = await readTeam(stateRootOf(env), teamId);
+  if (!team) throw new ETeamsError(`团队「${teamId}」不存在`);
+  if (team.captainSessionId !== String(captain.id)) throw new ETeamsError('只有该团队的领队可以执行此操作');
+  return team;
+}
+
+/** Captain → member or member → captain/member message (docs/09.1). */
+export async function sendMessage(
+  env: RuntimeEnv,
+  team: TeamState,
+  from: Actor,
+  to: string,
+  content: string,
+  refs: { taskId?: string } = {},
+): Promise<void> {
+  return withTeam(env, team.id, async (fresh, root) => {
+    if (to === 'captain') {
+      const captainAgent = env.ctx.agents.get(fresh.captainSessionId);
+      await deliverMail(env, fresh, 'captain', {
+        id: `m${Date.now().toString(36)}`,
+        seq: readBox(env, fresh.id, 'captain').length + 1,
+        at: Date.now(),
+        from,
+        to: { kind: 'captain', name: '领队' },
+        kind: from.kind === 'user' ? 'user_message' : 'report',
+        taskId: refs.taskId,
+        content,
+      });
+      if (captainAgent) {
+        try {
+          const { createUserMessage } = await import('@deepseek-ai/dsh-llm');
+          captainAgent.followup(createUserMessage({ content: [{ type: 'text', text: `[来自 ${from.name ?? from.kind}] ${content}` }], source: { kind: 'plugin', plugin: 'dsh-eteams' } }));
+        } catch (error) {
+          env.ctx.logger.warn(`eteams: captain wake failed: ${String(error)}`);
+        }
+      }
+    } else {
+      const member = requireMember(fresh, to);
+      await deliverMail(env, fresh, member.name, {
+        id: `m${Date.now().toString(36)}`,
+        seq: readBox(env, fresh.id, member.name).length + 1,
+        at: Date.now(),
+        from,
+        to: { kind: 'member', name: member.name },
+        kind: 'notice',
+        taskId: refs.taskId,
+        content,
+      });
+      await wakeMember(env, fresh, member, `[来自 ${from.name ?? from.kind}] ${content}`);
+    }
+    await recordEvent(root, fresh.id, from, 'message.sent', { taskId: refs.taskId, payload: { to, length: content.length } });
+  });
+}
+
+/** Read-only team view used by both tool faces (JSON-safe for tool output). */
+export function teamView(env: RuntimeEnv, team: TeamState): Record<string, JsonValue> {
+  return {
+    id: team.id,
+    name: team.name,
+    goal: team.goal,
+    phase: team.phase,
+    planReviewState: team.planReviewState ?? null,
+    workDir: team.workDir ?? null,
+    members: team.members
+      .filter((m) => m.status !== 'removed')
+      .map((m): JsonValue => ({ name: m.name, role: m.role, status: m.status, route: { ...m.modelRoute }, currentTask: currentTaskOf(team, m.name)?.id ?? null })),
+    tasks: team.tasks.map((t): JsonValue => ({ id: t.id, subject: t.subject, status: t.status, assignee: t.assignee ?? null, chain: t.chain.length, cursor: t.chainCursor })),
+    pendingDecisions: team.pendingDecisions.filter((d) => d.status === 'open').map((d): JsonValue => ({ ...d })),
+    captainMailbox: readBox(env, team.id, 'captain').slice(-10).map((m): JsonValue => ({ id: m.id, seq: m.seq, at: m.at, from: { kind: m.from.kind, name: m.from.name ?? null }, to: { kind: m.to.kind, name: m.to.name ?? null }, kind: m.kind, taskId: m.taskId ?? null, attemptId: m.attemptId ?? null, content: m.content, readAt: m.readAt ?? null })),
+  };
+}
+
+function currentTaskOf(team: TeamState, memberName: string) {
+  return team.tasks.find((t) => t.assignee === memberName && ['assigned', 'in_progress', 'retrying', 'paused'].includes(t.status));
+}
+
+/** Archive a completed/halted team (docs/09.1 archive/<id>). */
+export async function archiveTeam(env: RuntimeEnv, captain: Agent, teamId: string): Promise<string> {
+  const team = await requireTeamById(env, captain, teamId);
+  return withTeam(env, team.id, async (fresh, root) => {
+    if (fresh.phase !== 'completed' && fresh.phase !== 'halted') {
+      throw new ETeamsError('只能归档 completed/halted 团队', '先取消全部任务或等待团队完成');
+    }
+    await recordEvent(root, fresh.id, captainActor(fresh), 'team.archived', {});
+    const dest = join(root, 'archive');
+    mkdirSync(dest, { recursive: true });
+    const target = join(dest, fresh.id);
+    if (existsSync(target)) throw new ETeamsError(`归档目录 ${target} 已存在`);
+    renameSync(join(root, fresh.id), target);
+    return target;
+  });
+}
+
+/** Delete a staged/completed team directory permanently. */
+export async function deleteTeam(env: RuntimeEnv, captain: Agent, teamId: string): Promise<void> {
+  const team = await requireTeamById(env, captain, teamId);
+  return withTeam(env, team.id, async (fresh, root) => {
+    if (!['staged', 'completed', 'halted'].includes(fresh.phase)) {
+      throw new ETeamsError('running 团队不能直接删除', '先取消任务（cancel_task）或停止团队');
+    }
+    rmSync(join(root, fresh.id), { recursive: true, force: true });
+  });
+}
+
+/** Helper re-export for tools (slug kept consistent with docs). */
+export { sanitizeKey, memberActor, notifyCaptain };

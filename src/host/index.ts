@@ -1,19 +1,20 @@
 /**
  * dsh-eteams — host-plane plugin for DeepSeek Harness.
  *
- * M0 (工程脚手架) ships the plugin skeleton:
- * - configuration schema (cordis.patch.yml `config:` block → `ETeamsConfig`);
- * - one smoke tool `eteams_ping` proving the `tools` inject and the caller
- *   identity seam (`exec.agent`) work end to end;
- * - the client bundle (see `./client` entry) adds the 团队 tab and the
- *   composer 团队 button.
+ * M1 (状态与核心工具) ships the full team lifecycle:
+ * - durable state (`<workspace>/.eteams/<teamId>/`) with events + snapshots;
+ * - captain tools (`eteams_create_team … eteams_mailbox`) and member tools
+ *   (`eteams_claim_task … eteams_team_status`) with per-caller identity;
+ * - continuable member spawning with persona injection and per-child tool
+ *   installation (`registerContinuableSetup`), captain tools denied at spawn;
+ * - execution chains (D11) with deviation notes, attempt tokens, 完成即续派
+ *   notifications, and immediate same-member retry (M1; backoff in M2);
+ * - task work documents under `<workspace>/teams/<team-slug>/` (D12).
  *
- * Later milestones (M1+) add the team lifecycle tools, member runtime, task
- * chains, mailboxes, and HTTP surfaces — see docs/15-development-plan.md.
+ * M0 pieces kept: configuration schema, `eteams_ping`, the client bundle
+ * (团队 tab + composer button).
  *
- * Installation (bundle): `dsh plugin --profile <name> add dsh-eteams`
- * (or a local path). The bundle patch mounts this plugin row into the host
- * composition, so every session of the profile can drive ETeams.
+ * Installation: `dsh plugin --profile <name> add C:\eTeam` (live link).
  *
  * @module dsh-eteams
  */
@@ -24,14 +25,26 @@ import type { Agent } from '@deepseek-ai/dsh-agent';
 import { ETeamsConfig } from './config.js';
 import type { ETeamsResolvedConfig } from './config.js';
 import { PLUGIN_ID, PLUGIN_VERSION, STATE_SCHEMA_VERSION, TOOL_PREFIX } from './version.js';
+import { createCaptainTools } from './tools/captainTools.js';
+import { createMemberTools } from './tools/memberTools.js';
+import { installMemberRuntime } from './runtime/members.js';
+import { CAPTAIN_SECTION_SHORT } from './prompts/captain.js';
+import { composeCaptainPersona } from './prompts/persona.js';
+import { personaDigest } from './prompts/persona.js';
 
 /** Host services this plugin requires at mount time. */
-export const inject = ['tools'];
+export const inject = ['tools', 'subagents', 'agents', 'systemPrompt'];
 
 /** Config schema consumed by the cordis loader (validated before apply). */
 export { ETeamsConfig };
 
-/** Best-effort human label for the calling agent (M0 diagnostics only). */
+/** Offline verification surface (verify script / integration tests). */
+export { createCaptainTools } from './tools/captainTools.js';
+export { createMemberTools } from './tools/memberTools.js';
+export { approvePlan } from './runtime/teamOps.js';
+export { assignTask, advanceTask, claimTask, completeTask, failTask } from './runtime/assignment.js';
+
+/** Best-effort human label for the calling agent (diagnostics only). */
 function callerLabel(agent: Agent | undefined): string {
   if (agent === undefined) return 'unknown';
   const probe = agent as unknown as { name?: unknown; sessionId?: unknown };
@@ -57,6 +70,41 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
     config.memberProvider,
   );
 
+  // 1) Captain tool face (root scope; members get toolFilter.deny at spawn).
+  for (const tool of createCaptainTools(config, ctx)) {
+    ctx.tools.register(tool);
+  }
+  log.info('eteams: captain tools registered');
+
+  // 2) Member runtime: per-child tool installation + route bookkeeping.
+  installMemberRuntime(
+    ctx as unknown as { logger: { info(m: string): void; warn(m: string): void }; subagents?: { registerContinuableSetup(c: (childCtx: Context) => () => void): () => void } },
+    config,
+    (childCtx, _env) => {
+      for (const tool of createMemberTools(config, childCtx as Context)) {
+        (childCtx as unknown as { tools: { register(t: unknown): unknown } }).tools.register(tool);
+      }
+    },
+  );
+  log.info('eteams: member runtime installed');
+
+  // 3) Captain standing prompt (compact section, tools guidance band).
+  try {
+    ctx.systemPrompt.section({
+      name: 'eteams-captain',
+      order: 105,
+      text: CAPTAIN_SECTION_SHORT,
+    });
+    log.info('eteams: system prompt section registered');
+  } catch (error) {
+    log.warn('eteams: systemPrompt section registration failed: %s', String(error));
+  }
+
+  // 4) Captain persona digest (D13 override file support).
+  const persona = composeCaptainPersona(process.cwd(), config.stateDir);
+  log.info('eteams: captain persona ready (%s)', personaDigest(persona, '领队').slice(0, 60));
+
+  // 5) M0 smoke tool.
   const ping = defineTool({
     name: `${TOOL_PREFIX}ping`,
     description:
