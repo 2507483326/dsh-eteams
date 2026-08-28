@@ -100,3 +100,24 @@ export async function addTeamMember(
     body: JSON.stringify(payload),
   });
 }
+
+/** Delete one roster member. The leader (项目牧羊人) is rejected by the host. */
+export async function deleteRosterMember(name: string): Promise<void> {
+  await requestJson(`${API_BASE}/roster/${encodeURIComponent(name)}/remove`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+}
+
+/** Move a team member out of a team (领队不属于团队成员记录，无需删除). */
+export async function removeTeamMember(teamId: string, name: string): Promise<void> {
+  await requestJson(
+    `${API_BASE}/team/${encodeURIComponent(teamId)}/member/${encodeURIComponent(name)}/remove`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    },
+  );
+}

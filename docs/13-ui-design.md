@@ -195,3 +195,7 @@ t3 实现导出模块                    ●in_progress  [取消任务] [改派]
 - **成员详情角色手册（2026-08-28）**：详情页在人设摘要行下新增「角色手册（Markdown）」卡片，用宿主 `MarkdownText`（primitives）渲染 `personaMd`；无手册的成员不显示该卡片。新增成员表单可选填手册，命令以 `eteams-persona-md` 围栏携带原文，领队原样作为 personaMd 参数传入 `eteams_member_save`。
 
 - **领队卡片（2026-08-28，用户要求可见牧羊人）**：团队页成员栅格首行常驻领队卡——项目牧羊人（头像 seed 固定 + 「领队」roleChip + 「不接任务：负责拆解、指派与调度」副标），「查看手册」展开宿主 MarkdownText 渲染的领队角色手册。快照新增 `captain` 投影（name/role/duty/style/skills/personaMd/avatar，来自 composeCaptainPersona，随用户 captain-persona.yaml 覆盖变化）。领队不属于成员页（员工语义），不进成员列表。
+
+- **领队=成员定稿（2026-08-28 三改，用户模型）**：项目牧羊人作为第 5 个预置成员进入成员页列表（role=领队（项目牧羊人），带手册），**默认加入每个团队**（团队页 LeaderCard 常驻首行，带「查看手册」展开）、**不可删除**（`removeRosterMember` 与 POST /roster/<name>/remove 对领队返回 400；团队页拉人下拉排除领队）。其他成员均可删除：成员页行「删除」按钮（POST /roster/<name>/remove），团队页成员卡「移出团队」按钮（POST /team/<id>/member/<name>/remove → removeMember，执行中工作吊销、任务回到就绪池）。成员行改为 div（内嵌按钮，stopPropagation 防误触详情）。
+
+- **手册=原文逐字（2026-08-28 四改，用户要求直接下载对应角色 md）**：详情页/领队卡展示的手册即 agency-agents-zh 原文全文（数百行，含代码示例），不再是摘要蒸馏；新增成员命令的围栏按手册内最长反引号串自动加长，避免嵌套断裂。

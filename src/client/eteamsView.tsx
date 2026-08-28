@@ -16,7 +16,14 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives';
 import { Avatar } from './avatar';
 import { ClientErrorBoundary } from './diagnostics';
-import { addTeamMember, createTeamViaPanel, fetchRoster, type RosterMember } from './api';
+import {
+  addTeamMember,
+  createTeamViaPanel,
+  deleteRosterMember,
+  fetchRoster,
+  removeTeamMember,
+  type RosterMember,
+} from './api';
 import {
   relativeTime,
   useActivityMonitor,
@@ -34,6 +41,9 @@ const PHASE_LABELS: Record<string, string> = {
   completed: '已完成',
   archived: '已归档',
 };
+
+/** The leader is a member too — default-joined, undeletable (用户定稿模型). */
+const LEADER_NAME = '项目牧羊人';
 
 const STATUS_GROUPS: { id: string; label: string; statuses: string[]; tone: Tone }[] = [
   { id: 'active', label: '执行中', statuses: ['in_progress', 'retrying'], tone: 'info' },
@@ -620,7 +630,9 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
               }}
             />
           )}
-          {activeTab === 'roster' && <MembersTab members={roster} pool={pool} team={team} />}
+          {activeTab === 'roster' && (
+            <MembersTab members={roster} pool={pool} team={team} onDeleted={refreshRoster} />
+          )}
           {activeTab === 'tasks' && team !== undefined && (
             <TasksTab
               team={team}
@@ -796,7 +808,9 @@ function TeamTab({
       ) : (
         <>
           <div style={styles.card}>
-            <div style={styles.sectionTitle}>团队成员（{team.members.length}）</div>
+            <div style={styles.sectionTitle}>
+              团队成员（{team.members.length}）· 领队默认在团，不可移出
+            </div>
             {roster.length > 0 && (
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
                 <select
@@ -806,7 +820,9 @@ function TeamTab({
                 >
                   <option value="">— 从成员列表选择 —</option>
                   {roster
-                    .filter((m) => !team.members.some((t) => t.name === m.name))
+                    .filter(
+                      (m) => m.name !== LEADER_NAME && !team.members.some((t) => t.name === m.name),
+                    )
                     .map((m) => (
                       <option key={m.name} value={m.name}>
                         {m.name}（{m.role}）
@@ -825,7 +841,14 @@ function TeamTab({
             <div style={styles.memberGrid}>
               <LeaderCard captain={team.captain} />
               {team.members.map((m) => (
-                <MemberCard key={m.name} member={m} onOpenReports={onOpenReports} />
+                <MemberCard
+                  key={m.name}
+                  member={m}
+                  onOpenReports={onOpenReports}
+                  onRemove={(memberName) => {
+                    void removeTeamMember(team.teamId, memberName).catch(() => undefined);
+                  }}
+                />
               ))}
               {team.members.length === 0 && (
                 <div style={styles.muted}>
@@ -871,13 +894,15 @@ function LeaderCard({ captain }: { captain: CaptainView }): ReactNode {
   );
 }
 
-/** One team-member card: seeded avatar + status pill + optional 汇报入口. */
+/** One team-member card: seeded avatar + status pill + 移出团队（领队不可移出）. */
 function MemberCard({
   member: m,
   onOpenReports,
+  onRemove,
 }: {
   member: MemberView;
   onOpenReports?: (name: string) => void;
+  onRemove?: (name: string) => void;
 }): ReactNode {
   const tone = memberTone(m.status);
   return (
@@ -896,11 +921,22 @@ function MemberCard({
         {STATUS_LABELS[m.status] ?? m.status}
         {m.currentTaskId !== null && <span style={{ fontWeight: 400 }}>· {m.currentTaskId}</span>}
       </div>
-      {onOpenReports !== undefined && (
-        <button type="button" style={styles.btn} onClick={() => onOpenReports(m.name)}>
-          汇报记录
-        </button>
-      )}
+      <div style={{ display: 'flex', gap: 6 }}>
+        {onOpenReports !== undefined && (
+          <button type="button" style={styles.btn} onClick={() => onOpenReports(m.name)}>
+            汇报记录
+          </button>
+        )}
+        {onRemove !== undefined && (
+          <button
+            type="button"
+            style={{ ...styles.btn, color: T.err }}
+            onClick={() => onRemove(m.name)}
+          >
+            移出团队
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -910,10 +946,12 @@ function MembersTab({
   members,
   pool,
   team,
+  onDeleted,
 }: {
   members: RosterMember[];
   pool: TeamSnapshot[];
   team: TeamSnapshot | undefined;
+  onDeleted: () => void;
 }): ReactNode {
   const [view, setView] = useState<'list' | 'add' | 'detail'>('list');
   const [detailName, setDetailName] = useState<string | null>(null);
@@ -925,10 +963,24 @@ function MembersTab({
   const [executionPrompt, setExecutionPrompt] = useState('');
   const [personaMd, setPersonaMd] = useState('');
   const [copied, setCopied] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
+
+  const del = async (memberName: string): Promise<void> => {
+    setListError(null);
+    try {
+      await deleteRosterMember(memberName);
+      onDeleted();
+    } catch (e) {
+      setListError(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   // 通过对话创建（用户要求）：面板生成命令，用户粘贴到会话里由领队执行
   // eteams_member_save 入库——面板不直连写成员。personaMd（完整角色手册）
   // 以 Markdown 围栏附在命令尾部，由领队原样作为 personaMd 参数传入。
+  // 手册原文自带 ``` 代码块时用更长的围栏包裹，避免嵌套断裂。
+  const maxBacktickRun = personaMd.match(/`{3,}/g)?.reduce((m, f) => Math.max(m, f.length), 0) ?? 0;
+  const mdFence = '`'.repeat(Math.max(3, maxBacktickRun + 1));
   const command = [
     '用 eteams_member_save 创建成员：',
     `- 名字：${name.trim()}`,
@@ -941,9 +993,9 @@ function MembersTab({
       ? [
           '- 人设手册：把下面围栏内的 Markdown 原文作为 personaMd 参数传入',
           '',
-          '```eteams-persona-md',
+          `${mdFence}eteams-persona-md`,
           personaMd.trim(),
-          '```',
+          mdFence,
         ]
       : []),
   ].join('\n');
@@ -1065,8 +1117,11 @@ function MembersTab({
             />
             <div>
               <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>{detail.name}</div>
-              <div style={{ marginTop: 4 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
                 <span style={styles.roleChip}>{detail.role}</span>
+                {detail.name === LEADER_NAME && (
+                  <span style={styles.muted}>默认加入团队 · 不可删除</span>
+                )}
               </div>
             </div>
           </div>
@@ -1130,6 +1185,7 @@ function MembersTab({
             新增成员
           </Button>
         </div>
+        {listError !== null && <div style={styles.formError}>{listError}</div>}
         {members.length === 0 && (
           <div style={styles.empty}>
             还没有成员。先「新增成员」（生成对话命令由领队创建），再到「团队」页组建团队。
@@ -1137,10 +1193,10 @@ function MembersTab({
         )}
         {members.map((m) => {
           const teamNames = teamsOf(m.name);
+          const isLeader = m.name === LEADER_NAME;
           return (
-            <button
+            <div
               key={m.name}
-              type="button"
               style={styles.memberRow}
               onClick={() => {
                 setDetailName(m.name);
@@ -1149,16 +1205,30 @@ function MembersTab({
             >
               <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={32} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: T.text }}>
-                  {m.name}
-                  <span style={{ ...styles.muted, fontWeight: 400 }}> · {m.role}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{m.name}</span>
+                  {isLeader && <span style={styles.roleChip}>领队</span>}
                 </div>
                 <div style={{ ...styles.muted, fontSize: 11, marginTop: 1 }}>
+                  {m.role} ·{' '}
                   {teamNames.length === 0 ? '尚未加入团队' : `加入团队：${teamNames.join('、')}`}
                 </div>
               </div>
-              <span style={{ color: T.text3, fontSize: 14 }}>›</span>
-            </button>
+              {isLeader ? (
+                <span style={{ ...styles.muted, fontSize: 11 }}>默认加入团队 · 不可删除</span>
+              ) : (
+                <button
+                  type="button"
+                  style={{ ...styles.btn, color: T.err }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void del(m.name);
+                  }}
+                >
+                  删除
+                </button>
+              )}
+            </div>
           );
         })}
       </div>

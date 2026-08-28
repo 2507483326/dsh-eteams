@@ -10,7 +10,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { atomicWriteText } from '../state/store.js';
-import { PRESET_MEMBER_ROLES, ROLE_TEMPLATES } from '../prompts/persona.js';
+import { defaultCaptainPersona, PRESET_MEMBER_ROLES, ROLE_TEMPLATES } from '../prompts/persona.js';
 
 /** Stored avatar pair (docs/14): deterministic seed for the SVG renderer. */
 export interface AvatarPair {
@@ -112,6 +112,9 @@ export async function upsertRosterMember(
   return stored;
 }
 
+/** The team leader is itself a preset member: default-joined, undeletable. */
+export const LEADER_NAME = '项目牧羊人';
+
 /** Fixed salts so the four preset members look the same in every workspace. */
 const PRESET_SALTS: Record<string, number> = {
   前端开发者: 11,
@@ -121,14 +124,41 @@ const PRESET_SALTS: Record<string, number> = {
 };
 
 /**
- * Seed the four preset members (agency-agents-zh roles, name = role) into a
- * workspace roster on first access. Idempotent and non-destructive: existing
- * entries (including user edits to a preset) are never overwritten; only
- * missing presets are inserted.
+ * Seed the four preset members (agency-agents-zh roles, name = role) plus the
+ * leader (项目牧羊人) into a workspace roster on first access. Idempotent and
+ * non-destructive: existing entries (including user edits to a preset) are
+ * never overwritten; only missing presets are inserted.
  */
 export async function ensurePresetMembers(stateRoot: string): Promise<void> {
   const members = readRoster(stateRoot);
   let changed = false;
+  // The leader first: it belongs to the member list (用户模型：领队也是成员),
+  // is default-joined to every new team as the 团队页 leader card, and is
+  // protected from deletion (removeRosterMember rejects it).
+  const leader = members.find((m) => m.name === LEADER_NAME);
+  const captain = defaultCaptainPersona();
+  if (leader === undefined) {
+    members.push({
+      name: LEADER_NAME,
+      role: captain.role,
+      duty: captain.duty,
+      style: captain.style,
+      skills: captain.skills,
+      ...(captain.personaMd !== undefined ? { personaMd: captain.personaMd } : {}),
+      avatar: { seed: hashName(LEADER_NAME), salt: 7 },
+      updatedAt: Date.now(),
+    });
+    changed = true;
+  } else if (
+    captain.personaMd !== undefined &&
+    staleDistilledDoc(leader.personaMd) &&
+    leader.duty === captain.duty &&
+    leader.style === captain.style &&
+    leader.skills === captain.skills
+  ) {
+    leader.personaMd = captain.personaMd;
+    changed = true;
+  }
   for (const role of PRESET_MEMBER_ROLES) {
     const template = ROLE_TEMPLATES[role];
     if (template === undefined) continue;
@@ -147,11 +177,12 @@ export async function ensurePresetMembers(stateRoot: string): Promise<void> {
       changed = true;
       continue;
     }
-    // Backfill the role playbook for untouched presets from earlier versions
-    // (user-edited personas are never overwritten).
+    // Backfill / upgrade the role playbook for untouched presets from earlier
+    // versions (user-edited personas are never overwritten). staleDistilledDoc
+    // detects the short pre-verbatim handbooks so they upgrade to the source.
     if (
-      existing.personaMd === undefined &&
       template.personaMd !== undefined &&
+      (existing.personaMd === undefined || staleDistilledDoc(existing.personaMd)) &&
       existing.duty === template.duty &&
       existing.style === template.style &&
       existing.skills === template.skills
@@ -162,5 +193,29 @@ export async function ensurePresetMembers(stateRoot: string): Promise<void> {
   }
   if (!changed) return;
   const file: RosterFile = { schemaVersion: 1, members };
+  await atomicWriteText(rosterFile(stateRoot), `${JSON.stringify(file, null, 2)}\n`);
+}
+
+/**
+ * Detects the short hand-written playbooks from before the verbatim import
+ * (they carry 「## 交付标准」 but never the source's 「核心使命」 heading).
+ * User-written custom docs rarely match this shape, so they stay untouched.
+ */
+function staleDistilledDoc(md: string | undefined): boolean {
+  return md !== undefined && md.includes('## 交付标准') && !md.includes('核心使命');
+}
+
+/**
+ * Remove one roster entry by name. The leader (项目牧羊人) is a member too,
+ * but it is protected: deletion is rejected (用户模型：领队不可删除).
+ */
+export async function removeRosterMember(stateRoot: string, name: string): Promise<void> {
+  const trimmed = name.trim();
+  if (trimmed === '') throw new Error('成员名不能为空');
+  if (trimmed === LEADER_NAME) throw new Error('领队成员不可删除');
+  const members = readRoster(stateRoot);
+  const next = members.filter((m) => m.name !== trimmed);
+  if (next.length === members.length) throw new Error(`成员「${trimmed}」不存在`);
+  const file: RosterFile = { schemaVersion: 1, members: next };
   await atomicWriteText(rosterFile(stateRoot), `${JSON.stringify(file, null, 2)}\n`);
 }

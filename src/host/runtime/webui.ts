@@ -30,10 +30,12 @@ import {
   avatarSeedFor,
   ensurePresetMembers,
   findRosterMember,
+  LEADER_NAME,
   readRoster,
+  removeRosterMember,
   upsertRosterMember,
 } from './roster.js';
-import { addMember, createTeam } from './teamOps.js';
+import { addMember, createTeam, removeMember } from './teamOps.js';
 
 /** Web-server service key candidates, newest first. */
 const WEB_SERVER_KEYS = ['webServer', 'httpServer'] as const;
@@ -574,6 +576,54 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                   status: result.member.status,
                 },
               });
+              return;
+            }
+            // POST /roster/<name>/remove — delete a roster member (领队除外).
+            if (
+              req.method === 'POST' &&
+              segments[0] === 'roster' &&
+              segments.length === 3 &&
+              segments[2] === 'remove'
+            ) {
+              if (segments[1] === LEADER_NAME) {
+                sendError(res, 400, '领队成员不可删除');
+                return;
+              }
+              try {
+                await removeRosterMember(rootForWrites(ctx, config), segments[1]!);
+              } catch (e) {
+                sendError(res, 404, e instanceof Error ? e.message : String(e));
+                return;
+              }
+              sendJson(res, 200, { ok: true, removed: segments[1] });
+              return;
+            }
+            // POST /team/<id>/member/<name>/remove — move a member out of a team.
+            if (
+              req.method === 'POST' &&
+              segments[0] === 'team' &&
+              segments.length === 5 &&
+              segments[2] === 'member' &&
+              segments[4] === 'remove'
+            ) {
+              const located = locateTeam(ctx, config, segments[1]!);
+              if (!located) {
+                sendError(res, 404, `团队 ${segments[1]} 不存在`);
+                return;
+              }
+              const { team, workspacePath } = located;
+              try {
+                await removeMember(
+                  envFor(ctx, config, workspacePath),
+                  agentFor(team.captainSessionId),
+                  segments[3]!,
+                  team.id,
+                );
+              } catch (e) {
+                sendError(res, 400, e instanceof Error ? e.message : String(e));
+                return;
+              }
+              sendJson(res, 200, { ok: true, removed: segments[3] });
               return;
             }
             if (req.method !== 'GET') {
