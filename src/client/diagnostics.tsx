@@ -2,7 +2,7 @@
  * Client-side diagnostics (FR: 插件日志记录): capture every renderer-side
  * error the main-process logs cannot see — bundle load, window errors,
  * unhandled rejections, React render failures — into a ring buffer and
- * batch-upload them to the host route `POST /plugins/dsh-eteams/client-log`,
+ * batch-upload them to the host route `POST /eteams-api/client-log`,
  * which persists them under `<workspace>/.eteams/logs/client.log` for
  * offline inspection.
  *
@@ -12,7 +12,7 @@ import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { PLUGIN_VERSION_LABEL } from './versionLabel';
 
 /** Client-side log URL served by the host web surface. */
-const CLIENT_LOG_URL = '/plugins/dsh-eteams/client-log';
+const CLIENT_LOG_URL = '/eteams-api/client-log';
 
 /** One captured client-side event. */
 export interface ClientDiagEntry {

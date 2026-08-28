@@ -1,6 +1,6 @@
 /**
  * Client-side activity monitor (docs/12.4): a single polling loop over the
- * host `/plugins/dsh-eteams/state` route feeding a `useSyncExternalStore`
+ * host `/eteams-api/state` route feeding a `useSyncExternalStore`
  * snapshot store. Cadence: 1s while any team exists, 5s probe when none
  * (keeps a cardless session able to discover a team created later), paused
  * while the document is hidden (docs/13.7).
@@ -10,7 +10,7 @@
 import { useEffect, useSyncExternalStore } from 'react';
 
 /** Base URL served by the host web surface. */
-export const STATE_URL = '/plugins/dsh-eteams/state';
+export const STATE_URL = '/eteams-api/state';
 
 /** Live cadence while teams exist (docs/15.6 DoD: ≤1s reflection). */
 const POLL_MS = 1000;

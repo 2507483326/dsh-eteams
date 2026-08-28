@@ -8,7 +8,7 @@ ETeams for DeepSeek Harness — 领队（captain）把目标拆解为任务、�
 
 ## M4 能力一览（Web 基础 UI）
 
-- **状态路由（宿主端，回环）**：`GET /plugins/dsh-eteams/state`（全量团队快照 + 归档摘要）、`/team/<id>/task/<tid>/track`（执行线路）、`/team/<id>/events?afterSeq=`（事件增量）、`/team/<id>/member/<name>/dialog`（成员对话框时间线）；懒绑定，webless profile 自动跳过
+- **状态路由（宿主端，回环）**：`GET /eteams-api/state`（全量团队快照 + 归档摘要）、`/team/<id>/task/<tid>/track`（执行线路）、`/team/<id>/events?afterSeq=`（事件增量）、`/team/<id>/member/<name>/dialog`（成员对话框时间线）；懒绑定，webless profile 自动跳过
 - **对话卡片（ETeamsCard）**：从 `eteams_create_team` 工具事件折叠，轮询快照实时渲染阶段徽标/成员行/进度条/最新事件 +「打开面板」
 - **活动面板（团队 tab）**：团队切换器 + 四视图只读——概览（目标/进度/最近动态/决策横幅）、成员（卡片网格 + 状态点 + 对话记录）、任务（状态分组 + 执行链站点 ✔/●/◌ + 重试计数 + 详情抽屉执行线路）、动态（事件流）
 - **轮询（docs/12.4）**：1s 活跃 / 5s 探测 / 页面隐藏暂停 / 恢复即刷，`useSyncExternalStore` 单循环

@@ -1,6 +1,6 @@
 /**
  * Web surface (docs/12, M4 subset — read-only): loopback HTTP routes under
- * `/plugins/dsh-eteams` served from the durable state files, for the client
+ * `/eteams-api` served from the durable state files, for the client
  * panel to poll. Registration is lazy: the web server and workspace registry
  * are sibling services that headless profiles never mount and concurrent
  * activations may bind after this plugin, so we try now and retry on each
@@ -31,7 +31,7 @@ const WEB_SERVER_KEYS = ['webServer', 'httpServer'] as const;
 const WORKSPACE_KEYS = ['workspaceRegistry', 'workspace'] as const;
 
 /** Base URL prefix for every eteams route. */
-export const ROUTE_PREFIX = '/plugins/dsh-eteams';
+export const ROUTE_PREFIX = '/eteams-api';
 
 /** Minimal structural view of the host web server service. */
 interface WebServerLike {

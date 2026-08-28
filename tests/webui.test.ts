@@ -190,7 +190,7 @@ describe('web surface installation', () => {
     expect(installWebSurface(ctx, config)).toBe(true);
     expect(registered).toHaveLength(1);
     expect(registered[0]!.kind).toBe('prefix');
-    expect(registered[0]!.path).toBe('/plugins/dsh-eteams');
+    expect(registered[0]!.path).toBe('/eteams-api');
   });
 
   it('serves archived team summaries from archive/', async () => {
@@ -235,7 +235,7 @@ describe('web surface installation', () => {
         this.body = data ?? '';
       },
     };
-    await registered[0]!.handler({ method: 'GET', url: '/plugins/dsh-eteams/state' }, res);
+    await registered[0]!.handler({ method: 'GET', url: '/eteams-api/state' }, res);
     const captured = JSON.parse(res.body) as {
       archivedTeams: { teamId: string }[];
     };
@@ -279,7 +279,7 @@ describe('web surface installation', () => {
     });
     const req = {
       method: 'POST',
-      url: '/plugins/dsh-eteams/client-log',
+      url: '/eteams-api/client-log',
       on(event: string, cb: (chunk?: Buffer) => void) {
         if (event === 'data') cb(Buffer.from(body, 'utf8'));
         if (event === 'end') cb();
