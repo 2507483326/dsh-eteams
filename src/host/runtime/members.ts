@@ -40,6 +40,8 @@ export function parseMemberLabel(
 export const MEMBER_DENIED_TOOLS: readonly string[] = [
   'eteams_create_team',
   'eteams_add_member',
+  'eteams_member_save',
+  'eteams_member_list',
   'eteams_remove_member',
   'eteams_update_member',
   'eteams_create_task',

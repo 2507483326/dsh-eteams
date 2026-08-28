@@ -36,6 +36,8 @@ export interface MemberView {
   currentAttemptId: string | null;
   childId: string | null;
   removed: boolean;
+  /** Pre-generated avatar pair (docs/14); null for legacy members. */
+  avatar: { seed: number; salt: number } | null;
 }
 
 /** One attempt summary row (compact; full line via the track route). */

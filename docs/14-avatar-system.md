@@ -89,3 +89,11 @@ option  = randomOption(rand, widgets, palettes, {
 1. 单测：种子确定性（同 seed 同 option 同 SVG 字符串）、类别覆盖（必选类别无缺）、前向兼容（注入未知 id 不崩）。
 2. 快照测试：抽取 10 个种子渲染 SVG 字符串比对（防渲染器回归）。
 3. 体积审计：`assets/avatar/*.json` gz <80KB 预算（超限则压缩策略：形状 path 去重/简化坐标精度）。
+
+
+## 14.8 M6 首切片（2026-08-28 提前交付）
+
+- **种子化 SVG 渲染器已上线**（`src/client/avatar.tsx`）：(seed, salt) 经 mulberry32 确定性推导 背景/肤色/发型×5/眼型×3/嘴型×3/眼镜/腮红，64×64 viewBox，无外部资产；无头像对时回退首字母色环。
+- **头像提前生成**（用户需求）：成员库 upsert 时若未携带 avatar 即自动生成并落盘（`roster.json`），更新条目保留既有头像；团队采纳成员（fromRoster）继承成员库头像，非采纳路径按名字哈希 + 随机 salt 生成（`eteams_add_member`）。
+- **展示面**：成员 tab（团队成员卡片 + 成员库行）、团队 tab、快照 `members[].avatar` 投影。
+- M6 剩余：vue-color-avatar 完整形状数据移植、重摇/编辑器、种子化数据资产压缩。

@@ -1,15 +1,22 @@
-# 12 Web 接口（/plugins/dsh-eteams/*）
+# 12 Web 接口（/eteams-api/*）
 
 服务端 HTTP 路由契约。读路由供面板轮询，写路由（ops）供 UI 操作（D10 的 UI 指派等）。信任模型与参考实现一致：回环暴露（宿主 `networkExposure: loopback`）、会话归属校验、无跨源凭证。
 
+> **前缀变更（2026-08-28 事故，见 18 §7.1）**：基前缀由 `/plugins/dsh-eteams` 迁至 **`/eteams-api`**。`/plugins` 命名空间归 client-modules 独占（bundle URL `/plugins/<包名>/client.js`），插件不得在其下注册任何路由。
+
 ## 12.1 通用约定
 
-- 基前缀：`/plugins/dsh-eteams`
+- 基前缀：`/eteams-api`
+- 路径段按 URL 解码后匹配（团队 id / 成员名允许 CJK）
 - 所有响应 `content-type: application/json; charset=utf-8`、`cache-control: no-store`
 - 错误格式：`{ "error": string, "hint"?: string }` + 恰当 HTTP 码（400 参数 / 404 不存在 / 409 状态冲突 / 405 方法 / 500 内部）
 - 会话标识：读路由用 `?session=<sessionId>`；写路由 body 带 `sessionId`，服务端校验「该会话是否团队领队/所属会话」后执行（与团队状态同锁）。
 
 ## 12.2 读路由
+
+### GET `/roster` ✅
+
+返回 `{ members: RosterMember[] }`（D16 成员库，见 5.11）。
 
 ### GET `/state?session=<id>`
 
@@ -81,11 +88,16 @@ staged 计划编辑器数据（成员草案 + 人设 + 任务 DAG + 执行链 + 
 
 ## 12.3 写路由（ops，全部 POST）
 
+> **实现状态**：M5 首切片已于 M4 后提前交付——`/roster`、`/team`（新建）、`/team/<id>/member`（入库添加）；其余仍为 M5 计划契约。已实现路由的工作区解析：优先已存在 `.eteams` 的工作区，否则第一个注册工作区。
+
 统一 body：`{ "sessionId": "…", … }`。语义与 11 的工具一一对应（复用同一状态机实现，防两套逻辑漂移）：
 
-| 路由 | body 附加字段 | 行为 |
-|---|---|---|
-| `/team/<id>/plan/approve` | - | 批准计划（唯一批准入口；领队工具无此能力） |
+| 路由 | 状态 | body 附加字段 | 行为 |
+|---|---|---|---|
+| `/roster` | ✅ 已实现 | `{ name, role, duty?, style?, skills?, rules?, executionPrompt?, provider?, model?, reasoningEffort? }` | 成员库 upsert（D16；按 name 键） |
+| `/team` | ✅ 已实现 | `{ name, goal, sessionId }` | 新建 staged 团队并绑定领队会话（events 记 via=panel） |
+| `/team/<id>/member` | ✅ 已实现 | `{ name, fromRoster: true, …覆盖字段? }` | 添加成员；fromRoster 时从成员库采纳人设（显式字段覆盖），events 记 via=panel |
+| `/team/<id>/plan/approve` | 计划（M5） | - | 批准计划（唯一批准入口；领队工具无此能力） |
 | `/team/<id>/plan/return` | `{ message? }` | 退回修改（终止规划轮次，注入修改指令） |
 | `/team/<id>/plan/discard` | - | 放弃草案（二次确认在 UI） |
 | `/team/<id>/tasks` | `{ subject, description, dependencies, chain?, acceptance? }` | 新增任务（D5；running 时 createdBy=user；chain 见 11） |

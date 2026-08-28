@@ -63,6 +63,8 @@ export async function createTeam(
     approval?: 'required' | 'automatic';
     questionnaire?: string[];
     maxRetries?: number;
+    /** Origin marker for events (tool / panel). */
+    via?: string;
   },
 ): Promise<TeamState> {
   const root = stateRootOf(env);
@@ -96,7 +98,12 @@ export async function createTeam(
       pendingDecisions: [],
     };
     await recordEvent(root, id, captainActor(team), 'team.created', {
-      payload: { name: team.name, goal: team.goal, approval: params.approval ?? 'required' },
+      payload: {
+        name: team.name,
+        goal: team.goal,
+        approval: params.approval ?? 'required',
+        ...(params.via !== undefined ? { via: params.via } : {}),
+      },
     });
     if (params.questionnaire && params.questionnaire.length > 0) {
       await recordEvent(root, id, captainActor(team), 'plan.questionnaire', {
@@ -164,9 +171,18 @@ export async function addMember(
     name: string;
     role: string;
     executionPrompt?: string;
+    /** Persona framework content (D13) — overrides the role template. */
+    duty?: string;
+    style?: string;
+    skills?: string;
+    rules?: string[];
     provider?: string;
     model?: string;
     reasoningEffort?: string;
+    /** Pre-generated avatar (docs/14); generated from the name when absent. */
+    avatar?: { seed: number; salt: number };
+    /** Origin marker for events (tool / panel). */
+    via?: string;
   },
 ): Promise<{ team: TeamState; member: MemberRecord }> {
   const resolve = async (): Promise<TeamState> => {
@@ -208,15 +224,25 @@ export async function addMember(
       id: '',
       name,
       role: params.role.trim() || 'member',
-      persona: defaultPersonaFor(name, params.role, params.executionPrompt),
+      persona: mergePersona(defaultPersonaFor(name, params.role, params.executionPrompt), {
+        ...(params.duty !== undefined ? { duty: params.duty } : {}),
+        ...(params.style !== undefined ? { style: params.style } : {}),
+        ...(params.skills !== undefined ? { skills: params.skills } : {}),
+        ...(params.rules !== undefined ? { rules: params.rules } : {}),
+      }),
       modelRoute: route,
       status: 'staged',
-      avatar: { seed: hashName(name), salt: Math.floor(Math.random() * 1000) },
+      avatar: params.avatar ?? { seed: hashName(name), salt: Math.floor(Math.random() * 1000) },
       createdAt: Date.now(),
     };
     fresh.members.push(member);
     await recordEvent(root, fresh.id, captainActor(fresh), 'member.added', {
-      payload: { name, role: member.role, route },
+      payload: {
+        name,
+        role: member.role,
+        route,
+        ...(params.via !== undefined ? { via: params.via } : {}),
+      },
     });
     if (fresh.phase === 'running') {
       // FR-15 mid-run addition: spawn immediately.

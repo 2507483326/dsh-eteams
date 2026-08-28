@@ -33,6 +33,7 @@ import {
 } from '../runtime/assignment.js';
 import { listTeams, envForAgent, resolveCaller } from './identity.js';
 import { readBox } from '../runtime/notifier.js';
+import { readRoster, upsertRosterMember } from '../runtime/roster.js';
 import { stationProgress } from '../model/taskMachine.js';
 import type { TaskRecord } from '../model/types.js';
 
@@ -153,6 +154,10 @@ export function createCaptainTools(
       name: strR('成员名（任务链与指派都用它）'),
       role: strR('角色：researcher/engineer/reviewer/writer/…（决定默认人设）'),
       executionPrompt: str('成员执行提示（写入人设）'),
+      duty: str('职责边界（覆盖角色模板默认人设）'),
+      style: str('工作风格（覆盖角色模板默认人设）'),
+      skills: str('能力（覆盖角色模板默认人设）'),
+      rules: strArr('工作纪律列表（覆盖角色模板默认人设）'),
       provider: str('LLM provider（与 model 同给才生效，覆盖继承路线）'),
       model: str('LLM model'),
       reasoningEffort: str('推理力度（可选）'),
@@ -178,11 +183,97 @@ export function createCaptainTools(
         name: args.name,
         role: args.role,
         executionPrompt: args.executionPrompt,
+        duty: args.duty,
+        style: args.style,
+        skills: args.skills,
+        rules: args.rules,
         provider: args.provider,
         model: args.model,
         reasoningEffort: args.reasoningEffort,
       });
       return { ok: true as const, member: member.name, status: member.status, teamId: team.id };
+    },
+  });
+
+  const memberSaveTool = defineTool({
+    name: 'eteams_member_save',
+    description:
+      '把成员定义存入工作区成员库（D16，按名字 upsert）。成员库是人设模板：各团队用 eteams_add_member 或面板「添加成员」引用同一份定义。修改已有条目即更新，下次组建团队生效。',
+    parameters: {
+      name: strR('成员名（成员库唯一键）'),
+      role: strR('角色：researcher/engineer/reviewer/writer/…'),
+      duty: str('职责边界'),
+      style: str('工作风格'),
+      skills: str('能力'),
+      rules: strArr('工作纪律列表（整体替换）'),
+      executionPrompt: str('执行提示'),
+      provider: str('LLM provider（与 model 同给才生效）'),
+      model: str('LLM model'),
+      reasoningEffort: str('推理力度（可选）'),
+    },
+    output: {
+      schema: {
+        type: 'object' as const,
+        properties: {
+          ok: bool('是否成功'),
+          name: str('成员名'),
+          updatedAt: { type: 'integer' as const, description: '更新时间戳（毫秒）' },
+        },
+        additionalProperties: false as const,
+      },
+      render: (_a, v) => text(`成员库已保存：${v.name}`),
+    },
+    execute: async (args, exec) => {
+      const env = envForAgent(config, runtime, exec.agent, exec.signal);
+      const stored = await upsertRosterMember(stateRootOf(env), {
+        name: args.name,
+        role: args.role,
+        ...(args.duty !== undefined ? { duty: args.duty } : {}),
+        ...(args.style !== undefined ? { style: args.style } : {}),
+        ...(args.skills !== undefined ? { skills: args.skills } : {}),
+        ...(args.rules !== undefined ? { rules: args.rules } : {}),
+        ...(args.executionPrompt !== undefined ? { executionPrompt: args.executionPrompt } : {}),
+        ...(args.provider !== undefined ? { provider: args.provider } : {}),
+        ...(args.model !== undefined ? { model: args.model } : {}),
+        ...(args.reasoningEffort !== undefined ? { reasoningEffort: args.reasoningEffort } : {}),
+      });
+      return { ok: true as const, name: stored.name, updatedAt: stored.updatedAt };
+    },
+  });
+
+  const memberListTool = defineTool({
+    name: 'eteams_member_list',
+    description: '列出工作区成员库（D16）：可复用的成员定义。组建团队时可从中点名并带入人设。',
+    parameters: {},
+    output: {
+      schema: {
+        type: 'object' as const,
+        properties: {
+          ok: bool('是否成功'),
+          count: { type: 'integer' as const, description: '成员库条目数' },
+          names: {
+            type: 'array' as const,
+            items: { type: 'string' as const },
+            description: '成员名列表',
+          },
+        },
+        additionalProperties: false as const,
+      },
+      render: (_a, v) =>
+        text(
+          (v.count ?? 0) > 0
+            ? `成员库（${v.count ?? 0}）：${(v.names ?? []).join('、')}`
+            : '成员库为空',
+        ),
+    },
+    execute: async (_args, exec) => {
+      const env = envForAgent(config, runtime, exec.agent, exec.signal);
+      const members = readRoster(stateRootOf(env));
+      return {
+        ok: true as const,
+        count: members.length,
+        names: members.map((m) => m.name),
+      };
     },
   });
 
@@ -721,6 +812,8 @@ export function createCaptainTools(
   return [
     createTeamTool,
     addMemberTool,
+    memberSaveTool,
+    memberListTool,
     removeMemberTool,
     updateMemberTool,
     createTaskTool,

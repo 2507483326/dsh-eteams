@@ -6,6 +6,8 @@
 
 ```
 <workspace>/.eteams/                      # stateDir，可配置
+  roster.json                             # 工作区成员库（D16，5.11；工作区级，团队共享）
+  logs/client.log                         # 渲染端诊断遥测（环形 400 行）
   <teamId>/                               # teamId = sanitizeKey(团队名)，全局唯一
     team.json                             # 全量快照（TeamState，下述全部记录都在此）
     events.jsonl                          # append-only 事件日志（审计+恢复重放）
@@ -240,6 +242,31 @@ interface AvatarRecord {
 | 站点进度 | `(chainCursor+1) / chain.length`（无链任务不显示） |
 
 > blocked 为派生状态但会被**物化**进 `task.status`（依赖事件发生时刷新下游状态），保证 UI 排序/筛选简单；依赖恢复（挂起解除）时反向刷新。
+
+## 5.11 成员库 RosterMember（roster.json，D16）
+
+工作区级的**可复用成员定义**：用户（或领队经 `eteams_member_save`）按名字 upsert；各团队添加成员时按名引用，把人设字段复制进团队 MemberRecord。
+
+```ts
+interface RosterMember {
+  name: string;               // 唯一键（trim 后非空）
+  role: string;               // 角色标签（决定默认人设模板）
+  duty?: string;              // D13 人设框架字段（可选，覆盖模板）
+  style?: string;
+  skills?: string;
+  rules?: string[];
+  executionPrompt?: string;
+  provider?: string;          // 可选模型路线，团队采纳时随 persona 一起带入
+  model?: string;
+  reasoningEffort?: string;
+  updatedAt: number;          // upsert 时间戳
+}
+```
+
+- 文件形态：`{ schemaVersion: 1, members: RosterMember[] }`，原子写（同 09）。
+- **复制语义**：团队采纳（`fromRoster: true`）时把字段**复制**进该团队的 MemberRecord.persona——团队内后续用 `eteams_update_member` 改的是团队副本，不影响成员库；要全局升级就重新 upsert 成员库。
+- 同名团队内冲突：团队内成员名唯一（existing 检查），跨团队可同名。
+- v1 不提供删除/改名（避免悬空引用）；改字段即 upsert。
 
 ## 5.10 与旧 0.1 的关系
 

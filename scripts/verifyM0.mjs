@@ -27,6 +27,15 @@ if (exists('lib/index.js')) {
   const host = read('lib/index.js');
   ok('registers eteams_ping', host.includes('eteams_ping'));
   ok('applies config schema', host.includes('stateDir'));
+  // docs/18 §7.1: `/plugins` is owned by client-modules; our API must live at
+  // the dedicated top-level prefix, and the bundle-URL hijack must never
+  // reappear (2026-08-28 recovery-mode incident).
+  ok('web routes bound under /eteams-api', /['"`]\/eteams-api['"`]/.test(host));
+  ok('no /plugins namespace registration', !/['"`]\/plugins\/dsh-eteams/.test(host));
+  ok(
+    'member roster tools registered',
+    host.includes('eteams_member_save') && host.includes('eteams_member_list'),
+  );
 }
 
 console.log('lib/client.js (wrapped client bundle)');
@@ -44,6 +53,7 @@ if (exists('lib/client.js')) {
   );
   ok('registers conversation.view entry', client.includes('"conversation.view"'));
   ok('registers conversation.input.right entry', client.includes('"conversation.input.right"'));
+  ok('client fetches stay under /eteams-api', !/['"`]\/plugins\/dsh-eteams/.test(client));
   ok('no bare top-level import statements', !/^import\s/m.test(client));
 }
 

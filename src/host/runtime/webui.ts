@@ -10,6 +10,7 @@
  * @module dsh-eteams/host/webui
  */
 import type { Context } from '@deepseek-ai/cordis';
+import type { Agent } from '@deepseek-ai/dsh-agent';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import type { ETeamsResolvedConfig } from '../config.js';
 import type {
@@ -22,8 +23,10 @@ import type {
 } from '../model/types.js';
 import { archiveRoot, readEventsSync, readMailboxSync } from '../state/events.js';
 import { listTeamIds, readTeamSync } from '../state/store.js';
-import { joinPath } from './base.js';
+import { joinPath, type RuntimeContext, type RuntimeEnv } from './base.js';
 import { teamWorkDirRel } from './docs.js';
+import { findRosterMember, readRoster, upsertRosterMember } from './roster.js';
+import { addMember, createTeam } from './teamOps.js';
 
 /** Web-server service key candidates, newest first. */
 const WEB_SERVER_KEYS = ['webServer', 'httpServer'] as const;
@@ -96,6 +99,7 @@ function memberView(team: TeamState, m: MemberRecord) {
     currentAttemptId: m.currentAttemptId ?? null,
     childId: m.id || null,
     removed: m.status === 'removed',
+    avatar: m.avatar ?? null,
   };
 }
 
@@ -406,15 +410,153 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
           try {
             const url = new URL(req.url ?? '/', 'http://localhost');
             const path = url.pathname.slice(ROUTE_PREFIX.length) || '/';
-            const segments = path.split('/').filter((s) => s !== '');
+            // Decode once here: pathname arrives percent-encoded for non-ASCII
+            // team ids / member names (CJK slugs are the norm, docs/09).
+            const segments = path
+              .split('/')
+              .filter((s) => s !== '')
+              .map((s) => {
+                try {
+                  return decodeURIComponent(s);
+                } catch {
+                  return s;
+                }
+              });
             if (req.method === 'POST' && segments[0] === 'client-log' && segments.length === 1) {
               const raw = await readBody(req);
               const written = appendClientLog(ctx, config, raw);
               sendJson(res, 200, { ok: true, written });
               return;
             }
+            // ---------- panel writes (M5 first slice) ----------
+            if (req.method === 'POST' && segments[0] === 'roster' && segments.length === 1) {
+              const body = parseJsonObject(await readBody(req));
+              const stored = await upsertRosterMember(rootForWrites(ctx, config), {
+                name: str(body.name, ''),
+                role: str(body.role, ''),
+                ...(body.duty !== undefined ? { duty: str(body.duty) } : {}),
+                ...(body.style !== undefined ? { style: str(body.style) } : {}),
+                ...(body.skills !== undefined ? { skills: str(body.skills) } : {}),
+                ...(Array.isArray(body.rules) ? { rules: body.rules.map((r) => str(r)) } : {}),
+                ...(body.executionPrompt !== undefined
+                  ? { executionPrompt: str(body.executionPrompt) }
+                  : {}),
+                ...(body.provider !== undefined ? { provider: str(body.provider) } : {}),
+                ...(body.model !== undefined ? { model: str(body.model) } : {}),
+                ...(body.reasoningEffort !== undefined
+                  ? { reasoningEffort: str(body.reasoningEffort) }
+                  : {}),
+              });
+              sendJson(res, 200, { ok: true, member: stored });
+              return;
+            }
+            if (req.method === 'POST' && segments[0] === 'team' && segments.length === 1) {
+              const body = parseJsonObject(await readBody(req));
+              const name = str(body.name, '');
+              const sessionId = str(body.sessionId, '');
+              if (name === '' || sessionId === '') {
+                sendError(res, 400, 'name / sessionId 均不能为空');
+                return;
+              }
+              // Panel-created teams may omit the goal (name-only creation);
+              // the captain refines it in conversation afterwards.
+              const goal = str(body.goal, '') || '（待完善：与领队在对话中确认目标）';
+              const workspace = writeWorkspacePath(ctx, config);
+              const team = await createTeam(envFor(ctx, config, workspace), agentFor(sessionId), {
+                name,
+                goal,
+                approval: 'required',
+                via: 'panel',
+              });
+              sendJson(res, 200, { ok: true, teamId: team.id, name: team.name, phase: team.phase });
+              return;
+            }
+            if (
+              req.method === 'POST' &&
+              segments[0] === 'team' &&
+              segments.length === 3 &&
+              segments[2] === 'member'
+            ) {
+              const body = parseJsonObject(await readBody(req));
+              const name = str(body.name, '');
+              if (name === '') {
+                sendError(res, 400, 'name 不能为空');
+                return;
+              }
+              const located = locateTeam(ctx, config, segments[1]!);
+              if (!located) {
+                sendError(res, 404, `团队 ${segments[1]} 不存在`);
+                return;
+              }
+              const { team, workspacePath } = located;
+              const root = joinPath(workspacePath, config.stateDir);
+              const entry = findRosterMember(root, name);
+              if (body.fromRoster === true && !entry) {
+                sendError(res, 404, `成员库中没有「${name}」`);
+                return;
+              }
+              const result = await addMember(
+                envFor(ctx, config, workspacePath),
+                agentFor(team.captainSessionId),
+                {
+                  name,
+                  role: str(body.role, entry?.role ?? 'member'),
+                  ...(body.executionPrompt !== undefined
+                    ? { executionPrompt: str(body.executionPrompt) }
+                    : entry?.executionPrompt !== undefined
+                      ? { executionPrompt: entry.executionPrompt }
+                      : {}),
+                  ...(body.duty !== undefined
+                    ? { duty: str(body.duty) }
+                    : entry?.duty !== undefined
+                      ? { duty: entry.duty }
+                      : {}),
+                  ...(body.style !== undefined
+                    ? { style: str(body.style) }
+                    : entry?.style !== undefined
+                      ? { style: entry.style }
+                      : {}),
+                  ...(body.skills !== undefined
+                    ? { skills: str(body.skills) }
+                    : entry?.skills !== undefined
+                      ? { skills: entry.skills }
+                      : {}),
+                  ...(Array.isArray(body.rules)
+                    ? { rules: body.rules.map((r) => str(r)) }
+                    : entry?.rules !== undefined
+                      ? { rules: entry.rules }
+                      : {}),
+                  ...(entry?.avatar !== undefined ? { avatar: entry.avatar } : {}),
+                  ...(body.provider !== undefined && body.model !== undefined
+                    ? { provider: str(body.provider), model: str(body.model) }
+                    : entry?.provider !== undefined && entry.model !== undefined
+                      ? { provider: entry.provider, model: entry.model }
+                      : {}),
+                  ...(body.reasoningEffort !== undefined
+                    ? { reasoningEffort: str(body.reasoningEffort) }
+                    : entry?.reasoningEffort !== undefined
+                      ? { reasoningEffort: entry.reasoningEffort }
+                      : {}),
+                  via: 'panel',
+                },
+              );
+              sendJson(res, 200, {
+                ok: true,
+                teamId: team.id,
+                member: {
+                  name: result.member.name,
+                  role: result.member.role,
+                  status: result.member.status,
+                },
+              });
+              return;
+            }
             if (req.method !== 'GET') {
-              sendError(res, 405, 'M4 只读面板：仅支持 GET（client-log 除外）');
+              sendError(res, 405, 'M4 只读面板：仅支持 GET（写路由除外）');
+              return;
+            }
+            if (segments[0] === 'roster' && segments.length === 1) {
+              sendJson(res, 200, { members: readRoster(rootForWrites(ctx, config)) });
               return;
             }
             if (segments[0] === 'state' && segments.length === 1) {
@@ -466,7 +608,7 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                 return;
               }
               if (segments[2] === 'member' && segments[4] === 'dialog') {
-                const name = decodeURIComponent(segments[3]!);
+                const name = segments[3]!;
                 const member = team.members.find((m) => m.name === name);
                 if (!member) {
                   sendError(res, 404, `成员 ${name} 不存在`);
@@ -502,6 +644,48 @@ function locateTeam(
     if (team) return { team, root, workspacePath: workspace.path };
   }
   return undefined;
+}
+
+// ---------- panel-write helpers (M5 first slice) ----------
+
+/** The workspace panel writes target: prefer one with existing eteams state. */
+function writeWorkspacePath(ctx: Context, config: ETeamsResolvedConfig): string {
+  const registry = workspaceRegistryOf(ctx);
+  const list = registry?.list() ?? [];
+  if (list.length === 0) throw new Error('没有可用工作区（workspaceRegistry 未就绪）');
+  for (const workspace of list) {
+    if (existsSync(joinPath(workspace.path, config.stateDir))) return workspace.path;
+  }
+  return list[0]!.path;
+}
+
+/** State root for roster reads/writes (same resolution as writeWorkspacePath). */
+function rootForWrites(ctx: Context, config: ETeamsResolvedConfig): string {
+  return joinPath(writeWorkspacePath(ctx, config), config.stateDir);
+}
+
+/** Runtime env for a panel-driven mutation in one workspace. */
+function envFor(ctx: Context, config: ETeamsResolvedConfig, workspace: string): RuntimeEnv {
+  return { ctx: ctx as unknown as RuntimeContext, config, workspace };
+}
+
+/** Synthesize the captain Agent identity from a session id (staged ops only need id). */
+function agentFor(sessionId: string): Agent {
+  return { id: sessionId } as unknown as Agent;
+}
+
+/** Parse a JSON object body; throws on non-object payloads. */
+function parseJsonObject(raw: string): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(raw);
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('请求体必须是 JSON 对象');
+  }
+  return parsed as Record<string, unknown>;
+}
+
+/** Coerce one JSON value to a trimmed string with a fallback. */
+function str(value: unknown, fallback = ''): string {
+  return typeof value === 'string' ? value.trim() : fallback;
 }
 
 /** Member dialog timeline (D15 read-only): mailbox rows + member events merged. */

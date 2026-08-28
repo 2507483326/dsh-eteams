@@ -160,6 +160,161 @@ describe('TeamSnapshot builder (docs/12.2)', () => {
   });
 });
 
+describe('panel write routes (M5 first slice)', () => {
+  /** Install the web surface against a minimal registry ctx; return the handler. */
+  async function installFake(): Promise<{
+    handler: (req: unknown, res: unknown) => Promise<void>;
+    res: () => {
+      code: number;
+      body: string;
+      writeHead(code: number): void;
+      end(data?: string): void;
+    };
+    post: (path: string, body: unknown) => Promise<{ code: number; body: string }>;
+  }> {
+    const registered: { handler: (req: unknown, res: unknown) => Promise<void> }[] = [];
+    const ctx = {
+      get: (key: string) =>
+        key === 'webServer'
+          ? {
+              register: (route: { handler: (req: unknown, res: unknown) => Promise<void> }) => {
+                registered.push(route);
+              },
+            }
+          : key === 'workspaceRegistry'
+            ? { list: () => [{ path: workspace, title: 'ws' }] }
+            : undefined,
+      effect: (fn: () => unknown) => {
+        fn();
+        return () => undefined;
+      },
+      logger: { info: () => undefined, warn: () => undefined },
+    } as unknown as Context;
+    installWebSurface(ctx, config);
+    const handler = registered[0]!.handler;
+    const res = () => ({
+      code: 0,
+      body: '',
+      writeHead(code: number) {
+        this.code = code;
+      },
+      end(data?: string) {
+        this.body = data ?? '';
+      },
+    });
+    const post = async (path: string, body: unknown) => {
+      const r = res();
+      const payload = JSON.stringify(body);
+      await handler(
+        {
+          method: 'POST',
+          url: path,
+          on(event: string, cb: (chunk?: Buffer) => void) {
+            if (event === 'data') cb(Buffer.from(payload, 'utf8'));
+            if (event === 'end') cb();
+          },
+        },
+        r,
+      );
+      return { code: r.code, body: r.body };
+    };
+    return { handler, res, post };
+  }
+
+  it('upserts roster entries and serves GET /roster', async () => {
+    const { handler, res, post } = await installFake();
+    await post('/eteams-api/roster', { name: 'Alice', role: 'researcher', duty: '调研与检索' });
+    const again = await post('/eteams-api/roster', {
+      name: 'Alice',
+      role: 'writer',
+      style: '简洁',
+    });
+    expect(again.code).toBe(200);
+    const r = res();
+    await handler({ method: 'GET', url: '/eteams-api/roster' }, r);
+    expect(r.code).toBe(200);
+    const parsed = JSON.parse(r.body) as { members: { name: string; role: string }[] };
+    expect(parsed.members).toHaveLength(1);
+    expect(parsed.members[0]!.role).toBe('writer');
+  });
+
+  it('creates a staged team via POST /team and adopts a roster member', async () => {
+    const { post } = await installFake();
+    const saved = await post('/eteams-api/roster', {
+      name: 'Bob',
+      role: 'engineer',
+      skills: '实现与测试',
+      executionPrompt: '你是 Bob。',
+    });
+    expect(saved.code).toBe(200);
+    // Name-only creation (docs/13.x IA): no goal field — the host supplies a
+    // placeholder the captain refines in conversation.
+    const created = await post('/eteams-api/team', {
+      name: '面板建队',
+      sessionId: 'sess-panel',
+    });
+    expect(created.code).toBe(200);
+    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
+    const team = readTeamFromDisk(teamId);
+    expect(team.phase).toBe('staged');
+    expect(team.captainSessionId).toBe('sess-panel');
+    expect(team.goal).toContain('待完善');
+
+    const added = await post(`/eteams-api/team/${teamId}/member`, {
+      name: 'Bob',
+      fromRoster: true,
+    });
+    expect(added.code).toBe(200);
+    const fresh = readTeamFromDisk(teamId);
+    expect(fresh.members).toHaveLength(1);
+    expect(fresh.members[0]!.persona.skills).toBe('实现与测试');
+    expect(fresh.members[0]!.persona.executionPrompt).toBe('你是 Bob。');
+    const rosterMember = fresh.members[0]!;
+    expect(rosterMember.status).toBe('staged');
+  });
+
+  it('pre-generates a roster avatar and the adopted team member inherits it', async () => {
+    const { handler, res, post } = await installFake();
+    const saved = await post('/eteams-api/roster', { name: 'Cara', role: '前端开发者' });
+    expect(saved.code).toBe(200);
+    const stored = (
+      JSON.parse(saved.body) as { member: { avatar?: { seed: number; salt: number } } }
+    ).member;
+    expect(typeof stored.avatar?.seed).toBe('number');
+    expect(typeof stored.avatar?.salt).toBe('number');
+
+    const created = await post('/eteams-api/team', { name: '头像团队', sessionId: 'sess-panel' });
+    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
+    await post(`/eteams-api/team/${teamId}/member`, { name: 'Cara', fromRoster: true });
+    const fresh = readTeamFromDisk(teamId);
+    expect(fresh.members[0]!.avatar).toEqual(stored.avatar);
+
+    // Snapshot projection exposes the avatar pair for the panel renderer.
+    const { teamSnapshot } = await import('../src/host/runtime/webui');
+    const snap = teamSnapshot(fresh, workspace, config);
+    const member = (snap.members as { name: string; avatar: unknown }[]).find(
+      (m) => m.name === 'Cara',
+    )!;
+    expect(member.avatar).toEqual(stored.avatar);
+    void handler;
+    void res;
+  });
+
+  it('rejects adding a roster name that does not exist', async () => {
+    const { post } = await installFake();
+    const created = await post('/eteams-api/team', {
+      name: '拒绝测试',
+      sessionId: 'sess-panel',
+    });
+    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
+    const added = await post(`/eteams-api/team/${teamId}/member`, {
+      name: 'Ghost',
+      fromRoster: true,
+    });
+    expect(added.code).toBe(404);
+  });
+});
+
 describe('web surface installation', () => {
   it('stays tool-only when web services are absent (headless)', () => {
     const { ctx } = fakeCtx();

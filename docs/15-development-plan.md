@@ -119,3 +119,14 @@ DoD：16 章验收清单全绿；`dsh plugin add` 从打包产物安装成功。
 | FR-37~40 问询/文档/人设 | M1（问询协议/文档生成/人设框架），M5（人设与文档 UI） |
 | FR-41~42 执行槽与成员对话框 | M4（槽渲染/对话框时间线只读），M5（拖拽/发送） |
 | NFR-* | 贯穿（一致性 M1、恢复 M3、性能/审计 M8 收口） |
+
+## 15.x M4.5（2026-08-28，M5 首切片提前交付）
+
+用户需求驱动，从 M5 提前实现：成员库（D16）+ 面板「新建团队 / 添加成员」。
+
+- 数据：`<stateDir>/roster.json`（05.11）；runtime/roster.ts 原子读写。
+- 工具：`eteams_member_save` / `eteams_member_list`（领队专属，进 MEMBER_DENIED_TOOLS）；`eteams_add_member` 增加人设字段（duty/style/skills/rules）。
+- 路由：`GET|POST /eteams-api/roster`、`POST /eteams-api/team`、`POST /eteams-api/team/<id>/member`（12.3 标注✅）；事件记 via=panel。
+- UI：13.x 增补（primitives Modal + 双模式成员表单）。
+- 回归防线：verifyM0 增加「路由必须绑定 /eteams-api、禁止 /plugins/dsh-eteams」检查。
+- M5 剩余：staged 编辑器、任务 CRUD、UI 指派/拖拽、决策代答、计划批准/退回路由。
