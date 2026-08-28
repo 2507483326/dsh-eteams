@@ -16,32 +16,44 @@ export const ETEAMS_TAB_LABEL = '团队';
  */
 export const ETEAMS_DATA_ATTR = 'data-eteams';
 
+/** Selectors whose subtrees must never be treated as the view tab. */
+const EXCLUDED_ANCESTORS = `[${ETEAMS_DATA_ATTR}],[role="menu"],[role="dialog"],[role="listbox"]`;
+
 /**
- * Activate the 团队 view by clicking its host-rendered tab.
+ * Activate the 团队 view by clicking its host-rendered tab button.
  *
- * M0 bridge: the host does not (yet) expose a sanctioned view-activation API
- * to plugins — the tab ring is owned by ui-conversation's chat store, whose
- * write surface (`actions.setView`) is private to the declaring entry. Until
- * an official seam ships, we locate the host-rendered tab button by its exact
- * label text and synthesize a click. The bridge:
- * - only considers leaf elements whose trimmed text equals the tab label,
- * - ignores anything inside `[data-eteams]` (our own button/popup uses the
- *   same wording),
- * - prefers the last match (the tab ring renders after the header row),
- * - degrades silently (returns `false`) when the tab bar is absent (e.g. the
- *   session header collapsed), leaving the UI untouched.
+ * The session header renders the view ring as
+ * `<div role="tablist"><button role="tab" onClick={() => actions.setView(id)}>` —
+ * the real activation path. Candidates whose trimmed text equals the tab
+ * label are considered in two tiers:
+ * 1. `button[role="tab"]` elements (exact label match) — the sanctioned tab;
+ * 2. leaf `<div>`s (legacy fallback for header variants that wrap the label).
+ *
+ * Anything inside our own `[data-eteams]` DOM or an open menu/dialog/listbox
+ * (the composer popup portals to `<body>` after the tab ring and would
+ * otherwise win the "last match") is ignored.
  *
  * @returns whether a tab element was found and clicked.
  */
 export function activateETeamsTab(): boolean {
   if (typeof document === 'undefined') return false;
   const label = ETEAMS_TAB_LABEL;
-  const elements = document.querySelectorAll<HTMLElement>('div');
+  const excluded = (el: Element): boolean => el.closest(EXCLUDED_ANCESTORS) !== null;
+  const textOf = (el: Element): string => (el.textContent ?? '').trim();
+
+  const tab = [...document.querySelectorAll<HTMLButtonElement>('button[role="tab"]')].find(
+    (el) => !excluded(el) && textOf(el) === label,
+  );
+  if (tab) {
+    tab.click();
+    return true;
+  }
+
   let target: HTMLElement | undefined;
-  for (const el of elements) {
+  for (const el of document.querySelectorAll<HTMLElement>('div')) {
     if (el.children.length !== 0) continue;
-    if ((el.textContent ?? '').trim() !== label) continue;
-    if (el.closest(`[${ETEAMS_DATA_ATTR}]`) !== null) continue;
+    if (textOf(el) !== label) continue;
+    if (excluded(el)) continue;
     if ((el.className ?? '') === '') continue;
     target = el;
   }

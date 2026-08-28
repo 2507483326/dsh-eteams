@@ -63,15 +63,24 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
     // The literal attribute marks eteams-owned DOM for the activation bridge.
     <div style={styles.root} data-eteams="view">
       <h2 style={styles.title}>团队</h2>
-      <div style={styles.meta}>ETeams {PLUGIN_VERSION_LABEL} · M0 脚手架</div>
+      <div style={styles.meta}>ETeams {PLUGIN_VERSION_LABEL} · M1 状态与核心工具</div>
       <div style={styles.card}>
         <p style={styles.line}>
-          <span style={styles.badge}>里程碑</span>
-          团队面板（成员网格 / 任务图 / 执行槽 / 成员对话框）将在 M4–M5 开放。
+          <span style={styles.badge}>当前里程碑</span>
+          M1 已交付宿主端全生命周期（staged → 批准 → 指派 → 执行链 → 完成/升级）；面板数据视图在 M4–M5 开放。
         </p>
         <p style={styles.line}>
           <span style={styles.badge}>当前会话</span>
           {props.sessionId || '（未绑定会话）'}
+        </p>
+        <p style={styles.line}>
+          <span style={styles.badge}>开始使用</span>
+          在对话中说「用 AgentTeams 做某事」或 <code>/agent-teams</code>：领队建队 → 问询 → 拆解 → 等待你批准 → 派活执行。
+        </p>
+        <p style={styles.line}>
+          <span style={styles.badge}>状态落盘</span>
+          <code>&lt;工作区&gt;/.eteams/&lt;团队&gt;/</code>（team.json + events.jsonl + inbox/）；任务文档在
+          <code> teams/&lt;团队slug&gt;/</code>。
         </p>
         <p style={styles.line}>
           <span style={styles.badge}>冒烟验证</span>
