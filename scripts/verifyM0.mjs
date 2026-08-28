@@ -38,6 +38,10 @@ if (exists('lib/client.js')) {
   ok('factory receives require', client.includes('factory: (require) => {'));
   ok('exports.apply exported', client.includes('exports.apply'));
   ok('exports.inject exported', client.includes('exports.inject'));
+  ok(
+    'exports.inject declares every accessed service (slots + conversationEvents)',
+    /inject\s*=\s*\[\s*"slots"\s*,\s*"conversationEvents"\s*\]/.test(client),
+  );
   ok('registers conversation.view entry', client.includes('"conversation.view"'));
   ok('registers conversation.input.right entry', client.includes('"conversation.input.right"'));
   ok('no bare top-level import statements', !/^import\s/m.test(client));
@@ -59,9 +63,16 @@ const pkg = JSON.parse(read('package.json'));
 ok('dsh.bundle.patch', pkg.dsh?.bundle?.patch === './cordis.patch.yml');
 ok('dsh.client.platform web', pkg.dsh?.client?.platform === 'web');
 ok(
-  'dsh.client.inject lists slots deps',
+  'dsh.client.inject matches the reference browser roster',
   Array.isArray(pkg.dsh?.client?.inject) &&
-    pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-primitives'),
+    JSON.stringify(pkg.dsh.client.inject) ===
+      JSON.stringify([
+        '@deepseek-ai/dsh-client-locale',
+        '@deepseek-ai/dsh-client-runtime',
+        '@deepseek-ai/dsh-client-ui-conversation',
+        '@deepseek-ai/dsh-client-ui-layout',
+        '@deepseek-ai/dsh-client-ui-model-selection',
+      ]),
 );
 ok('exports ./cordis.patch.yml', pkg.exports?.['./cordis.patch.yml'] === './cordis.patch.yml');
 ok('exports ./client', Boolean(pkg.exports?.['./client']));

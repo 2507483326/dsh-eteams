@@ -207,7 +207,6 @@ describe('web surface installation', () => {
     writeFileSync(join(archive, 'arch-1', 'team.json'), JSON.stringify(archived), 'utf8');
 
     const registered: { handler: (req: unknown, res: unknown) => Promise<void> }[] = [];
-    let captured: unknown;
     const ctx = {
       get: (key: string) =>
         key === 'webServer'
@@ -237,14 +236,67 @@ describe('web surface installation', () => {
       },
     };
     await registered[0]!.handler({ method: 'GET', url: '/plugins/dsh-eteams/state' }, res);
-    captured = JSON.parse(res.body) as {
-      teams: unknown[];
-      archivedTeams: { teamId: string; name: string }[];
+    const captured = JSON.parse(res.body) as {
+      archivedTeams: { teamId: string }[];
     };
     expect(res.code).toBe(200);
-    expect(captured !== null && typeof captured === 'object').toBe(true);
-    expect((captured as { archivedTeams: { teamId: string }[] }).archivedTeams[0]!.teamId).toBe(
-      'arch-1',
-    );
+    expect(captured.archivedTeams[0]!.teamId).toBe('arch-1');
+  });
+
+  it('persists POST /client-log diagnostics under .eteams/logs/client.log', async () => {
+    const registered: { handler: (req: unknown, res: unknown) => Promise<void> }[] = [];
+    const ctx = {
+      get: (key: string) =>
+        key === 'webServer'
+          ? {
+              register: (route: { handler: (req: unknown, res: unknown) => Promise<void> }) => {
+                registered.push(route);
+              },
+            }
+          : key === 'workspaceRegistry'
+            ? { list: () => [{ path: workspace, title: 'ws' }] }
+            : undefined,
+      effect: (fn: () => unknown) => {
+        fn();
+        return () => undefined;
+      },
+      logger: { info: () => undefined, warn: () => undefined },
+    } as unknown as Context;
+    installWebSurface(ctx, config);
+    const res = {
+      code: 0,
+      body: '',
+      writeHead(code: number) {
+        this.code = code;
+      },
+      end(data?: string) {
+        this.body = data ?? '';
+      },
+    };
+    const body = JSON.stringify({
+      version: 'v0.2.0',
+      entries: [{ at: 1, kind: 'error', message: 'boom', source: 'a.js:1:1' }],
+    });
+    const req = {
+      method: 'POST',
+      url: '/plugins/dsh-eteams/client-log',
+      on(event: string, cb: (chunk?: Buffer) => void) {
+        if (event === 'data') cb(Buffer.from(body, 'utf8'));
+        if (event === 'end') cb();
+      },
+    };
+    await registered[0]!.handler(req, res);
+    expect(res.code).toBe(200);
+    expect(JSON.parse(res.body)).toMatchObject({ ok: true, written: 1 });
+    const log = readFileSync(join(workspace, '.eteams', 'logs', 'client.log'), 'utf8')
+      .split('\n')
+      .filter((l) => l !== '');
+    expect(log).toHaveLength(1);
+    const record = JSON.parse(log[0]!) as {
+      version: string;
+      entry: { kind: string; message: string };
+    };
+    expect(record.version).toBe('v0.2.0');
+    expect(record.entry).toMatchObject({ kind: 'error', message: 'boom' });
   });
 });

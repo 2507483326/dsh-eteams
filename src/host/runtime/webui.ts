@@ -10,7 +10,7 @@
  * @module dsh-eteams/host/webui
  */
 import type { Context } from '@deepseek-ai/cordis';
-import { readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import type { ETeamsResolvedConfig } from '../config.js';
 import type {
   EventRecord,
@@ -323,7 +323,68 @@ async function readBody(req: unknown): Promise<string> {
     r.on('error', reject);
   });
 }
-void readBody; // reserved for M5 write routes
+
+/** Ring cap for the persisted client log (lines). */
+const CLIENT_LOG_MAX_LINES = 400;
+
+/**
+ * Persist renderer-reported diagnostics to `<stateDir>/logs/client.log`
+ * (JSON lines, head-truncated ring). Prefers a workspace that already has
+ * eteams state; never throws — a broken log sink must not break the route.
+ */
+function appendClientLog(ctx: Context, config: ETeamsResolvedConfig, raw: string): number {
+  const registry = workspaceRegistryOf(ctx);
+  if (!registry) return 0;
+  const list = registry.list();
+  if (list.length === 0) return 0;
+  let root = joinPath(list[0]!.path, config.stateDir);
+  for (const ws of list) {
+    const candidate = joinPath(ws.path, config.stateDir);
+    if (existsSync(candidate)) {
+      root = candidate;
+      break;
+    }
+  }
+  let parsed: { version?: unknown; entries?: unknown };
+  try {
+    parsed = JSON.parse(raw) as { version?: unknown; entries?: unknown };
+  } catch {
+    return 0;
+  }
+  const batch = Array.isArray(parsed.entries) ? parsed.entries : [];
+  let written = 0;
+  try {
+    const dir = joinPath(root, 'logs');
+    mkdirSync(dir, { recursive: true });
+    const file = joinPath(dir, 'client.log');
+    const prev = existsSync(file)
+      ? readFileSync(file, 'utf8')
+          .split('\n')
+          .filter((l) => l !== '')
+      : [];
+    const lines: string[] = [...prev];
+    for (const item of batch) {
+      lines.push(
+        JSON.stringify({
+          at: Date.now(),
+          version: typeof parsed.version === 'string' ? parsed.version : 'unknown',
+          entry: item,
+        }),
+      );
+      written += 1;
+    }
+    while (lines.length > CLIENT_LOG_MAX_LINES) lines.shift();
+    writeFileSync(file, `${lines.join('\n')}\n`, 'utf8');
+    if (written > 0) {
+      const logger = (ctx as unknown as { logger?: { warn?: (msg: string) => void } }).logger;
+      if (typeof logger?.warn === 'function')
+        logger.warn(`eteams: client diagnostics +${written} → ${file}`);
+    }
+  } catch {
+    // sink failure is swallowed by design
+  }
+  return written;
+}
 
 /**
  * Install the eteams web surface (idempotent): registers one prefix route
@@ -346,8 +407,14 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
             const url = new URL(req.url ?? '/', 'http://localhost');
             const path = url.pathname.slice(ROUTE_PREFIX.length) || '/';
             const segments = path.split('/').filter((s) => s !== '');
+            if (req.method === 'POST' && segments[0] === 'client-log' && segments.length === 1) {
+              const raw = await readBody(req);
+              const written = appendClientLog(ctx, config, raw);
+              sendJson(res, 200, { ok: true, written });
+              return;
+            }
             if (req.method !== 'GET') {
-              sendError(res, 405, 'M4 只读面板：仅支持 GET');
+              sendError(res, 405, 'M4 只读面板：仅支持 GET（client-log 除外）');
               return;
             }
             if (segments[0] === 'state' && segments.length === 1) {

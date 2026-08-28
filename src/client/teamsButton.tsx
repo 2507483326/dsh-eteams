@@ -11,6 +11,7 @@
 import { useState } from 'react';
 import { Button, Menu } from '@deepseek-ai/dsh-client-ui-primitives';
 import { activateETeamsTab } from './bridge';
+import { ClientErrorBoundary } from './diagnostics';
 
 /**
  * Owner share of the input-region slots (`InputZone`): the conversation
@@ -29,30 +30,31 @@ export function TeamsButton(_props: TeamsButtonProps): React.ReactNode {
   const [open, setOpen] = useState(false);
 
   return (
-    // The literal attribute marks eteams-owned DOM for the activation bridge.
-    <div style={{ display: 'inline-flex', alignItems: 'center' }} data-eteams="button">
-      <Menu
-        open={open}
-        align="end"
-        side="bottom"
-        portal
-        items={[
-          { type: 'label', id: 'eteams-title', text: '团队' },
-          { type: 'separator', id: 'eteams-sep' },
-          { id: 'eteams-add-team', label: '＋ 新增团队' },
-        ]}
-        onSelect={(id) => {
-          if (id !== 'eteams-add-team') return;
-          setOpen(false);
-          activateETeamsTab();
-        }}
-        onClose={() => setOpen(false)}
-        anchor={
-          <Button variant="ghost" size="sm" aria-label="团队" onClick={() => setOpen((v) => !v)}>
-            团队
-          </Button>
-        }
-      />
-    </div>
+    <ClientErrorBoundary label="团队按钮">
+      <div style={{ display: 'inline-flex', alignItems: 'center' }} data-eteams="button">
+        <Menu
+          open={open}
+          align="end"
+          side="bottom"
+          portal
+          items={[
+            { type: 'label', id: 'eteams-title', text: '团队' },
+            { type: 'separator', id: 'eteams-sep' },
+            { id: 'eteams-add-team', label: '＋ 新增团队' },
+          ]}
+          onSelect={(id) => {
+            if (id !== 'eteams-add-team') return;
+            setOpen(false);
+            activateETeamsTab();
+          }}
+          onClose={() => setOpen(false)}
+          anchor={
+            <Button variant="ghost" size="sm" aria-label="团队" onClick={() => setOpen((v) => !v)}>
+              团队
+            </Button>
+          }
+        />
+      </div>
+    </ClientErrorBoundary>
   );
 }

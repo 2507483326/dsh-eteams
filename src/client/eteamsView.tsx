@@ -10,6 +10,7 @@ import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
 import { Avatar } from './avatar';
 import { PLUGIN_VERSION_LABEL } from './versionLabel';
+import { ClientErrorBoundary, clientDiagEntries } from './diagnostics';
 import {
   relativeTime,
   useActivityMonitor,
@@ -354,230 +355,263 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
   // Derived (no effect): stale/null selection falls back to the first team.
   const team = pool.find((t) => t.teamId === activeId) ?? pool[0];
   const now = state.serverTime || state.fetchedAt;
+  // Dialog target resolved defensively: a vanished member must not crash render.
+  const dialogMemberView =
+    dialogMember === null || team === undefined
+      ? null
+      : (team.members.find((m) => m.name === dialogMember) ?? null);
+  const diag = clientDiagEntries();
 
   return (
-    <div style={styles.root} data-eteams="view">
-      <div style={styles.header}>
-        <h2 style={styles.title}>团队</h2>
-        {pool.length > 0 && (
-          <select
-            style={styles.select}
-            value={team?.teamId ?? ''}
-            onChange={(e) => setActiveId(e.target.value)}
-          >
-            {pool.map((t) => (
-              <option key={t.teamId} value={t.teamId}>
-                {t.name}（{PHASE_LABELS[t.phase] ?? t.phase} {t.progress.completed}/
-                {t.progress.total}）
-              </option>
-            ))}
-          </select>
-        )}
-        <span style={styles.muted}>{PLUGIN_VERSION_LABEL}</span>
-      </div>
-
-      {team === undefined ? (
-        <div style={styles.empty}>
-          <p>本会话还没有团队。</p>
-          <p style={styles.line}>
-            在对话中说「用 AgentTeams 做某事」或 <code>/agent-teams</code>
-            ，领队会先问询、再拆解计划等你批准。
-          </p>
-          <p style={styles.muted}>
-            {state.error !== null ? `状态加载失败：${state.error}` : '轮询中…'}
-          </p>
-        </div>
-      ) : (
-        <>
-          {team.pendingDecisions.length > 0 && (
-            <div style={styles.banner}>
-              △ {team.pendingDecisions.length} 项待决策：
-              {team.pendingDecisions
-                .map((d) => `${d.taskId}（${d.error.slice(0, 40)}）`)
-                .join('；')}{' '}
-              —— 到对话里让领队处理，或等待 M5 的代答操作。
-            </div>
+    <ClientErrorBoundary label="团队面板">
+      <div style={styles.root} data-eteams="view">
+        <div style={styles.header}>
+          <h2 style={styles.title}>团队</h2>
+          {pool.length > 0 && (
+            <select
+              style={styles.select}
+              value={team?.teamId ?? ''}
+              onChange={(e) => setActiveId(e.target.value)}
+            >
+              {pool.map((t) => (
+                <option key={t.teamId} value={t.teamId}>
+                  {t.name}（{PHASE_LABELS[t.phase] ?? t.phase} {t.progress.completed}/
+                  {t.progress.total}）
+                </option>
+              ))}
+            </select>
           )}
-          <div style={styles.tabs}>
-            {(
-              [
-                ['overview', '概览'],
-                ['members', '成员'],
-                ['tasks', '任务'],
-                ['events', '动态'],
-              ] as const
-            ).map(([id, label]) => (
-              <button key={id} type="button" style={fns.tab(tab === id)} onClick={() => setTab(id)}>
-                {label}
-              </button>
-            ))}
-          </div>
+          <span style={styles.muted}>{PLUGIN_VERSION_LABEL}</span>
+        </div>
 
-          {tab === 'overview' && (
-            <div>
-              <div style={styles.card}>
-                <div style={styles.line}>
-                  <strong>目标</strong>
-                  {team.goal}
-                </div>
-                <div style={{ ...styles.progressTrack }}>
-                  <div
-                    style={fns.progressFill(
-                      team.progress.total === 0
-                        ? 0
-                        : (team.progress.completed / team.progress.total) * 100,
-                    )}
-                  />
-                </div>
-                <div style={styles.muted}>
-                  {team.progress.completed}/{team.progress.total} 完成 · {team.progress.active}{' '}
-                  执行中 · {team.members.length} 成员 · {PHASE_LABELS[team.phase] ?? team.phase}
-                  {team.planReviewState !== null && team.phase === 'staged'
-                    ? ` · 计划${team.planReviewState === 'awaiting_review' ? '待批准' : team.planReviewState}`
-                    : ''}
-                </div>
-                {team.workDir !== null && <div style={styles.muted}>任务文档：{team.workDir}/</div>}
+        {team === undefined ? (
+          <div style={styles.empty}>
+            <p>本会话还没有团队。</p>
+            <p style={styles.line}>
+              在对话中说「用 AgentTeams 做某事」或 <code>/agent-teams</code>
+              ，领队会先问询、再拆解计划等你批准。
+            </p>
+            <p style={styles.muted}>
+              {state.error !== null ? `状态加载失败：${state.error}` : '轮询中…'}
+            </p>
+          </div>
+        ) : (
+          <>
+            {team.pendingDecisions.length > 0 && (
+              <div style={styles.banner}>
+                △ {team.pendingDecisions.length} 项待决策：
+                {team.pendingDecisions
+                  .map((d) => `${d.taskId}（${d.error.slice(0, 40)}）`)
+                  .join('；')}{' '}
+                —— 到对话里让领队处理，或等待 M5 的代答操作。
               </div>
+            )}
+            <div style={styles.tabs}>
+              {(
+                [
+                  ['overview', '概览'],
+                  ['members', '成员'],
+                  ['tasks', '任务'],
+                  ['events', '动态'],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  style={fns.tab(tab === id)}
+                  onClick={() => setTab(id)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {tab === 'overview' && (
+              <div>
+                <div style={styles.card}>
+                  <div style={styles.line}>
+                    <strong>目标</strong>
+                    {team.goal}
+                  </div>
+                  <div style={{ ...styles.progressTrack }}>
+                    <div
+                      style={fns.progressFill(
+                        team.progress.total === 0
+                          ? 0
+                          : (team.progress.completed / team.progress.total) * 100,
+                      )}
+                    />
+                  </div>
+                  <div style={styles.muted}>
+                    {team.progress.completed}/{team.progress.total} 完成 · {team.progress.active}{' '}
+                    执行中 · {team.members.length} 成员 · {PHASE_LABELS[team.phase] ?? team.phase}
+                    {team.planReviewState !== null && team.phase === 'staged'
+                      ? ` · 计划${team.planReviewState === 'awaiting_review' ? '待批准' : team.planReviewState}`
+                      : ''}
+                  </div>
+                  {team.workDir !== null && (
+                    <div style={styles.muted}>任务文档：{team.workDir}/</div>
+                  )}
+                </div>
+                <div style={styles.card}>
+                  <div style={{ ...styles.line, fontWeight: 600 }}>最近动态</div>
+                  {team.latestEvents
+                    .slice(-8)
+                    .reverse()
+                    .map((e) => (
+                      <div key={e.seq} style={styles.eventRow}>
+                        <span style={styles.muted}>
+                          {relativeTime(e.at, now)} · {e.actor}
+                        </span>{' '}
+                        {e.text}
+                      </div>
+                    ))}
+                  {team.latestEvents.length === 0 && <div style={styles.muted}>暂无事件</div>}
+                </div>
+              </div>
+            )}
+
+            {tab === 'members' && (
+              <div>
+                {dialogMember !== null && dialogMemberView !== null && (
+                  <MemberDialog team={team} member={dialogMemberView} />
+                )}
+                <div style={styles.memberGrid}>
+                  {team.members.map((m) => {
+                    const tone =
+                      m.status === 'working' || m.status === 'busy'
+                        ? '#2f6fed'
+                        : m.status === 'ready' || m.status === 'idle'
+                          ? '#2e8b57'
+                          : m.status === 'paused'
+                            ? '#c78a1d'
+                            : '#8a8f98';
+                    return (
+                      <div key={m.name} style={styles.memberCard}>
+                        <div style={{ display: 'flex', alignItems: 'center' }}>
+                          <Avatar name={m.name} />
+                          <div>
+                            <div style={{ fontWeight: 600, fontSize: 13 }}>{m.name}</div>
+                            <div style={styles.muted}>
+                              {m.role} · {m.model}
+                            </div>
+                          </div>
+                        </div>
+                        <div style={{ ...styles.line, fontSize: 12 }}>
+                          <span style={fns.dot(tone)} />
+                          {m.status}
+                          {m.currentTaskId !== null && <span> · {m.currentTaskId} 执行中</span>}
+                        </div>
+                        <button
+                          type="button"
+                          style={styles.btn}
+                          onClick={() => setDialogMember(dialogMember === m.name ? null : m.name)}
+                        >
+                          {dialogMember === m.name ? '收起对话框' : '对话记录'}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {tab === 'tasks' && (
+              <div>
+                {STATUS_GROUPS.map((group) => {
+                  const rows = team.tasks.filter((t) => group.statuses.includes(t.status));
+                  if (rows.length === 0) return null;
+                  return (
+                    <div key={group.id} style={{ marginBottom: 14 }}>
+                      <div style={{ ...styles.line, fontWeight: 600, color: group.tone }}>
+                        {group.label}（{rows.length}）
+                      </div>
+                      {rows.map((t) => (
+                        <div key={t.taskId}>
+                          <div
+                            style={styles.taskRow}
+                            onClick={() =>
+                              setExpandedTask(expandedTask === t.taskId ? null : t.taskId)
+                            }
+                          >
+                            <div>
+                              <strong>{t.taskId}</strong> {t.subject}
+                              <span style={styles.muted}>
+                                {' '}
+                                {STATUS_LABELS[t.status] ?? t.status}
+                                {t.retryCount > 0 ? ` · ⟳${t.retryCount}` : ''}
+                                {t.assignee !== null ? ` · ${t.assignee}` : ''}
+                              </span>
+                            </div>
+                            <TaskStations task={t} />
+                            {t.dependencies.length > 0 && (
+                              <div style={{ marginTop: 3 }}>
+                                {t.dependencies.map((d) => (
+                                  <span key={d} style={styles.chip}>
+                                    依赖 {d}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          {expandedTask === t.taskId && (
+                            <TaskDrawer team={team} task={t} now={now} />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })}
+                {team.tasks.length === 0 && (
+                  <div style={styles.empty}>还没有任务。计划批准后任务会出现在这里。</div>
+                )}
+              </div>
+            )}
+
+            {tab === 'events' && (
               <div style={styles.card}>
-                <div style={{ ...styles.line, fontWeight: 600 }}>最近动态</div>
                 {team.latestEvents
-                  .slice(-8)
+                  .slice()
                   .reverse()
                   .map((e) => (
                     <div key={e.seq} style={styles.eventRow}>
                       <span style={styles.muted}>
-                        {relativeTime(e.at, now)} · {e.actor}
-                      </span>{' '}
-                      {e.text}
+                        {relativeTime(e.at, now)} · {e.actor} · #{e.seq}
+                      </span>
+                      <div>{e.text}</div>
                     </div>
                   ))}
                 {team.latestEvents.length === 0 && <div style={styles.muted}>暂无事件</div>}
               </div>
-            </div>
-          )}
+            )}
+          </>
+        )}
 
-          {tab === 'members' && (
-            <div>
-              {dialogMember !== null && (
-                <MemberDialog
-                  team={team}
-                  member={team.members.find((m) => m.name === dialogMember)!}
-                />
-              )}
-              <div style={styles.memberGrid}>
-                {team.members.map((m) => {
-                  const tone =
-                    m.status === 'working' || m.status === 'busy'
-                      ? '#2f6fed'
-                      : m.status === 'ready' || m.status === 'idle'
-                        ? '#2e8b57'
-                        : m.status === 'paused'
-                          ? '#c78a1d'
-                          : '#8a8f98';
-                  return (
-                    <div key={m.name} style={styles.memberCard}>
-                      <div style={{ display: 'flex', alignItems: 'center' }}>
-                        <Avatar name={m.name} />
-                        <div>
-                          <div style={{ fontWeight: 600, fontSize: 13 }}>{m.name}</div>
-                          <div style={styles.muted}>
-                            {m.role} · {m.model}
-                          </div>
-                        </div>
-                      </div>
-                      <div style={{ ...styles.line, fontSize: 12 }}>
-                        <span style={fns.dot(tone)} />
-                        {m.status}
-                        {m.currentTaskId !== null && <span> · {m.currentTaskId} 执行中</span>}
-                      </div>
-                      <button
-                        type="button"
-                        style={styles.btn}
-                        onClick={() => setDialogMember(dialogMember === m.name ? null : m.name)}
-                      >
-                        {dialogMember === m.name ? '收起对话框' : '对话记录'}
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+        <div style={{ ...styles.muted, marginTop: 16 }}>
+          {state.error !== null
+            ? `状态加载失败：${state.error}`
+            : `自动刷新（1s）· 更新于 ${state.fetchedAt === 0 ? '—' : relativeTime(state.fetchedAt, now)}`}
+        </div>
 
-          {tab === 'tasks' && (
-            <div>
-              {STATUS_GROUPS.map((group) => {
-                const rows = team.tasks.filter((t) => group.statuses.includes(t.status));
-                if (rows.length === 0) return null;
-                return (
-                  <div key={group.id} style={{ marginBottom: 14 }}>
-                    <div style={{ ...styles.line, fontWeight: 600, color: group.tone }}>
-                      {group.label}（{rows.length}）
-                    </div>
-                    {rows.map((t) => (
-                      <div key={t.taskId}>
-                        <div
-                          style={styles.taskRow}
-                          onClick={() =>
-                            setExpandedTask(expandedTask === t.taskId ? null : t.taskId)
-                          }
-                        >
-                          <div>
-                            <strong>{t.taskId}</strong> {t.subject}
-                            <span style={styles.muted}>
-                              {' '}
-                              {STATUS_LABELS[t.status] ?? t.status}
-                              {t.retryCount > 0 ? ` · ⟳${t.retryCount}` : ''}
-                              {t.assignee !== null ? ` · ${t.assignee}` : ''}
-                            </span>
-                          </div>
-                          <TaskStations task={t} />
-                          {t.dependencies.length > 0 && (
-                            <div style={{ marginTop: 3 }}>
-                              {t.dependencies.map((d) => (
-                                <span key={d} style={styles.chip}>
-                                  依赖 {d}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                        {expandedTask === t.taskId && <TaskDrawer team={team} task={t} now={now} />}
-                      </div>
-                    ))}
-                  </div>
-                );
-              })}
-              {team.tasks.length === 0 && (
-                <div style={styles.empty}>还没有任务。计划批准后任务会出现在这里。</div>
-              )}
-            </div>
+        <details style={{ ...styles.muted, marginTop: 8, fontSize: 12 }}>
+          <summary style={{ cursor: 'pointer' }}>
+            客户端诊断（{diag.length === 0 ? '无错误记录' : `${diag.length} 条记录`}）
+          </summary>
+          {diag.length === 0 ? (
+            <div>渲染端暂无错误；全部错误会自动记录到 .eteams/logs/client.log。</div>
+          ) : (
+            diag
+              .slice()
+              .reverse()
+              .map((d, i) => (
+                <div key={`${d.at}-${i}`} style={{ marginTop: 4 }}>
+                  [{new Date(d.at).toLocaleTimeString()}] {d.kind}: {d.message}
+                  {d.source !== undefined ? ` (${d.source})` : ''}
+                </div>
+              ))
           )}
-
-          {tab === 'events' && (
-            <div style={styles.card}>
-              {team.latestEvents
-                .slice()
-                .reverse()
-                .map((e) => (
-                  <div key={e.seq} style={styles.eventRow}>
-                    <span style={styles.muted}>
-                      {relativeTime(e.at, now)} · {e.actor} · #{e.seq}
-                    </span>
-                    <div>{e.text}</div>
-                  </div>
-                ))}
-              {team.latestEvents.length === 0 && <div style={styles.muted}>暂无事件</div>}
-            </div>
-          )}
-        </>
-      )}
-
-      <div style={{ ...styles.muted, marginTop: 16 }}>
-        {state.error !== null
-          ? `状态加载失败：${state.error}`
-          : `自动刷新（1s）· 更新于 ${state.fetchedAt === 0 ? '—' : relativeTime(state.fetchedAt, now)}`}
+        </details>
       </div>
-    </div>
+    </ClientErrorBoundary>
   );
 }

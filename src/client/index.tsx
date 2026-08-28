@@ -13,16 +13,35 @@
  *    tool events via the optional `conversationEvents` service (absent
  *    service degrades to tab+button only).
  *
+ * Every surface is individually try/catch-guarded and render-isolated
+ * (ClientErrorBoundary), and all client-side errors funnel into the
+ * diagnostics channel (console + host `client.log`) so renderer problems
+ * are always visible in files, not only in a console nobody opened.
+ *
  * @module dsh-eteams/client
  */
 import type { Context } from '@deepseek-ai/cordis';
 import { installCard } from './card';
 import { ETEAMS_TAB_LABEL, ETEAMS_VIEW_ID } from './bridge';
+import { installClientDiagnostics, recordClientDiag } from './diagnostics';
 import { ETeamsView } from './eteamsView';
 import { TeamsButton } from './teamsButton';
 
-/** Client services required before apply runs. */
-export const inject = ['slots'];
+/** Client services required before apply runs. The runner gates every
+ * `ctx.<service>` property read against this declaration — touching an
+ * undeclared service throws ("service X is not declared by your plugin"),
+ * so this list must name every service the client plane touches:
+ * `slots` (all registrations) and `conversationEvents` (card folding). */
+export const inject = ['slots', 'conversationEvents'];
+
+/** Run one registration step; a failure is recorded, never fatal. */
+function guard(step: string, run: () => void): void {
+  try {
+    run();
+  } catch (error) {
+    recordClientDiag(`apply:${step}`, error instanceof Error ? error.message : String(error));
+  }
+}
 
 /**
  * Mount the eteams client registrations onto the client root context.
@@ -30,28 +49,34 @@ export const inject = ['slots'];
  * @param ctx - client root context (cordis).
  */
 export function apply(ctx: Context): void {
-  ctx.slots.inject('conversation.view', () =>
-    ctx.slots.register(
-      {
-        name: 'conversation.view',
-        id: ETEAMS_VIEW_ID,
-        order: 100,
-        label: ETEAMS_TAB_LABEL,
-      },
-      ETeamsView,
+  installClientDiagnostics();
+
+  guard('conversation.view', () =>
+    ctx.slots.inject('conversation.view', () =>
+      ctx.slots.register(
+        {
+          name: 'conversation.view',
+          id: ETEAMS_VIEW_ID,
+          order: 100,
+          label: ETEAMS_TAB_LABEL,
+        },
+        ETeamsView,
+      ),
     ),
   );
 
-  ctx.slots.inject('conversation.input.right', () =>
-    ctx.slots.register(
-      {
-        name: 'conversation.input.right',
-        id: `${ETEAMS_VIEW_ID}-button`,
-        order: 100,
-      },
-      TeamsButton,
+  guard('conversation.input.right', () =>
+    ctx.slots.inject('conversation.input.right', () =>
+      ctx.slots.register(
+        {
+          name: 'conversation.input.right',
+          id: `${ETEAMS_VIEW_ID}-button`,
+          order: 100,
+        },
+        TeamsButton,
+      ),
     ),
   );
 
-  installCard(ctx);
+  guard('conversation.card', () => installCard(ctx));
 }
