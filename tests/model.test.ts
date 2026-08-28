@@ -137,7 +137,9 @@ describe('execution chain helpers (D11)', () => {
 
   it('stationProgress is undefined for chainless tasks', () => {
     expect(stationProgress(makeTask())).toBeUndefined();
-    expect(stationProgress(makeTask({ chain: [{ member: 'A', stageBrief: 'x' }], chainCursor: -1 }))).toEqual({
+    expect(
+      stationProgress(makeTask({ chain: [{ member: 'A', stageBrief: 'x' }], chainCursor: -1 })),
+    ).toEqual({
       done: 0,
       total: 1,
     });

@@ -22,7 +22,15 @@ const EDGES: Record<TaskStatus, readonly TaskStatus[]> = {
   draft: ['ready', 'cancelled'],
   ready: ['assigned', 'blocked', 'cancelled'],
   assigned: ['in_progress', 'ready', 'assigned', 'blocked', 'paused', 'cancelled'],
-  in_progress: ['retrying', 'completed', 'ready', 'awaiting_decision', 'paused', 'assigned', 'cancelled'],
+  in_progress: [
+    'retrying',
+    'completed',
+    'ready',
+    'awaiting_decision',
+    'paused',
+    'assigned',
+    'cancelled',
+  ],
   retrying: ['in_progress', 'assigned', 'cancelled'],
   paused: ['in_progress', 'assigned', 'cancelled'],
   awaiting_decision: ['assigned', 'suspended', 'needs_user', 'cancelled'],
@@ -63,7 +71,11 @@ export function applyTransition(task: TaskRecord, to: TaskStatus, now: number): 
  * that dependencies actually recovered (docs/05.9: blocked is materialized
  * but its exit re-derives from live dependency statuses).
  */
-export function restoreBlocked(task: TaskRecord, dependenciesSatisfied: boolean, now: number): TaskStatus {
+export function restoreBlocked(
+  task: TaskRecord,
+  dependenciesSatisfied: boolean,
+  now: number,
+): TaskStatus {
   if (task.status !== 'blocked') return task.status;
   const target: TaskStatus = task.blockedFrom ?? 'ready';
   if (target === 'ready' && !dependenciesSatisfied) return task.status;
@@ -74,7 +86,12 @@ export function restoreBlocked(task: TaskRecord, dependenciesSatisfied: boolean,
 }
 
 /** Dependency statuses that poison downstream tasks (docs/05.9). */
-const POISON: ReadonlySet<TaskStatus> = new Set(['suspended', 'failed', 'awaiting_decision', 'needs_user']);
+const POISON: ReadonlySet<TaskStatus> = new Set([
+  'suspended',
+  'failed',
+  'awaiting_decision',
+  'needs_user',
+]);
 
 /** Un-satisfied dependency ids of one task against the task list. */
 export function unsatisfiedDependencies(tasks: readonly TaskRecord[], task: TaskRecord): string[] {
@@ -103,7 +120,11 @@ export function dependenciesSatisfied(tasks: readonly TaskRecord[], task: TaskRe
  * already assigned/in_progress cannot regress through dependency poisoning.
  * @returns whether the status changed.
  */
-export function refreshDependencyStatus(tasks: readonly TaskRecord[], task: TaskRecord, now: number): boolean {
+export function refreshDependencyStatus(
+  tasks: readonly TaskRecord[],
+  task: TaskRecord,
+  now: number,
+): boolean {
   if (task.status === 'ready') {
     if (poisoningDependencies(tasks, task).length > 0) {
       applyTransition(task, 'blocked', now);
@@ -152,7 +173,11 @@ export function taskSlug(task: TaskRecord): string {
 }
 
 /** Detect a dependency cycle if `dependencies` were added to `taskId`. */
-export function wouldCycle(tasks: readonly TaskRecord[], taskId: string, dependencies: readonly string[]): boolean {
+export function wouldCycle(
+  tasks: readonly TaskRecord[],
+  taskId: string,
+  dependencies: readonly string[],
+): boolean {
   const byId = new Map(tasks.map((t) => [t.id, t]));
   const seen = new Set<string>([taskId]);
   const stack = [...dependencies];

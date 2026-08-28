@@ -1,10 +1,30 @@
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LockMap, teamLockKey } from '../src/host/state/lock';
-import { appendEvent, lastEventSeq, parseJsonl, readEventsSync, recordEvent } from '../src/host/state/events';
-import { allocateTeamDir, atomicWriteText, readTeam, snapshotFile, writeTeam } from '../src/host/state/store';
+import {
+  appendEvent,
+  lastEventSeq,
+  parseJsonl,
+  readEventsSync,
+  recordEvent,
+} from '../src/host/state/events';
+import {
+  allocateTeamDir,
+  atomicWriteText,
+  readTeam,
+  snapshotFile,
+  writeTeam,
+} from '../src/host/state/store';
 import type { TeamState } from '../src/host/model/types';
 
 let root: string;
@@ -52,7 +72,11 @@ describe('LockMap', () => {
 
   it('a throwing section does not poison the chain', async () => {
     const locks = new LockMap();
-    await expect(locks.withLock('k', async () => { throw new Error('boom'); })).rejects.toThrow('boom');
+    await expect(
+      locks.withLock('k', async () => {
+        throw new Error('boom');
+      }),
+    ).rejects.toThrow('boom');
     const result = await locks.withLock('k', async () => 'ok');
     expect(result).toBe('ok');
   });
@@ -123,7 +147,12 @@ describe('event journal', () => {
 
   it('appendEvent writes raw rows', async () => {
     await mkdirSync(join(root, 't2'), { recursive: true });
-    await appendEvent(root, 't2', { seq: 1, at: 5, actor: { kind: 'user' }, type: 'plan.approved' });
+    await appendEvent(root, 't2', {
+      seq: 1,
+      at: 5,
+      actor: { kind: 'user' },
+      type: 'plan.approved',
+    });
     const events = readEventsSync(root, 't2');
     expect(events[0]?.type).toBe('plan.approved');
   });

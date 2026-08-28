@@ -41,7 +41,8 @@ export function renderTeamReadme(team: TeamState): string {
   ];
   const active = team.members.filter((m) => m.status !== 'removed');
   if (active.length === 0) lines.push('（暂无成员）');
-  for (const m of active) lines.push(`- **${m.name}**（${m.role}）· ${m.status} · 路线 ${routeLabel(m)}`);
+  for (const m of active)
+    lines.push(`- **${m.name}**（${m.role}）· ${m.status} · 路线 ${routeLabel(m)}`);
   lines.push('', '## 任务');
   if (team.tasks.length === 0) lines.push('（暂无任务）');
   for (const t of team.tasks) {
@@ -50,7 +51,11 @@ export function renderTeamReadme(team: TeamState): string {
     const assignee = t.assignee ? ` · ${t.assignee}` : '';
     lines.push(`- ${t.id} ${t.subject} — ${t.status}${assignee}${chainTxt}`);
   }
-  lines.push('', '> 本文件由 eteams 自动渲染（幂等视图）；请勿手工编辑，任务笔记写在对应 tasks/tN-*/notes.md。', '');
+  lines.push(
+    '',
+    '> 本文件由 eteams 自动渲染（幂等视图）；请勿手工编辑，任务笔记写在对应 tasks/tN-*/notes.md。',
+    '',
+  );
   return lines.join('\n');
 }
 
@@ -96,7 +101,11 @@ export function renderTaskContract(team: TeamState, task: TaskRecord): string {
       if (a.error) lines.push(`  - 失败：${a.error}`);
     }
   }
-  lines.push('', '> 本合同由 eteams 自动渲染（幂等视图）；请勿手工编辑，笔记写在同目录 notes.md。', '');
+  lines.push(
+    '',
+    '> 本合同由 eteams 自动渲染（幂等视图）；请勿手工编辑，笔记写在同目录 notes.md。',
+    '',
+  );
   return lines.join('\n');
 }
 
@@ -106,7 +115,11 @@ export function renderTaskContract(team: TeamState, task: TaskRecord): string {
  * per docs/07.2: docs are rendered views of the durable state.
  * @returns warnings collected during rendering.
  */
-export function renderTeamDocs(workspace: string, team: TeamState, log?: (msg: string) => void): string[] {
+export function renderTeamDocs(
+  workspace: string,
+  team: TeamState,
+  log?: (msg: string) => void,
+): string[] {
   if (team.phase === 'staged') return []; // workDir is allocated + materialized at approval (D12)
   const warnings: string[] = [];
   const warn = log ?? (() => undefined);
@@ -119,7 +132,8 @@ export function renderTeamDocs(workspace: string, team: TeamState, log?: (msg: s
       mkdirSync(tDir, { recursive: true });
       writeFileSync(join(tDir, 'contract.md'), renderTaskContract(team, task), 'utf8');
       const notes = join(tDir, 'notes.md');
-      if (!existsSync(notes)) writeFileSync(notes, `# ${task.id} ${task.subject} · 任务笔记\n\n`, 'utf8');
+      if (!existsSync(notes))
+        writeFileSync(notes, `# ${task.id} ${task.subject} · 任务笔记\n\n`, 'utf8');
     }
   } catch (error) {
     const msg = `eteams: 任务文档渲染失败（不阻塞状态）：${String(error)}`;
@@ -130,7 +144,13 @@ export function renderTeamDocs(workspace: string, team: TeamState, log?: (msg: s
 }
 
 /** Append a member note to notes.md (create-only file, append-only content). */
-export function appendTaskNote(workspace: string, team: TeamState, task: TaskRecord, member: string, text: string): void {
+export function appendTaskNote(
+  workspace: string,
+  team: TeamState,
+  task: TaskRecord,
+  member: string,
+  text: string,
+): void {
   const file = join(taskDirAbs(workspace, team, task), 'notes.md');
   if (!existsSync(file)) return; // notes are optional scratch; missing folder = skip silently
   const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');

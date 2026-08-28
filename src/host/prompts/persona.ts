@@ -52,7 +52,11 @@ const GENERIC_TEMPLATE = {
 };
 
 /** Build the default persona for one member (docs/07.2 step 4). */
-export function defaultPersonaFor(name: string, role: string, executionPrompt?: string): PersonaRecord {
+export function defaultPersonaFor(
+  name: string,
+  role: string,
+  executionPrompt?: string,
+): PersonaRecord {
   const tpl = ROLE_TEMPLATES[role.trim().toLowerCase()] ?? GENERIC_TEMPLATE;
   return {
     frameworkVersion: PERSONA_FRAMEWORK_VERSION,
@@ -61,12 +65,16 @@ export function defaultPersonaFor(name: string, role: string, executionPrompt?: 
     style: tpl.style,
     skills: tpl.skills,
     rules: [...PERSONA_BASELINE_RULES],
-    executionPrompt: executionPrompt?.trim() || `你是「${name}」，以 ${role || 'member'} 的身份为团队交付。`,
+    executionPrompt:
+      executionPrompt?.trim() || `你是「${name}」，以 ${role || 'member'} 的身份为团队交付。`,
   };
 }
 
 /** Field-level persona merge (docs/11.2 update_member): fixed framework, patched content. */
-export function mergePersona(base: PersonaRecord, patch: Partial<Omit<PersonaRecord, 'frameworkVersion'>>): PersonaRecord {
+export function mergePersona(
+  base: PersonaRecord,
+  patch: Partial<Omit<PersonaRecord, 'frameworkVersion'>>,
+): PersonaRecord {
   return {
     frameworkVersion: PERSONA_FRAMEWORK_VERSION,
     role: patch.role?.trim() || base.role,
@@ -113,7 +121,8 @@ export function defaultCaptainPersona(executionPrompt?: string): PersonaRecord {
       '汇报纪律：任务/团队状态变化用 eteams_send_message 通知用户；计划就绪后等待用户批准，绝不自行批准。',
       '升级处置：任务失败重试超限时三选一（挂起/换人/问用户），不让团队悬停。',
     ],
-    executionPrompt: executionPrompt?.trim() || '你是领队：对用户负责，对成员调度。当前没有团队时引导用户创建。',
+    executionPrompt:
+      executionPrompt?.trim() || '你是领队：对用户负责，对成员调度。当前没有团队时引导用户创建。',
   };
 }
 
@@ -143,7 +152,13 @@ export function parsePersonaYaml(raw: string): Partial<Omit<PersonaRecord, 'fram
       continue;
     }
     inRules = false;
-    if (key === 'role' || key === 'duty' || key === 'style' || key === 'skills' || key === 'executionPrompt') {
+    if (
+      key === 'role' ||
+      key === 'duty' ||
+      key === 'style' ||
+      key === 'skills' ||
+      key === 'executionPrompt'
+    ) {
       out[key] = unquote(value);
     }
   }
@@ -152,7 +167,11 @@ export function parsePersonaYaml(raw: string): Partial<Omit<PersonaRecord, 'fram
 }
 
 function unquote(value: string): string {
-  if (value.length >= 2 && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
+  if (
+    value.length >= 2 &&
+    ((value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'")))
+  ) {
     return value.slice(1, -1);
   }
   return value;
@@ -163,7 +182,11 @@ function unquote(value: string): string {
  * override file `<workspace>/.eteams/captain-persona.yaml` when present
  * (docs/05.3). Missing/unparsable file degrades to defaults.
  */
-export function composeCaptainPersona(workspace: string, stateDir: string, executionPrompt?: string): PersonaRecord {
+export function composeCaptainPersona(
+  workspace: string,
+  stateDir: string,
+  executionPrompt?: string,
+): PersonaRecord {
   const base = defaultCaptainPersona(executionPrompt);
   const file = join(workspace, stateDir, 'captain-persona.yaml');
   if (!existsSync(file)) return base;

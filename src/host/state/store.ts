@@ -113,7 +113,9 @@ export function readTeamSync(stateRoot: string, teamId: string): TeamState | und
 export async function listTeamIds(stateRoot: string): Promise<string[]> {
   if (!existsSync(stateRoot)) return [];
   const entries = await readdir(stateRoot, { withFileTypes: true });
-  return entries.filter((e) => e.isDirectory() && e.name !== 'archive' && e.name !== 'corrupt').map((e) => e.name);
+  return entries
+    .filter((e) => e.isDirectory() && e.name !== 'archive' && e.name !== 'corrupt')
+    .map((e) => e.name);
 }
 
 /** Load every non-archived team snapshot (UI listing, M4+). */
@@ -128,7 +130,10 @@ export async function listTeams(stateRoot: string): Promise<TeamState[]> {
 }
 
 /** The team currently led by one captain session, if any. */
-export async function findTeamByCaptain(stateRoot: string, captainSessionId: string): Promise<TeamState | undefined> {
+export async function findTeamByCaptain(
+  stateRoot: string,
+  captainSessionId: string,
+): Promise<TeamState | undefined> {
   const teams = await listTeams(stateRoot);
   return teams.find((t) => t.captainSessionId === captainSessionId && t.phase !== 'completed');
 }

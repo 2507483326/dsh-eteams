@@ -10,8 +10,27 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm';
 import type { Context } from '@deepseek-ai/cordis';
 import type { ETeamsResolvedConfig } from '../config.js';
 import { ETeamsError, stateRootOf, type RuntimeContext } from '../runtime/base.js';
-import { createTeam, addMember, removeMember, updateMember, teamView, archiveTeam, deleteTeam, sendMessage } from '../runtime/teamOps.js';
-import { createTask, updateTask, deleteTask, assignTask, advanceTask, reassignTask, suspendTask, resumeTask, cancelTask } from '../runtime/assignment.js';
+import {
+  createTeam,
+  addMember,
+  removeMember,
+  updateMember,
+  teamView,
+  archiveTeam,
+  deleteTeam,
+  sendMessage,
+} from '../runtime/teamOps.js';
+import {
+  createTask,
+  updateTask,
+  deleteTask,
+  assignTask,
+  advanceTask,
+  reassignTask,
+  suspendTask,
+  resumeTask,
+  cancelTask,
+} from '../runtime/assignment.js';
 import { listTeams, envForAgent, resolveCaller } from './identity.js';
 import { readBox } from '../runtime/notifier.js';
 import { stationProgress } from '../model/taskMachine.js';
@@ -19,7 +38,11 @@ import type { TaskRecord } from '../model/types.js';
 
 /** JSON-schema snippet helpers (literal types required by the spec union). */
 const str = (description: string) => ({ type: 'string' as const, description });
-const strR = (description: string) => ({ type: 'string' as const, description, required: true as const });
+const strR = (description: string) => ({
+  type: 'string' as const,
+  description,
+  required: true as const,
+});
 const strArr = (description: string, required = false) => ({
   type: 'array' as const,
   items: { type: 'string' as const },
@@ -33,7 +56,10 @@ const chainParam = () => ({
   description: '执行链（D11）：成员按序接力的站点列表；空 = 单站点任务。',
   items: {
     type: 'object' as const,
-    properties: { member: str('站点成员名（须在团队中）'), stageBrief: str('本站简报：该站产出与交接物') },
+    properties: {
+      member: str('站点成员名（须在团队中）'),
+      stageBrief: str('本站简报：该站产出与交接物'),
+    },
     additionalProperties: false,
   },
 });
@@ -48,7 +74,14 @@ function taskSummary(task: TaskRecord) {
     assignee: task.assignee ?? null,
     attemptId: task.currentAttemptId ?? null,
     retryCount: task.retryCount,
-    chain: station !== undefined ? { done: station.done, total: station.total, next: task.chain[task.chainCursor + 1]?.member ?? null } : null,
+    chain:
+      station !== undefined
+        ? {
+            done: station.done,
+            total: station.total,
+            next: task.chain[task.chainCursor + 1]?.member ?? null,
+          }
+        : null,
   };
 }
 
@@ -60,7 +93,10 @@ function text(value: string): ContentBlock[] {
  * Create the captain tool set. Registered on the root context; members are
  * denied the whole list at spawn (`toolFilter.deny`).
  */
-export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Context): ReturnType<typeof defineTool>[] {
+export function createCaptainTools(
+  config: ETeamsResolvedConfig,
+  hostCtx: Context,
+): ReturnType<typeof defineTool>[] {
   const runtime = hostCtx as unknown as RuntimeContext;
 
   const createTeamTool = defineTool({
@@ -70,14 +106,23 @@ export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Contex
     parameters: {
       name: strR('团队名（将用作目录名）'),
       goal: strR('团队目标（一句话，成员可见）'),
-      approval: { type: 'string' as const, enum: ['required', 'automatic'], description: 'required=等待用户批准（默认）；automatic=立即启动' },
+      approval: {
+        type: 'string' as const,
+        enum: ['required', 'automatic'],
+        description: 'required=等待用户批准（默认）；automatic=立即启动',
+      },
       questionnaire: strArr('问询记录：拆解前向用户确认的问题（FR-37 五区）'),
       maxRetries: { type: 'integer' as const, description: '同成员自动重试上限（默认取插件配置）' },
     },
     output: {
       schema: {
         type: 'object' as const,
-        properties: { ok: bool('是否成功'), teamId: str('团队 id'), phase: str('团队阶段'), planReviewState: str('计划审阅状态') },
+        properties: {
+          ok: bool('是否成功'),
+          teamId: str('团队 id'),
+          phase: str('团队阶段'),
+          planReviewState: str('计划审阅状态'),
+        },
         additionalProperties: false as const,
       },
       render: (_a, v) => text(`团队「${v.teamId}」已创建（${v.phase}）`),
@@ -91,13 +136,19 @@ export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Contex
         questionnaire: args.questionnaire,
         maxRetries: args.maxRetries,
       });
-      return { ok: true as const, teamId: team.id, phase: team.phase, planReviewState: team.planReviewState ?? '' };
+      return {
+        ok: true as const,
+        teamId: team.id,
+        phase: team.phase,
+        planReviewState: team.planReviewState ?? '',
+      };
     },
   });
 
   const addMemberTool = defineTool({
     name: 'eteams_add_member',
-    description: '添加团队成员（staged 计划或运行中团队均可）。不指定 provider/model 时继承当前会话路线（route source=inherited）。',
+    description:
+      '添加团队成员（staged 计划或运行中团队均可）。不指定 provider/model 时继承当前会话路线（route source=inherited）。',
     parameters: {
       name: strR('成员名（任务链与指派都用它）'),
       role: strR('角色：researcher/engineer/reviewer/writer/…（决定默认人设）'),
@@ -110,7 +161,12 @@ export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Contex
     output: {
       schema: {
         type: 'object' as const,
-        properties: { ok: bool('是否成功'), member: str('成员名'), status: str('staged|ready'), teamId: str('团队 id') },
+        properties: {
+          ok: bool('是否成功'),
+          member: str('成员名'),
+          status: str('staged|ready'),
+          teamId: str('团队 id'),
+        },
         additionalProperties: false as const,
       },
       render: (_a, v) => text(`成员 ${v.member}（${v.status}）`),
@@ -132,10 +188,15 @@ export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Contex
 
   const removeMemberTool = defineTool({
     name: 'eteams_remove_member',
-    description: '移除成员：未接取指派直接撤下；进行中工作吊销 attempt、任务回到就绪池，并中断其当前回合。',
+    description:
+      '移除成员：未接取指派直接撤下；进行中工作吊销 attempt、任务回到就绪池，并中断其当前回合。',
     parameters: { name: strR('成员名'), teamId: str('团队 id（默认当前团队）') },
     output: {
-      schema: { type: 'object' as const, properties: { ok: bool('是否成功') }, additionalProperties: false as const },
+      schema: {
+        type: 'object' as const,
+        properties: { ok: bool('是否成功') },
+        additionalProperties: false as const,
+      },
       render: (_a, v) => text(v.ok ? '成员已移除' : '移除失败'),
     },
     execute: async (args, exec) => {
@@ -147,7 +208,8 @@ export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Contex
 
   const updateMemberTool = defineTool({
     name: 'eteams_update_member',
-    description: '更新成员人设（固定框架、可改内容）：role/duty/style/skills/rules/executionPrompt。',
+    description:
+      '更新成员人设（固定框架、可改内容）：role/duty/style/skills/rules/executionPrompt。',
     parameters: {
       name: strR('成员名'),
       role: str('新角色'),
@@ -159,7 +221,11 @@ export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Contex
       teamId: str('团队 id（默认当前团队）'),
     },
     output: {
-      schema: { type: 'object' as const, properties: { ok: bool('是否成功') }, additionalProperties: false as const },
+      schema: {
+        type: 'object' as const,
+        properties: { ok: bool('是否成功') },
+        additionalProperties: false as const,
+      },
       render: (_a, v) => text(v.ok ? '成员已更新' : '更新失败'),
     },
     execute: async (args, exec) => {
@@ -198,8 +264,15 @@ export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Contex
       if (caller.kind !== 'captain') throw new ETeamsError('只有领队可以创建任务');
       // Runtime re-validates chain members/stageBrief (schema-level required
       // is unavailable inside nested value schemas).
-      const chain = args.chain?.map((s) => ({ member: s.member ?? '', stageBrief: s.stageBrief ?? '' }));
-      const task = await createTask(env, { teamId: caller.team.id, actor: caller.actor }, { ...args, chain });
+      const chain = args.chain?.map((s) => ({
+        member: s.member ?? '',
+        stageBrief: s.stageBrief ?? '',
+      }));
+      const task = await createTask(
+        env,
+        { teamId: caller.team.id, actor: caller.actor },
+        { ...args, chain },
+      );
       return { ok: true as const, taskId: task.id, status: task.status };
     },
   });
@@ -231,8 +304,15 @@ export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Contex
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
       const caller = await resolveCaller(env, exec.agent!);
       if (caller.kind !== 'captain') throw new ETeamsError('只有领队可以更新任务');
-      const chain = args.chain?.map((s) => ({ member: s.member ?? '', stageBrief: s.stageBrief ?? '' }));
-      const task = await updateTask(env, { teamId: caller.team.id, actor: caller.actor }, { ...args, chain });
+      const chain = args.chain?.map((s) => ({
+        member: s.member ?? '',
+        stageBrief: s.stageBrief ?? '',
+      }));
+      const task = await updateTask(
+        env,
+        { teamId: caller.team.id, actor: caller.actor },
+        { ...args, chain },
+      );
       return { ok: true as const, taskId: task.id };
     },
   });
@@ -242,7 +322,11 @@ export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Contex
     description: '删除草稿任务（被依赖或已入执行的任务不可删）。',
     parameters: { taskId: strR('任务 id') },
     output: {
-      schema: { type: 'object' as const, properties: { ok: bool('是否成功') }, additionalProperties: false as const },
+      schema: {
+        type: 'object' as const,
+        properties: { ok: bool('是否成功') },
+        additionalProperties: false as const,
+      },
       render: (_a, v) => text(v.ok ? '任务已删除' : '删除失败'),
     },
     execute: async (args, exec) => {
@@ -267,7 +351,12 @@ export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Contex
     output: {
       schema: {
         type: 'object' as const,
-        properties: { ok: bool('是否成功'), taskId: str('任务 id'), member: str('成员'), attemptId: str('attempt id') },
+        properties: {
+          ok: bool('是否成功'),
+          taskId: str('任务 id'),
+          member: str('成员'),
+          attemptId: str('attempt id'),
+        },
         additionalProperties: false as const,
       },
       render: (_a, v) => text(`任务 ${v.taskId} → ${v.member}（${v.attemptId}）`),
@@ -276,19 +365,29 @@ export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Contex
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
       const caller = await resolveCaller(env, exec.agent!);
       if (caller.kind !== 'captain') throw new ETeamsError('只有领队可以指派任务');
-      const { task, attempt } = await assignTask(env, { teamId: caller.team.id, actor: caller.actor }, { ...args });
+      const { task, attempt } = await assignTask(
+        env,
+        { teamId: caller.team.id, actor: caller.actor },
+        { ...args },
+      );
       return { ok: true as const, taskId: task.id, member: attempt.member, attemptId: attempt.id };
     },
   });
 
   const advanceTaskTool = defineTool({
     name: 'eteams_advance_task',
-    description: '推进链任务到下一站（完成即续派的第一动作）。无链任务会报错并提示用 eteams_assign_task。',
+    description:
+      '推进链任务到下一站（完成即续派的第一动作）。无链任务会报错并提示用 eteams_assign_task。',
     parameters: { taskId: strR('任务 id'), handoff: str('交接说明（可选）') },
     output: {
       schema: {
         type: 'object' as const,
-        properties: { ok: bool('是否成功'), taskId: str('任务 id'), member: str('下一站成员'), attemptId: str('attempt id') },
+        properties: {
+          ok: bool('是否成功'),
+          taskId: str('任务 id'),
+          member: str('下一站成员'),
+          attemptId: str('attempt id'),
+        },
         additionalProperties: false as const,
       },
       render: (_a, v) => text(`任务 ${v.taskId} → 下一站 ${v.member}（${v.attemptId}）`),
@@ -297,19 +396,34 @@ export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Contex
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
       const caller = await resolveCaller(env, exec.agent!);
       if (caller.kind !== 'captain') throw new ETeamsError('只有领队可以推进任务');
-      const { task, attempt } = await advanceTask(env, { teamId: caller.team.id, actor: caller.actor }, args.taskId, args.handoff);
+      const { task, attempt } = await advanceTask(
+        env,
+        { teamId: caller.team.id, actor: caller.actor },
+        args.taskId,
+        args.handoff,
+      );
       return { ok: true as const, taskId: task.id, member: attempt.member, attemptId: attempt.id };
     },
   });
 
   const reassignTaskTool = defineTool({
     name: 'eteams_reassign_task',
-    description: '改派进行中/待决策任务：吊销当前 attempt（旧 token 立即失效），任务转新成员。链任务偏离需 deviationNote。也用于处置 awaiting_decision。',
-    parameters: { taskId: strR('任务 id'), member: str('新成员（缺省=原成员重派）'), deviationNote: str('偏离原因（偏离链时必填）') },
+    description:
+      '改派进行中/待决策任务：吊销当前 attempt（旧 token 立即失效），任务转新成员。链任务偏离需 deviationNote。也用于处置 awaiting_decision。',
+    parameters: {
+      taskId: strR('任务 id'),
+      member: str('新成员（缺省=原成员重派）'),
+      deviationNote: str('偏离原因（偏离链时必填）'),
+    },
     output: {
       schema: {
         type: 'object' as const,
-        properties: { ok: bool('是否成功'), taskId: str('任务 id'), member: str('新成员'), attemptId: str('attempt id') },
+        properties: {
+          ok: bool('是否成功'),
+          taskId: str('任务 id'),
+          member: str('新成员'),
+          attemptId: str('attempt id'),
+        },
         additionalProperties: false as const,
       },
       render: (_a, v) => text(`任务 ${v.taskId} 改派 → ${v.member}（${v.attemptId}）`),
@@ -318,7 +432,11 @@ export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Contex
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
       const caller = await resolveCaller(env, exec.agent!);
       if (caller.kind !== 'captain') throw new ETeamsError('只有领队可以改派任务');
-      const { task, attempt } = await reassignTask(env, { teamId: caller.team.id, actor: caller.actor }, { ...args });
+      const { task, attempt } = await reassignTask(
+        env,
+        { teamId: caller.team.id, actor: caller.actor },
+        { ...args },
+      );
       return { ok: true as const, taskId: task.id, member: attempt.member, attemptId: attempt.id };
     },
   });
@@ -339,7 +457,12 @@ export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Contex
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
       const caller = await resolveCaller(env, exec.agent!);
       if (caller.kind !== 'captain') throw new ETeamsError('只有领队可以挂起任务');
-      const task = await suspendTask(env, { teamId: caller.team.id, actor: caller.actor }, args.taskId, args.note);
+      const task = await suspendTask(
+        env,
+        { teamId: caller.team.id, actor: caller.actor },
+        args.taskId,
+        args.note,
+      );
       return { ok: true as const, taskId: task.id };
     },
   });
@@ -351,7 +474,11 @@ export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Contex
     output: {
       schema: {
         type: 'object' as const,
-        properties: { ok: bool('是否成功'), taskId: str('任务 id'), attemptId: str('attempt id（ready 恢复时为空）') },
+        properties: {
+          ok: bool('是否成功'),
+          taskId: str('任务 id'),
+          attemptId: str('attempt id（ready 恢复时为空）'),
+        },
         additionalProperties: false as const,
       },
       render: (_a, v) => text(`任务 ${v.taskId} 已恢复（${v.attemptId}）`),
@@ -360,7 +487,11 @@ export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Contex
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
       const caller = await resolveCaller(env, exec.agent!);
       if (caller.kind !== 'captain') throw new ETeamsError('只有领队可以恢复任务');
-      const { task, attempt } = await resumeTask(env, { teamId: caller.team.id, actor: caller.actor }, args.taskId);
+      const { task, attempt } = await resumeTask(
+        env,
+        { teamId: caller.team.id, actor: caller.actor },
+        args.taskId,
+      );
       return { ok: true as const, taskId: task.id, attemptId: attempt?.id ?? '' };
     },
   });
@@ -381,7 +512,12 @@ export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Contex
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
       const caller = await resolveCaller(env, exec.agent!);
       if (caller.kind !== 'captain') throw new ETeamsError('只有领队可以取消任务');
-      const task = await cancelTask(env, { teamId: caller.team.id, actor: caller.actor }, args.taskId, args.reason);
+      const task = await cancelTask(
+        env,
+        { teamId: caller.team.id, actor: caller.actor },
+        args.taskId,
+        args.reason,
+      );
       return { ok: true as const, taskId: task.id };
     },
   });
@@ -389,7 +525,11 @@ export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Contex
   const sendMessageTool = defineTool({
     name: 'eteams_send_message',
     description: '私信团队成员（to=成员名）。对用户的状态汇报直接写在你的回复里，不走此工具。',
-    parameters: { to: strR('收件成员名'), content: strR('消息内容'), taskId: str('相关任务 id（可选）') },
+    parameters: {
+      to: strR('收件成员名'),
+      content: strR('消息内容'),
+      taskId: str('相关任务 id（可选）'),
+    },
     output: {
       schema: {
         type: 'object' as const,
@@ -402,7 +542,9 @@ export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Contex
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
       const caller = await resolveCaller(env, exec.agent!);
       if (caller.kind !== 'captain') throw new ETeamsError('成员请用成员版 eteams_send_message');
-      await sendMessage(env, caller.team, caller.actor, args.to, args.content, { taskId: args.taskId });
+      await sendMessage(env, caller.team, caller.actor, args.to, args.content, {
+        taskId: args.taskId,
+      });
       return { ok: true as const, to: args.to };
     },
   });
@@ -414,7 +556,10 @@ export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Contex
     output: {
       schema: {
         type: 'object' as const,
-        properties: { ok: bool('是否成功'), view: { type: 'object' as const, properties: {}, additionalProperties: true } },
+        properties: {
+          ok: bool('是否成功'),
+          view: { type: 'object' as const, properties: {}, additionalProperties: true },
+        },
         additionalProperties: false as const,
       },
       render: (_a, v) => text(JSON.stringify(v.view, null, 2)),
@@ -433,7 +578,13 @@ export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Contex
     output: {
       schema: {
         type: 'object' as const,
-        properties: { ok: bool('是否成功'), tasks: { type: 'array' as const, items: { type: 'object' as const, properties: {}, additionalProperties: true } } },
+        properties: {
+          ok: bool('是否成功'),
+          tasks: {
+            type: 'array' as const,
+            items: { type: 'object' as const, properties: {}, additionalProperties: true },
+          },
+        },
         additionalProperties: false as const,
       },
       render: (_a, v) => text(JSON.stringify(v.tasks, null, 2)),
@@ -448,7 +599,15 @@ export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Contex
           dependencies: t.dependencies,
           description: t.description ?? null,
           acceptance: t.acceptance ?? [],
-          attempts: t.attempts.map((a) => ({ id: a.id, kind: a.kind, member: a.member, status: a.status, progress: a.progress.map((p) => p.text), result: a.result?.output ?? null, error: a.error ?? null })),
+          attempts: t.attempts.map((a) => ({
+            id: a.id,
+            kind: a.kind,
+            member: a.member,
+            status: a.status,
+            progress: a.progress.map((p) => p.text),
+            result: a.result?.output ?? null,
+            error: a.error ?? null,
+          })),
         }));
       return { ok: true as const, tasks };
     },
@@ -461,7 +620,13 @@ export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Contex
     output: {
       schema: {
         type: 'object' as const,
-        properties: { ok: bool('是否成功'), teams: { type: 'array' as const, items: { type: 'object' as const, properties: {}, additionalProperties: true } } },
+        properties: {
+          ok: bool('是否成功'),
+          teams: {
+            type: 'array' as const,
+            items: { type: 'object' as const, properties: {}, additionalProperties: true },
+          },
+        },
         additionalProperties: false as const,
       },
       render: (_a, v) => text(JSON.stringify(v.teams, null, 2)),
@@ -469,7 +634,10 @@ export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Contex
     execute: async (_args, exec) => {
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
       const teams = await listTeams(stateRootOf(env));
-      return { ok: true as const, teams: teams.map((t) => ({ id: t.id, name: t.name, phase: t.phase, goal: t.goal })) };
+      return {
+        ok: true as const,
+        teams: teams.map((t) => ({ id: t.id, name: t.name, phase: t.phase, goal: t.goal })),
+      };
     },
   });
 
@@ -497,7 +665,11 @@ export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Contex
     description: '删除 staged/completed 团队的全部状态（不可恢复）。',
     parameters: { teamId: strR('团队 id') },
     output: {
-      schema: { type: 'object' as const, properties: { ok: bool('是否成功') }, additionalProperties: false as const },
+      schema: {
+        type: 'object' as const,
+        properties: { ok: bool('是否成功') },
+        additionalProperties: false as const,
+      },
       render: (_a, v) => text(v.ok ? '团队已删除' : '删除失败'),
     },
     execute: async (args, exec) => {
@@ -514,7 +686,13 @@ export function createCaptainTools(config: ETeamsResolvedConfig, hostCtx: Contex
     output: {
       schema: {
         type: 'object' as const,
-        properties: { ok: bool('是否成功'), messages: { type: 'array' as const, items: { type: 'object' as const, properties: {}, additionalProperties: true } } },
+        properties: {
+          ok: bool('是否成功'),
+          messages: {
+            type: 'array' as const,
+            items: { type: 'object' as const, properties: {}, additionalProperties: true },
+          },
+        },
         additionalProperties: false as const,
       },
       render: (_a, v) => text(JSON.stringify(v.messages, null, 2)),

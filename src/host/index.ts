@@ -28,6 +28,7 @@ import { PLUGIN_ID, PLUGIN_VERSION, STATE_SCHEMA_VERSION, TOOL_PREFIX } from './
 import { createCaptainTools } from './tools/captainTools.js';
 import { createMemberTools } from './tools/memberTools.js';
 import { installMemberRuntime } from './runtime/members.js';
+import { installWebSurface } from './runtime/webui.js';
 import { CAPTAIN_SECTION_SHORT } from './prompts/captain.js';
 import { composeCaptainPersona } from './prompts/persona.js';
 import { personaDigest } from './prompts/persona.js';
@@ -42,7 +43,13 @@ export { ETeamsConfig };
 export { createCaptainTools } from './tools/captainTools.js';
 export { createMemberTools } from './tools/memberTools.js';
 export { approvePlan } from './runtime/teamOps.js';
-export { assignTask, advanceTask, claimTask, completeTask, failTask } from './runtime/assignment.js';
+export {
+  assignTask,
+  advanceTask,
+  claimTask,
+  completeTask,
+  failTask,
+} from './runtime/assignment.js';
 
 /** Best-effort human label for the calling agent (diagnostics only). */
 function callerLabel(agent: Agent | undefined): string {
@@ -78,7 +85,10 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
 
   // 2) Member runtime: per-child tool installation + route bookkeeping.
   installMemberRuntime(
-    ctx as unknown as { logger: { info(m: string): void; warn(m: string): void }; subagents?: { registerContinuableSetup(c: (childCtx: Context) => () => void): () => void } },
+    ctx as unknown as {
+      logger: { info(m: string): void; warn(m: string): void };
+      subagents?: { registerContinuableSetup(c: (childCtx: Context) => () => void): () => void };
+    },
     config,
     (childCtx, _env) => {
       for (const tool of createMemberTools(config, childCtx as Context)) {
@@ -158,4 +168,35 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
 
   ctx.tools.register(ping);
   log.info('eteams: ready — tool eteams_ping registered');
+
+  // 6) M4 web surface: panel state routes (lazy — webless profiles skip).
+  try {
+    const bound = installWebSurface(ctx, config);
+    if (bound) {
+      log.info('eteams: web routes bound under /plugins/dsh-eteams');
+    } else {
+      // Sibling services (webServer/workspaceRegistry) may bind after us.
+      const rebind = (name: string): void => {
+        if (
+          name === 'webServer' ||
+          name === 'httpServer' ||
+          name === 'workspaceRegistry' ||
+          name === 'workspace'
+        ) {
+          if (installWebSurface(ctx, config))
+            log.info('eteams: web routes bound (late service %s)', name);
+        }
+      };
+      (ctx as unknown as { on: (event: string, cb: (name: string) => void) => void }).on(
+        'internal/service',
+        rebind,
+      );
+      log.info('eteams: web routes deferred (web services not yet bound)');
+    }
+  } catch (error) {
+    log.warn(
+      'eteams: web surface registration failed (panel falls back to empty state): %s',
+      String(error),
+    );
+  }
 }

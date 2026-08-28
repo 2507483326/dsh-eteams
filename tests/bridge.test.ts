@@ -17,7 +17,12 @@ interface FakeElement {
   clicks: number;
 }
 
-function el(tag: string, opts: Partial<Omit<FakeElement, 'tag' | 'children' | 'parent'>> & { children?: FakeElement[] } = {}): FakeElement {
+function el(
+  tag: string,
+  opts: Partial<Omit<FakeElement, 'tag' | 'children' | 'parent'>> & {
+    children?: FakeElement[];
+  } = {},
+): FakeElement {
   const node: FakeElement = {
     tag,
     attrs: opts.attrs ?? {},

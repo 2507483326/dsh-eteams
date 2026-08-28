@@ -26,7 +26,9 @@ export function buildMemberLabel(teamId: string, memberName: string): string {
 }
 
 /** Inverse of {@link buildMemberLabel}. */
-export function parseMemberLabel(label: string | undefined): { teamId: string; memberName: string } | undefined {
+export function parseMemberLabel(
+  label: string | undefined,
+): { teamId: string; memberName: string } | undefined {
   if (!label || !label.startsWith(MEMBER_LABEL_PREFIX)) return undefined;
   const rest = label.slice(MEMBER_LABEL_PREFIX.length);
   const sep = rest.indexOf(':');
@@ -58,7 +60,12 @@ export const MEMBER_DENIED_TOOLS: readonly string[] = [
  * Spawn one staged member as a durable continuable child of the captain.
  * Atomic per member: throws before mutating team state if start fails.
  */
-export async function spawnMember(env: RuntimeEnv, team: TeamState, member: MemberRecord, captain: Agent): Promise<string> {
+export async function spawnMember(
+  env: RuntimeEnv,
+  team: TeamState,
+  member: MemberRecord,
+  captain: Agent,
+): Promise<string> {
   const route = member.modelRoute;
   const start = await env.ctx.subagents.startContinuable({
     provider: env.config.memberProvider,
@@ -88,7 +95,11 @@ export async function spawnMember(env: RuntimeEnv, team: TeamState, member: Memb
  * interrupts the already-started children and rethrows, leaving all
  * members staged.
  */
-export async function spawnTeamMembers(env: RuntimeEnv, team: TeamState, captain: Agent): Promise<string[]> {
+export async function spawnTeamMembers(
+  env: RuntimeEnv,
+  team: TeamState,
+  captain: Agent,
+): Promise<string[]> {
   const staged = team.members.filter((m) => m.status === 'staged');
   const started: string[] = [];
   for (const member of staged) {
@@ -105,7 +116,10 @@ export async function spawnTeamMembers(env: RuntimeEnv, team: TeamState, captain
           // best-effort rollback; the cold child stays inert without a team
         }
       }
-      throw new ETeamsError(`成员「${member.name}」启动失败：${String(error)}`, '已回滚本次全部启动；请检查子代理提供方配置后重试批准');
+      throw new ETeamsError(
+        `成员「${member.name}」启动失败：${String(error)}`,
+        '已回滚本次全部启动；请检查子代理提供方配置后重试批准',
+      );
     }
   }
   return started;
@@ -126,14 +140,26 @@ export function interruptMember(env: RuntimeEnv, member: MemberRecord, captain: 
  * assignTask against a freshly ready member). Kept here so assignment.ts
  * stays free of spawn concerns.
  */
-export async function sendAssignment(env: RuntimeEnv, team: TeamState, member: MemberRecord, task: TaskRecord, attemptId: string, opts: { stageBrief?: string; handoff?: string } = {}): Promise<void> {
+export async function sendAssignment(
+  env: RuntimeEnv,
+  team: TeamState,
+  member: MemberRecord,
+  task: TaskRecord,
+  attemptId: string,
+  opts: { stageBrief?: string; handoff?: string } = {},
+): Promise<void> {
   const isStation = task.chain.length > 0;
   const content = assignmentMail(task, { teamName: team.name, attemptId, isStation, ...opts });
   await deliverAssignment(env, team, member, content, { taskId: task.id, attemptId });
 }
 
 /** Queue a notice for a not-yet-spawned member (staged roster additions). */
-export async function queueStagedNotice(env: RuntimeEnv, team: TeamState, member: MemberRecord, content: string): Promise<void> {
+export async function queueStagedNotice(
+  env: RuntimeEnv,
+  team: TeamState,
+  member: MemberRecord,
+  content: string,
+): Promise<void> {
   await queueNotice(env, team, member.name, content);
 }
 
@@ -143,16 +169,23 @@ export async function queueStagedNotice(env: RuntimeEnv, team: TeamState, member
  * the member tool face into the child scope (captain tools stay denied via
  * the spawn toolFilter). Safe on non-member children (no-op contribution).
  */
-export function installMemberRuntime(hostCtx: { logger: RuntimeLogger2; subagents?: SubagentInstallFace }, config: ETeamsResolvedConfig, registerMemberTools: (childCtx: Context, env: RuntimeEnv) => void): void {
+export function installMemberRuntime(
+  hostCtx: { logger: RuntimeLogger2; subagents?: SubagentInstallFace },
+  config: ETeamsResolvedConfig,
+  registerMemberTools: (childCtx: Context, env: RuntimeEnv) => void,
+): void {
   const subagents = hostCtx.subagents;
   if (!subagents?.registerContinuableSetup) {
-    hostCtx.logger.warn('eteams: subagents service unavailable; member tools will not be installed');
+    hostCtx.logger.warn(
+      'eteams: subagents service unavailable; member tools will not be installed',
+    );
     return;
   }
   subagents.registerContinuableSetup((childCtx: Context) => {
     const child = (childCtx as unknown as { agent?: Agent }).agent;
     if (!child) return () => undefined;
-    const seedLength = (child.session?.header as { seedLength?: number } | undefined)?.seedLength ?? 0;
+    const seedLength =
+      (child.session?.header as { seedLength?: number } | undefined)?.seedLength ?? 0;
     const suffix = child.session?.events?.slice(seedLength) ?? [];
     const descriptor = foldSubagentDescriptor(suffix);
     if (descriptor?.mode !== 'continuable') return () => undefined;
@@ -161,8 +194,11 @@ export function installMemberRuntime(hostCtx: { logger: RuntimeLogger2; subagent
     const workspace = child.session?.header?.cwd ?? process.cwd();
     const stateRoot = stateRootOf({ ctx: hostCtx as unknown as RuntimeContext, config, workspace });
     const team = readTeamSync(stateRoot, identity.teamId);
-    if (!team || team.captainSessionId !== String(child.session?.header?.parentSession ?? '')) return () => undefined;
-    const member = team.members.find((m) => m.name === identity.memberName && m.status !== 'removed');
+    if (!team || team.captainSessionId !== String(child.session?.header?.parentSession ?? ''))
+      return () => undefined;
+    const member = team.members.find(
+      (m) => m.name === identity.memberName && m.status !== 'removed',
+    );
     if (!member) return () => undefined;
     const env: RuntimeEnv = { ctx: hostCtx as unknown as RuntimeContext, config, workspace };
     registerMemberTools(childCtx, env);

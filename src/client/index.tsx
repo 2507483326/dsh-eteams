@@ -5,14 +5,18 @@
  * see scripts/wrap-client.mjs) with `inject: ['slots']`. Registers:
  *
  * 1. the 团队 tab — an entry in the `conversation.view` ring (id `eteams`,
- *    order 100), rendered one-at-a-time beside 对话/轨迹;
+ *    order 100) hosting the M4 activity panel (概览/成员/任务/动态 + 抽屉);
  * 2. the 团队 button — an entry at the right end of the composer tool row
- *    (`conversation.input.right`), opening the team-list popup whose v1
- *    「新增团队」 item jumps to the 团队 tab.
+ *    (`conversation.input.right`), opening the team-list popup whose
+ *    「新增团队」 item jumps to the 团队 tab;
+ * 3. the ETeams conversation card — folded from `eteams_create_team`
+ *    tool events via the optional `conversationEvents` service (absent
+ *    service degrades to tab+button only).
  *
  * @module dsh-eteams/client
  */
 import type { Context } from '@deepseek-ai/cordis';
+import { installCard } from './card';
 import { ETEAMS_TAB_LABEL, ETEAMS_VIEW_ID } from './bridge';
 import { ETeamsView } from './eteamsView';
 import { TeamsButton } from './teamsButton';
@@ -48,4 +52,6 @@ export function apply(ctx: Context): void {
       TeamsButton,
     ),
   );
+
+  installCard(ctx);
 }

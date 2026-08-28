@@ -16,22 +16,28 @@ export function renderContract(task: TaskRecord): string {
     lines.push('验收标准：', ...task.acceptance.map((a, i) => `  ${i + 1}. ${a}`));
   }
   if (task.inScope && task.inScope.length > 0) lines.push(`允许改动：${task.inScope.join('、')}`);
-  if (task.outOfScope && task.outOfScope.length > 0) lines.push(`禁止改动：${task.outOfScope.join('、')}`);
-  if (task.deliverables && task.deliverables.length > 0) lines.push(`交付物：${task.deliverables.join('、')}`);
+  if (task.outOfScope && task.outOfScope.length > 0)
+    lines.push(`禁止改动：${task.outOfScope.join('、')}`);
+  if (task.deliverables && task.deliverables.length > 0)
+    lines.push(`交付物：${task.deliverables.join('、')}`);
   if (task.idempotencyNote) lines.push(`幂等说明：${task.idempotencyNote}`);
-  if (task.dependencies.length > 0) lines.push(`前置依赖：${task.dependencies.join('、')}（产物见对应任务文件夹）`);
+  if (task.dependencies.length > 0)
+    lines.push(`前置依赖：${task.dependencies.join('、')}（产物见对应任务文件夹）`);
   return lines.join('\n');
 }
 
 /** Assignment / stage-handoff mail body (docs/07.3.1 模板). */
-export function assignmentMail(task: TaskRecord, opts: {
-  teamName: string;
-  stageBrief?: string;
-  handoff?: string;
-  attemptId: string;
-  isStation: boolean;
-  stationIndex?: number;
-}): string {
+export function assignmentMail(
+  task: TaskRecord,
+  opts: {
+    teamName: string;
+    stageBrief?: string;
+    handoff?: string;
+    attemptId: string;
+    isStation: boolean;
+    stationIndex?: number;
+  },
+): string {
   const station = stationProgress(task);
   const header = opts.isStation
     ? `【指派·执行链】任务 ${task.id} ${task.subject} · 第 ${(opts.stationIndex ?? task.chainCursor + 1) + 1}/${station?.total ?? task.chain.length} 站`
@@ -55,38 +61,48 @@ export function assignmentMail(task: TaskRecord, opts: {
 }
 
 /** Successful report body → captain (docs/07.3.4). */
-export function reportCompletedMail(task: TaskRecord, opts: {
-  member: string;
-  attemptId: string;
-  isFinalStation: boolean;
-  output: string;
-  changedPaths?: string[];
-  nextStation?: string;
-  nextStageBrief?: string;
-}): string {
+export function reportCompletedMail(
+  task: TaskRecord,
+  opts: {
+    member: string;
+    attemptId: string;
+    isFinalStation: boolean;
+    output: string;
+    changedPaths?: string[];
+    nextStation?: string;
+    nextStageBrief?: string;
+  },
+): string {
   const lines = [
     `【完成】${opts.member} · 任务 ${task.id} ${task.subject}`,
     `产出：${opts.output}`,
-    opts.changedPaths && opts.changedPaths.length > 0 ? `改动：${opts.changedPaths.join('、')}` : undefined,
+    opts.changedPaths && opts.changedPaths.length > 0
+      ? `改动：${opts.changedPaths.join('、')}`
+      : undefined,
   ];
   if (opts.isFinalStation) {
     lines.push('任务已全部完成。空闲成员可接新任务，建议你当轮续派（完成即续派）。');
   } else if (opts.nextStation) {
-    lines.push(`下一站：${opts.nextStation}${opts.nextStageBrief ? ` — ${opts.nextStageBrief}` : ''}。请用 eteams_advance_task 推进（完成即续派）。`);
+    lines.push(
+      `下一站：${opts.nextStation}${opts.nextStageBrief ? ` — ${opts.nextStageBrief}` : ''}。请用 eteams_advance_task 推进（完成即续派）。`,
+    );
   }
   lines.push(`（attempt ${opts.attemptId}）`);
   return lines.filter((l) => l !== undefined).join('\n');
 }
 
 /** Failure report body → captain. */
-export function reportFailedMail(task: TaskRecord, opts: {
-  member: string;
-  attemptId: string;
-  error: string;
-  willRetry: boolean;
-  retryCount: number;
-  maxRetries: number;
-}): string {
+export function reportFailedMail(
+  task: TaskRecord,
+  opts: {
+    member: string;
+    attemptId: string;
+    error: string;
+    willRetry: boolean;
+    retryCount: number;
+    maxRetries: number;
+  },
+): string {
   if (opts.willRetry) {
     return `【失败·将重试】${opts.member} · 任务 ${task.id} ${task.subject}\n障碍：${opts.error}\n重试 ${opts.retryCount}/${opts.maxRetries}：已安排同成员立即重试。`;
   }

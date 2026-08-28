@@ -8,7 +8,14 @@
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { MemberRecord, TeamState } from '../model/types.js';
 import { listTeams } from '../state/store.js';
-import { captainActor, memberActor, stateRootOf, ETeamsError, type RuntimeContext, type RuntimeEnv } from '../runtime/base.js';
+import {
+  captainActor,
+  memberActor,
+  stateRootOf,
+  ETeamsError,
+  type RuntimeContext,
+  type RuntimeEnv,
+} from '../runtime/base.js';
 import type { ETeamsResolvedConfig } from '../config.js';
 import type { Actor } from '../model/types.js';
 
@@ -30,7 +37,12 @@ export interface MemberCaller {
 export type Caller = CaptainCaller | MemberCaller;
 
 /** Build a runtime env for one agent execution. */
-export function envForAgent(config: ETeamsResolvedConfig, ctx: RuntimeContext, agent: Agent | undefined, signal?: AbortSignal): RuntimeEnv {
+export function envForAgent(
+  config: ETeamsResolvedConfig,
+  ctx: RuntimeContext,
+  agent: Agent | undefined,
+  signal?: AbortSignal,
+): RuntimeEnv {
   if (!agent) throw new ETeamsError('无法识别调用者（exec.agent 缺失）');
   const cwd = agent.session?.header?.cwd ?? process.cwd();
   return { ctx, config, workspace: cwd, signal };
@@ -51,7 +63,10 @@ export async function resolveCaller(env: RuntimeEnv, agent: Agent): Promise<Call
     const member = team.members.find((m) => m.id === sessionId && m.status !== 'removed');
     if (member) return { kind: 'member', team, member, actor: memberActor(member) };
   }
-  throw new ETeamsError('当前会话不在任何 eteams 团队中', '领队用 eteams_create_team 建队；成员由领队拉入团队');
+  throw new ETeamsError(
+    '当前会话不在任何 eteams 团队中',
+    '领队用 eteams_create_team 建队；成员由领队拉入团队',
+  );
 }
 
 /** Shared listTeams re-export for tool factories. */

@@ -62,7 +62,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
-    "verify": "node scripts/verifyM0.mjs && vitest run",    "prepublishOnly": "pnpm build && pnpm typecheck && pnpm lint && pnpm test"
+    "verify": "node scripts/verifyM0.mjs && vitest run",
+    "prepublishOnly": "pnpm build && pnpm typecheck && pnpm lint && pnpm test"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1-rc.1",

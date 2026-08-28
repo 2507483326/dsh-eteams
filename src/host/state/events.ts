@@ -48,7 +48,11 @@ export function lastEventSeq(stateRoot: string, teamId: string): number {
 }
 
 /** Append one event line; must be called inside the team lock. */
-export async function appendEvent(stateRoot: string, teamId: string, event: EventRecord): Promise<void> {
+export async function appendEvent(
+  stateRoot: string,
+  teamId: string,
+  event: EventRecord,
+): Promise<void> {
   const file = eventsFile(stateRoot, teamId);
   await appendFile(file, `${JSON.stringify(event)}\n`, 'utf8');
 }
@@ -82,7 +86,12 @@ export function readMailboxSync(stateRoot: string, teamId: string, box: string):
 }
 
 /** Append one mailbox message; must be called inside the team lock. */
-export async function appendMail(stateRoot: string, teamId: string, box: string, message: MailMessage): Promise<void> {
+export async function appendMail(
+  stateRoot: string,
+  teamId: string,
+  box: string,
+  message: MailMessage,
+): Promise<void> {
   await appendFile(inboxFile(stateRoot, teamId, box), `${JSON.stringify(message)}\n`, 'utf8');
 }
 

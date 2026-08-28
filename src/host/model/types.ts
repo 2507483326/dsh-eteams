@@ -43,7 +43,8 @@ export interface ChainStation {
 export type AttemptKind = 'initial' | 'stage' | 'retry' | 'reassign';
 
 /** Attempt lifecycle status. */
-export type AttemptStatus = 'pending_accept' | 'running' | 'succeeded' | 'failed' | 'revoked' | 'paused';
+export type AttemptStatus =
+  'pending_accept' | 'running' | 'succeeded' | 'failed' | 'revoked' | 'paused';
 
 /** One progress note on the execution line (≤200 chars per docs/06.3). */
 export interface ProgressNote {

@@ -21,7 +21,10 @@ import type { TeamState } from '../src/host/model/types';
 
 interface FakeAgent {
   id: string;
-  session: { header: { cwd: string; parentSession?: string; seedLength?: number }; events: unknown[] };
+  session: {
+    header: { cwd: string; parentSession?: string; seedLength?: number };
+    events: unknown[];
+  };
   followups: { text: string; source: unknown }[];
   followup(msg: { content: { type: string; text: string }[]; source: unknown }): void;
 }
@@ -32,14 +35,26 @@ function fakeAgent(id: string, cwd: string, parent?: string): FakeAgent {
     session: { header: { cwd, parentSession: parent, seedLength: 0 }, events: [] },
     followups: [],
     followup(msg) {
-      this.followups.push({ text: msg.content.map((c) => ('text' in c ? c.text : '')).join(''), source: msg.source });
+      this.followups.push({
+        text: msg.content.map((c) => ('text' in c ? c.text : '')).join(''),
+        source: msg.source,
+      });
     },
   };
   return agent;
 }
 
 function fakeRuntime(_workspace: string) {
-  const children: { childId: string; label: string; request: { parent: FakeAgent; persona?: string; toolFilter?: { deny: string[] }; agentOptions?: Record<string, unknown> } }[] = [];
+  const children: {
+    childId: string;
+    label: string;
+    request: {
+      parent: FakeAgent;
+      persona?: string;
+      toolFilter?: { deny: string[] };
+      agentOptions?: Record<string, unknown>;
+    };
+  }[] = [];
   const deliveries: { childId: string; text: string }[] = [];
   const interrupts: string[] = [];
   const captains = new Map<string, FakeAgent>();
@@ -48,13 +63,19 @@ function fakeRuntime(_workspace: string) {
   const ctx = {
     logger: { info: () => undefined, warn: (m: string) => console.warn(`[warn] ${m}`) },
     subagents: {
-      async startContinuable(spec: { label: string; request: { parent: FakeAgent; toolFilter?: { deny: string[] } } }) {
+      async startContinuable(spec: {
+        label: string;
+        request: { parent: FakeAgent; toolFilter?: { deny: string[] } };
+      }) {
         const childId = `sess-child-${++childCounter}`;
         children.push({ childId, label: spec.label, request: spec.request });
         return { childId, messageId: 'm-fake' };
       },
       async followup(_parent: unknown, childId: string, content: { type: string; text: string }[]) {
-        deliveries.push({ childId, text: content.map((c) => ('text' in c ? c.text : '')).join('') });
+        deliveries.push({
+          childId,
+          text: content.map((c) => ('text' in c ? c.text : '')).join(''),
+        });
         return 'm-fake';
       },
       interrupt(target: string) {
@@ -62,8 +83,18 @@ function fakeRuntime(_workspace: string) {
       },
     },
     agents: { get: (id: string) => captains.get(id) },
-    tools: { registered: [] as { name: string }[], register(tool: { name: string }) { this.registered.push(tool); } },
-    systemPrompt: { sections: [] as { name: string; order: number; text: string }[], section(s: { name: string; order: number; text: string }) { this.sections.push(s); } },
+    tools: {
+      registered: [] as { name: string }[],
+      register(tool: { name: string }) {
+        this.registered.push(tool);
+      },
+    },
+    systemPrompt: {
+      sections: [] as { name: string; order: number; text: string }[],
+      section(s: { name: string; order: number; text: string }) {
+        this.sections.push(s);
+      },
+    },
   } as unknown as Context;
 
   const runtime = {
@@ -101,7 +132,10 @@ function memberTool(name: string) {
 }
 
 async function cap<T>(name: string, args: Record<string, unknown>): Promise<T> {
-  return (await captainTool(name).execute(args as never, { agent: captain, signal: undefined } as never)) as T;
+  return (await captainTool(name).execute(
+    args as never,
+    { agent: captain, signal: undefined } as never,
+  )) as T;
 }
 
 function memberAgent(childId: string): FakeAgent {
@@ -111,7 +145,10 @@ function memberAgent(childId: string): FakeAgent {
 }
 
 async function mem<T>(agent: FakeAgent, name: string, args: Record<string, unknown>): Promise<T> {
-  return (await memberTool(name).execute(args as never, { agent, signal: undefined } as never)) as T;
+  return (await memberTool(name).execute(
+    args as never,
+    { agent, signal: undefined } as never,
+  )) as T;
 }
 
 function readTeam(): TeamState {
@@ -154,8 +191,16 @@ describe('M1 lifecycle (offline full flow)', () => {
     const teamId = created.teamId;
 
     // 2. 成员 + 任务（含执行链）进入计划
-    const alice = await cap<{ ok: true; member: string; status: string }>('eteams_add_member', { name: 'Alice', role: 'researcher', teamId });
-    const bob = await cap<{ ok: true }>('eteams_add_member', { name: 'Bob', role: 'engineer', teamId });
+    const alice = await cap<{ ok: true; member: string; status: string }>('eteams_add_member', {
+      name: 'Alice',
+      role: 'researcher',
+      teamId,
+    });
+    const bob = await cap<{ ok: true }>('eteams_add_member', {
+      name: 'Bob',
+      role: 'engineer',
+      teamId,
+    });
     expect(alice.status).toBe('staged');
     expect(bob.ok).toBe(true);
 
@@ -203,26 +248,47 @@ describe('M1 lifecycle (offline full flow)', () => {
     expect(existsSync(join(workDir, 'tasks', taskFolders[0]!, 'notes.md'))).toBe(true);
 
     // 5. 指派链任务首站 → Alice
-    const assigned = await cap<{ ok: true; taskId: string; member: string; attemptId: string }>('eteams_assign_task', {
-      taskId: task.taskId,
-      member: 'Alice',
-    });
+    const assigned = await cap<{ ok: true; taskId: string; member: string; attemptId: string }>(
+      'eteams_assign_task',
+      {
+        taskId: task.taskId,
+        member: 'Alice',
+      },
+    );
     expect(assigned.member).toBe('Alice');
     expect(assigned.attemptId).toBe('a1');
     // 指派信已投递（邮箱 + followup 唤醒）
-    expect(runtime.deliveries.some((d) => d.childId === runtime.children[0]!.childId && d.text.includes('执行链'))).toBe(true);
+    expect(
+      runtime.deliveries.some(
+        (d) => d.childId === runtime.children[0]!.childId && d.text.includes('执行链'),
+      ),
+    ).toBe(true);
 
     const aliceAgent = memberAgent(runtime.children[0]!.childId);
 
     // 6. claim → token；错误 token 全部拒绝
-    const claimed = await mem<{ ok: true; attemptId: string; token: string; contract: string }>(aliceAgent, 'eteams_claim_task', { taskId: task.taskId });
+    const claimed = await mem<{ ok: true; attemptId: string; token: string; contract: string }>(
+      aliceAgent,
+      'eteams_claim_task',
+      { taskId: task.taskId },
+    );
     expect(claimed.token).toMatch(/^[0-9a-f]{24}$/);
     expect(claimed.contract).toContain('验收标准');
 
-    const badToken = { taskId: task.taskId, attemptId: claimed.attemptId, token: 'deadbeef'.repeat(3), text: '开工' };
+    const badToken = {
+      taskId: task.taskId,
+      attemptId: claimed.attemptId,
+      token: 'deadbeef'.repeat(3),
+      text: '开工',
+    };
     await expect(mem(aliceAgent, 'eteams_append_progress', badToken)).rejects.toThrow(/token/);
 
-    await mem(aliceAgent, 'eteams_append_progress', { taskId: task.taskId, attemptId: claimed.attemptId, token: claimed.token, text: '方案调研完成' });
+    await mem(aliceAgent, 'eteams_append_progress', {
+      taskId: task.taskId,
+      attemptId: claimed.attemptId,
+      token: claimed.token,
+      text: '方案调研完成',
+    });
 
     // 7. 中间站完成 → 任务回 ready + 领队收到续派通知
     const stationDone = await mem<{ ok: true; done: boolean }>(aliceAgent, 'eteams_complete_task', {
@@ -241,21 +307,40 @@ describe('M1 lifecycle (offline full flow)', () => {
     expect(captainNotified).toContain('Bob');
 
     // 8. 偏离链被拒绝（无 deviationNote）
-    const carol = await cap<{ ok: true }>('eteams_add_member', { name: 'Carol', role: 'engineer', teamId });
+    const carol = await cap<{ ok: true }>('eteams_add_member', {
+      name: 'Carol',
+      role: 'engineer',
+      teamId,
+    });
     expect(carol.ok).toBe(true);
     await expect(
       cap('eteams_assign_task', { taskId: task.taskId, member: 'Carol' }),
     ).rejects.toThrow(/deviation_note|偏离/);
     // deviation_note 提供时放行 → chain.deviated 事件
-    await expect(cap('eteams_assign_task', { taskId: task.taskId, member: 'Carol', deviationNote: 'Bob 临时不可用' })).resolves.toBeTruthy();
+    await expect(
+      cap('eteams_assign_task', {
+        taskId: task.taskId,
+        member: 'Carol',
+        deviationNote: 'Bob 临时不可用',
+      }),
+    ).resolves.toBeTruthy();
     team = readTeam();
     expect(team.tasks[0]!.assignee).toBe('Carol');
 
     // Carol claim + 完成末站
     const carolChild = runtime.children.find((c) => c.label.endsWith(':Carol'))!;
     const carolAgent = memberAgent(carolChild.childId);
-    const carolClaim = await mem<{ token: string; attemptId: string }>(carolAgent, 'eteams_claim_task', { taskId: task.taskId });
-    await mem(carolAgent, 'eteams_append_progress', { taskId: task.taskId, attemptId: carolClaim.attemptId, token: carolClaim.token, text: '实现中' });
+    const carolClaim = await mem<{ token: string; attemptId: string }>(
+      carolAgent,
+      'eteams_claim_task',
+      { taskId: task.taskId },
+    );
+    await mem(carolAgent, 'eteams_append_progress', {
+      taskId: task.taskId,
+      attemptId: carolClaim.attemptId,
+      token: carolClaim.token,
+      text: '实现中',
+    });
     const finalDone = await mem<{ done: boolean }>(carolAgent, 'eteams_complete_task', {
       taskId: task.taskId,
       attemptId: carolClaim.attemptId,
@@ -269,15 +354,29 @@ describe('M1 lifecycle (offline full flow)', () => {
     expect(captain.followups.at(-1)!.text).toContain('任务已全部完成');
 
     // 9. advance 用尽后报错；依赖任务已可指派
-    await expect(cap('eteams_advance_task', { taskId: task.taskId })).rejects.toThrow(/无后续站点|没有执行链|处于/);
-    const docAssign = await cap<{ ok: true }>('eteams_assign_task', { taskId: dependent.taskId, member: 'Alice' });
+    await expect(cap('eteams_advance_task', { taskId: task.taskId })).rejects.toThrow(
+      /无后续站点|没有执行链|处于/,
+    );
+    const docAssign = await cap<{ ok: true }>('eteams_assign_task', {
+      taskId: dependent.taskId,
+      member: 'Alice',
+    });
     expect(docAssign.ok).toBe(true);
 
     // 10. 失败重试链：Alice fail ×(maxRetries+1) → awaiting_decision
     // （重试指派为 pending_accept，成员需重新 claim 才能再次上报）
     const failOnce = async () => {
-      const claim = await mem<{ token: string; attemptId: string }>(aliceAgent, 'eteams_claim_task', { taskId: dependent.taskId });
-      await mem(aliceAgent, 'eteams_fail_task', { taskId: dependent.taskId, attemptId: claim.attemptId, token: claim.token, error: '格式不对' });
+      const claim = await mem<{ token: string; attemptId: string }>(
+        aliceAgent,
+        'eteams_claim_task',
+        { taskId: dependent.taskId },
+      );
+      await mem(aliceAgent, 'eteams_fail_task', {
+        taskId: dependent.taskId,
+        attemptId: claim.attemptId,
+        token: claim.token,
+        error: '格式不对',
+      });
     };
     await failOnce();
     // 第一次失败 → 同成员立即重试（attempt kind=retry）
@@ -308,7 +407,9 @@ describe('M1 lifecycle (offline full flow)', () => {
     expect(eventsRaw).toContain('decision.requested');
 
     // 12. 非法转换被拒绝：completed 任务不能再 assign
-    await expect(cap('eteams_assign_task', { taskId: task.taskId, member: 'Alice' })).rejects.toThrow(/只能指派 ready 任务|处于 completed/);
+    await expect(
+      cap('eteams_assign_task', { taskId: task.taskId, member: 'Alice' }),
+    ).rejects.toThrow(/只能指派 ready 任务|处于 completed/);
 
     // 13. 邮箱可见
     const mailbox = await cap<{ ok: true; messages: unknown[] }>('eteams_mailbox', {});
@@ -316,7 +417,10 @@ describe('M1 lifecycle (offline full flow)', () => {
   });
 
   it('rejects claim by a member the task is not assigned to', async () => {
-    const created = await cap<{ teamId: string }>('eteams_create_team', { name: '拒绝测试', goal: 'g' });
+    const created = await cap<{ teamId: string }>('eteams_create_team', {
+      name: '拒绝测试',
+      goal: 'g',
+    });
     await cap('eteams_add_member', { name: 'Alice', role: 'engineer', teamId: created.teamId });
     await cap('eteams_add_member', { name: 'Bob', role: 'engineer', teamId: created.teamId });
     await approvePlan(runtimeEnvFor(), captain as never, created.teamId);
@@ -324,7 +428,9 @@ describe('M1 lifecycle (offline full flow)', () => {
     await cap('eteams_assign_task', { taskId: 't1', member: 'Alice' });
     const bobChild = runtime.children.find((c) => c.label.endsWith(':Bob'))!;
     const bobAgent = memberAgent(bobChild.childId);
-    await expect(mem(bobAgent, 'eteams_claim_task', { taskId: 't1' })).rejects.toThrow(/未指派给你/);
+    await expect(mem(bobAgent, 'eteams_claim_task', { taskId: 't1' })).rejects.toThrow(
+      /未指派给你/,
+    );
   });
 });
 
