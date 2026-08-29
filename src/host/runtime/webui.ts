@@ -822,7 +822,7 @@ function writeWorkspacePath(ctx: Context, config: ETeamsResolvedConfig): string 
 }
 
 /** State root for roster reads/writes (same resolution as writeWorkspacePath). */
-function rootForWrites(ctx: Context, config: ETeamsResolvedConfig): string {
+export function rootForWrites(ctx: Context, config: ETeamsResolvedConfig): string {
   return joinPath(writeWorkspacePath(ctx, config), config.stateDir);
 }
 

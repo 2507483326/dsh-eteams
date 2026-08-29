@@ -30,7 +30,8 @@ import { PLUGIN_ID, PLUGIN_VERSION, STATE_SCHEMA_VERSION, TOOL_PREFIX } from './
 import { createCaptainTools } from './tools/captainTools.js';
 import { createMemberTools } from './tools/memberTools.js';
 import { installMemberRuntime } from './runtime/members.js';
-import { installWebSurface } from './runtime/webui.js';
+import { installWebSurface, rootForWrites } from './runtime/webui.js';
+import { readBuildSession, reportBuildProgress } from './runtime/roleBuilder.js';
 import { CAPTAIN_SECTION_SHORT } from './prompts/captain.js';
 import { composeCaptainPersona } from './prompts/persona.js';
 import { personaDigest } from './prompts/persona.js';
@@ -142,10 +143,43 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
             images: false,
           },
           handler: ({ agent, rawInput }) => {
+            // 受理即开构建会话（docs/19.16）：不等构建师首次播报（模型启动有
+            // 数秒延迟）——命令受理瞬间就把 active 会话落盘，对话卡片与面板
+            // 立即呈现「创建中」。已存在的待确认草稿自动让位（放弃旧稿），
+            // 否则新构建会被状态机挡住。best-effort：写失败则退回等首播。
+            void (async () => {
+              try {
+                const root = rootForWrites(ctx, config);
+                const current = readBuildSession(root);
+                if (current !== null && current.status === 'awaiting_confirmation') {
+                  await reportBuildProgress(root, {
+                    status: 'cancelled',
+                    note: '新构建请求已受理，旧待确认草稿自动放弃',
+                  });
+                }
+                await reportBuildProgress(root, {
+                  status: 'active',
+                  step: '收到需求',
+                  stepsDone: ['收到需求'],
+                  request: buildActivationMessage(rawInput),
+                  note: '命令已受理——角色构建师接手中',
+                });
+              } catch {
+                // 状态文件不可写（无工作区等）：卡片退回等构建师首次播报。
+              }
+            })();
             agent.steer(
               createUserMessage({
                 content: [{ type: 'text', text: buildActivationMessage(rawInput) }],
-                source: { kind: 'user' },
+                // Plugin-sourced notice: the conversation folds this user-role
+                // message into a compact context row (not a chat bubble) while
+                // the model still receives the full activation text (docs/19.9.5).
+                source: {
+                  kind: 'plugin',
+                  plugin: 'dsh-eteams',
+                  form: 'notice',
+                  summary: '成员创建请求已提交——构建卡片与面板实时显示进度',
+                },
               }),
             );
             return {

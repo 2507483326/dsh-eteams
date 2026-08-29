@@ -19,6 +19,23 @@ export const ETEAMS_DATA_ATTR = 'data-eteams';
 /** Selectors whose subtrees must never be treated as the view tab. */
 const EXCLUDED_ANCESTORS = `[${ETEAMS_DATA_ATTR}],[role="menu"],[role="dialog"],[role="listbox"]`;
 
+/** Custom window event: a surface asks the panel to open the member builder. */
+export const GOTO_ADD_EVENT = 'eteams:goto-add';
+
+/**
+ * Activate the 团队 tab AND open the member-builder workbench
+ * （成员 → 新增）：fires the cross-component signal first, then clicks the
+ * host tab. The card in the conversation uses this for its click-through.
+ *
+ * @returns whether the tab element was found and clicked.
+ */
+export function openMemberBuilder(): boolean {
+  if (typeof window !== 'undefined' && typeof window.CustomEvent === 'function') {
+    window.dispatchEvent(new CustomEvent(GOTO_ADD_EVENT));
+  }
+  return activateETeamsTab();
+}
+
 /**
  * Activate the 团队 view by clicking its host-rendered tab button.
  *

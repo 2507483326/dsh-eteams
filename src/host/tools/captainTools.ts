@@ -331,6 +331,16 @@ export function createCaptainTools(
       },
       render: (_a, v) => text(`构建会话：${v.status} · ${v.step}`),
     },
+    // 会话内行内呈现（docs/19.16）：默认卡会把整包 args（含 personaMd 全文）
+    // 渲染成大 JSON 行——这里收敛为一行「构建进度 · 步骤」，细节只在面板。
+    presentCall: (args) => ({
+      card: 'generic' as const,
+      title: `构建进度 · ${args.step !== undefined && args.step !== '' ? args.step : '准备中'}`,
+    }),
+    presentResult: (_args, result) => {
+      if (result.isError) return undefined;
+      return { card: 'generic' as const, title: '构建进度已同步（面板实时可见）', content: [] };
+    },
     execute: async (args, exec) => {
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
       const session = await reportBuildProgress(stateRootOf(env), {

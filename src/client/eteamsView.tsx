@@ -18,7 +18,9 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives';
 import { ADD_PEOPLE_TEMPLATE, prefillComposer, type PrefillOutcome } from './addPeople';
 import { Avatar } from './avatar';
+import { GOTO_ADD_EVENT } from './bridge';
 import { ClientErrorBoundary } from './diagnostics';
+import { MdEditor } from './mdEditor';
 import {
   addTeamMember,
   cancelBuild,
@@ -590,6 +592,16 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
   const [expandedTask, setExpandedTask] = useState<string | null>(null);
   const [dialogMember, setDialogMember] = useState<string | null>(null);
   const [roster, setRoster] = useState<RosterMember[]>([]);
+  // 创建卡片/弹层跳转信号（docs/19.9.5）：递增计数驱动 MembersTab 打开新增页。
+  const [openAddTick, setOpenAddTick] = useState(0);
+  useEffect(() => {
+    const h = (): void => {
+      setTab('roster');
+      setOpenAddTick((t) => t + 1);
+    };
+    window.addEventListener(GOTO_ADD_EVENT, h);
+    return () => window.removeEventListener(GOTO_ADD_EVENT, h);
+  }, []);
 
   const myTeams = state.teams.filter((t) => t.captainSessionId === props.sessionId);
   const pool = myTeams.length > 0 ? myTeams : state.teams;
@@ -691,6 +703,7 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
               team={team}
               onDeleted={refreshRoster}
               onPrefillAddPeople={prefillAddPeople}
+              openAddTick={openAddTick}
             />
           )}
           {activeTab === 'tasks' && team !== undefined && (
@@ -1004,11 +1017,10 @@ function MemberCard({
 /** 构建步骤时间线（docs/19.6.2）——与角色构建师的 eteams_build_report 播报约定一致。 */
 const BUILD_STEPS = [
   '收到需求',
-  '查重',
-  '起草职责/能力',
-  '起草风格/纪律',
-  '撰写角色手册',
-  '待确认',
+  '查重成员库',
+  '起草统一手册',
+  '深化领域章节',
+  '完成草稿',
 ] as const;
 
 /** Editable draft form state (待确认态). */
@@ -1105,12 +1117,15 @@ function MembersTab({
   team,
   onDeleted,
   onPrefillAddPeople,
+  openAddTick,
 }: {
   members: RosterMember[];
   pool: TeamSnapshot[];
   team: TeamSnapshot | undefined;
   onDeleted: () => void;
   onPrefillAddPeople: () => 'set' | 'copied' | 'aborted';
+  /** 创建卡片跳转信号：>0 时打开新增工作台（docs/19.9.5）。 */
+  openAddTick: number;
 }): ReactNode {
   const [view, setView] = useState<'list' | 'add' | 'detail'>('list');
   const [detailName, setDetailName] = useState<string | null>(null);
@@ -1165,6 +1180,15 @@ function MembersTab({
     const h = setInterval(refreshBuild, 1500);
     return () => clearInterval(h);
   }, [refreshBuild]);
+
+  // 创建卡片跳转（docs/19.9.5）：信号递增时打开新增工作台。
+  const lastAddTickRef = useRef(0);
+  useEffect(() => {
+    if (openAddTick > 0 && openAddTick !== lastAddTickRef.current) {
+      lastAddTickRef.current = openAddTick;
+      setView('add');
+    }
+  }, [openAddTick]);
 
   const del = async (memberName: string): Promise<void> => {
     setListError(null);
@@ -1256,6 +1280,7 @@ function MembersTab({
     const confirmedDraft = build !== null && build.status === 'confirmed' ? build.draft : null;
     return (
       <div>
+        <style>{'@keyframes eteams-spin{to{transform:rotate(360deg)}}'}</style>
         <Button size="sm" onClick={() => setView('list')}>
           ← 返回成员列表
         </Button>
@@ -1263,7 +1288,13 @@ function MembersTab({
           {build !== null && build.status === 'active' && (
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ color: T.accent, display: 'inline-flex' }}>
+                <span
+                  style={{
+                    color: T.accent,
+                    display: 'inline-flex',
+                    animation: 'eteams-spin 1s linear infinite',
+                  }}
+                >
                   <IconSparkle16 />
                 </span>
                 <div style={{ ...styles.line, fontWeight: 600, margin: 0 }}>
@@ -1317,51 +1348,12 @@ function MembersTab({
                   />
                 </div>
                 <div style={styles.formRow}>
-                  <span style={styles.formLabel}>职责边界</span>
-                  <textarea
-                    style={styles.textarea}
-                    value={draftEdit.duty}
-                    onChange={(e) => setDraftEdit({ ...draftEdit, duty: e.target.value })}
-                  />
-                </div>
-                <div style={styles.formRow}>
-                  <span style={styles.formLabel}>工作风格</span>
-                  <textarea
-                    style={styles.textarea}
-                    value={draftEdit.style}
-                    onChange={(e) => setDraftEdit({ ...draftEdit, style: e.target.value })}
-                  />
-                </div>
-                <div style={styles.formRow}>
-                  <span style={styles.formLabel}>能力</span>
-                  <textarea
-                    style={styles.textarea}
-                    value={draftEdit.skills}
-                    onChange={(e) => setDraftEdit({ ...draftEdit, skills: e.target.value })}
-                  />
-                </div>
-                <div style={styles.formRow}>
-                  <span style={styles.formLabel}>工作纪律（每行一条）</span>
-                  <textarea
-                    style={styles.textarea}
-                    value={draftEdit.rulesText}
-                    onChange={(e) => setDraftEdit({ ...draftEdit, rulesText: e.target.value })}
-                  />
-                </div>
-                <div style={styles.formRow}>
-                  <span style={styles.formLabel}>执行提示</span>
-                  <textarea
-                    style={styles.textarea}
-                    value={draftEdit.executionPrompt}
-                    onChange={(e) => setDraftEdit({ ...draftEdit, executionPrompt: e.target.value })}
-                  />
-                </div>
-                <div style={styles.formRow}>
-                  <span style={styles.formLabel}>角色手册（Markdown）</span>
-                  <textarea
-                    style={{ ...styles.textarea, minHeight: 120 }}
+                  <span style={styles.formLabel}>
+                    人设手册（统一 Markdown：frontmatter + 身份/使命/规则/领域专章/沟通风格）
+                  </span>
+                  <MdEditor
                     value={draftEdit.personaMd}
-                    onChange={(e) => setDraftEdit({ ...draftEdit, personaMd: e.target.value })}
+                    onChange={(next) => setDraftEdit({ ...draftEdit, personaMd: next })}
                   />
                 </div>
                 <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>

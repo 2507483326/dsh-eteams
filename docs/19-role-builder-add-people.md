@@ -466,3 +466,25 @@ popup 增加 **「＋ 新增成员」** 项：执行与 19.7.1 相同的一键�
 
 > ✓ 已入库 **data-eng**（数据工程师，roster 第 7 条），头像已生成。
 > 这份人设的边界：只做数据管道与建模，不碰业务前端与服务端接口。去「团队」页把它拉进团队即可使用。
+
+## 19.16 用户迭代 ⑤：统一 md / 命令卡片 / agency 规格（2026-08-29）
+
+五条反馈的落地（确认前零落库、N1、409 竞态门等安全不变量全部保持）：
+
+1. **人设深度对齐 agency-agents-zh**（`jnMetaCode/agency-agents-zh`，20k★）：构建师按单文件规格产出——YAML frontmatter（`name/description/emoji/color`）+ 正文（身份开篇段 → 🧠 身份与记忆 → 🎯 核心使命 → 🔧 关键规则 → ≥2 个领域专章（工作流含代码块 / 陷阱对照表 / 速查清单）→ 💬 沟通风格 → 📊 成功指标），正文 ≥60 行；emoji/color 按领域随机挑选。见 `ROLE_BUILDER_PRESET.rules` 与 19.8.1 standing section。
+2. **人设统一 md 管理**：`personaMd` 是唯一权威——frontmatter 承载 name/description/emoji/color，正文承载全部人设章节；duty/style/skills/rules 变为从 md 提炼的摘要（`eteams_member_save` 参数兼容保留）。
+3. **md 编辑器**（`src/client/mdEditor.tsx`）：待确认表单以「工具栏（H2/加粗/行内码/列表/引用/代码块/表格）+ 等宽编辑区 + 编辑/预览切换（MarkdownText）」取代散装 textarea；预览与 DSH 同一渲染组件。
+4. **对话内命令卡片**（`src/client/buildCard.tsx`，docs/19.9.5）：
+   - `/eteam` 命令节点经 `conversation.chat.commandview` keyed 槽（key `eteam`）渲染为「成员创建中」卡片，替换通用命令卡片；
+   - 激活消息以 plugin source（`{kind:'plugin', plugin:'dsh-eteams', form:'notice', summary}`）steer——模型照常收到全文，会话折叠为上下文行而非用户气泡（input-message 节点折叠规则：`source.kind !== 'user'` → context 节点）；
+   - 卡片 1.5s 轮询 `/eteams-api/rolebuilder`，呈现 创建中（步骤）/ 待确认 / 已入库，点击（或「打开创建页」）→ `openMemberBuilder()` → 团队 tab + 成员新增工作台（`eteams:goto-add` 窗口事件 → `openAddTick` prop）；
+   - 构建对话纪律：构建师在对话里只回一句简短确认，细节全部走 `eteams_build_report`。
+5. **头像**：已有 seeded SVG 头像（`src/client/avatar.tsx`，docs/14）——`upsertRosterMember` 对无头像成员自动分配随机 `(seed, salt)`，构建师创建的成员天然适用；卡片与工作台均渲染。
+
+构建时间线步骤名对齐：`收到需求 → 查重成员库 → 起草统一手册 → 深化领域章节 → 完成草稿`（`eteams_build_report` step/stepsDone 逐字使用，面板 `BUILD_STEPS` 渲染）。
+
+**发送即进入创建态（迭代 ⑤ 补充）**：
+- **受理即开会话**：`/eteam` 命令处理器在受理瞬间直接落盘 active 会话（`收到需求`，request=激活消息全文）——不再等构建师首次播报（模型启动有数秒延迟）。已存在的待确认草稿自动让位（`cancelled` + note）。best-effort：状态文件不可写时退回等首播。
+- 对话内 `/eteam` 卡片首次拉取发现 20s 内开启的 active 会话时，自动 `openMemberBuilder()` 跳到成员创建页（`jumpedRef` 按 startedAt 去重；历史卡片不跳）；卡片对 null 有 800ms×25 有界重试，吸收受理写盘与首次拉取的竞态。
+- `eteams_build_report` 配 `presentCall/presentResult`：会话里的进度行收敛为一行「构建进度 · 步骤」，整包 args（含 personaMd 全文）不再渲染进对话。
+- 构建师对话纪律加严：一句确认后立即结束回合，不复述草稿内容。

@@ -22,6 +22,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import { installCard } from './card';
+import { EteamBuildCard } from './buildCard';
 import { ETEAMS_TAB_LABEL, ETEAMS_VIEW_ID } from './bridge';
 import { installClientDiagnostics, recordClientDiag } from './diagnostics';
 import { ETeamsView } from './eteamsView';
@@ -79,4 +80,15 @@ export function apply(ctx: Context): void {
   );
 
   guard('conversation.card', () => installCard(ctx));
+
+  guard('conversation.chat.commandview', () =>
+    ctx.slots.inject('conversation.chat.commandview', () =>
+      ctx.slots.register(
+        // keyed entry：/eteam 命令节点渲染为「成员创建中」卡片，
+        // 替换通用命令卡片（docs/19.9.5）。
+        { name: 'conversation.chat.commandview', key: 'eteam' },
+        EteamBuildCard,
+      ),
+    ),
+  );
 }
