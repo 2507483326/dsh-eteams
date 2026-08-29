@@ -234,8 +234,9 @@ describe('panel write routes (M5 first slice)', () => {
     await handler({ method: 'GET', url: '/eteams-api/roster' }, r);
     expect(r.code).toBe(200);
     const parsed = JSON.parse(r.body) as { members: { name: string; role: string }[] };
-    // Four role presets + the leader are seeded on first GET; Alice upserts on top.
-    expect(parsed.members).toHaveLength(6);
+    // Four role presets + 角色构建师 (D18-3) + the leader are seeded on first
+    // GET; Alice upserts on top.
+    expect(parsed.members).toHaveLength(7);
     expect(parsed.members.find((m) => m.name === 'Alice')!.role).toBe('writer');
   });
 
@@ -246,19 +247,19 @@ describe('panel write routes (M5 first slice)', () => {
     const first = JSON.parse(r1.body) as {
       members: { name: string; role: string; avatar?: unknown }[];
     };
-    const presetNames = ['前端开发者', '后端架构师', 'UI 设计师', '趣味注入师'];
+    const presetNames = ['前端开发者', '后端架构师', 'UI 设计师', '趣味注入师', '角色构建师'];
     expect(first.members.map((m) => m.name)).toEqual(expect.arrayContaining(presetNames));
     // The leader (项目牧羊人) is also a preset member (默认入团、不可删除).
     const leader = first.members.find((m) => m.name === '项目牧羊人')!;
     expect(leader).toBeDefined();
     expect(leader.role).toContain('领队');
-    expect(first.members).toHaveLength(5);
+    expect(first.members).toHaveLength(6);
     for (const p of first.members) expect(p.avatar).toBeDefined();
 
     // Second GET is idempotent — no duplicates.
     const r2 = res();
     await handler({ method: 'GET', url: '/eteams-api/roster' }, r2);
-    expect((JSON.parse(r2.body) as { members: unknown[] }).members).toHaveLength(5);
+    expect((JSON.parse(r2.body) as { members: unknown[] }).members).toHaveLength(6);
 
     // User edit to a preset is preserved on later GETs.
     await post('/eteams-api/roster', {
@@ -269,7 +270,7 @@ describe('panel write routes (M5 first slice)', () => {
     const r3 = res();
     await handler({ method: 'GET', url: '/eteams-api/roster' }, r3);
     const third = JSON.parse(r3.body) as { members: { name: string; duty?: string }[] };
-    expect(third.members).toHaveLength(5);
+    expect(third.members).toHaveLength(6);
     expect(third.members.find((m) => m.name === '前端开发者')!.duty).toBe('自定义职责');
   });
 

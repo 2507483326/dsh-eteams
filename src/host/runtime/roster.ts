@@ -94,6 +94,9 @@ export async function upsertRosterMember(
   const role = member.role.trim();
   if (name === '') throw new Error('成员名不能为空');
   if (role === '') throw new Error('角色不能为空');
+  // 领队保留名（docs/19.10）：removeRosterMember 拒删，upsert 对称拒绝覆盖，
+  // 防止对话流/面板写路径意外改写领队人设。
+  if (name === LEADER_NAME) throw new Error('领队成员为保留名，不可通过 upsert 覆盖');
   const members = readRoster(stateRoot);
   const previous = members.find((m) => m.name === name);
   const stored: RosterMember = {
@@ -115,12 +118,13 @@ export async function upsertRosterMember(
 /** The team leader is itself a preset member: default-joined, undeletable. */
 export const LEADER_NAME = '项目牧羊人';
 
-/** Fixed salts so the four preset members look the same in every workspace. */
+/** Fixed salts so the preset members look the same in every workspace. */
 const PRESET_SALTS: Record<string, number> = {
   前端开发者: 11,
   后端架构师: 23,
   'UI 设计师': 37,
   趣味注入师: 51,
+  角色构建师: 67,
 };
 
 /**
@@ -170,6 +174,7 @@ export async function ensurePresetMembers(stateRoot: string): Promise<void> {
         duty: template.duty,
         style: template.style,
         skills: template.skills,
+        ...(template.rules !== undefined ? { rules: template.rules } : {}),
         ...(template.personaMd !== undefined ? { personaMd: template.personaMd } : {}),
         avatar: { seed: hashName(role), salt: PRESET_SALTS[role] ?? 0 },
         updatedAt: Date.now(),

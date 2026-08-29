@@ -9,6 +9,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { PersonaRecord } from '../model/types.js';
 import { ROLE_DOCS } from './roleDocs.js';
+import { ROLE_BUILDER_NAME, ROLE_BUILDER_PRESET } from './roleBuilder.js';
 
 /** Human framework version — bump only when field semantics change. */
 export const PERSONA_FRAMEWORK_VERSION = 1 as const;
@@ -35,13 +36,21 @@ export const PERSONA_BASELINE_RULES: readonly string[] = [
  * The four agency-agents-zh member roles, in preset seeding order. The host
  * seeds one roster member per role on first panel access (name = role).
  */
-export const PRESET_MEMBER_ROLES = ['前端开发者', '后端架构师', 'UI 设计师', '趣味注入师'] as const;
+export const PRESET_MEMBER_ROLES = [
+  '前端开发者',
+  '后端架构师',
+  'UI 设计师',
+  '趣味注入师',
+  ROLE_BUILDER_NAME,
+] as const;
 
 /** Role template: short summary fields + full Markdown playbook. */
 export interface RoleTemplate {
   duty: string;
   skills: string;
   style: string;
+  /** Role-specific discipline appended after PERSONA_BASELINE_RULES (D18). */
+  rules?: string[];
   personaMd?: string;
 }
 
@@ -95,6 +104,13 @@ export const ROLE_TEMPLATES: Record<string, RoleTemplate> = {
     style: '爱玩但讲策略；每个趣味元素都有功能或情感理由；先确认不干扰可用性再注入个性。',
     personaMd: ROLE_DOCS['趣味注入师'],
   },
+  [ROLE_BUILDER_NAME]: {
+    duty: ROLE_BUILDER_PRESET.duty,
+    skills: ROLE_BUILDER_PRESET.skills,
+    style: ROLE_BUILDER_PRESET.style,
+    rules: [...ROLE_BUILDER_PRESET.rules],
+    personaMd: ROLE_BUILDER_PRESET.personaMd,
+  },
 };
 
 const GENERIC_TEMPLATE: RoleTemplate = {
@@ -116,7 +132,7 @@ export function defaultPersonaFor(
     duty: tpl.duty,
     style: tpl.style,
     skills: tpl.skills,
-    rules: [...PERSONA_BASELINE_RULES],
+    rules: [...PERSONA_BASELINE_RULES, ...(tpl.rules ?? [])],
     ...(tpl.personaMd !== undefined ? { personaMd: tpl.personaMd } : {}),
     executionPrompt:
       executionPrompt?.trim() || `你是「${name}」，以 ${role || 'member'} 的身份为团队交付。`,

@@ -121,3 +121,60 @@ export async function removeTeamMember(teamId: string, name: string): Promise<vo
     },
   );
 }
+
+// ---------- role-builder build session (docs/19.6, D18) ----------
+
+/** One persona draft — field names align with eteams_member_save params. */
+export interface BuildDraft {
+  name: string;
+  role: string;
+  duty?: string;
+  style?: string;
+  skills?: string;
+  rules?: string[];
+  executionPrompt?: string;
+  personaMd?: string;
+  provider?: string;
+  model?: string;
+  reasoningEffort?: string;
+}
+
+/** One build session (docs/19.9.1). */
+export interface BuildSession {
+  schemaVersion: number;
+  startedAt: number;
+  status: 'active' | 'awaiting_confirmation' | 'confirmed' | 'cancelled';
+  step: string;
+  stepsDone: string[];
+  request: string;
+  draft: BuildDraft | null;
+  note: string;
+  updatedAt: number;
+}
+
+/** Poll the single build-session slot (null when no session exists). */
+export async function fetchBuildState(): Promise<BuildSession | null> {
+  const body = (await requestJson(`${API_BASE}/rolebuilder`)) as {
+    empty?: boolean;
+    session?: BuildSession;
+  };
+  return body.empty === true || body.session === undefined ? null : body.session;
+}
+
+/** Confirm the pending draft — host persists to the roster atomically. */
+export async function confirmBuild(draft: BuildDraft): Promise<void> {
+  await requestJson(`${API_BASE}/rolebuilder/confirm`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(draft),
+  });
+}
+
+/** Abandon the current build session. */
+export async function cancelBuild(): Promise<void> {
+  await requestJson(`${API_BASE}/rolebuilder/cancel`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+}

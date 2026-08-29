@@ -34,6 +34,10 @@ import {
 import { listTeams, envForAgent, resolveCaller } from './identity.js';
 import { readBox } from '../runtime/notifier.js';
 import { readRoster, upsertRosterMember } from '../runtime/roster.js';
+import {
+  reportBuildProgress,
+  type BuildDraft,
+} from '../runtime/roleBuilder.js';
 import { stationProgress } from '../model/taskMachine.js';
 import type { TaskRecord } from '../model/types.js';
 
@@ -277,6 +281,71 @@ export function createCaptainTools(
         ok: true as const,
         count: members.length,
         names: members.map((m) => m.name),
+      };
+    },
+  });
+
+  const buildReportTool = defineTool({
+    name: 'eteams_build_report',
+    description:
+      '角色构建师进度播报（D18-5）：把成员构建会话的一步写入 .eteams/rolebuilder.json，面板实时轮询渲染（步骤时间线 + 草稿渐次呈现）。status 缺省沿用当前状态；首轮报告开启会话（active）；draft 浅合并累积；终态会话上 status=active 的报告开启新一轮。',
+    parameters: {
+      status: {
+        type: 'string' as const,
+        enum: ['active', 'awaiting_confirmation', 'confirmed', 'cancelled'],
+        description: '会话状态（缺省=沿用当前状态）',
+      },
+      step: str('当前步骤名（如：撰写角色手册）'),
+      stepsDone: strArr('已完成步骤列表（整体替换）'),
+      request: str('用户需求原文（开启会话时传入）'),
+      draft: {
+        type: 'object' as const,
+        description: '人设草稿（字段与 eteams_member_save 参数逐字对齐；浅合并累积）',
+        properties: {
+          name: str('成员名（成员库唯一键）'),
+          role: str('角色标签'),
+          duty: str('职责边界'),
+          style: str('工作风格'),
+          skills: str('能力'),
+          rules: strArr('工作纪律列表'),
+          executionPrompt: str('执行提示'),
+          personaMd: str('完整角色手册（Markdown 全文）'),
+          provider: str('LLM provider（与 model 同给才生效）'),
+          model: str('LLM model'),
+          reasoningEffort: str('推理力度'),
+        },
+        additionalProperties: false,
+      },
+      note: str('一句话进度（面板时间线旁展示）'),
+    },
+    output: {
+      schema: {
+        type: 'object' as const,
+        properties: {
+          ok: bool('是否成功'),
+          status: str('会话状态'),
+          step: str('当前步骤'),
+          updatedAt: { type: 'integer' as const, description: '更新时间戳（毫秒）' },
+        },
+        additionalProperties: false as const,
+      },
+      render: (_a, v) => text(`构建会话：${v.status} · ${v.step}`),
+    },
+    execute: async (args, exec) => {
+      const env = envForAgent(config, runtime, exec.agent, exec.signal);
+      const session = await reportBuildProgress(stateRootOf(env), {
+        ...(args.status !== undefined ? { status: args.status } : {}),
+        ...(args.step !== undefined ? { step: args.step } : {}),
+        ...(args.stepsDone !== undefined ? { stepsDone: args.stepsDone } : {}),
+        ...(args.request !== undefined ? { request: args.request } : {}),
+        ...(args.draft !== undefined ? { draft: args.draft as BuildDraft } : {}),
+        ...(args.note !== undefined ? { note: args.note } : {}),
+      });
+      return {
+        ok: true as const,
+        status: session.status,
+        step: session.step,
+        updatedAt: session.updatedAt,
       };
     },
   });
@@ -819,6 +888,7 @@ export function createCaptainTools(
     addMemberTool,
     memberSaveTool,
     memberListTool,
+    buildReportTool,
     removeMemberTool,
     updateMemberTool,
     createTaskTool,

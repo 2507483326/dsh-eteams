@@ -5,23 +5,31 @@
  *
  * @module dsh-eteams/client/eteamsView
  */
-import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
 import {
   Button,
   Input,
+  IconCheckOutline16,
   IconPlusOutline16,
+  IconSparkle16,
   MarkdownText,
   writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives';
+import { ADD_PEOPLE_TEMPLATE, prefillComposer, type PrefillOutcome } from './addPeople';
 import { Avatar } from './avatar';
 import { ClientErrorBoundary } from './diagnostics';
 import {
   addTeamMember,
+  cancelBuild,
+  confirmBuild,
   createTeamViaPanel,
   deleteRosterMember,
+  fetchBuildState,
   fetchRoster,
   removeTeamMember,
+  type BuildDraft,
+  type BuildSession,
   type RosterMember,
 } from './api';
 import {
@@ -124,20 +132,6 @@ const TONE_BG: Record<Tone, string> = {
   err: T.errBg,
   muted: T.sunken,
 };
-
-function taskTone(status: string): Tone {
-  if (status === 'in_progress' || status === 'retrying' || status === 'assigned') return 'info';
-  if (status === 'completed') return 'ok';
-  if (
-    status === 'awaiting_decision' ||
-    status === 'needs_user' ||
-    status === 'paused' ||
-    status === 'suspended'
-  )
-    return 'warn';
-  if (status === 'blocked' || status === 'failed') return 'err';
-  return 'muted';
-}
 
 function memberTone(status: string): Tone {
   if (status === 'working' || status === 'busy') return 'info';
@@ -355,6 +349,58 @@ const styles: Record<string, CSSProperties> = {
   },
   formActions: { display: 'flex', gap: 8, justifyContent: 'flex-end' },
   formError: { fontSize: 12, color: T.err, margin: '4px 0 8px' },
+  buildStep: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '3px 0',
+    fontSize: 12.5,
+  },
+  prefillBanner: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: 8,
+    padding: '10px 12px',
+    borderRadius: 10,
+    background: T.infoBg,
+    border: `1px solid ${T.border}`,
+    marginTop: 10,
+  },
+  cmdChip: {
+    marginTop: 8,
+    padding: '9px 11px',
+    borderRadius: 8,
+    background: T.sunken,
+    border: `1px solid ${T.border}`,
+    fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace',
+    fontSize: 12,
+    lineHeight: 1.7,
+    color: T.text2,
+    wordBreak: 'break-all',
+  },
+  stepRow: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: 8,
+    marginTop: 8,
+    fontSize: 12.5,
+    lineHeight: 1.55,
+    color: T.text2,
+  },
+  stepNum: {
+    flexShrink: 0,
+    width: 18,
+    height: 18,
+    borderRadius: 999,
+    background: T.accentSoft,
+    color: T.accent,
+    fontSize: 11,
+    fontWeight: 600,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 1,
+  },
   addRow: { display: 'flex', justifyContent: 'flex-end', marginBottom: 10 },
 };
 
@@ -573,6 +619,14 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
     if (activeTab === 'roster' || activeTab === 'team') refreshRoster();
   }, [activeTab, refreshRoster]);
 
+  // 一键预填（docs/19.7.1, D18-1）：共享 helper（addPeople.ts）把命令写入
+  // 对话输入框并聚焦；inputActions 不可用时退化为剪贴板复制。不自动发送。
+  const prefillAddPeople = useCallback((): PrefillOutcome => {
+    const actions = (props as { inputActions?: { setDraft: (text: string) => void } })
+      .inputActions;
+    return prefillComposer(actions);
+  }, [props]);
+
   return (
     <ClientErrorBoundary label="团队面板">
       <div style={styles.root} data-eteams="view">
@@ -631,7 +685,13 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
             />
           )}
           {activeTab === 'roster' && (
-            <MembersTab members={roster} pool={pool} team={team} onDeleted={refreshRoster} />
+            <MembersTab
+              members={roster}
+              pool={pool}
+              team={team}
+              onDeleted={refreshRoster}
+              onPrefillAddPeople={prefillAddPeople}
+            />
           )}
           {activeTab === 'tasks' && team !== undefined && (
             <TasksTab
@@ -941,17 +1001,116 @@ function MemberCard({
   );
 }
 
-/** 成员：全体成员（先有员工，再组建团队）——列表 / 新增 / 详情。 */
+/** 构建步骤时间线（docs/19.6.2）——与角色构建师的 eteams_build_report 播报约定一致。 */
+const BUILD_STEPS = [
+  '收到需求',
+  '查重',
+  '起草职责/能力',
+  '起草风格/纪律',
+  '撰写角色手册',
+  '待确认',
+] as const;
+
+/** Editable draft form state (待确认态). */
+interface DraftEdit {
+  name: string;
+  role: string;
+  duty: string;
+  style: string;
+  skills: string;
+  executionPrompt: string;
+  personaMd: string;
+  rulesText: string;
+}
+
+const EMPTY_EDIT: DraftEdit = {
+  name: '',
+  role: '',
+  duty: '',
+  style: '',
+  skills: '',
+  executionPrompt: '',
+  personaMd: '',
+  rulesText: '',
+};
+
+function fromBuildDraft(d: BuildDraft): DraftEdit {
+  return {
+    name: d.name,
+    role: d.role,
+    duty: d.duty ?? '',
+    style: d.style ?? '',
+    skills: d.skills ?? '',
+    executionPrompt: d.executionPrompt ?? '',
+    personaMd: d.personaMd ?? '',
+    rulesText: (d.rules ?? []).join('\n'),
+  };
+}
+
+/** 预填命令芯片：占位符以品牌色高亮，一眼看出要改哪里。 */
+function CommandChip({ text }: { text: string }): ReactNode {
+  const parts = text.split(/(【成员名称】|【职责】)/g);
+  return (
+    <div style={styles.cmdChip}>
+      {parts.map((p, i) =>
+        p === '【成员名称】' || p === '【职责】' ? (
+          <span key={i} style={{ color: T.accent, fontWeight: 600 }}>
+            {p}
+          </span>
+        ) : (
+          <span key={i}>{p}</span>
+        ),
+      )}
+    </div>
+  );
+}
+
+/** 预填引导三步（空闲态展示）。 */
+const PREFILL_STEPS = [
+  '在对话输入框补全两个【】占位符——可顺手追加能力、风格等期望',
+  '回车发送，角色构建师立刻接手（预填行直接回车同样生效）',
+  '回到这里实时看构建；草稿就绪后可修改，点「确认入库」完成',
+] as const;
+
+/** 构建中草稿只读预览（docs/19.6.2）：字段渐次呈现，不可编辑。 */
+function DraftPreview({ draft }: { draft: BuildDraft }): ReactNode {
+  const rows: [string, string][] = [
+    ['成员名', draft.name],
+    ['角色', draft.role],
+    ['职责边界', draft.duty ?? ''],
+    ['工作风格', draft.style ?? ''],
+    ['能力', draft.skills ?? ''],
+    ['工作纪律', (draft.rules ?? []).join('；')],
+    ['执行提示', draft.executionPrompt ?? ''],
+  ];
+  return (
+    <div style={{ ...styles.card, marginTop: 8, padding: 10 }}>
+      <div style={styles.sectionTitle}>草稿预览（构建中，待确认后可编辑）</div>
+      {rows.map(([label, value]) => (
+        <div key={label} style={styles.detailRow}>
+          <span style={styles.detailLabel}>{label}</span>
+          <span style={{ ...styles.muted, ...(value.trim() !== '' ? { color: T.text2 } : {}) }}>
+            {value.trim() !== '' ? value : '…'}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** 成员：全体成员（先有员工，再组建团队）——列表 / 构建工作台 / 详情。 */
 function MembersTab({
   members,
   pool,
   team,
   onDeleted,
+  onPrefillAddPeople,
 }: {
   members: RosterMember[];
   pool: TeamSnapshot[];
   team: TeamSnapshot | undefined;
   onDeleted: () => void;
+  onPrefillAddPeople: () => 'set' | 'copied' | 'aborted';
 }): ReactNode {
   const [view, setView] = useState<'list' | 'add' | 'detail'>('list');
   const [detailName, setDetailName] = useState<string | null>(null);
@@ -965,6 +1124,48 @@ function MembersTab({
   const [copied, setCopied] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
 
+  // 构建会话（docs/19.6.2, D18-5）：轮询 /eteams-api/rolebuilder；以 startedAt
+  // 为会话键去重自动跳转（用户手动离开后不反复强拉，状态再迁移才再次跳转）。
+  const [build, setBuild] = useState<BuildSession | null>(null);
+  const [justFilled, setJustFilled] = useState(false);
+  const [draftEdit, setDraftEdit] = useState<DraftEdit>(EMPTY_EDIT);
+  const [confirming, setConfirming] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const seenSessionRef = useRef(0);
+  const seenReviewRef = useRef(0);
+  const draftInitRef = useRef(0);
+
+  const refreshBuild = useCallback((): void => {
+    void fetchBuildState()
+      .then((s) => {
+        setBuild(s);
+        if (s === null) return;
+        if (s.startedAt !== seenSessionRef.current) {
+          seenSessionRef.current = s.startedAt;
+          if (s.status === 'active' || s.status === 'awaiting_confirmation') setView('add');
+        }
+        if (s.status === 'awaiting_confirmation' && seenReviewRef.current !== s.startedAt) {
+          seenReviewRef.current = s.startedAt;
+          setView('add');
+        }
+        // 待确认草稿到达/刷新时重置编辑表单（对话里继续调整 → 表单跟着刷新）。
+        if (
+          s.status === 'awaiting_confirmation' &&
+          s.draft !== null &&
+          s.updatedAt !== draftInitRef.current
+        ) {
+          draftInitRef.current = s.updatedAt;
+          setDraftEdit(fromBuildDraft(s.draft));
+        }
+      })
+      .catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    refreshBuild();
+    const h = setInterval(refreshBuild, 1500);
+    return () => clearInterval(h);
+  }, [refreshBuild]);
+
   const del = async (memberName: string): Promise<void> => {
     setListError(null);
     try {
@@ -973,6 +1174,41 @@ function MembersTab({
     } catch (e) {
       setListError(e instanceof Error ? e.message : String(e));
     }
+  };
+
+  // 确认入库（D18-6 主路径）：修改后的草稿经 POST /rolebuilder/confirm 由
+  // 宿主落库 roster 并翻转会话状态；确认前零落库。
+  const confirmDraft = async (): Promise<void> => {
+    setConfirming(true);
+    setFormError(null);
+    try {
+      await confirmBuild({
+        name: draftEdit.name.trim(),
+        role: draftEdit.role.trim(),
+        duty: draftEdit.duty,
+        style: draftEdit.style,
+        skills: draftEdit.skills,
+        rules: draftEdit.rulesText
+          .split('\n')
+          .map((r) => r.trim())
+          .filter((r) => r !== ''),
+        executionPrompt: draftEdit.executionPrompt,
+        personaMd: draftEdit.personaMd,
+      });
+      onDeleted();
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setConfirming(false);
+      refreshBuild();
+    }
+  };
+
+  const abandon = async (): Promise<void> => {
+    setConfirming(true);
+    await cancelBuild().catch(() => undefined);
+    setConfirming(false);
+    refreshBuild();
   };
 
   // 通过对话创建（用户要求）：面板生成命令，用户粘贴到会话里由领队执行
@@ -1016,84 +1252,292 @@ function MembersTab({
     detail === null ? null : (team?.members.find((m) => m.name === detail.name) ?? null);
 
   if (view === 'add') {
+    // 闭包内无法从外层条件继承窄化，这里先固化已入库草稿。
+    const confirmedDraft = build !== null && build.status === 'confirmed' ? build.draft : null;
     return (
       <div>
         <Button size="sm" onClick={() => setView('list')}>
           ← 返回成员列表
         </Button>
         <div style={{ ...styles.card, marginTop: 8 }}>
-          <div style={{ ...styles.line, fontWeight: 600 }}>新增成员</div>
-          <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-            <Input
-              value={name}
-              placeholder="成员名，如：alice"
-              onChange={(e) => setName(e.target.value)}
-            />
-            <Input
-              value={role}
-              placeholder="角色：前端开发者 / 后端架构师 / UI 设计师 / 趣味注入师 / researcher / …"
-              onChange={(e) => setRole(e.target.value)}
-            />
-          </div>
-          <details>
-            <summary style={{ cursor: 'pointer', ...styles.muted }}>可选：人设细节</summary>
-            <div style={{ ...styles.formRow, marginTop: 8 }}>
-              <span style={styles.formLabel}>职责边界</span>
-              <textarea
-                style={styles.textarea}
-                value={duty}
-                onChange={(e) => setDuty(e.target.value)}
-              />
+          {build !== null && build.status === 'active' && (
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ color: T.accent, display: 'inline-flex' }}>
+                  <IconSparkle16 />
+                </span>
+                <div style={{ ...styles.line, fontWeight: 600, margin: 0 }}>
+                  角色构建师工作中…
+                </div>
+                <span style={fns.pill('info')}>构建中</span>
+              </div>
+              <div style={{ margin: '10px 0 4px' }}>
+                {BUILD_STEPS.map((s) => {
+                  const done = build.stepsDone.includes(s);
+                  const current = !done && build.step === s;
+                  const tone: Tone = done ? 'ok' : current ? 'info' : 'muted';
+                  return (
+                    <div key={s} style={styles.buildStep}>
+                      <span style={{ color: TONE_FG[tone], fontWeight: 600 }}>
+                        {done ? '✔' : current ? '●' : '◌'}
+                      </span>
+                      <span style={{ color: done || current ? T.text2 : T.text3 }}>{s}</span>
+                      {current && <span style={styles.muted}>进行中…</span>}
+                    </div>
+                  );
+                })}
+              </div>
+              {build.note !== '' && <div style={styles.muted}>{build.note}</div>}
+              {build.request !== '' && (
+                <div style={{ ...styles.muted, marginTop: 4 }}>需求：{build.request}</div>
+              )}
+              {build.draft !== null && <DraftPreview draft={build.draft} />}
             </div>
-            <div style={styles.formRow}>
-              <span style={styles.formLabel}>工作风格</span>
-              <textarea
-                style={styles.textarea}
-                value={style}
-                onChange={(e) => setStyle(e.target.value)}
-              />
+          )}
+          {build !== null &&
+            build.status === 'awaiting_confirmation' &&
+            build.draft !== null && (
+              <div>
+                <div style={{ ...styles.line, fontWeight: 600 }}>
+                  草稿已就绪——可直接修改，确认后入库
+                </div>
+                {formError !== null && <div style={styles.formError}>{formError}</div>}
+                <div style={{ ...styles.formRow, marginTop: 8 }}>
+                  <span style={styles.formLabel}>成员名</span>
+                  <Input
+                    value={draftEdit.name}
+                    onChange={(e) => setDraftEdit({ ...draftEdit, name: e.target.value })}
+                  />
+                </div>
+                <div style={styles.formRow}>
+                  <span style={styles.formLabel}>角色</span>
+                  <Input
+                    value={draftEdit.role}
+                    onChange={(e) => setDraftEdit({ ...draftEdit, role: e.target.value })}
+                  />
+                </div>
+                <div style={styles.formRow}>
+                  <span style={styles.formLabel}>职责边界</span>
+                  <textarea
+                    style={styles.textarea}
+                    value={draftEdit.duty}
+                    onChange={(e) => setDraftEdit({ ...draftEdit, duty: e.target.value })}
+                  />
+                </div>
+                <div style={styles.formRow}>
+                  <span style={styles.formLabel}>工作风格</span>
+                  <textarea
+                    style={styles.textarea}
+                    value={draftEdit.style}
+                    onChange={(e) => setDraftEdit({ ...draftEdit, style: e.target.value })}
+                  />
+                </div>
+                <div style={styles.formRow}>
+                  <span style={styles.formLabel}>能力</span>
+                  <textarea
+                    style={styles.textarea}
+                    value={draftEdit.skills}
+                    onChange={(e) => setDraftEdit({ ...draftEdit, skills: e.target.value })}
+                  />
+                </div>
+                <div style={styles.formRow}>
+                  <span style={styles.formLabel}>工作纪律（每行一条）</span>
+                  <textarea
+                    style={styles.textarea}
+                    value={draftEdit.rulesText}
+                    onChange={(e) => setDraftEdit({ ...draftEdit, rulesText: e.target.value })}
+                  />
+                </div>
+                <div style={styles.formRow}>
+                  <span style={styles.formLabel}>执行提示</span>
+                  <textarea
+                    style={styles.textarea}
+                    value={draftEdit.executionPrompt}
+                    onChange={(e) => setDraftEdit({ ...draftEdit, executionPrompt: e.target.value })}
+                  />
+                </div>
+                <div style={styles.formRow}>
+                  <span style={styles.formLabel}>角色手册（Markdown）</span>
+                  <textarea
+                    style={{ ...styles.textarea, minHeight: 120 }}
+                    value={draftEdit.personaMd}
+                    onChange={(e) => setDraftEdit({ ...draftEdit, personaMd: e.target.value })}
+                  />
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    icon={<IconPlusOutline16 />}
+                    disabled={
+                      confirming || draftEdit.name.trim() === '' || draftEdit.role.trim() === ''
+                    }
+                    onClick={() => void confirmDraft()}
+                  >
+                    确认入库
+                  </Button>
+                  <Button size="sm" disabled={confirming} onClick={() => void abandon()}>
+                    放弃
+                  </Button>
+                  <span style={styles.muted}>也可以在对话里继续调整，这里会跟着刷新。</span>
+                </div>
+              </div>
+            )}
+          {confirmedDraft !== null && (
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ color: T.ok, display: 'inline-flex' }}>
+                  <IconCheckOutline16 />
+                </span>
+                <div style={{ ...styles.line, fontWeight: 600, margin: 0 }}>已入库</div>
+                <span style={fns.pill('ok')}>成员列表已更新</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
+                <Avatar name={confirmedDraft.name} size={40} />
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 14, color: T.text }}>
+                    {confirmedDraft.name}
+                  </div>
+                  <div style={styles.muted}>
+                    {confirmedDraft.role} · 已加入成员列表，到「团队」页拉进团队即可使用。
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setDetailName(confirmedDraft.name);
+                    setView('detail');
+                  }}
+                >
+                  查看成员详情
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    if (onPrefillAddPeople() === 'set') setJustFilled(true);
+                  }}
+                >
+                  再建一个
+                </Button>
+              </div>
             </div>
-            <div style={styles.formRow}>
-              <span style={styles.formLabel}>能力</span>
-              <textarea
-                style={styles.textarea}
-                value={skills}
-                onChange={(e) => setSkills(e.target.value)}
-              />
+          )}
+          {(build === null || build.status === 'cancelled') && (
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ color: T.accent, display: 'inline-flex' }}>
+                  <IconSparkle16 />
+                </span>
+                <div style={{ ...styles.line, fontWeight: 600 }}>新增成员 · 角色构建师</div>
+                <span style={fns.pill('info')}>对话式构建</span>
+              </div>
+              {justFilled ? (
+                <div>
+                  <div style={styles.prefillBanner}>
+                    <span style={{ color: T.info, fontWeight: 600, fontSize: 12.5 }}>
+                      ✓ 已填充到对话输入框
+                    </span>
+                  </div>
+                  <CommandChip text={ADD_PEOPLE_TEMPLATE} />
+                  {PREFILL_STEPS.map((s, i) => (
+                    <div key={s} style={styles.stepRow}>
+                      <span style={styles.stepNum}>{i + 1}</span>
+                      <span>{s}</span>
+                    </div>
+                  ))}
+                  <div style={{ ...styles.muted, marginTop: 10, fontSize: 11.5 }}>
+                    提示：已模拟「键入 /eteam + 空格」完成命令认领（claimed）——补全两个【】占位符后直接回车即可；编辑正文时命令高亮收起属正常行为。
+                  </div>
+                </div>
+              ) : (
+                <div style={{ ...styles.muted, marginTop: 4 }}>
+                  点成员列表上方的「新增成员」：命令会填进对话输入框，在对话里补全信息后回车，这里实时看构建。
+                </div>
+              )}
+              <details>
+                <summary style={{ cursor: 'pointer', ...styles.muted, marginTop: 10 }}>
+                  手动创建（不经过角色构建师）
+                </summary>
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                    <Input
+                      value={name}
+                      placeholder="成员名，如：alice"
+                      onChange={(e) => setName(e.target.value)}
+                    />
+                    <Input
+                      value={role}
+                      placeholder="角色：前端开发者 / 后端架构师 / UI 设计师 / 趣味注入师 / researcher / …"
+                      onChange={(e) => setRole(e.target.value)}
+                    />
+                  </div>
+                  <details>
+                    <summary style={{ cursor: 'pointer', ...styles.muted }}>可选：人设细节</summary>
+                    <div style={{ ...styles.formRow, marginTop: 8 }}>
+                      <span style={styles.formLabel}>职责边界</span>
+                      <textarea
+                        style={styles.textarea}
+                        value={duty}
+                        onChange={(e) => setDuty(e.target.value)}
+                      />
+                    </div>
+                    <div style={styles.formRow}>
+                      <span style={styles.formLabel}>工作风格</span>
+                      <textarea
+                        style={styles.textarea}
+                        value={style}
+                        onChange={(e) => setStyle(e.target.value)}
+                      />
+                    </div>
+                    <div style={styles.formRow}>
+                      <span style={styles.formLabel}>能力</span>
+                      <textarea
+                        style={styles.textarea}
+                        value={skills}
+                        onChange={(e) => setSkills(e.target.value)}
+                      />
+                    </div>
+                    <div style={styles.formRow}>
+                      <span style={styles.formLabel}>执行提示</span>
+                      <textarea
+                        style={styles.textarea}
+                        value={executionPrompt}
+                        onChange={(e) => setExecutionPrompt(e.target.value)}
+                      />
+                    </div>
+                    <div style={styles.formRow}>
+                      <span style={styles.formLabel}>
+                        角色手册（可选，Markdown：使命/职责/规则/交付标准）
+                      </span>
+                      <textarea
+                        style={{ ...styles.textarea, minHeight: 90 }}
+                        value={personaMd}
+                        onChange={(e) => setPersonaMd(e.target.value)}
+                      />
+                    </div>
+                  </details>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      icon={<IconPlusOutline16 />}
+                      disabled={name.trim() === '' || role.trim() === ''}
+                      onClick={copyCommand}
+                    >
+                      复制对话命令
+                    </Button>
+                    <span style={styles.muted}>
+                      粘贴到对话发送，主会话智能体执行 eteams_member_save 入库；成功后列表会出现。
+                    </span>
+                  </div>
+                  {copied && (
+                    <div style={{ ...styles.muted, marginTop: 6 }}>✓ 已复制——去对话里粘贴发送</div>
+                  )}
+                </div>
+              </details>
             </div>
-            <div style={styles.formRow}>
-              <span style={styles.formLabel}>执行提示</span>
-              <textarea
-                style={styles.textarea}
-                value={executionPrompt}
-                onChange={(e) => setExecutionPrompt(e.target.value)}
-              />
-            </div>
-            <div style={styles.formRow}>
-              <span style={styles.formLabel}>
-                角色手册（可选，Markdown：使命/职责/规则/交付标准）
-              </span>
-              <textarea
-                style={{ ...styles.textarea, minHeight: 90 }}
-                value={personaMd}
-                onChange={(e) => setPersonaMd(e.target.value)}
-              />
-            </div>
-          </details>
-          <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
-            <Button
-              size="sm"
-              variant="primary"
-              icon={<IconPlusOutline16 />}
-              disabled={name.trim() === '' || role.trim() === ''}
-              onClick={copyCommand}
-            >
-              复制对话命令
-            </Button>
-            <span style={styles.muted}>粘贴到对话发送，领队即创建成员；成功后列表会出现。</span>
-          </div>
-          {copied && (
-            <div style={{ ...styles.muted, marginTop: 6 }}>✓ 已复制——去对话里粘贴发送</div>
           )}
         </div>
       </div>
@@ -1180,7 +1624,18 @@ function MembersTab({
             size="sm"
             variant="primary"
             icon={<IconPlusOutline16 />}
-            onClick={() => setView('add')}
+            onClick={() => {
+              // 一键预填（D18-1）：命令进输入框 → 跳到构建工作台；不可用时
+              // 退化为复制，提示去对话粘贴。
+              const outcome = onPrefillAddPeople();
+              if (outcome === 'set') {
+                setJustFilled(true);
+                setView('add');
+              } else if (outcome === 'copied') {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+              }
+            }}
           >
             新增成员
           </Button>
@@ -1188,7 +1643,7 @@ function MembersTab({
         {listError !== null && <div style={styles.formError}>{listError}</div>}
         {members.length === 0 && (
           <div style={styles.empty}>
-            还没有成员。先「新增成员」（生成对话命令由领队创建），再到「团队」页组建团队。
+            还没有成员。点「新增成员」，在对话里补全信息，角色构建师会帮你构建人设。
           </div>
         )}
         {members.map((m) => {

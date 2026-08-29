@@ -36,6 +36,12 @@ import {
   upsertRosterMember,
 } from './roster.js';
 import { addMember, createTeam, removeMember } from './teamOps.js';
+import {
+  cancelBuildSession,
+  confirmBuildSession,
+  readBuildSession,
+  type BuildDraft,
+} from './roleBuilder.js';
 
 /** Web-server service key candidates, newest first. */
 const WEB_SERVER_KEYS = ['webServer', 'httpServer'] as const;
@@ -624,6 +630,85 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                 return;
               }
               sendJson(res, 200, { ok: true, removed: segments[3] });
+              return;
+            }
+            // ---------- role-builder build session (docs/19.6, D18) ----------
+            // GET /rolebuilder — the single build-session slot; {empty:true}
+            // when no session exists yet.
+            if (
+              req.method === 'GET' &&
+              segments[0] === 'rolebuilder' &&
+              segments.length === 1
+            ) {
+              const session = readBuildSession(rootForWrites(ctx, config));
+              sendJson(res, 200, session === null ? { empty: true } : { empty: false, session });
+              return;
+            }
+            // POST /rolebuilder/confirm — the user-confirmed draft lands in
+            // the roster and the session flips to confirmed in one host-side
+            // operation (D18-6, 确认前零落库的唯一写点).
+            if (
+              req.method === 'POST' &&
+              segments[0] === 'rolebuilder' &&
+              segments.length === 2 &&
+              segments[1] === 'confirm'
+            ) {
+              const current = readBuildSession(rootForWrites(ctx, config));
+              if (current === null || current.status !== 'awaiting_confirmation') {
+                sendError(res, 409, '没有待确认的构建草稿（状态非 awaiting_confirmation）');
+                return;
+              }
+              const body = parseJsonObject(await readBody(req));
+              const draft: BuildDraft = {
+                name: str(body.name, ''),
+                role: str(body.role, ''),
+                ...(body.duty !== undefined ? { duty: str(body.duty) } : {}),
+                ...(body.style !== undefined ? { style: str(body.style) } : {}),
+                ...(body.skills !== undefined ? { skills: str(body.skills) } : {}),
+                ...(Array.isArray(body.rules) ? { rules: body.rules.map((r) => str(r)) } : {}),
+                ...(body.executionPrompt !== undefined
+                  ? { executionPrompt: str(body.executionPrompt) }
+                  : {}),
+                ...(body.personaMd !== undefined ? { personaMd: str(body.personaMd) } : {}),
+                ...(body.provider !== undefined ? { provider: str(body.provider) } : {}),
+                ...(body.model !== undefined ? { model: str(body.model) } : {}),
+                ...(body.reasoningEffort !== undefined
+                  ? { reasoningEffort: str(body.reasoningEffort) }
+                  : {}),
+              };
+              if (draft.name === '' || draft.role === '') {
+                sendError(res, 400, 'name / role 均不能为空');
+                return;
+              }
+              try {
+                const { session, memberName } = await confirmBuildSession(
+                  rootForWrites(ctx, config),
+                  draft,
+                );
+                sendJson(res, 200, {
+                  ok: true,
+                  status: session.status,
+                  name: memberName,
+                  role: draft.role,
+                });
+              } catch (e) {
+                sendError(res, 400, e instanceof Error ? e.message : String(e));
+              }
+              return;
+            }
+            // POST /rolebuilder/cancel — abandon the current build session.
+            if (
+              req.method === 'POST' &&
+              segments[0] === 'rolebuilder' &&
+              segments.length === 2 &&
+              segments[1] === 'cancel'
+            ) {
+              try {
+                const session = await cancelBuildSession(rootForWrites(ctx, config));
+                sendJson(res, 200, { ok: true, status: session.status });
+              } catch (e) {
+                sendError(res, 400, e instanceof Error ? e.message : String(e));
+              }
               return;
             }
             if (req.method !== 'GET') {

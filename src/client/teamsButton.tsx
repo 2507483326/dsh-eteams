@@ -1,32 +1,35 @@
 /**
  * The 团队 button in the composer tool row (`conversation.input.right`).
  *
- * Clicking opens a popup listing the session's teams. v1 scope (user
- * requirement): the list contains exactly one action — 「新增团队」 — which
- * jumps to the 团队 tab via the activation bridge. The real team list and the
- * creation flow arrive with M1/M4.
+ * The popup lists the session's teams plus the member-building entry
+ * (D18-1): 「＋ 新增成员」 prefills the `eTeam --add-people` command into the
+ * composer draft (never auto-send) and jumps to the panel. When the slot's
+ * `inputActions` kit is unavailable it degrades to clipboard copy.
  *
  * @module dsh-eteams/client/teamsButton
  */
 import { useState } from 'react';
-import { Button, Menu } from '@deepseek-ai/dsh-client-ui-primitives';
+import { Button, Menu, writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives';
 import { activateETeamsTab } from './bridge';
 import { ClientErrorBoundary } from './diagnostics';
+import { ADD_PEOPLE_TEMPLATE, prefillComposer } from './addPeople';
 
 /**
  * Owner share of the input-region slots (`InputZone`): the conversation
- * snapshot and the live input state. M0's button reads neither, so the prop
- * type stays structural to avoid reaching into non-exported contract names.
+ * snapshot, the live input state, and the session-slot standard kit's
+ * draft actions when the runtime injects them. Types stay structural to
+ * avoid reaching into non-exported contract names.
  */
 interface TeamsButtonProps {
   readonly session?: unknown;
   readonly input?: unknown;
+  readonly inputActions?: { setDraft: (text: string) => void };
 }
 
 /**
  * The eteams composer tool-row entry: a 「团队」 button with a team-list popup.
  */
-export function TeamsButton(_props: TeamsButtonProps): React.ReactNode {
+export function TeamsButton(props: TeamsButtonProps): React.ReactNode {
   const [open, setOpen] = useState(false);
 
   return (
@@ -41,11 +44,22 @@ export function TeamsButton(_props: TeamsButtonProps): React.ReactNode {
             { type: 'label', id: 'eteams-title', text: '团队' },
             { type: 'separator', id: 'eteams-sep' },
             { id: 'eteams-add-team', label: '＋ 新增团队' },
+            { id: 'eteams-add-member', label: '＋ 新增成员' },
           ]}
           onSelect={(id) => {
-            if (id !== 'eteams-add-team') return;
             setOpen(false);
-            activateETeamsTab();
+            if (id === 'eteams-add-team') {
+              activateETeamsTab();
+              return;
+            }
+            if (id === 'eteams-add-member') {
+              // D18-1：命令进输入框（覆盖前确认），退化为复制；均不自动发送。
+              const outcome = prefillComposer(props.inputActions);
+              if (outcome === 'copied') {
+                void writeClipboard(ADD_PEOPLE_TEMPLATE).catch(() => undefined);
+              }
+              activateETeamsTab();
+            }
           }}
           onClose={() => setOpen(false)}
           anchor={

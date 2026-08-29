@@ -20,7 +20,9 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import { defineTool } from '@deepseek-ai/dsh-tools';
+import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import type { ContentBlock } from '@deepseek-ai/dsh-llm';
+import type { CommandDefinition } from '@deepseek-ai/dsh-commands';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import { ETeamsConfig } from './config.js';
 import type { ETeamsResolvedConfig } from './config.js';
@@ -32,9 +34,10 @@ import { installWebSurface } from './runtime/webui.js';
 import { CAPTAIN_SECTION_SHORT } from './prompts/captain.js';
 import { composeCaptainPersona } from './prompts/persona.js';
 import { personaDigest } from './prompts/persona.js';
+import { buildActivationMessage, ROLE_BUILDER_SECTION } from './prompts/roleBuilder.js';
 
 /** Host services this plugin requires at mount time. */
-export const inject = ['tools', 'subagents', 'agents', 'systemPrompt'];
+export const inject = ['tools', 'subagents', 'agents', 'systemPrompt', 'commands'];
 
 /** Config schema consumed by the cordis loader (validated before apply). */
 export { ETeamsConfig };
@@ -108,6 +111,57 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
     log.info('eteams: system prompt section registered');
   } catch (error) {
     log.warn('eteams: systemPrompt section registration failed: %s', String(error));
+  }
+
+  // 3b) Role Builder standing section (docs/19.8.1, D18): conversational
+  // member building — the `eTeam --add-people` prefix makes the session
+  // agent BE the 角色构建师 for that turn (no captain relay, no subagent).
+  try {
+    ctx.systemPrompt.section({
+      name: 'eteams-role-builder',
+      order: 106,
+      text: ROLE_BUILDER_SECTION,
+    });
+    log.info('eteams: role builder section registered');
+  } catch (error) {
+    log.warn('eteams: role builder section registration failed: %s', String(error));
+  }
+
+  // 3c) /eteam slash command (docs/19.4, D18): the command-plane entry for
+  // member building. Slash input never reaches the model on its own, so the
+  // handler explicitly steers the activation message (`eTeam --add-people …`)
+  // onto the receiving agent — an idle driver starts a turn immediately.
+  try {
+    ctx.inject(['commands'], (commandCtx) => {
+      try {
+        const eteamCommand: CommandDefinition = {
+          name: 'eteam',
+          description: '新增成员 · 角色构建师',
+          input: {
+            hint: '--add-people 我需要创建一个成员 【成员名称】，它的职责是【职责】。',
+            images: false,
+          },
+          handler: ({ agent, rawInput }) => {
+            agent.steer(
+              createUserMessage({
+                content: [{ type: 'text', text: buildActivationMessage(rawInput) }],
+                source: { kind: 'user' },
+              }),
+            );
+            return {
+              kind: 'success' as const,
+              text: '已转交角色构建师——面板「新增成员」工作台会实时显示构建进度。',
+            };
+          },
+        };
+        commandCtx.commands.register(eteamCommand);
+        log.info('eteams: /eteam command registered');
+      } catch (error) {
+        log.warn('eteams: /eteam command registration failed: %s', String(error));
+      }
+    });
+  } catch {
+    // 无 commands 服务的部署（UI-less）：斜杠命令不可用，纯文本前缀路径仍有效。
   }
 
   // 4) Captain persona digest (D13 override file support).

@@ -52,3 +52,15 @@
 {"at":1787928294841,"version":"v0.2.0","entry":{"at":1787928291954,"kind":"error","message":"Uncaught ReferenceError: exports is not defined","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=ad4f8f884bfa:1:23"}}
 {"at":1787928294856,"version":"v0.2.0","entry":{"at":1787928292762,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
 {"at":1787928522126,"version":"v0.2.0","entry":{"at":1787928520045,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1787976708523,"version":"v0.2.0","entry":{"at":1787976706503,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1787976936450,"version":"v0.2.0","entry":{"at":1787976934446,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1787977111416,"version":"v0.2.0","entry":{"at":1787977109411,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1787977921604,"version":"v0.2.0","entry":{"at":1787977919600,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1787978614377,"version":"v0.2.0","entry":{"at":1787978612371,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1787979487454,"version":"v0.2.0","entry":{"at":1787979485447,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1787979874487,"version":"v0.2.0","entry":{"at":1787979872481,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1787979919567,"version":"v0.2.0","entry":{"at":1787979917552,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1787980703418,"version":"v0.2.0","entry":{"at":1787979917552,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1787980703418,"version":"v0.2.0","entry":{"at":1787980701415,"kind":"error","message":"Uncaught ReferenceError: exports is not defined","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=a2954e267f38:1:23"}}
+{"at":1787980704318,"version":"v0.2.0","entry":{"at":1787980702316,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1787980844706,"version":"v0.2.0","entry":{"at":1787980842623,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
