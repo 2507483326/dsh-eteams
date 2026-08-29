@@ -106,3 +106,12 @@
 {"at":1788004282836,"version":"v0.2.0","entry":{"at":1788004280831,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
 {"at":1788004378919,"version":"v0.2.0","entry":{"at":1788004376759,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
 {"at":1788005410911,"version":"v0.2.0","entry":{"at":1788005408649,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1788006028962,"version":"v0.2.0","entry":{"at":1788004376759,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1788006028962,"version":"v0.2.0","entry":{"at":1788006026958,"kind":"error","message":"Uncaught ReferenceError: exports is not defined","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=e5fd501c9819:1:23"}}
+{"at":1788006028977,"version":"v0.2.0","entry":{"at":1788005408649,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1788006028977,"version":"v0.2.0","entry":{"at":1788006026958,"kind":"error","message":"Uncaught ReferenceError: exports is not defined","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=e5fd501c9819:1:23"}}
+{"at":1788006030121,"version":"v0.2.0","entry":{"at":1788006028116,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1788006740911,"version":"v0.2.0","entry":{"at":1788006738819,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1788006740911,"version":"v0.2.0","entry":{"at":1788006739714,"kind":"persona-restore","message":"M4 只读面板：仅支持 GET（写路由除外）"}}
+{"at":1788006942746,"version":"v0.2.0","entry":{"at":1788006940742,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1788008009320,"version":"v0.2.0","entry":{"at":1788008007317,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}

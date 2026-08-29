@@ -6,14 +6,19 @@
  * roster, with one creation shortcut pinned to the footer of each tab:
  *
  * - 「＋ 新增团队」 jumps straight to the 团队 tab page (real host tab when
- *   visible, the full overlay panel otherwise) with the creation form open;
+ *   visible, the full-page 团队页 otherwise) with the creation form open;
  * - 「＋ 新增成员」 prefills the `eTeam --add-people` command into the
  *   composer draft (never auto-send; clipboard fallback) and jumps to the
  *   member-builder view of the 团队 tab page (D18-1).
  *
- * Team rows jump to the panel with that team selected. When the slot's
- * `inputActions` kit is unavailable the member prefill degrades to
- * clipboard copy.
+ * Member rows are selectable: the selected member's avatar + name replace
+ * the button label, and the host asserts a system-prompt persona band for
+ * the session (per-assembly dynamic section keyed by the session agent) so
+ * the conversation speaks as that role — no draft text, nothing sent.
+ * Selection persists per session in localStorage and re-asserts to the host
+ * on mount. Team rows jump to the panel with that team selected. When the
+ * slot's `inputActions` kit is unavailable the new-member prefill degrades
+ * to clipboard copy.
  *
  * @module dsh-eteams/client/teamsButton
  */
@@ -29,9 +34,14 @@ import { createPortal } from 'react-dom';
 import { Button, writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives';
 import { ADD_PEOPLE_TEMPLATE, prefillComposer } from './addPeople';
 import { PHASE_LABELS, T } from './eteamsView';
-import { ClientErrorBoundary } from './diagnostics';
+import { ClientErrorBoundary, recordClientDiag } from './diagnostics';
 import { enterTeamsPanel } from './teamsPanel';
-import { fetchRoster, type RosterMember } from './api';
+import {
+  clearSessionPersona,
+  fetchRoster,
+  setSessionPersona,
+  type RosterMember,
+} from './api';
 import { useActivityMonitor } from './monitor';
 import { Avatar } from './avatar';
 
@@ -54,6 +64,97 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
   // off a ref during render) so the portal can mount in the same commit the
   // popup opens.
   const [anchorEl, setAnchorEl] = useState<HTMLDivElement | null>(null);
+  // The wrapper is per session — the structural session face carries the id.
+  const sessionId = (props.session as { sessionId?: string } | undefined)?.sessionId;
+  // Selections (docs/13.8.2): a selected MEMBER drives the system-prompt
+  // persona band (the conversation speaks as that role); a selected TEAM is
+  // a navigation bookmark. The two are mutually exclusive — the button shows
+  // one thing. Both persist per session in localStorage; the member
+  // selection re-asserts to the host on mount (host restart self-heals).
+  const [selectedMember, setSelectedMember] = useState<RosterMember | null>(() =>
+    loadSelectedMember(sessionId),
+  );
+  const [selectedTeam, setSelectedTeam] = useState<{ teamId: string; name: string } | null>(() =>
+    loadSelectedTeam(sessionId),
+  );
+  useEffect(() => {
+    ensurePopupStyle();
+    const restore = (): void => {
+      const member = loadSelectedMember(sessionId);
+      setSelectedMember(member);
+      if (member !== null) {
+        forgetSelectedTeam(sessionId);
+        setSelectedTeam(null);
+        if (sessionId !== undefined) {
+          void setSessionPersona(sessionId, member).catch((error: unknown) => {
+            recordClientDiag('persona-restore', error instanceof Error ? error.message : String(error));
+          });
+        }
+        return;
+      }
+      setSelectedTeam(loadSelectedTeam(sessionId));
+    };
+    restore();
+  }, [sessionId]);
+
+  const clearSelection = (): void => {
+    setSelectedMember(null);
+    forgetSelectedMember(sessionId);
+    setSelectedTeam(null);
+    forgetSelectedTeam(sessionId);
+    if (sessionId === undefined) return;
+    void clearSessionPersona(sessionId).catch((error: unknown) => {
+      recordClientDiag('persona-clear', error instanceof Error ? error.message : String(error));
+    });
+  };
+
+  const selectMember = (member: RosterMember): void => {
+    const next = selectedMember?.name === member.name ? null : member;
+    setSelectedMember(next);
+    saveSelectedMember(sessionId, next);
+    setSelectedTeam(null);
+    forgetSelectedTeam(sessionId);
+    if (sessionId === undefined) return;
+    if (next === null) {
+      void clearSessionPersona(sessionId).catch((error: unknown) => {
+        recordClientDiag('persona-clear', error instanceof Error ? error.message : String(error));
+      });
+      return;
+    }
+    void setSessionPersona(sessionId, next).catch((error: unknown) => {
+      recordClientDiag('persona-set', error instanceof Error ? error.message : String(error));
+    });
+  };
+
+  const selectTeam = (team: { teamId: string; name: string }): void => {
+    const next = selectedTeam?.teamId === team.teamId ? null : team;
+    setSelectedTeam(next);
+    saveSelectedTeam(sessionId, next);
+    setSelectedMember(null);
+    forgetSelectedMember(sessionId);
+    if (next === null && sessionId !== undefined) {
+      void clearSessionPersona(sessionId).catch((error: unknown) => {
+        recordClientDiag('persona-clear', error instanceof Error ? error.message : String(error));
+      });
+    }
+  };
+
+  // Button click is context-aware (docs/13.8.2): with nothing selected it
+  // toggles the popup; with a member selected it opens the panel's 成员 tab;
+  // with a team selected it opens the panel's 团队 tab on that team.
+  const onButtonClick = (): void => {
+    if (selectedMember !== null) {
+      setOpen(false);
+      enterTeamsPanel({ roster: true });
+      return;
+    }
+    if (selectedTeam !== null) {
+      setOpen(false);
+      enterTeamsPanel({ creator: true, teamId: selectedTeam.teamId });
+      return;
+    }
+    setOpen((v) => !v);
+  };
 
   return (
     <ClientErrorBoundary label="团队按钮">
@@ -61,18 +162,68 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
         <Button
           variant="ghost"
           size="sm"
+          className="eteams-teams-btn"
+          data-selected={selectedMember !== null || selectedTeam !== null ? 'true' : undefined}
           aria-label="团队"
           aria-haspopup="dialog"
           aria-expanded={open}
-          onClick={() => setOpen((v) => !v)}
+          onClick={onButtonClick}
         >
-          团队
+          {selectedMember !== null ? (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <Avatar
+                name={selectedMember.name}
+                seed={selectedMember.avatar?.seed}
+                salt={selectedMember.avatar?.salt}
+                size={18}
+              />
+              <span style={S.faceName}>{selectedMember.name}</span>
+              <span
+                className="eteams-teams-clear"
+                role="button"
+                aria-label="取消选择"
+                title="取消选择"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  clearSelection();
+                }}
+              >
+                ×
+              </span>
+            </span>
+          ) : selectedTeam !== null ? (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <span style={S.teamChip} aria-hidden={true}>
+                {selectedTeam.name.slice(0, 1)}
+              </span>
+              <span style={S.faceName}>{selectedTeam.name}</span>
+              <span
+                className="eteams-teams-clear"
+                role="button"
+                aria-label="取消选择"
+                title="取消选择"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  clearSelection();
+                }}
+              >
+                ×
+              </span>
+            </span>
+          ) : (
+            '团队'
+          )}
         </Button>
         {open && anchorEl !== null && typeof document !== 'undefined' ? (
           createPortal(
             <TeamsPopup
               anchor={anchorEl}
               inputActions={props.inputActions}
+              selectedMember={selectedMember}
+              selectedTeam={selectedTeam}
+              onSelectMember={selectMember}
+              onSelectTeam={selectTeam}
+              initialTab={selectedMember !== null ? 'member' : 'team'}
               onClose={() => setOpen(false)}
             />,
             document.body,
@@ -81,6 +232,104 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
       </div>
     </ClientErrorBoundary>
   );
+}
+
+// ---------- selection persistence (per session, guarded) ----------
+
+const memberKey = (sessionId: string | undefined): string =>
+  `eteams:selected-member:${sessionId ?? 'global'}`;
+const teamKey = (sessionId: string | undefined): string =>
+  `eteams:selected-team:${sessionId ?? 'global'}`;
+
+function loadSelectedMember(sessionId: string | undefined): RosterMember | null {
+  try {
+    const raw = localStorage.getItem(memberKey(sessionId));
+    if (raw === null) return null;
+    const parsed = JSON.parse(raw) as RosterMember;
+    return typeof parsed?.name === 'string' && parsed.name !== '' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSelectedMember(sessionId: string | undefined, member: RosterMember | null): void {
+  try {
+    if (member === null) localStorage.removeItem(memberKey(sessionId));
+    else localStorage.setItem(memberKey(sessionId), JSON.stringify(member));
+  } catch {
+    // 无 localStorage 时静默（会话内仍生效）
+  }
+}
+
+function forgetSelectedMember(sessionId: string | undefined): void {
+  try {
+    localStorage.removeItem(memberKey(sessionId));
+  } catch {
+    // 静默
+  }
+}
+
+function loadSelectedTeam(sessionId: string | undefined): { teamId: string; name: string } | null {
+  try {
+    const raw = localStorage.getItem(teamKey(sessionId));
+    if (raw === null) return null;
+    const parsed = JSON.parse(raw) as { teamId?: unknown; name?: unknown };
+    return typeof parsed?.teamId === 'string' &&
+      parsed.teamId !== '' &&
+      typeof parsed?.name === 'string'
+      ? { teamId: parsed.teamId, name: parsed.name }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSelectedTeam(
+  sessionId: string | undefined,
+  team: { teamId: string; name: string } | null,
+): void {
+  try {
+    if (team === null) localStorage.removeItem(teamKey(sessionId));
+    else localStorage.setItem(teamKey(sessionId), JSON.stringify(team));
+  } catch {
+    // 静默
+  }
+}
+
+function forgetSelectedTeam(sessionId: string | undefined): void {
+  try {
+    localStorage.removeItem(teamKey(sessionId));
+  } catch {
+    // 静默
+  }
+}
+
+// ---------- popup row hover / selected styles ----------
+
+const POPUP_STYLE_ID = 'eteams-popup-style';
+/** Inline styles cannot express :hover — rows get their default/hover/
+ * selected backgrounds from this one stylesheet instead (token-driven; the
+ * default transparent also belongs here because `<button>` carries a UA
+ * background that an inline transparent would shadow the hover with).
+ * `.eteams-teams-btn` is the composer button itself: highlighted while a
+ * member/team is selected, and its right-reserved × clears on hover. */
+const POPUP_CSS = `
+.eteams-ets-row{background:transparent}
+.eteams-ets-row:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(100,116,139,0.08))}
+.eteams-ets-row[data-selected="true"]{background:var(--dsw-alias-interactive-bg-active,rgba(75,123,236,0.12))}
+.eteams-teams-btn[data-selected="true"]{background:var(--dsw-alias-interactive-bg-active,rgba(75,123,236,0.12));color:var(--dsw-alias-brand-primary,#4b7bec)}
+.eteams-teams-clear{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:16px;height:16px;border:none;border-radius:50%;padding:0;font-size:13px;line-height:1;font-family:inherit;color:var(--dsw-alias-label-tertiary,#808da4);background:transparent;cursor:pointer;opacity:0;transition:opacity .12s}
+.eteams-teams-btn:hover .eteams-teams-clear{opacity:1}
+.eteams-teams-clear:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(100,116,139,0.08));color:var(--dsw-alias-label-primary,#1c2430)}
+`;
+
+/** Inject the row stylesheet once per page (same pattern as heroTeamsButton). */
+function ensurePopupStyle(): void {
+  if (typeof document === 'undefined' || document.getElementById(POPUP_STYLE_ID) !== null) return;
+  const tag = document.createElement('style');
+  tag.id = POPUP_STYLE_ID;
+  tag.textContent = POPUP_CSS;
+  document.head.appendChild(tag);
 }
 
 // ---------- the tabbed popup ----------
@@ -138,7 +387,8 @@ const S = {
     padding: '7px 9px',
     border: 'none',
     borderRadius: 8,
-    background: 'transparent',
+    /* background intentionally unset — the stylesheet owns hover/selected
+    (`.eteams-ets-row:hover` / `[data-selected="true"]`); inline would win. */
     cursor: 'pointer',
     textAlign: 'left',
     font: 'inherit',
@@ -167,6 +417,34 @@ const S = {
     padding: '4px 10px 8px',
     fontSize: 11,
     color: T.err,
+  } satisfies CSSProperties,
+  faceName: {
+    maxWidth: 120,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    fontWeight: 500,
+  } satisfies CSSProperties,
+  teamChip: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    width: 18,
+    height: 18,
+    borderRadius: 5,
+    fontSize: 11,
+    fontWeight: 600,
+    /* surface-on-accent: the chip stays visible on the highlighted button */
+    background: T.surface,
+    border: `1px solid ${T.border2}`,
+    color: T.accent,
+  } satisfies CSSProperties,
+  hint: {
+    padding: '6px 10px 2px',
+    fontSize: 11,
+    lineHeight: 1.5,
+    color: T.text3,
   } satisfies CSSProperties,
   footer: {
     borderTop: `1px solid ${T.border}`,
@@ -198,10 +476,15 @@ const S = {
 function TeamsPopup(props: {
   anchor: HTMLElement;
   inputActions?: { setDraft: (text: string) => void };
+  selectedMember: RosterMember | null;
+  selectedTeam: { teamId: string; name: string } | null;
+  onSelectMember: (member: RosterMember) => void;
+  onSelectTeam: (team: { teamId: string; name: string }) => void;
+  initialTab: 'team' | 'member';
   onClose: () => void;
 }): ReactNode {
-  const { anchor, onClose } = props;
-  const [tab, setTab] = useState<'team' | 'member'>('team');
+  const { anchor, selectedMember, selectedTeam, onSelectMember, onSelectTeam, onClose } = props;
+  const [tab, setTab] = useState<'team' | 'member'>(props.initialTab);
   const panelRef = useRef<HTMLDivElement | null>(null);
   // Hand-rolled above-placement: right-aligned to the trigger, bottom edge
   // `gap` above its top edge, clamped to the viewport. Re-measured on the
@@ -291,11 +574,6 @@ function TeamsPopup(props: {
     enterTeamsPanel({ memberBuilder: true });
   };
 
-  const openTeam = (teamId: string): void => {
-    onClose();
-    enterTeamsPanel({ teamId });
-  };
-
   const teams = state.teams;
 
   return (
@@ -327,34 +605,65 @@ function TeamsPopup(props: {
               {state.error !== null ? `状态加载失败：${state.error}` : '还没有团队——点下方「新增团队」创建。'}
             </div>
           ) : (
-            teams.map((t) => (
-              <button
-                key={t.teamId}
-                type="button"
-                style={S.row}
-                onClick={() => openTeam(t.teamId)}
-                title={`${t.goal}（点击进入团队面板）`}
-              >
-                <span style={S.rowName}>{t.name}</span>
-                <span style={S.rowMeta}>
-                  {PHASE_LABELS[t.phase] ?? t.phase} · {t.progress.completed}/{t.progress.total}
-                </span>
-              </button>
-            ))
+            teams.map((t) => {
+              const isTeamSelected = selectedTeam?.teamId === t.teamId;
+              return (
+                <button
+                  key={t.teamId}
+                  type="button"
+                  className="eteams-ets-row"
+                  data-selected={isTeamSelected ? 'true' : undefined}
+                  style={S.row}
+                  onClick={() => onSelectTeam({ teamId: t.teamId, name: t.name })}
+                  title={
+                    isTeamSelected
+                      ? `${t.name}（已选，点击取消；按钮直达团队页）`
+                      : `选择 ${t.name}（按钮直达团队页）· ${t.goal}`
+                  }
+                >
+                  <span style={S.rowName}>{t.name}</span>
+                  {isTeamSelected ? (
+                    <span style={S.rowMeta}>已选</span>
+                  ) : (
+                    <span style={S.rowMeta}>
+                      {PHASE_LABELS[t.phase] ?? t.phase} · {t.progress.completed}/{t.progress.total}
+                    </span>
+                  )}
+                </button>
+              );
+            })
           )
         ) : roster === null ? (
           <div style={S.empty}>成员库加载中…</div>
         ) : roster.length === 0 ? (
           <div style={S.empty}>成员库为空——点下方「新增成员」创建。</div>
         ) : (
-          roster.map((m) => (
-            <div key={m.name} style={{ ...S.row, cursor: 'default' }} title={m.role}>
-              <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={22} />
-              <span style={S.rowName}>{m.name}</span>
-            </div>
-          ))
+          roster.map((m) => {
+            const isSelected = selectedMember?.name === m.name;
+            return (
+              <button
+                key={m.name}
+                type="button"
+                className="eteams-ets-row"
+                data-selected={isSelected ? 'true' : undefined}
+                style={S.row}
+                onClick={() => onSelectMember(m)}
+                title={isSelected ? `${m.name}（已选，点击取消）` : `选择 ${m.name} · ${m.role}（对话将以该角色输出）`}
+              >
+                <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={22} />
+                <span style={S.rowName}>{m.name}</span>
+                {isSelected && <span style={S.rowMeta}>已选</span>}
+              </button>
+            );
+          })
         )}
         {tab === 'member' && rosterError && <div style={S.err}>成员库加载失败（稍后重试）</div>}
+        {tab === 'member' && selectedMember !== null && (
+          <div style={S.hint}>对话将以「{selectedMember.name}」的角色输出（再次点击该成员可取消）。</div>
+        )}
+        {tab === 'team' && selectedTeam !== null && (
+          <div style={S.hint}>已选「{selectedTeam.name}」——点按钮直达团队页（再次点击该团队可取消）。</div>
+        )}
       </div>
 
       <div style={S.footer}>

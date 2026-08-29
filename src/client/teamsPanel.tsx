@@ -46,6 +46,8 @@ export interface TeamsPanelOptions {
   readonly creator?: boolean;
   /** Open the 新增成员 flow (panel 成员 tab with the build workbench). */
   readonly memberBuilder?: boolean;
+  /** Land on the 成员 tab (roster page, no add form). */
+  readonly roster?: boolean;
   /** Select this team after landing (teamId). */
   readonly teamId?: string;
 }

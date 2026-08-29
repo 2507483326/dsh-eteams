@@ -22,9 +22,11 @@ import {
   activateConversationTab,
   consumePendingGotoAdd,
   consumePendingGotoAddTeam,
+  consumePendingGotoRoster,
   consumePendingSelectTeam,
   GOTO_ADD_EVENT,
   GOTO_ADD_TEAM_EVENT,
+  GOTO_ROSTER_EVENT,
   SELECT_TEAM_EVENT,
 } from './bridge';
 import { ClientErrorBoundary } from './diagnostics';
@@ -625,6 +627,11 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
       consumePendingGotoAddTeam();
       setTab('team');
     };
+    // 「成员 tab」信号（按钮成员选中直达，docs/13.8.2）：落成员页，不带新增表单。
+    const hRoster = (): void => {
+      consumePendingGotoRoster();
+      setTab('roster');
+    };
     // 选中某个团队（弹层团队行点击）：board 视图随选择联动。
     const hSelect = (event?: Event): void => {
       const id =
@@ -633,15 +640,18 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
     };
     window.addEventListener(GOTO_ADD_EVENT, h);
     window.addEventListener(GOTO_ADD_TEAM_EVENT, hTeam);
+    window.addEventListener(GOTO_ROSTER_EVENT, hRoster);
     window.addEventListener(SELECT_TEAM_EVENT, hSelect);
     // 补消费挂载前的跳转信号：跳转方先点宿主 tab 再触发本面板
     // 挂载，窗口事件会错过——pending 标记在这里兜底（docs/19.16）。
     if (consumePendingGotoAdd()) h();
     if (consumePendingGotoAddTeam()) hTeam();
+    if (consumePendingGotoRoster()) hRoster();
     hSelect();
     return () => {
       window.removeEventListener(GOTO_ADD_EVENT, h);
       window.removeEventListener(GOTO_ADD_TEAM_EVENT, hTeam);
+      window.removeEventListener(GOTO_ROSTER_EVENT, hRoster);
       window.removeEventListener(SELECT_TEAM_EVENT, hSelect);
     };
   }, []);

@@ -28,6 +28,9 @@ export const GOTO_ADD_TEAM_EVENT = 'eteams:goto-add-team';
 /** Custom window event: select one team in the panel (CustomEvent detail: teamId). */
 export const SELECT_TEAM_EVENT = 'eteams:select-team';
 
+/** Custom window event: a surface asks the panel to open the 成员 tab (roster page). */
+export const GOTO_ROSTER_EVENT = 'eteams:goto-roster';
+
 /**
  * Pending jump signal (module level): openMemberBuilder fires BEFORE the
  * host tab switches, so ETeamsView is often not yet mounted and would miss
@@ -37,6 +40,9 @@ let pendingGotoAdd = false;
 
 /** Pending 「新增团队」 jump signal — same mount-time consumption as {@link pendingGotoAdd}. */
 let pendingGotoAddTeam = false;
+
+/** Pending 成员-tab jump signal — same mount-time consumption. */
+let pendingGotoRoster = false;
 
 /** Pending team selection (teamId) — consumed once on panel mount. */
 let pendingSelectTeam: string | null = null;
@@ -52,6 +58,13 @@ export function consumePendingGotoAdd(): boolean {
 export function consumePendingGotoAddTeam(): boolean {
   const value = pendingGotoAddTeam;
   pendingGotoAddTeam = false;
+  return value;
+}
+
+/** Whether a 成员-tab jump is waiting; consumes it (one-shot). */
+export function consumePendingGotoRoster(): boolean {
+  const value = pendingGotoRoster;
+  pendingGotoRoster = false;
   return value;
 }
 
@@ -73,10 +86,15 @@ function dispatchSignal(name: string, detail?: string): void {
  * Stage the cross-component jump signals WITHOUT clicking any tab: pending
  * flags for the about-to-mount panel, window events for the mounted one.
  * Splitting this from the tab click lets callers decide the landing surface
- * (real 团队 tab when visible, full overlay panel otherwise).
+ * (real 团队 tab when visible, full-page 团队页 otherwise).
  */
 export function stageTeamSignals(
-  opts: { creator?: boolean; memberBuilder?: boolean; teamId?: string } = {},
+  opts: {
+    creator?: boolean;
+    memberBuilder?: boolean;
+    roster?: boolean;
+    teamId?: string;
+  } = {},
 ): void {
   if (opts.memberBuilder === true) {
     pendingGotoAdd = true;
@@ -85,6 +103,10 @@ export function stageTeamSignals(
   if (opts.creator === true) {
     pendingGotoAddTeam = true;
     dispatchSignal(GOTO_ADD_TEAM_EVENT);
+  }
+  if (opts.roster === true) {
+    pendingGotoRoster = true;
+    dispatchSignal(GOTO_ROSTER_EVENT);
   }
   if (opts.teamId !== undefined) {
     pendingSelectTeam = opts.teamId;

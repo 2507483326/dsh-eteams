@@ -122,6 +122,39 @@ export async function removeTeamMember(teamId: string, name: string): Promise<vo
   );
 }
 
+// ---------- session persona takeover (docs/13.8.2) ----------
+
+/**
+ * Assert the persona band for one session: the session agent's system prompt
+ * gains a per-assembly persona section (runtime/sessionPersona.ts), so the
+ * conversation speaks as the selected member — no draft text involved.
+ */
+export async function setSessionPersona(
+  sessionId: string,
+  member: { name: string; role?: string; duty?: string; personaMd?: string },
+): Promise<void> {
+  await requestJson(`${API_BASE}/session-persona`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      sessionId,
+      name: member.name,
+      ...(member.role !== undefined ? { role: member.role } : {}),
+      ...(member.duty !== undefined ? { duty: member.duty } : {}),
+      ...(member.personaMd !== undefined ? { personaMd: member.personaMd } : {}),
+    }),
+  });
+}
+
+/** Clear the persona band (deselect — back to the default agent voice). */
+export async function clearSessionPersona(sessionId: string): Promise<void> {
+  await requestJson(`${API_BASE}/session-persona/clear`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId }),
+  });
+}
+
 // ---------- role-builder build session (docs/19.6, D18) ----------
 
 /** One persona draft — field names align with eteams_member_save params. */

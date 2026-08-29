@@ -31,6 +31,7 @@ import { createCaptainTools } from './tools/captainTools.js';
 import { createMemberTools } from './tools/memberTools.js';
 import { installMemberRuntime } from './runtime/members.js';
 import { installWebSurface, rootForWrites } from './runtime/webui.js';
+import { sessionPersonaSection, sessionIdOfScope } from './runtime/sessionPersona.js';
 import type { RuntimeContext } from './runtime/base.js';
 import { readBuildSession } from './runtime/roleBuilder.js';
 import { spawnBuildPhase } from './runtime/builderPhases.js';
@@ -131,6 +132,25 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
     log.info('eteams: role builder section registered');
   } catch (error) {
     log.warn('eteams: role builder section registration failed: %s', String(error));
+  }
+
+  // 3b2) Session persona takeover (docs/13.8.2, dynamic): when the panel
+  // selects a member for a session, that session's agent speaks as the
+  // member. The section is a per-assembly provider — the assembling scope IS
+  // the agent (`assembleContextFor` passes `scope: agent`) and a session
+  // agent's id IS its sessionId, so the band reaches exactly that session's
+  // agent; every other agent assembles `''`, which contributes nothing. The
+  // store lives in runtime/sessionPersona.ts and is fed by the
+  // /eteams-api/session-persona routes — no conversation message involved.
+  try {
+    ctx.systemPrompt.section({
+      name: 'eteams-session-persona',
+      order: 107,
+      text: (context) => sessionPersonaSection(sessionIdOfScope(context.scope)),
+    });
+    log.info('eteams: session persona section registered');
+  } catch (error) {
+    log.warn('eteams: session persona section registration failed: %s', String(error));
   }
 
   // 3c) /eteam slash command (docs/19.4, D18): the command-plane entry for

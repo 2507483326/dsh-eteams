@@ -9,6 +9,7 @@ import {
   activateETeamsTab,
   consumePendingGotoAdd,
   consumePendingGotoAddTeam,
+  consumePendingGotoRoster,
   consumePendingSelectTeam,
   ETEAMS_TAB_LABEL,
   stageTeamSignals,
@@ -215,13 +216,15 @@ describe('teamsTabVisible (DOM stub)', () => {
 
 describe('pending jump signals', () => {
   it('stage + consume is one-shot for every signal kind', () => {
-    stageTeamSignals({ creator: true, memberBuilder: true, teamId: 't1' });
+    stageTeamSignals({ creator: true, memberBuilder: true, roster: true, teamId: 't1' });
     expect(consumePendingGotoAdd()).toBe(true);
     expect(consumePendingGotoAddTeam()).toBe(true);
+    expect(consumePendingGotoRoster()).toBe(true);
     expect(consumePendingSelectTeam()).toBe('t1');
     // consumed flags must not leak into a later mount
     expect(consumePendingGotoAdd()).toBe(false);
     expect(consumePendingGotoAddTeam()).toBe(false);
+    expect(consumePendingGotoRoster()).toBe(false);
     expect(consumePendingSelectTeam()).toBe(null);
   });
 
@@ -229,6 +232,7 @@ describe('pending jump signals', () => {
     stageTeamSignals({ creator: true });
     expect(consumePendingGotoAdd()).toBe(false);
     expect(consumePendingGotoAddTeam()).toBe(true);
+    expect(consumePendingGotoRoster()).toBe(false);
     expect(consumePendingSelectTeam()).toBe(null);
   });
 });

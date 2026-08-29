@@ -46,6 +46,7 @@ import {
   type BuildDraft,
 } from './roleBuilder.js';
 import { spawnBuildPhase } from './builderPhases.js';
+import { clearSessionPersona, setSessionPersona } from './sessionPersona.js';
 
 
 /** Web-server service key candidates, newest first. */
@@ -461,6 +462,43 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               return;
             }
             // ---------- panel writes (M5 first slice) ----------
+            // POST /session-persona — the panel's member selection (docs/13.8.2):
+            // the session agent's system prompt gains a persona band evaluated per
+            // assembly (sessionPersona.ts). No conversation message is involved.
+            if (req.method === 'POST' && segments[0] === 'session-persona' && segments.length === 1) {
+              const body = parseJsonObject(await readBody(req));
+              const sessionId = str(body.sessionId, '');
+              const name = str(body.name, '');
+              if (sessionId === '' || name === '') {
+                sendError(res, 400, 'sessionId / name 均不能为空');
+                return;
+              }
+              setSessionPersona(sessionId, {
+                name,
+                ...(body.role !== undefined ? { role: str(body.role) } : {}),
+                ...(body.duty !== undefined ? { duty: str(body.duty) } : {}),
+                ...(body.personaMd !== undefined ? { personaMd: str(body.personaMd) } : {}),
+              });
+              sendJson(res, 200, { ok: true });
+              return;
+            }
+            // POST /session-persona/clear — deselect (back to the default agent voice).
+            if (
+              req.method === 'POST' &&
+              segments[0] === 'session-persona' &&
+              segments[1] === 'clear' &&
+              segments.length === 2
+            ) {
+              const body = parseJsonObject(await readBody(req));
+              const sessionId = str(body.sessionId, '');
+              if (sessionId === '') {
+                sendError(res, 400, 'sessionId 不能为空');
+                return;
+              }
+              clearSessionPersona(sessionId);
+              sendJson(res, 200, { ok: true });
+              return;
+            }
             if (req.method === 'POST' && segments[0] === 'roster' && segments.length === 1) {
               const body = parseJsonObject(await readBody(req));
               const stored = await upsertRosterMember(rootForWrites(ctx, config), {
