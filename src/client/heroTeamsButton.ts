@@ -17,9 +17,11 @@
  *   whole row including our node); the observer re-injects on the next hero
  *   render, so new-chat screens always get the button;
  * - click → the installed click handler: {@link enterTeamsPanel} (real 团队
- *   tab when the host renders it visibly, full overlay panel on the
- *   not-started screen). The handler is INJECTED by the composition root so
- *   this DOM module stays free of the React import graph.
+ *   tab when the host renders it visibly, the full-screen 团队页 on the
+ *   not-started screen — the host cannot render its tab ring before the
+ *   session's first prompt, see teamsPanel.ts). The handler is INJECTED by
+ *   the composition root so this DOM module stays free of the React import
+ *   graph.
  *
  * @module dsh-eteams/client/heroTeamsButton
  */
@@ -29,8 +31,9 @@ import { recordClientDiag } from './diagnostics';
  * The hero chip row. CSS-module classes are content-hashed
  * (`wSkVaW_heroWorkspaceRow`), but the composed name keeps the original key
  * as a suffix, so a substring attribute selector survives rehashing.
+ * Exported: the 团队页 pane measurement walks up from this landmark.
  */
-const HERO_ROW_SELECTOR = 'div[class*="heroWorkspaceRow"]';
+export const HERO_ROW_SELECTOR = 'div[class*="heroWorkspaceRow"]';
 
 /** Marker attribute value for the injected button (idempotent injection). */
 const BUTTON_FLAG = 'hero-button';

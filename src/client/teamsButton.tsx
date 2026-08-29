@@ -17,19 +17,23 @@
  *
  * @module dsh-eteams/client/teamsButton
  */
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { createPortal } from 'react-dom';
 import {
-  Button,
-  useAnchoredPosition,
-  writeClipboard,
-} from '@deepseek-ai/dsh-client-ui-primitives';
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
+import { createPortal } from 'react-dom';
+import { Button, writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives';
 import { ADD_PEOPLE_TEMPLATE, prefillComposer } from './addPeople';
 import { PHASE_LABELS, T } from './eteamsView';
 import { ClientErrorBoundary } from './diagnostics';
 import { enterTeamsPanel } from './teamsPanel';
 import { fetchRoster, type RosterMember } from './api';
 import { useActivityMonitor } from './monitor';
+import { Avatar } from './avatar';
 
 /**
  * Owner share of the input-region slots (`InputZone`): the conversation
@@ -120,6 +124,7 @@ const S = {
   list: {
     maxHeight: 260,
     overflowY: 'auto',
+    overflowX: 'hidden',
     padding: 6,
     display: 'flex',
     flexDirection: 'column',
@@ -141,6 +146,7 @@ const S = {
   } satisfies CSSProperties,
   rowName: {
     fontWeight: 500,
+    minWidth: 0,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
@@ -185,7 +191,9 @@ const S = {
 
 /**
  * The popup card, portaled to `<body>` (the composer card would crop an
- * in-place surface) and fixed-positioned under the trigger.
+ * in-place surface). It floats ABOVE the trigger with a small gap — the
+ * button sits at the bottom of the window, and a below-placement (or a
+ * viewport-clamped flip) would cover the 「团队」 label it belongs to.
  */
 function TeamsPopup(props: {
   anchor: HTMLElement;
@@ -195,16 +203,36 @@ function TeamsPopup(props: {
   const { anchor, onClose } = props;
   const [tab, setTab] = useState<'team' | 'member'>('team');
   const panelRef = useRef<HTMLDivElement | null>(null);
-  // Stable RefObject view of the anchor element (useAnchoredPosition keys its
-  // effect on the ref identity — a fresh object per render would loop it).
-  const anchorRef = useMemo(() => ({ current: anchor }), [anchor]);
-  const position = useAnchoredPosition({
-    open: true,
-    anchorRef,
-    panelRef,
-    gap: 6,
-    margin: 8,
-  });
+  // Hand-rolled above-placement: right-aligned to the trigger, bottom edge
+  // `gap` above its top edge, clamped to the viewport. Re-measured on the
+  // panel's own size changes (tab switch, roster load) via ResizeObserver,
+  // plus window resize and captured scroll. Until the first measurement the
+  // panel stays invisible (no flash at 0,0).
+  const [pos, setPos] = useState<CSSProperties | null>(null);
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    if (panel === null) return;
+    const compute = (): void => {
+      const r = anchor.getBoundingClientRect();
+      const w = panel.offsetWidth;
+      const h = panel.offsetHeight;
+      const margin = 8;
+      const gap = 6;
+      const left = Math.min(Math.max(r.right - w, margin), window.innerWidth - margin - w);
+      const top = Math.max(margin, r.top - gap - h);
+      setPos({ left, top });
+    };
+    compute();
+    const ro = new ResizeObserver(compute);
+    ro.observe(panel);
+    window.addEventListener('resize', compute);
+    window.addEventListener('scroll', compute, true);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', compute);
+      window.removeEventListener('scroll', compute, true);
+    };
+  }, [anchor]);
   const state = useActivityMonitor();
   const [roster, setRoster] = useState<RosterMember[] | null>(null);
   const [rosterError, setRosterError] = useState(false);
@@ -280,7 +308,7 @@ function TeamsPopup(props: {
         ...S.card,
         position: 'fixed',
         zIndex: 1000,
-        ...(position ?? { left: anchor.getBoundingClientRect().left, top: anchor.getBoundingClientRect().bottom + 6 }),
+        ...(pos ?? { visibility: 'hidden' }),
       }}
     >
       <div style={S.tabHeader}>
@@ -320,9 +348,9 @@ function TeamsPopup(props: {
           <div style={S.empty}>成员库为空——点下方「新增成员」创建。</div>
         ) : (
           roster.map((m) => (
-            <div key={m.name} style={{ ...S.row, cursor: 'default' }}>
+            <div key={m.name} style={{ ...S.row, cursor: 'default' }} title={m.role}>
+              <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={22} />
               <span style={S.rowName}>{m.name}</span>
-              <span style={S.rowMeta}>{m.role}</span>
             </div>
           ))
         )}
