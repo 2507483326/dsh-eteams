@@ -139,6 +139,32 @@ export function interruptMember(env: RuntimeEnv, member: MemberRecord, captain: 
 }
 
 /**
+ * Release selected members' resident activations (docs/20.4 P2): newer
+ * runtimes expose `drainContinuableChildren` — the live registry drops them
+ * immediately and they can no longer be woken; the durable session record
+ * remains and is reclaimed with the parent conversation. Older runtimes lack
+ * the API (feature-detected): degrade to interrupt-only semantics.
+ */
+export async function drainMembers(
+  env: RuntimeEnv,
+  captain: Agent,
+  memberIds: (string | undefined)[],
+): Promise<void> {
+  const ids = memberIds.filter((id): id is string => typeof id === 'string' && id !== '');
+  if (ids.length === 0) return;
+  const subagents = env.ctx.subagents;
+  if (subagents?.drainContinuableChildren === undefined) return;
+  try {
+    await subagents.drainContinuableChildren(
+      captain,
+      ids as unknown as readonly SessionId[],
+    );
+  } catch {
+    // absent/settled targets and authority races are acceptable no-ops
+  }
+}
+
+/**
  * Deliver the first assignment mail right after spawn (used by
  * assignTask against a freshly ready member). Kept here so assignment.ts
  * stays free of spawn concerns.

@@ -199,3 +199,15 @@ t3 实现导出模块                    ●in_progress  [取消任务] [改派]
 - **领队=成员定稿（2026-08-28 三改，用户模型）**：项目牧羊人作为第 5 个预置成员进入成员页列表（role=领队（项目牧羊人），带手册），**默认加入每个团队**（团队页 LeaderCard 常驻首行，带「查看手册」展开）、**不可删除**（`removeRosterMember` 与 POST /roster/<name>/remove 对领队返回 400；团队页拉人下拉排除领队）。其他成员均可删除：成员页行「删除」按钮（POST /roster/<name>/remove），团队页成员卡「移出团队」按钮（POST /team/<id>/member/<name>/remove → removeMember，执行中工作吊销、任务回到就绪池）。成员行改为 div（内嵌按钮，stopPropagation 防误触详情）。
 
 - **手册=原文逐字（2026-08-28 四改，用户要求直接下载对应角色 md）**：详情页/领队卡展示的手册即 agency-agents-zh 原文全文（数百行，含代码示例），不再是摘要蒸馏；新增成员命令的围栏按手册内最长反引号串自动加长，避免嵌套断裂。
+
+## 13.8 会话未开始入口（2026-09 增补）：标准模式旁的「团队」按钮 + 工具行 tab 弹层
+
+用户需求：对话还没开始时也能一键进团队页；工具行「团队」弹层升级为 团队/成员 双 tab。
+
+- **hero 团队按钮（heroTeamsButton.ts，DOM 注入）**：会话未开始的新会话屏，hero 芯片行（WorkspaceChip + agentPreset 席位「标准模式」）没有可入驻的 additive 槽位——`conversation.hero.workspace`/`conversation.hero.agentPreset` 均为 `single` 且已被宿主包占用（注册同优先级抛错、异优先级为 shadow 替换）——因此走 MutationObserver DOM 注入：发现 `div[class*="heroWorkspaceRow"]`（CSS-module 哈希后缀稳定）且无 `[data-eteams="hero-button"]` 标记时，在「标准模式」右侧追加一枚芯片样式按钮（样式镜像宿主 preset chip，`--dsw-alias-*` 令牌）。点击 → `enterTeamsPanel()`（teamsPanel.tsx）：宿主 tab 可见时点真 tab，否则落**全屏浮层面板**。click 处理由组合根注入（模块不引入 React 图，可单测）。
+- **为什么需要浮层**：会话 blank 期间宿主隐藏整个 header chrome 且视图区渲染 null——隐藏的「团队」tab 点了也不会渲染任何东西，所以未开始屏只有浮层能承载完整面板（headless Modal + ETeamsView，惰性 createRoot 于 `[data-eteams="overlay-root"]`，关闭渲染 null，root 常驻）。无会话时面板创建表单禁用并提示（绑定会话的团队创建需要 sessionId）。
+- **工具行弹层 tab 化（teamsButton.tsx 重写）**：「团队」按钮弹层从 Menu 改为门户到 body 的锚定卡片（`useAnchoredPosition` + 手写外点/Escape 关闭——门户面在触发器根之外，`useDismissOnOutsidePointer` 单根语义不适用），两个 tab：
+  - **团队**：活动监视器实时团队列表（名称 + 阶段 + 进度），行点击 → `enterTeamsPanel({ teamId })`（新增 `eteams:select-team` 信号 + pending 标记，面板消费后 `setActiveId`）；页脚「＋ 新增团队」→ `enterTeamsPanel({ creator: true })`（新增 `eteams:goto-add-team` 信号，面板落「团队」tab 新建表单）。
+  - **成员**：成员库快照（fetchRoster，打开时拉取），页脚「＋ 新增成员」→ 保留 D18-1 预填命令 + `enterTeamsPanel({ memberBuilder: true })`（复用 GOTO_ADD，落「成员」tab 新增页）。
+- **信号机制**：bridge 新增 `stageTeamSignals`（pending 标记 + window 事件双路径，挂载前后都能送达）与 `teamsTabVisible`（tab 存在且 `offsetParent !== null`——blank 期 tab 按钮仍在 DOM 但 display:none）；浮层打开前先 stage，面板挂载时按既有 pending 兜底模式消费（docs/19.16）。
+- **构建约束**：react-dom / react-dom/client 是客户端 loader 的 seed 词（Jd 表），插件 bundle 可直接 `require`；tsdown external 需列 `react-dom/client`（否则被内联进 envelope 破坏加载器语义）。

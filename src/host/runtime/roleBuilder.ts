@@ -7,7 +7,7 @@
  *
  * @module dsh-eteams/runtime/roleBuilder
  */
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { atomicWriteText } from '../state/store.js';
 import { avatarSeedFor, upsertRosterMember } from './roster.js';
@@ -49,10 +49,6 @@ export interface BuildSession {
   draft: BuildDraft | null;
   note: string;
   updatedAt: number;
-  /** Durable id of the background builder child, for cancel-time interrupt. */
-  agentId?: string;
-  /** Main-session id the builder child was spawned under (interrupt authority). */
-  parentSessionId?: string;
   /** Pending/answered intent interview (docs/19.16). */
   interview?: InterviewState;
 }
@@ -80,64 +76,36 @@ export function roleBuilderFile(stateRoot: string): string {
 }
 
 /**
- * Side-car file for the builder-child identity (docs/19.16): the dispatcher
- * records it right after spawning the subagent — BEFORE the child's first
- * report creates the session. `reportBuildProgress` stamps it onto the fresh
- * session and consumes the file, so cancel/resume/interview can always find
- * the child even though the session did not exist at spawn time.
+ * Side-car file remembering which main-session agent spawned the current
+ * build phase (docs/19.16): host routes (interview answers / resume) need a
+ * live parent Agent to attribute the NEXT one-shot phase child to. Written on
+ * every spawn; never carries a child id — phase children are one-shot and
+ * need no interrupt/followup handle at all.
  */
-function agentRefFile(stateRoot: string): string {
-  return join(stateRoot, 'rolebuilder-agent.json');
+function parentRefFile(stateRoot: string): string {
+  return join(stateRoot, 'rolebuilder-parent.json');
 }
 
-interface AgentRef {
-  agentId: string;
-  parentSessionId: string;
-}
-
-/** Record the background builder child id + parent session (spawn-time). */
-export async function setBuildAgentId(
+/** Remember the spawning main-session id (one-shot phase attribution). */
+export async function setBuildParentSession(
   stateRoot: string,
-  info: { agentId: string; parentSessionId: string },
+  parentSessionId: string,
 ): Promise<void> {
-  await atomicWriteText(agentRefFile(stateRoot), `${JSON.stringify(info, null, 2)}\n`);
+  await atomicWriteText(parentRefFile(stateRoot), `${JSON.stringify({ parentSessionId }, null, 2)}\n`);
 }
 
-/** Read the pending child identity, if any. */
-export function readBuilderAgentRef(stateRoot: string): AgentRef | null {
-  const file = agentRefFile(stateRoot);
+/** Read the remembered main-session id, if any. */
+export function readBuildParentSession(stateRoot: string): string | null {
+  const file = parentRefFile(stateRoot);
   if (!existsSync(file)) return null;
   try {
-    const parsed = JSON.parse(readFileSync(file, 'utf8')) as Partial<AgentRef>;
-    if (typeof parsed.agentId !== 'string' || typeof parsed.parentSessionId !== 'string') {
-      return null;
-    }
-    return { agentId: parsed.agentId, parentSessionId: parsed.parentSessionId };
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as { parentSessionId?: unknown };
+    return typeof parsed.parentSessionId === 'string' && parsed.parentSessionId !== ''
+      ? parsed.parentSessionId
+      : null;
   } catch {
     return null;
   }
-}
-
-/** Stamp the pending child identity onto a session and consume the side file. */
-async function stampAgentRef(stateRoot: string, session: BuildSession): Promise<BuildSession> {
-  const ref = readBuilderAgentRef(stateRoot);
-  if (ref === null || session.agentId !== undefined) return session;
-  await rmSync(agentRefFile(stateRoot), { force: true });
-  return { ...session, agentId: ref.agentId, parentSessionId: ref.parentSessionId };
-}
-
-/**
- * Resolve the builder child for host-side followup/interrupt: prefer the id
- * stamped on the session; fall back to a not-yet-consumed spawn-time ref.
- */
-export function builderChildRef(
-  stateRoot: string,
-  session: BuildSession | null,
-): AgentRef | null {
-  if (session?.agentId !== undefined && session?.parentSessionId !== undefined) {
-    return { agentId: session.agentId, parentSessionId: session.parentSessionId };
-  }
-  return readBuilderAgentRef(stateRoot);
 }
 
 /** Read the session; missing or malformed file yields null. */
@@ -200,10 +168,8 @@ export async function reportBuildProgress(
       note: report.note ?? '',
       updatedAt: now,
     };
-    // 子代理首播报开启会话时，把派发时记录的 child 身份合并进来并消费旁路文件。
-    const stamped = await stampAgentRef(stateRoot, fresh);
-    await writeSession(stateRoot, stamped);
-    return stamped;
+    await writeSession(stateRoot, fresh);
+    return fresh;
   }
   const current = readBuildSession(stateRoot);
   const requested = report.status ?? current?.status ?? 'active';
@@ -234,9 +200,8 @@ export async function reportBuildProgress(
       note: report.note ?? '',
       updatedAt: now,
     };
-    const stamped = await stampAgentRef(stateRoot, fresh);
-    await writeSession(stateRoot, stamped);
-    return stamped;
+    await writeSession(stateRoot, fresh);
+    return fresh;
   }
   const next: BuildSession = {
     ...current,
@@ -274,6 +239,9 @@ export async function answerBuildInterview(
   const current = readBuildSession(stateRoot);
   if (current === null || current.interview === undefined) {
     throw new Error('没有待回答的意图访谈');
+  }
+  if (current.status !== 'active') {
+    throw new Error(`构建已结束（${current.status}），访谈答案不再接收`);
   }
   const next: BuildSession = {
     ...current,

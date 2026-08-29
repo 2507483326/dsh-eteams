@@ -23,7 +23,7 @@ import { recordEvent } from '../state/events.js';
 import { sanitizeKey } from '../model/taskMachine.js';
 import { ETeamsError, captainActor, memberActor, stateRootOf, type RuntimeEnv } from './base.js';
 import { renderTeamDocs, teamWorkDirRel } from './docs.js';
-import { spawnTeamMembers, interruptMember } from './members.js';
+import { spawnTeamMembers, interruptMember, drainMembers } from './members.js';
 import { deliverMail, notifyCaptain, readBox, requireMember, wakeMember } from './notifier.js';
 
 /** Read one team under its lock and hand it to `fn` for mutation. */
@@ -348,6 +348,9 @@ export async function removeMember(
     if (member.status !== 'staged' && member.id) {
       const captainAgent = env.ctx.agents.get(fresh.captainSessionId) ?? captain;
       interruptMember(env, member, captainAgent);
+      // 回收驻留 Activation（docs/20.4 P2）：live 注册表立刻干净、不可再被
+      // 唤醒；持久记录随父会话回收。旧运行时无 drain API 时静默降级。
+      await drainMembers(env, captainAgent, [member.id]);
     }
     member.status = 'removed';
     member.currentAttemptId = undefined;
@@ -492,6 +495,10 @@ export async function archiveTeam(
     if (fresh.phase !== 'completed' && fresh.phase !== 'halted') {
       throw new ETeamsError('只能归档 completed/halted 团队', '先取消全部任务或等待团队完成');
     }
+    // 回收全部成员的驻留 Activation（docs/20.4 P2）：完结团队不应有可唤醒
+    // 的成员留在 live 注册表；持久记录随父对话回收。旧运行时静默降级。
+    const captainAgent = env.ctx.agents.get(fresh.captainSessionId) ?? captain;
+    await drainMembers(env, captainAgent, fresh.members.map((m) => m.id));
     await recordEvent(root, fresh.id, captainActor(fresh), 'team.archived', {});
     const dest = join(root, 'archive');
     mkdirSync(dest, { recursive: true });
@@ -509,6 +516,8 @@ export async function deleteTeam(env: RuntimeEnv, captain: Agent, teamId: string
     if (!['staged', 'completed', 'halted'].includes(fresh.phase)) {
       throw new ETeamsError('running 团队不能直接删除', '先取消任务（cancel_task）或停止团队');
     }
+    const captainAgent = env.ctx.agents.get(fresh.captainSessionId) ?? captain;
+    await drainMembers(env, captainAgent, fresh.members.map((m) => m.id));
     rmSync(join(root, fresh.id), { recursive: true, force: true });
   });
 }

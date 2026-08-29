@@ -11,7 +11,6 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
-import type { SessionId } from '@deepseek-ai/dsh-session';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import type { ETeamsResolvedConfig } from '../config.js';
 import type {
@@ -39,13 +38,15 @@ import {
 import { addMember, createTeam, removeMember } from './teamOps.js';
 import {
   answerBuildInterview,
-  builderChildRef,
   cancelBuildSession,
   confirmBuildSession,
+  readBuildParentSession,
   readBuildSession,
   resumeBuildSession,
   type BuildDraft,
 } from './roleBuilder.js';
+import { spawnBuildPhase } from './builderPhases.js';
+
 
 /** Web-server service key candidates, newest first. */
 const WEB_SERVER_KEYS = ['webServer', 'httpServer'] as const;
@@ -702,6 +703,8 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               return;
             }
             // POST /rolebuilder/cancel — abandon the current build session.
+            // Phase children are one-shot: they end naturally; nothing to
+            // interrupt, nothing resumable left behind (docs/19.16).
             if (
               req.method === 'POST' &&
               segments[0] === 'rolebuilder' &&
@@ -710,23 +713,7 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
             ) {
               try {
                 const root = rootForWrites(ctx, config);
-                // 先取会话拿 builder childId：放弃构建时连带中断后台代理，
-                // 否则代理还在空转、下一次播报只会撞上状态机报错。
-                const before = readBuildSession(root);
                 const session = await cancelBuildSession(root);
-                const child = builderChildRef(root, before);
-                const agentId = child?.agentId;
-                const parentSessionId = child?.parentSessionId;
-                if (agentId !== undefined && agentId !== '' && parentSessionId !== undefined) {
-                  try {
-                    (ctx as unknown as RuntimeContext).subagents?.interrupt?.(agentId as SessionId, {
-                      kind: 'user',
-                      parentSessionId: parentSessionId as SessionId,
-                    });
-                  } catch {
-                    // child 已退出/不存在/权限失效是可接受终态
-                  }
-                }
                 sendJson(res, 200, { ok: true, status: session.status });
               } catch (e) {
                 sendError(res, 400, e instanceof Error ? e.message : String(e));
@@ -734,8 +721,8 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               return;
             }
             // POST /rolebuilder/resume — continue a cancelled build (docs/19.16).
-            // Context lives in the session file; the durable builder child keeps
-            // its conversation, so a followup wakes it mid-flow.
+            // Context lives in the session file; a fresh ONE-SHOT phase child
+            // finishes the build from that context — nothing resumable hangs.
             if (
               req.method === 'POST' &&
               segments[0] === 'rolebuilder' &&
@@ -744,30 +731,20 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
             ) {
               try {
                 const root = rootForWrites(ctx, config);
-                const before = readBuildSession(root);
                 const session = await resumeBuildSession(root);
-                const child = builderChildRef(root, before);
-                const agentId = child?.agentId;
-                const parentSessionId = child?.parentSessionId;
-                if (agentId !== undefined && agentId !== '' && parentSessionId !== undefined) {
-                  const parent = (ctx as unknown as RuntimeContext).agents?.get(parentSessionId);
-                  if (parent !== undefined) {
-                    try {
-                      await (ctx as unknown as RuntimeContext).subagents?.followup?.(
-                        parent,
-                        agentId as SessionId,
-                        [
-                          {
-                            type: 'text',
-                            text: '构建会话已被用户恢复（此前被中断）。请先用 eteams_build_report 同步恢复进度（沿用原步骤与草稿），再从中断处继续构建流程。',
-                          },
-                        ],
-                        { source: { kind: 'plugin', plugin: 'dsh-eteams' } },
-                      );
-                    } catch {
-                      // child 不在了：会话保持 active，用户可重新 /eteam 接管
-                    }
-                  }
+                const parentSessionId = readBuildParentSession(root);
+                const parent =
+                  parentSessionId !== null
+                    ? (ctx as unknown as RuntimeContext).agents?.get(parentSessionId)
+                    : undefined;
+                if (parent !== undefined) {
+                  spawnBuildPhase({
+                    ctx: { subagents: (ctx as unknown as RuntimeContext).subagents },
+                    config,
+                    parent,
+                    stateRoot: root,
+                    kind: 'resume',
+                  });
                 }
                 sendJson(res, 200, { ok: true, status: session.status });
               } catch (e) {
@@ -776,9 +753,8 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               return;
             }
             // POST /rolebuilder/interview — user answered the intent interview
-            // in the workbench (docs/19.16): store the answers, then wake the
-            // durable builder child with a formatted transcript so it continues
-            // drafting. This is the background child's only user-facing channel.
+            // in the workbench (docs/19.16): store the answers, then spawn the
+            // drafting ONE-SHOT phase child with the full session snapshot.
             if (
               req.method === 'POST' &&
               segments[0] === 'rolebuilder' &&
@@ -787,7 +763,6 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
             ) {
               try {
                 const root = rootForWrites(ctx, config);
-                const before = readBuildSession(root);
                 const body = parseJsonObject(await readBody(req));
                 const rawAnswers = Array.isArray(body.answers) ? body.answers : [];
                 const answers = rawAnswers
@@ -799,34 +774,19 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                   return;
                 }
                 const session = await answerBuildInterview(root, answers);
-                const child = builderChildRef(root, before);
-                const agentId = child?.agentId;
-                const parentSessionId = child?.parentSessionId;
-                if (agentId !== undefined && agentId !== '' && parentSessionId !== undefined) {
-                  const parent = (ctx as unknown as RuntimeContext).agents?.get(parentSessionId);
-                  if (parent !== undefined) {
-                    const transcript = (before?.interview?.questions ?? [])
-                      .map((q) => {
-                        const hit = answers.find((a) => a.id === q.id);
-                        return `- ${q.question}\n  → ${hit?.choice ?? '（未答）'}`;
-                      })
-                      .join('\n');
-                    try {
-                      await (ctx as unknown as RuntimeContext).subagents?.followup?.(
-                        parent,
-                        agentId as SessionId,
-                        [
-                          {
-                            type: 'text',
-                            text: `用户已在面板完成意图访谈，逐题作答如下：\n${transcript}\n请按答案继续构建流程（起草统一手册 → 深化领域章节 → 完成草稿）。`,
-                          },
-                        ],
-                        { source: { kind: 'plugin', plugin: 'dsh-eteams' } },
-                      );
-                    } catch {
-                      // child 不在了：答案保留在会话里，用户可重新 /eteam 接管
-                    }
-                  }
+                const parentSessionId = readBuildParentSession(root);
+                const parent =
+                  parentSessionId !== null
+                    ? (ctx as unknown as RuntimeContext).agents?.get(parentSessionId)
+                    : undefined;
+                if (parent !== undefined) {
+                  spawnBuildPhase({
+                    ctx: { subagents: (ctx as unknown as RuntimeContext).subagents },
+                    config,
+                    parent,
+                    stateRoot: root,
+                    kind: 'continue',
+                  });
                 }
                 sendJson(res, 200, { ok: true, status: session.status });
               } catch (e) {
@@ -869,6 +829,28 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                 const afterSeq = Number(url.searchParams.get('afterSeq') ?? '0') || 0;
                 const events = readEventsSync(root, team.id).filter((e) => e.seq > afterSeq);
                 sendJson(res, 200, { events, serverTime: Date.now() });
+                return;
+              }
+              // GET /team/<id>/agentactivity — member subagent activity dots
+              // (docs/20.4 P4): feature-detected listChildren; empty on older
+              // runtimes (panel renders no dots then).
+              if (segments[2] === 'agentactivity') {
+                const list = (ctx as unknown as RuntimeContext).subagents?.listChildren;
+                if (list === undefined) {
+                  sendJson(res, 200, { activity: {} });
+                  return;
+                }
+                const entries = await list.call(
+                  (ctx as unknown as RuntimeContext).subagents,
+                  team.captainSessionId as never,
+                );
+                const activity: Record<string, string> = {};
+                for (const entry of entries) {
+                  if (entry.kind === 'child' && entry.activity !== undefined) {
+                    activity[entry.id] = entry.activity;
+                  }
+                }
+                sendJson(res, 200, { activity });
                 return;
               }
               if (segments[2] === 'task' && segments[4] === 'track') {

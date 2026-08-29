@@ -3,7 +3,7 @@
   "session": {
     "schemaVersion": 1,
     "startedAt": 1787991860954,
-    "status": "active",
+    "status": "cancelled",
     "step": "查重成员库",
     "stepsDone": [
       "收到需求",
@@ -11,7 +11,7 @@
     ],
     "request": "eTeam --add-people 我需要创建一个成员 【牛马】，它的职责是【发出叫声】。",
     "draft": null,
-    "note": "查重成员库完成：无重名「牛马」，可新建；成员库中「趣味注入师」气质相近，访谈确认分工边界",
-    "updatedAt": 1787992067406
+    "note": "已放弃本次构建",
+    "updatedAt": 1787994336522
   }
 }

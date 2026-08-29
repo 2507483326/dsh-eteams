@@ -90,6 +90,7 @@ tx.aborted / journal.resynced
 - 归档 = rename 团队目录到 `archive/`；面板「历史团队」列表读取 archive 快照（只读渲染，无操作按钮）。
 - v0.2 不做自动清理；`eteams_delete_team` 提供显式删除（二次确认；默认先归档）。
 - 工作区 `.eteams/` 建议 gitignore（状态含会话 ID 与本地路径），文档注明。
+- **子代理记录不归本插件管（harness 存储语义）**：团队成员是 `startContinuable` 持久子代理（邮箱模型/完成即续派依赖可续聊），其会话记录持久化在**领队会话**的存储子树里（`origin: 'subagent'`，带 `parentSession`）。两层回收（docs/20）：① **驻留 Activation**——`removeMember`/`archiveTeam`/`deleteTeam` 在 interrupt 之后调用 `drainContinuableChildren(captainAgent, memberIds)`（特性检测，旧运行时降级为仅 interrupt），live 注册表立刻干净、成员不可再被唤醒；② **记录级**——持久化子会话随父会话销毁而回收 → 清理动作 = 在 DSH 里归档/删除对应对话（会话即工作区：一个项目一批团队用一个会话）。完结记录为惰性 JSON（interrupt 过 + 无 followup 路由 + 终态守卫），不运行、不消耗、跨会话不可见。**角色构建代理已改一次性阶段制**（docs/19.16）：不产生可续聊记录，每阶段是 mode=one-shot 的终态条目，派发方持有 run 并在结算后 dispose。
 
 ## 9.9 容量与性能预算
 

@@ -19,14 +19,14 @@ import {
 import { PRESET_MEMBER_ROLES, ROLE_TEMPLATES } from '../src/host/prompts/persona';
 import {
   answerBuildInterview,
-  builderChildRef,
   cancelBuildSession,
   confirmBuildSession,
+  readBuildParentSession,
   readBuildSession,
   reportBuildProgress,
   resumeBuildSession,
   roleBuilderFile,
-  setBuildAgentId,
+  setBuildParentSession,
 } from '../src/host/runtime/roleBuilder';
 import { MEMBER_DENIED_TOOLS } from '../src/host/runtime/members';
 import { ensurePresetMembers, upsertRosterMember } from '../src/host/runtime/roster';
@@ -205,23 +205,13 @@ describe('D18 对话式新增成员', () => {
     );
   });
 
-  it('spawn-time agent ref stamps onto the child-opened session (docs/19.16)', async () => {
-    // 派发时会话尚不存在：身份先落旁路文件
-    await setBuildAgentId(stateRoot, { agentId: 'child-1', parentSessionId: 'parent-1' });
-    expect(readBuildSession(stateRoot)).toBeNull();
-    // 子代理首播报（newBuild）开会话：身份合并、旁路文件消费
-    const fresh = await reportBuildProgress(stateRoot, {
-      request: 'r4',
-      newBuild: true,
-      step: '收到需求',
-    });
-    expect(fresh.agentId).toBe('child-1');
-    expect(fresh.parentSessionId).toBe('parent-1');
-    expect(builderChildRef(stateRoot, readBuildSession(stateRoot))?.agentId).toBe('child-1');
-    // 旁路文件已被消费：无会话引用时解析为 null（身份只存活在会话里）
-    expect(builderChildRef(stateRoot, null)).toBeNull();
-    await reportBuildProgress(stateRoot, { status: 'active', newBuild: true });
-    expect(builderChildRef(stateRoot, readBuildSession(stateRoot))).toBeNull();
+  it('spawn-time parent ref is remembered for later phase attribution (docs/19.16)', async () => {
+    // 派发时记住主会话 id（一次性阶段代理的后续阶段归属）
+    await setBuildParentSession(stateRoot, 'parent-1');
+    expect(readBuildParentSession(stateRoot)).toBe('parent-1');
+    await setBuildParentSession(stateRoot, 'parent-2');
+    expect(readBuildParentSession(stateRoot)).toBe('parent-2');
+    expect(readBuildParentSession(join(stateRoot, 'nonexistent-dir'))).toBeNull();
   });
 
   it('eteams_build_report is denied to team members (D18-4)', () => {

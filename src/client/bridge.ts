@@ -22,6 +22,12 @@ const EXCLUDED_ANCESTORS = `[${ETEAMS_DATA_ATTR}],[role="menu"],[role="dialog"],
 /** Custom window event: a surface asks the panel to open the member builder. */
 export const GOTO_ADD_EVENT = 'eteams:goto-add';
 
+/** Custom window event: a surface asks the panel to open the team creator (团队 tab). */
+export const GOTO_ADD_TEAM_EVENT = 'eteams:goto-add-team';
+
+/** Custom window event: select one team in the panel (CustomEvent detail: teamId). */
+export const SELECT_TEAM_EVENT = 'eteams:select-team';
+
 /**
  * Pending jump signal (module level): openMemberBuilder fires BEFORE the
  * host tab switches, so ETeamsView is often not yet mounted and would miss
@@ -29,11 +35,61 @@ export const GOTO_ADD_EVENT = 'eteams:goto-add';
  */
 let pendingGotoAdd = false;
 
+/** Pending 「新增团队」 jump signal — same mount-time consumption as {@link pendingGotoAdd}. */
+let pendingGotoAddTeam = false;
+
+/** Pending team selection (teamId) — consumed once on panel mount. */
+let pendingSelectTeam: string | null = null;
+
 /** Whether a jump request is waiting; consumes it (one-shot). */
 export function consumePendingGotoAdd(): boolean {
   const value = pendingGotoAdd;
   pendingGotoAdd = false;
   return value;
+}
+
+/** Whether a team-creator jump is waiting; consumes it (one-shot). */
+export function consumePendingGotoAddTeam(): boolean {
+  const value = pendingGotoAddTeam;
+  pendingGotoAddTeam = false;
+  return value;
+}
+
+/** The pending team selection, if any; consumes it (one-shot). */
+export function consumePendingSelectTeam(): string | null {
+  const value = pendingSelectTeam;
+  pendingSelectTeam = null;
+  return value;
+}
+
+/** Dispatch a window CustomEvent when a DOM/window exists (best effort). */
+function dispatchSignal(name: string, detail?: string): void {
+  if (typeof window !== 'undefined' && typeof window.CustomEvent === 'function') {
+    window.dispatchEvent(new CustomEvent(name, detail === undefined ? undefined : { detail }));
+  }
+}
+
+/**
+ * Stage the cross-component jump signals WITHOUT clicking any tab: pending
+ * flags for the about-to-mount panel, window events for the mounted one.
+ * Splitting this from the tab click lets callers decide the landing surface
+ * (real 团队 tab when visible, full overlay panel otherwise).
+ */
+export function stageTeamSignals(
+  opts: { creator?: boolean; memberBuilder?: boolean; teamId?: string } = {},
+): void {
+  if (opts.memberBuilder === true) {
+    pendingGotoAdd = true;
+    dispatchSignal(GOTO_ADD_EVENT);
+  }
+  if (opts.creator === true) {
+    pendingGotoAddTeam = true;
+    dispatchSignal(GOTO_ADD_TEAM_EVENT);
+  }
+  if (opts.teamId !== undefined) {
+    pendingSelectTeam = opts.teamId;
+    dispatchSignal(SELECT_TEAM_EVENT, opts.teamId);
+  }
 }
 
 /**
@@ -75,6 +131,33 @@ export function activateConversationTab(): boolean {
 }
 
 /**
+ * Find the host-rendered 团队 tab button — the sanctioned activation target
+ * (`<div role="tablist"><button role="tab" onClick={() => actions.setView(id)}>`).
+ * Only the first tier of {@link activateETeamsTab} (exact-label tab buttons),
+ * with the same exclusions ([data-eteams] DOM, open menu/dialog/listbox).
+ */
+function findETeamsTabButton(): HTMLButtonElement | undefined {
+  if (typeof document === 'undefined') return undefined;
+  const excluded = (el: Element): boolean => el.closest(EXCLUDED_ANCESTORS) !== null;
+  const textOf = (el: Element): string => (el.textContent ?? '').trim();
+  return [...document.querySelectorAll<HTMLButtonElement>('button[role="tab"]')].find(
+    (el) => !excluded(el) && textOf(el) === ETEAMS_TAB_LABEL,
+  );
+}
+
+/**
+ * Whether the 团队 tab is not only present but VISIBLE right now. The host
+ * hides the whole session header chrome while the session is blank (the
+ * not-started hero screen): the tab buttons still exist in the DOM but the
+ * view ring renders nothing, so clicking them would silently no-op. Callers
+ * use this to pick the landing surface (tab click vs overlay panel).
+ */
+export function teamsTabVisible(): boolean {
+  const tab = findETeamsTabButton();
+  return tab !== undefined && tab.offsetParent !== null;
+}
+
+/**
  * Activate the 团队 view by clicking its host-rendered tab button.
  *
  * The session header renders the view ring as
@@ -96,10 +179,8 @@ export function activateETeamsTab(): boolean {
   const excluded = (el: Element): boolean => el.closest(EXCLUDED_ANCESTORS) !== null;
   const textOf = (el: Element): string => (el.textContent ?? '').trim();
 
-  const tab = [...document.querySelectorAll<HTMLButtonElement>('button[role="tab"]')].find(
-    (el) => !excluded(el) && textOf(el) === label,
-  );
-  if (tab) {
+  const tab = findETeamsTabButton();
+  if (tab !== undefined) {
     tab.click();
     return true;
   }

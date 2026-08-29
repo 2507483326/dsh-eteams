@@ -39,6 +39,7 @@ import {
   reportBuildProgress,
   type BuildDraft,
 } from '../runtime/roleBuilder.js';
+import { spawnBuildPhase } from '../runtime/builderPhases.js';
 import { stationProgress } from '../model/taskMachine.js';
 import type { TaskRecord } from '../model/types.js';
 
@@ -408,6 +409,55 @@ export function createCaptainTools(
         status: session.status,
         step: session.step,
         updatedAt: session.updatedAt,
+      };
+    },
+  });
+
+  const buildDispatchTool = defineTool({
+    name: 'eteams_build_dispatch',
+    description:
+      '派发成员构建（角色构建师调度专用，docs/19.16）：自带门禁——已有构建进行中（active/awaiting）返回 busy；否则派发一次性阶段代理（受理：开会话 → 查重 → 发布意图访谈后自然结束，不留下可续聊的持久子代理）。按返回 detail 回应用户即可。',
+    parameters: {
+      request: strR('用户激活消息原文（eTeam --add-people …）'),
+    },
+    output: {
+      schema: {
+        type: 'object' as const,
+        properties: {
+          ok: bool('是否成功'),
+          spawned: bool('是否已派发新构建'),
+          detail: str('给用户的一句话结果'),
+        },
+        additionalProperties: false as const,
+      },
+      render: (_a, v) => text(v.detail ?? ''),
+    },
+    execute: async (args, exec) => {
+      const env = envForAgent(config, runtime, exec.agent, exec.signal);
+      const root = stateRootOf(env);
+      const current = readBuildSession(root);
+      if (
+        current !== null &&
+        (current.status === 'active' || current.status === 'awaiting_confirmation')
+      ) {
+        return {
+          ok: true as const,
+          spawned: false,
+          detail: `已有成员构建在进行（${current.draft?.name || '未命名'} · ${current.step}）——请先在面板完成或放弃它`,
+        };
+      }
+      if (!exec.agent) throw new ETeamsError('无法识别调用者（exec.agent 缺失）');
+      spawnBuildPhase({
+        ctx: env.ctx,
+        config,
+        parent: exec.agent,
+        stateRoot: root,
+        kind: 'start',
+      });
+      return {
+        ok: true as const,
+        spawned: true,
+        detail: '已派发构建——后台构建中，卡片将随首次播报出现',
       };
     },
   });
@@ -959,6 +1009,7 @@ export function createCaptainTools(
     memberSaveTool,
     memberListTool,
     buildReportTool,
+    buildDispatchTool,
     removeMemberTool,
     updateMemberTool,
     createTaskTool,

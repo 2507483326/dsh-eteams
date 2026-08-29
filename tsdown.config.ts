@@ -1,4 +1,4 @@
-const external = [/^@deepseek-ai\//, 'react', 'react/jsx-runtime', 'react-dom'];
+const external = [/^@deepseek-ai\//, 'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client'];
 
 export default [
   {

@@ -22,6 +22,18 @@ export interface RuntimeContext {
   logger: RuntimeLogger;
   /** Continuation runtime: spawn/followup/interrupt (inject `subagents`). */
   subagents: {
+    /** One-shot child (docs/19.16 builder phases): settles after its turn. */
+    start(
+      name: string,
+      request: {
+        label?: string;
+        prompt: { type: 'text'; text: string }[];
+        parent: Agent;
+        signal: AbortSignal;
+        persona?: string;
+        toolFilter?: { deny: string[] };
+      },
+    ): Promise<{ id: string; dispose(): Promise<void>; result: Promise<unknown> }>;
     startContinuable(spec: {
       provider: string;
       label: string;
@@ -46,6 +58,22 @@ export interface RuntimeContext {
         | { kind: 'user'; parentSessionId: SessionId }
         | { kind: 'ancestor'; agent: Agent },
     ): void;
+    /**
+     * Runtime-version-gated recycling APIs (docs/20.2.2): present on newer
+     * harness runtimes, absent in older type snapshots — feature-detect via
+     * `?.` and degrade to interrupt-only when missing.
+     */
+    /** Release selected resident continuable direct children of one parent. */
+    drainContinuableChildren?(parent: Agent, childIds: readonly SessionId[]): Promise<void>;
+    /** Close admission below exact parents and release their descendant forests. */
+    drainContinuableDescendants?(parents: readonly Agent[]): Promise<void>;
+    /** Enumerate direct session-backed subagents (no Agent loading). */
+    listChildren?(
+      parentSessionId: SessionId,
+      signal?: AbortSignal,
+    ): Promise<SubagentChildEntry[]>;
+    /** Enumerate the complete descendant tree in stable pre-order. */
+    listDescendants?(rootSessionId: SessionId, signal?: AbortSignal): Promise<SubagentChildEntry[]>;
   };
   /** Live agent registry (inject `agents`): wake the captain. */
   agents: { get(sessionId: string): Agent | undefined };
@@ -97,6 +125,18 @@ export function agentIdentity(agent: Agent | undefined): { sessionId: string; cw
 /** Actor record for the captain of one team. */
 export function captainActor(_team?: TeamState): Actor {
   return { kind: 'captain', name: '领队' };
+}
+
+/**
+ * Minimal structural view of one `listChildren` entry (docs/20.3): only the
+ * fields eteams consumes; the runtime may carry more.
+ */
+export interface SubagentChildEntry {
+  kind: 'child' | 'diagnostic';
+  id: string;
+  activity?: 'running' | 'inactive';
+  mode?: 'one-shot' | 'continuable';
+  label?: string;
 }
 
 /** Actor record for one member. */

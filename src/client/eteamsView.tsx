@@ -18,7 +18,15 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives';
 import { ADD_PEOPLE_TEMPLATE, prefillComposer, type PrefillOutcome } from './addPeople';
 import { Avatar } from './avatar';
-import { activateConversationTab, consumePendingGotoAdd, GOTO_ADD_EVENT } from './bridge';
+import {
+  activateConversationTab,
+  consumePendingGotoAdd,
+  consumePendingGotoAddTeam,
+  consumePendingSelectTeam,
+  GOTO_ADD_EVENT,
+  GOTO_ADD_TEAM_EVENT,
+  SELECT_TEAM_EVENT,
+} from './bridge';
 import { ClientErrorBoundary } from './diagnostics';
 import { MdEditor } from './mdEditor';
 import {
@@ -27,6 +35,7 @@ import {
   confirmBuild,
   createTeamViaPanel,
   deleteRosterMember,
+  fetchAgentActivity,
   fetchBuildState,
   fetchRoster,
   removeTeamMember,
@@ -54,6 +63,7 @@ const PHASE_LABELS: Record<string, string> = {
   completed: '已完成',
   archived: '已归档',
 };
+export { PHASE_LABELS };
 
 /** The leader is a member too — default-joined, undeletable (用户定稿模型). */
 const LEADER_NAME = '项目牧羊人';
@@ -120,6 +130,7 @@ const T = {
   infoBg: 'rgba(29,78,216,0.1)',
   shadow: '0 1px 2px rgba(15,23,42,0.05), 0 6px 18px rgba(15,23,42,0.06)',
 } as const;
+export { T };
 
 /** Semantic tone — every status color flows through these five buckets. */
 type Tone = 'info' | 'ok' | 'warn' | 'err' | 'muted';
@@ -596,6 +607,9 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
   const [expandedTask, setExpandedTask] = useState<string | null>(null);
   const [dialogMember, setDialogMember] = useState<string | null>(null);
   const [roster, setRoster] = useState<RosterMember[]>([]);
+  // 成员子代理活动点（docs/20.4 P4）：childId → running/inactive。旧运行时
+  // 无 listChildren 时返回空表——面板不渲染点，不误导。
+  const [agentActivity, setAgentActivity] = useState<Record<string, string>>({});
   // 创建卡片/弹层跳转信号（docs/19.9.5）：递增计数驱动 MembersTab 打开新增页。
   const [openAddTick, setOpenAddTick] = useState(0);
   useEffect(() => {
@@ -606,11 +620,30 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
       setTab('roster');
       setOpenAddTick((t) => t + 1);
     };
+    // 「新增团队」信号：落到团队 tab（新建表单就在那里）。
+    const hTeam = (): void => {
+      consumePendingGotoAddTeam();
+      setTab('team');
+    };
+    // 选中某个团队（弹层团队行点击）：board 视图随选择联动。
+    const hSelect = (event?: Event): void => {
+      const id =
+        event === undefined ? consumePendingSelectTeam() : (event as CustomEvent<string>).detail;
+      if (typeof id === 'string' && id !== '') setActiveId(id);
+    };
     window.addEventListener(GOTO_ADD_EVENT, h);
-    // 补消费挂载前的跳转信号：openMemberBuilder 先点宿主 tab 再触发本面板
+    window.addEventListener(GOTO_ADD_TEAM_EVENT, hTeam);
+    window.addEventListener(SELECT_TEAM_EVENT, hSelect);
+    // 补消费挂载前的跳转信号：跳转方先点宿主 tab 再触发本面板
     // 挂载，窗口事件会错过——pending 标记在这里兜底（docs/19.16）。
     if (consumePendingGotoAdd()) h();
-    return () => window.removeEventListener(GOTO_ADD_EVENT, h);
+    if (consumePendingGotoAddTeam()) hTeam();
+    hSelect();
+    return () => {
+      window.removeEventListener(GOTO_ADD_EVENT, h);
+      window.removeEventListener(GOTO_ADD_TEAM_EVENT, hTeam);
+      window.removeEventListener(SELECT_TEAM_EVENT, hSelect);
+    };
   }, []);
 
   const myTeams = state.teams.filter((t) => t.captainSessionId === props.sessionId);
@@ -640,6 +673,25 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
   useEffect(() => {
     if (activeTab === 'roster' || activeTab === 'team') refreshRoster();
   }, [activeTab, refreshRoster]);
+
+  // 活动点轮询：跟随当前选中的团队，3s 节流（docs/20.4 P4）。
+  useEffect(() => {
+    if (team === undefined) return;
+    let alive = true;
+    const pull = (): void => {
+      void fetchAgentActivity(team.teamId)
+        .then((a) => {
+          if (alive) setAgentActivity(a);
+        })
+        .catch(() => undefined);
+    };
+    pull();
+    const h = setInterval(pull, 3000);
+    return () => {
+      alive = false;
+      clearInterval(h);
+    };
+  }, [team]);
 
   // 一键预填（docs/19.7.1, D18-1）：共享 helper（addPeople.ts）把命令写入
   // 对话输入框并聚焦；inputActions 不可用时退化为剪贴板复制。不自动发送。
@@ -700,6 +752,7 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
               sessionId={props.sessionId}
               team={team}
               roster={roster}
+              agentActivity={agentActivity}
               onOpenReports={(name) => {
                 setDialogMember(name);
                 setTab('reports');
@@ -822,20 +875,27 @@ function TeamTab({
   sessionId,
   team,
   roster,
+  agentActivity,
   onOpenReports,
 }: {
-  sessionId: string;
+  /** Current session id; undefined on the overlay panel (no session yet). */
+  sessionId: string | undefined;
   team: TeamSnapshot | undefined;
   roster: RosterMember[];
+  /** Member subagent activity dots (docs/20.4 P4): childId → running/inactive. */
+  agentActivity: Record<string, string>;
   onOpenReports: (name: string) => void;
 }): ReactNode {
   const [name, setName] = useState('');
   const [pick, setPick] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 面板创建团队绑定当前会话（领队即该会话代理）；浮层/无会话时没有可绑定的
+  // 会话，创建按钮禁用并给出指引，而不是提交后吃 400 错误。
+  const canCreate = typeof sessionId === 'string' && sessionId !== '';
 
   const create = async (): Promise<void> => {
-    if (busy || name.trim() === '') return;
+    if (busy || !canCreate || name.trim() === '') return;
     setBusy(true);
     setError(null);
     try {
@@ -876,13 +936,17 @@ function TeamTab({
             size="sm"
             variant="primary"
             icon={<IconPlusOutline16 />}
-            disabled={busy || name.trim() === ''}
+            disabled={busy || !canCreate || name.trim() === ''}
             onClick={() => void create()}
           >
             创建
           </Button>
         </div>
-        <div style={styles.muted}>只需名称即可创建（草案阶段）；目标可在看板中与领队继续完善。</div>
+        <div style={styles.muted}>
+          {canCreate
+            ? '只需名称即可创建（草案阶段）；目标可在看板中与领队继续完善。'
+            : '当前还没有进行中的对话——开始对话后即可在这里创建团队。'}
+        </div>
         {error !== null && <div style={styles.formError}>{error}</div>}
       </div>
 
@@ -927,6 +991,7 @@ function TeamTab({
                 <MemberCard
                   key={m.name}
                   member={m}
+                  activity={m.childId !== null ? agentActivity[m.childId] : undefined}
                   onOpenReports={onOpenReports}
                   onRemove={(memberName) => {
                     void removeTeamMember(team.teamId, memberName).catch(() => undefined);
@@ -980,10 +1045,13 @@ function LeaderCard({ captain }: { captain: CaptainView }): ReactNode {
 /** One team-member card: seeded avatar + status pill + 移出团队（领队不可移出）. */
 function MemberCard({
   member: m,
+  activity,
   onOpenReports,
   onRemove,
 }: {
   member: MemberView;
+  /** Subagent activity (docs/20.4 P4): 'running' | 'inactive' | undefined. */
+  activity?: string;
   onOpenReports?: (name: string) => void;
   onRemove?: (name: string) => void;
 }): ReactNode {
@@ -993,7 +1061,31 @@ function MemberCard({
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} />
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 600, fontSize: 13, color: T.text }}>{m.name}</div>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              fontWeight: 600,
+              fontSize: 13,
+              color: T.text,
+            }}
+          >
+            {activity !== undefined && (
+              <span
+                title={activity === 'running' ? '子代理运行中' : '子代理已完结'}
+                style={{
+                  width: 7,
+                  height: 7,
+                  borderRadius: '50%',
+                  flexShrink: 0,
+                  background: activity === 'running' ? T.ok : T.text3,
+                  boxShadow: activity === 'running' ? `0 0 0 3px ${T.okBg}` : 'none',
+                }}
+              />
+            )}
+            {m.name}
+          </div>
           <div style={{ ...styles.muted, marginTop: 1 }}>
             {m.role} · {m.model}
           </div>

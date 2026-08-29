@@ -5,7 +5,15 @@
  * portaled menu (the composer popup renders after the tab ring in DOM order).
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { activateETeamsTab, ETEAMS_TAB_LABEL } from '../src/client/bridge';
+import {
+  activateETeamsTab,
+  consumePendingGotoAdd,
+  consumePendingGotoAddTeam,
+  consumePendingSelectTeam,
+  ETEAMS_TAB_LABEL,
+  stageTeamSignals,
+  teamsTabVisible,
+} from '../src/client/bridge';
 
 interface FakeElement {
   tag: string;
@@ -15,6 +23,8 @@ interface FakeElement {
   parent: FakeElement | null;
   children: FakeElement[];
   clicks: number;
+  /** Mirrors the DOM visibility flag the bridge reads (absent = visible). */
+  offsetParent?: FakeElement | null;
 }
 
 function el(
@@ -163,5 +173,62 @@ describe('tab-activation bridge (DOM stub)', () => {
     } finally {
       restore();
     }
+  });
+});
+
+describe('teamsTabVisible (DOM stub)', () => {
+  it('is true for a tab with a rendered offsetParent', () => {
+    const tab = el('button', { attrs: { role: 'tab' } });
+    tab.ownText = ETEAMS_TAB_LABEL;
+    tab.offsetParent = el('div'); // any non-null parent = rendered
+    const { restore } = stubDocument(tab);
+    try {
+      expect(teamsTabVisible()).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it('is false when the tab exists but the header chrome hides it', () => {
+    // The not-started screen keeps the tab buttons in the DOM with
+    // display:none — offsetParent is null there, and clicking would no-op.
+    const tab = el('button', { attrs: { role: 'tab' } });
+    tab.ownText = ETEAMS_TAB_LABEL;
+    tab.offsetParent = null;
+    const { restore } = stubDocument(tab);
+    try {
+      expect(teamsTabVisible()).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+
+  it('is false when no tab exists at all', () => {
+    const { restore } = stubDocument(el('div', { ownText: 'nothing' }));
+    try {
+      expect(teamsTabVisible()).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+});
+
+describe('pending jump signals', () => {
+  it('stage + consume is one-shot for every signal kind', () => {
+    stageTeamSignals({ creator: true, memberBuilder: true, teamId: 't1' });
+    expect(consumePendingGotoAdd()).toBe(true);
+    expect(consumePendingGotoAddTeam()).toBe(true);
+    expect(consumePendingSelectTeam()).toBe('t1');
+    // consumed flags must not leak into a later mount
+    expect(consumePendingGotoAdd()).toBe(false);
+    expect(consumePendingGotoAddTeam()).toBe(false);
+    expect(consumePendingSelectTeam()).toBe(null);
+  });
+
+  it('leaves flags untouched when the kind is not requested', () => {
+    stageTeamSignals({ creator: true });
+    expect(consumePendingGotoAdd()).toBe(false);
+    expect(consumePendingGotoAddTeam()).toBe(true);
+    expect(consumePendingSelectTeam()).toBe(null);
   });
 });

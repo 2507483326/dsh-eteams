@@ -173,10 +173,6 @@ export interface BuildSession {
   draft: BuildDraft | null;
   note: string;
   updatedAt: number;
-  /** Durable id of the background builder child (host-side; cancel interrupt). */
-  agentId?: string;
-  /** Main-session id the builder child was spawned under. */
-  parentSessionId?: string;
   /** Pending/answered intent interview (docs/19.16). */
   interview?: InterviewState;
 }
@@ -190,7 +186,7 @@ export async function fetchBuildState(): Promise<BuildSession | null> {
   return body.empty === true || body.session === undefined ? null : body.session;
 }
 
-/** Resume a cancelled build — host wakes the durable builder child. */
+/** Resume a cancelled build — host spawns a fresh one-shot phase child. */
 export async function resumeBuild(): Promise<void> {
   await requestJson(`${API_BASE}/rolebuilder/resume`, { method: 'POST' });
 }
@@ -220,4 +216,17 @@ export async function cancelBuild(): Promise<void> {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({}),
   });
+}
+
+/**
+ * Member subagent activity dots (docs/20.4 P4): childId → 'running' |
+ * 'inactive'. Empty map on older runtimes without listChildren (no dots).
+ */
+export async function fetchAgentActivity(teamId: string): Promise<Record<string, string>> {
+  const body = (await requestJson(
+    `${API_BASE}/team/${encodeURIComponent(teamId)}/agentactivity`,
+  )) as { activity?: unknown };
+  return body.activity !== null && typeof body.activity === 'object'
+    ? (body.activity as Record<string, string>)
+    : {};
 }

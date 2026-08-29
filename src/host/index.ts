@@ -29,16 +29,16 @@ import type { ETeamsResolvedConfig } from './config.js';
 import { PLUGIN_ID, PLUGIN_VERSION, STATE_SCHEMA_VERSION, TOOL_PREFIX } from './version.js';
 import { createCaptainTools } from './tools/captainTools.js';
 import { createMemberTools } from './tools/memberTools.js';
-import { installMemberRuntime, MEMBER_DENIED_TOOLS } from './runtime/members.js';
+import { installMemberRuntime } from './runtime/members.js';
 import { installWebSurface, rootForWrites } from './runtime/webui.js';
 import type { RuntimeContext } from './runtime/base.js';
-import { readBuildSession, setBuildAgentId } from './runtime/roleBuilder.js';
+import { readBuildSession } from './runtime/roleBuilder.js';
+import { spawnBuildPhase } from './runtime/builderPhases.js';
 import { CAPTAIN_SECTION_SHORT } from './prompts/captain.js';
 import { composeCaptainPersona } from './prompts/persona.js';
 import { personaDigest } from './prompts/persona.js';
 import {
   buildActivationMessage,
-  ROLE_BUILDER_CHILD_PERSONA,
   ROLE_BUILDER_SECTION,
 } from './prompts/roleBuilder.js';
 
@@ -148,12 +148,10 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
             images: false,
           },
           handler: ({ agent, rawInput }) => {
-            // 门禁 + 派发（docs/19.16）：命令处理器只做两件事——① 已有构建
-            // 进行中（active/awaiting）则不派发，让用户先处理现有构建；
-            // ② 直接把激活消息投给可续聊的后台子代理（角色构建师）。会话
-            // 不在这里预开——卡片在子代理首次播报（newBuild 开会话）后出现；
-            // childId 先记入旁路文件 rolebuilder-agent.json，子代理首播报
-            // 开会话时由宿主合并（docs/19.16）。启动失败退回 steer 主会话。
+            // 门禁 + 一次性阶段派发（docs/19.16）：已有构建进行中则不派发；
+            // 否则派发阶段 A 一次性代理（开会话 → 查重 → 发布意图访谈后自然
+            // 结束）——没有任何可续聊的持久子代理被留下。卡片在子代理首次
+            // 播报后出现。派发失败退回 steer 主会话，保证流程永不哑火。
             void (async () => {
               let root: string | null = null;
               try {
@@ -182,36 +180,20 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
                   return;
                 }
               } catch {
-                // 状态读不到时不拦：照常派发（子代理首播报的 newBuild 会开新局）。
+                // 状态读不到时不拦：照常派发（阶段代理的 newBuild 会开新局）。
               }
               try {
                 const subagents = (ctx as unknown as RuntimeContext).subagents;
-                if (subagents?.startContinuable === undefined) {
+                if (subagents?.start === undefined) {
                   throw new Error('subagents 服务不可用');
                 }
-                const start = await subagents.startContinuable({
-                  provider: config.memberProvider,
-                  label: 'eteams-rolebuilder',
-                  request: {
-                    prompt: [{ type: 'text', text: buildActivationMessage(rawInput) }],
-                    parent: agent,
-                    persona: ROLE_BUILDER_CHILD_PERSONA,
-                    toolFilter: {
-                      deny: MEMBER_DENIED_TOOLS.filter(
-                        (tool) =>
-                          tool !== 'eteams_build_report' &&
-                          tool !== 'eteams_member_list' &&
-                          tool !== 'eteams_member_save',
-                      ),
-                    },
-                  },
+                spawnBuildPhase({
+                  ctx: { subagents },
+                  config,
+                  parent: agent,
+                  stateRoot: root ?? rootForWrites(ctx, config),
+                  kind: 'start',
                 });
-                if (root !== null) {
-                  await setBuildAgentId(root, {
-                    agentId: String(start.childId),
-                    parentSessionId: String(agent.id),
-                  });
-                }
               } catch {
                 agent.steer(
                   createUserMessage({

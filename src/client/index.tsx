@@ -7,9 +7,12 @@
  * 1. the 团队 tab — an entry in the `conversation.view` ring (id `eteams`,
  *    order 100) hosting the M4 activity panel (概览/成员/任务/动态 + 抽屉);
  * 2. the 团队 button — an entry at the right end of the composer tool row
- *    (`conversation.input.right`), opening the team-list popup whose
- *    「新增团队」 item jumps to the 团队 tab;
- * 3. the ETeams conversation card — folded from `eteams_create_team`
+ *    (`conversation.input.right`), opening the tabbed 团队/成员 popup whose
+ *    team rows and 新增 shortcuts jump straight to the 团队 tab page;
+ * 3. the hero 团队 button — DOM-injected beside the 标准模式 preset chip on
+ *    the not-started screen (no additive slot exists there), clicking into
+ *    the 团队 tab page (overlay panel while the view ring is not rendered);
+ * 4. the ETeams conversation card — folded from `eteams_create_team`
  *    tool events via the optional `conversationEvents` service (absent
  *    service degrades to tab+button only).
  *
@@ -26,6 +29,8 @@ import { EteamBuildCard } from './buildCard';
 import { ETEAMS_TAB_LABEL, ETEAMS_VIEW_ID } from './bridge';
 import { installClientDiagnostics, recordClientDiag } from './diagnostics';
 import { ETeamsView } from './eteamsView';
+import { installHeroTeamsButton } from './heroTeamsButton';
+import { enterTeamsPanel } from './teamsPanel';
 import { TeamsButton } from './teamsButton';
 
 /** Client services required before apply runs. The runner gates every
@@ -80,6 +85,11 @@ export function apply(ctx: Context): void {
   );
 
   guard('conversation.card', () => installCard(ctx));
+
+  // 会话未开始的新会话屏（hero）没有可供插件入驻的 additive 槽位——
+  // hero 行两个席位都是 single 且已被宿主占用——因此走 DOM 注入：
+  // 在「标准模式」旁补一枚团队按钮（heroTeamsButton 模块头有完整推理）。
+  guard('hero.teams-button', () => installHeroTeamsButton(() => enterTeamsPanel()));
 
   guard('conversation.chat.commandview', () =>
     ctx.slots.inject('conversation.chat.commandview', () =>

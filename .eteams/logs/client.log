@@ -95,3 +95,11 @@
 {"at":1787991828010,"version":"v0.2.0","entry":{"at":1787991826002,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
 {"at":1787992363219,"version":"v0.2.0","entry":{"at":1787992361215,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
 {"at":1787993131784,"version":"v0.2.0","entry":{"at":1787993129779,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1787994316223,"version":"v0.2.0","entry":{"at":1787994312879,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1787994671046,"version":"v0.2.0","entry":{"at":1787994669041,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1787998904257,"version":"v0.2.0","entry":{"at":1787994669041,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1787998904257,"version":"v0.2.0","entry":{"at":1787998901042,"kind":"error","message":"Uncaught ReferenceError: exports is not defined","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=8a2c321c460f:1:23"}}
+{"at":1787998905212,"version":"v0.2.0","entry":{"at":1787998903116,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1787999010198,"version":"v0.2.0","entry":{"at":1787999007918,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1788002524968,"version":"v0.2.0","entry":{"at":1788002522962,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1788002923355,"version":"v0.2.0","entry":{"at":1788002921346,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
