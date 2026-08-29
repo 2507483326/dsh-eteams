@@ -11,6 +11,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
+import type { SessionId } from '@deepseek-ai/dsh-session';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import type { ETeamsResolvedConfig } from '../config.js';
 import type {
@@ -40,6 +41,7 @@ import {
   cancelBuildSession,
   confirmBuildSession,
   readBuildSession,
+  resumeBuildSession,
   type BuildDraft,
 } from './roleBuilder.js';
 
@@ -670,6 +672,7 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                   ? { executionPrompt: str(body.executionPrompt) }
                   : {}),
                 ...(body.personaMd !== undefined ? { personaMd: str(body.personaMd) } : {}),
+                ...(isAvatarPair(body.avatar) ? { avatar: body.avatar } : {}),
                 ...(body.provider !== undefined ? { provider: str(body.provider) } : {}),
                 ...(body.model !== undefined ? { model: str(body.model) } : {}),
                 ...(body.reasoningEffort !== undefined
@@ -704,7 +707,64 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               segments[1] === 'cancel'
             ) {
               try {
-                const session = await cancelBuildSession(rootForWrites(ctx, config));
+                const root = rootForWrites(ctx, config);
+                // 先取会话拿 builder childId：放弃构建时连带中断后台代理，
+                // 否则代理还在空转、下一次播报只会撞上状态机报错。
+                const before = readBuildSession(root);
+                const session = await cancelBuildSession(root);
+                const agentId = before?.agentId;
+                const parentSessionId = before?.parentSessionId;
+                if (agentId !== undefined && agentId !== '' && parentSessionId !== undefined) {
+                  try {
+                    (ctx as unknown as RuntimeContext).subagents?.interrupt?.(agentId as SessionId, {
+                      kind: 'user',
+                      parentSessionId: parentSessionId as SessionId,
+                    });
+                  } catch {
+                    // child 已退出/不存在/权限失效是可接受终态
+                  }
+                }
+                sendJson(res, 200, { ok: true, status: session.status });
+              } catch (e) {
+                sendError(res, 400, e instanceof Error ? e.message : String(e));
+              }
+              return;
+            }
+            // POST /rolebuilder/resume — continue a cancelled build (docs/19.16).
+            // Context lives in the session file; the durable builder child keeps
+            // its conversation, so a followup wakes it mid-flow.
+            if (
+              req.method === 'POST' &&
+              segments[0] === 'rolebuilder' &&
+              segments.length === 2 &&
+              segments[1] === 'resume'
+            ) {
+              try {
+                const root = rootForWrites(ctx, config);
+                const before = readBuildSession(root);
+                const session = await resumeBuildSession(root);
+                const agentId = before?.agentId;
+                const parentSessionId = before?.parentSessionId;
+                if (agentId !== undefined && agentId !== '' && parentSessionId !== undefined) {
+                  const parent = (ctx as unknown as RuntimeContext).agents?.get(parentSessionId);
+                  if (parent !== undefined) {
+                    try {
+                      await (ctx as unknown as RuntimeContext).subagents?.followup?.(
+                        parent,
+                        agentId as SessionId,
+                        [
+                          {
+                            type: 'text',
+                            text: '构建会话已被用户恢复（此前被中断）。请先用 eteams_build_report 同步恢复进度（沿用原步骤与草稿），再从中断处继续构建流程。',
+                          },
+                        ],
+                        { source: { kind: 'plugin', plugin: 'dsh-eteams' } },
+                      );
+                    } catch {
+                      // child 不在了：会话保持 active，用户可重新 /eteam 接管
+                    }
+                  }
+                }
                 sendJson(res, 200, { ok: true, status: session.status });
               } catch (e) {
                 sendError(res, 400, e instanceof Error ? e.message : String(e));
@@ -837,6 +897,16 @@ function agentFor(sessionId: string): Agent {
 }
 
 /** Parse a JSON object body; throws on non-object payloads. */
+/** Type-guard for a client-supplied avatar pair (docs/14). */
+function isAvatarPair(value: unknown): value is { seed: number; salt: number } {
+  if (typeof value !== 'object' || value === null) return false;
+  const pair = value as Record<string, unknown>;
+  return (
+    typeof pair.seed === 'number' && Number.isFinite(pair.seed) &&
+    typeof pair.salt === 'number' && Number.isFinite(pair.salt)
+  );
+}
+
 function parseJsonObject(raw: string): Record<string, unknown> {
   const parsed: unknown = JSON.parse(raw);
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {

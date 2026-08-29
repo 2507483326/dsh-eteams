@@ -40,7 +40,12 @@ export interface RuntimeContext {
       content: { type: 'text'; text: string }[],
       options: { source: { kind: 'plugin'; plugin: string }; signal?: AbortSignal },
     ): Promise<unknown>;
-    interrupt(target: SessionId, authority: { kind: 'ancestor'; agent: Agent }): void;
+    interrupt(
+      target: SessionId,
+      authority:
+        | { kind: 'user'; parentSessionId: SessionId }
+        | { kind: 'ancestor'; agent: Agent },
+    ): void;
   };
   /** Live agent registry (inject `agents`): wake the captain. */
   agents: { get(sessionId: string): Agent | undefined };

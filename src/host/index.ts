@@ -29,13 +29,22 @@ import type { ETeamsResolvedConfig } from './config.js';
 import { PLUGIN_ID, PLUGIN_VERSION, STATE_SCHEMA_VERSION, TOOL_PREFIX } from './version.js';
 import { createCaptainTools } from './tools/captainTools.js';
 import { createMemberTools } from './tools/memberTools.js';
-import { installMemberRuntime } from './runtime/members.js';
+import { installMemberRuntime, MEMBER_DENIED_TOOLS } from './runtime/members.js';
 import { installWebSurface, rootForWrites } from './runtime/webui.js';
-import { readBuildSession, reportBuildProgress } from './runtime/roleBuilder.js';
+import type { RuntimeContext } from './runtime/base.js';
+import {
+  readBuildSession,
+  reportBuildProgress,
+  setBuildAgentId,
+} from './runtime/roleBuilder.js';
 import { CAPTAIN_SECTION_SHORT } from './prompts/captain.js';
 import { composeCaptainPersona } from './prompts/persona.js';
 import { personaDigest } from './prompts/persona.js';
-import { buildActivationMessage, ROLE_BUILDER_SECTION } from './prompts/roleBuilder.js';
+import {
+  buildActivationMessage,
+  ROLE_BUILDER_CHILD_PERSONA,
+  ROLE_BUILDER_SECTION,
+} from './prompts/roleBuilder.js';
 
 /** Host services this plugin requires at mount time. */
 export const inject = ['tools', 'subagents', 'agents', 'systemPrompt', 'commands'];
@@ -148,8 +157,9 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
             // 立即呈现「创建中」。已存在的待确认草稿自动让位（放弃旧稿），
             // 否则新构建会被状态机挡住。best-effort：写失败则退回等首播。
             void (async () => {
+              let root: string | null = null;
               try {
-                const root = rootForWrites(ctx, config);
+                root = rootForWrites(ctx, config);
                 const current = readBuildSession(root);
                 if (current !== null && current.status === 'awaiting_confirmation') {
                   await reportBuildProgress(root, {
@@ -163,28 +173,64 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
                   stepsDone: ['收到需求'],
                   request: buildActivationMessage(rawInput),
                   note: '命令已受理——角色构建师接手中',
+                  newBuild: true,
                 });
               } catch {
                 // 状态文件不可写（无工作区等）：卡片退回等构建师首次播报。
               }
+              // 后台构建（用户反馈：不卡主对话）：不再 steer 主会话——把激活
+              // 消息投给一个可续聊的后台子代理（角色构建师），主对话发送后立即
+              // 可用。子代理拿到构建三件套（build_report/member_list/member_save，
+              // 从成员拒绝清单里豁免），其余领队工具照旧拒绝；childId 记入会话
+              // 供放弃时中断。启动失败退回 steer 主会话，保证流程永不哑火。
+              try {
+                const subagents = (ctx as unknown as RuntimeContext).subagents;
+                if (subagents?.startContinuable === undefined) {
+                  throw new Error('subagents 服务不可用');
+                }
+                const start = await subagents.startContinuable({
+                  provider: config.memberProvider,
+                  label: 'eteams-rolebuilder',
+                  request: {
+                    prompt: [{ type: 'text', text: buildActivationMessage(rawInput) }],
+                    parent: agent,
+                    persona: ROLE_BUILDER_CHILD_PERSONA,
+                    toolFilter: {
+                      deny: MEMBER_DENIED_TOOLS.filter(
+                        (tool) =>
+                          tool !== 'eteams_build_report' &&
+                          tool !== 'eteams_member_list' &&
+                          tool !== 'eteams_member_save',
+                      ),
+                    },
+                  },
+                });
+                if (root !== null) {
+                  await setBuildAgentId(root, {
+                    agentId: String(start.childId),
+                    parentSessionId: String(agent.id),
+                  });
+                }
+              } catch {
+                agent.steer(
+                  createUserMessage({
+                    content: [{ type: 'text', text: buildActivationMessage(rawInput) }],
+                    // Plugin-sourced notice: the conversation folds this user-role
+                    // message into a compact context row (not a chat bubble) while
+                    // the model still receives the full activation text (docs/19.9.5).
+                    source: {
+                      kind: 'plugin',
+                      plugin: 'dsh-eteams',
+                      form: 'notice',
+                      summary: '成员创建请求已提交——构建卡片与面板实时显示进度',
+                    },
+                  }),
+                );
+              }
             })();
-            agent.steer(
-              createUserMessage({
-                content: [{ type: 'text', text: buildActivationMessage(rawInput) }],
-                // Plugin-sourced notice: the conversation folds this user-role
-                // message into a compact context row (not a chat bubble) while
-                // the model still receives the full activation text (docs/19.9.5).
-                source: {
-                  kind: 'plugin',
-                  plugin: 'dsh-eteams',
-                  form: 'notice',
-                  summary: '成员创建请求已提交——构建卡片与面板实时显示进度',
-                },
-              }),
-            );
             return {
               kind: 'success' as const,
-              text: '已转交角色构建师——面板「新增成员」工作台会实时显示构建进度。',
+              text: '成员构建已在后台开始——对话卡片与面板实时显示进度，主对话不受影响。',
             };
           },
         };

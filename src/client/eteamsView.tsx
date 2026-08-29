@@ -18,7 +18,7 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives';
 import { ADD_PEOPLE_TEMPLATE, prefillComposer, type PrefillOutcome } from './addPeople';
 import { Avatar } from './avatar';
-import { GOTO_ADD_EVENT } from './bridge';
+import { activateConversationTab, consumePendingGotoAdd, GOTO_ADD_EVENT } from './bridge';
 import { ClientErrorBoundary } from './diagnostics';
 import { MdEditor } from './mdEditor';
 import {
@@ -30,6 +30,7 @@ import {
   fetchBuildState,
   fetchRoster,
   removeTeamMember,
+  resumeBuild,
   type BuildDraft,
   type BuildSession,
   type RosterMember,
@@ -184,6 +185,7 @@ const styles: Record<string, CSSProperties> = {
     marginBottom: 12,
     background: T.surface,
     boxShadow: '0 1px 2px rgba(15,23,42,0.03)',
+    minWidth: 0,
   },
   sectionTitle: {
     margin: '0 0 8px',
@@ -193,7 +195,7 @@ const styles: Record<string, CSSProperties> = {
     letterSpacing: 0.5,
   },
   line: { margin: '4px 0', fontSize: 13, lineHeight: 1.6, color: T.text2 },
-  muted: { fontSize: 12, color: T.text3 },
+  muted: { fontSize: 12, color: T.text3, overflowWrap: 'anywhere' },
   progressTrack: {
     height: 6,
     borderRadius: 999,
@@ -600,6 +602,9 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
       setOpenAddTick((t) => t + 1);
     };
     window.addEventListener(GOTO_ADD_EVENT, h);
+    // 补消费挂载前的跳转信号：openMemberBuilder 先点宿主 tab 再触发本面板
+    // 挂载，窗口事件会错过——pending 标记在这里兜底（docs/19.16）。
+    if (consumePendingGotoAdd()) h();
     return () => window.removeEventListener(GOTO_ADD_EVENT, h);
   }, []);
 
@@ -1018,6 +1023,7 @@ function MemberCard({
 const BUILD_STEPS = [
   '收到需求',
   '查重成员库',
+  '意图访谈',
   '起草统一手册',
   '深化领域章节',
   '完成草稿',
@@ -1157,7 +1163,9 @@ function MembersTab({
         if (s === null) return;
         if (s.startedAt !== seenSessionRef.current) {
           seenSessionRef.current = s.startedAt;
-          if (s.status === 'active' || s.status === 'awaiting_confirmation') setView('add');
+          // 新会话不再强制跳创建页（docs/19.16）：发送时刻由对话卡片负责
+          // openMemberBuilder——这里强跳会把用户每次回面板都拽进 add 视图，
+          // 导致「构建时进不去对话/看板」。
         }
         if (s.status === 'awaiting_confirmation' && seenReviewRef.current !== s.startedAt) {
           seenReviewRef.current = s.startedAt;
@@ -1218,6 +1226,9 @@ function MembersTab({
           .filter((r) => r !== ''),
         executionPrompt: draftEdit.executionPrompt,
         personaMd: draftEdit.personaMd,
+        ...(build !== null && build.draft?.avatar !== undefined
+          ? { avatar: build.draft.avatar }
+          : {}),
       });
       onDeleted();
     } catch (e) {
@@ -1231,6 +1242,15 @@ function MembersTab({
   const abandon = async (): Promise<void> => {
     setConfirming(true);
     await cancelBuild().catch(() => undefined);
+    setConfirming(false);
+    refreshBuild();
+  };
+
+  // 继续构建（docs/19.16）：会话文件保存完整上下文（步骤/草稿/需求），
+  // 宿主恢复会话并唤醒后台构建代理，从中断处接着跑。
+  const resume = async (): Promise<void> => {
+    setConfirming(true);
+    await resumeBuild().catch(() => undefined);
     setConfirming(false);
     refreshBuild();
   };
@@ -1279,28 +1299,52 @@ function MembersTab({
     // 闭包内无法从外层条件继承窄化，这里先固化已入库草稿。
     const confirmedDraft = build !== null && build.status === 'confirmed' ? build.draft : null;
     return (
-      <div>
+      <div style={{ overflowX: 'hidden', minWidth: 0 }}>
         <style>{'@keyframes eteams-spin{to{transform:rotate(360deg)}}'}</style>
         <Button size="sm" onClick={() => setView('list')}>
           ← 返回成员列表
+        </Button>
+        <Button
+          size="sm"
+          style={{ marginLeft: 6 }}
+          onClick={() => activateConversationTab()}
+          title="切到会话的对话视图，看命令卡片与进度行"
+        >
+          💬 对话页看进度
         </Button>
         <div style={{ ...styles.card, marginTop: 8 }}>
           {build !== null && build.status === 'active' && (
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span
-                  style={{
-                    color: T.accent,
-                    display: 'inline-flex',
-                    animation: 'eteams-spin 1s linear infinite',
-                  }}
-                >
-                  <IconSparkle16 />
-                </span>
+                {build.draft?.avatar !== undefined ? (
+                  <Avatar
+                    name={build.draft.name}
+                    seed={build.draft.avatar.seed}
+                    salt={build.draft.avatar.salt}
+                    size={30}
+                  />
+                ) : (
+                  <span
+                    style={{
+                      color: T.accent,
+                      display: 'inline-flex',
+                      animation: 'eteams-spin 1s linear infinite',
+                    }}
+                  >
+                    <IconSparkle16 />
+                  </span>
+                )}
                 <div style={{ ...styles.line, fontWeight: 600, margin: 0 }}>
-                  角色构建师工作中…
+                  {build.draft?.name !== undefined && build.draft.name !== ''
+                    ? `角色构建师工作中 · ${build.draft.name}…`
+                    : '角色构建师工作中…'}
                 </div>
                 <span style={fns.pill('info')}>构建中</span>
+                <span style={{ flex: 1 }} />
+                {/* 构建中也能放弃（docs/19.16）：作废会话并中断后台构建代理。 */}
+                <Button size="sm" disabled={confirming} onClick={() => void abandon()}>
+                  放弃
+                </Button>
               </div>
               <div style={{ margin: '10px 0 4px' }}>
                 {BUILD_STEPS.map((s) => {
@@ -1329,7 +1373,23 @@ function MembersTab({
             build.status === 'awaiting_confirmation' &&
             build.draft !== null && (
               <div>
-                <div style={{ ...styles.line, fontWeight: 600 }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    ...styles.line,
+                    fontWeight: 600,
+                  }}
+                >
+                  {build.draft.avatar !== undefined && (
+                    <Avatar
+                      name={draftEdit.name.trim() !== '' ? draftEdit.name.trim() : build.draft.name}
+                      seed={build.draft.avatar.seed}
+                      salt={build.draft.avatar.salt}
+                      size={30}
+                    />
+                  )}
                   草稿已就绪——可直接修改，确认后入库
                 </div>
                 {formError !== null && <div style={styles.formError}>{formError}</div>}
@@ -1413,6 +1473,28 @@ function MembersTab({
                 >
                   再建一个
                 </Button>
+              </div>
+            </div>
+          )}
+          {build !== null && build.status === 'cancelled' && (
+            // 已放弃的构建：上下文（步骤/草稿/需求）都保存在会话里，
+            // 「继续构建」唤醒后台代理从中断处接着跑（docs/19.16）。
+            <div style={{ ...styles.card, marginBottom: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ ...styles.line, fontWeight: 600, margin: 0 }}>已放弃本次构建</div>
+                <span style={fns.pill('muted')}>已中断</span>
+              </div>
+              {build.note !== '' && <div style={styles.muted}>{build.note}</div>}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  disabled={confirming}
+                  onClick={() => void resume()}
+                >
+                  继续构建
+                </Button>
+                <span style={styles.muted}>上下文已保存——从中断处接着跑，不用从头再来。</span>
               </div>
             </div>
           )}
@@ -1612,25 +1694,40 @@ function MembersTab({
       <div style={styles.card}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
           <div style={{ ...styles.sectionTitle, flex: 1, margin: 0 }}>成员（{members.length}）</div>
-          <Button
-            size="sm"
-            variant="primary"
-            icon={<IconPlusOutline16 />}
-            onClick={() => {
-              // 一键预填（D18-1）：命令进输入框 → 跳到构建工作台；不可用时
-              // 退化为复制，提示去对话粘贴。
-              const outcome = onPrefillAddPeople();
-              if (outcome === 'set') {
-                setJustFilled(true);
+          {build !== null &&
+          (build.status === 'active' || build.status === 'awaiting_confirmation') ? (
+            // 有未入库的构建草稿：新增入口让位给「待加入成员」，防止误开新
+            // 构建把旧草稿顶掉（docs/19.16）。
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => {
                 setView('add');
-              } else if (outcome === 'copied') {
-                setCopied(true);
-                setTimeout(() => setCopied(false), 2000);
-              }
-            }}
-          >
-            新增成员
-          </Button>
+              }}
+            >
+              待加入成员
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant="primary"
+              icon={<IconPlusOutline16 />}
+              onClick={() => {
+                // 一键预填（D18-1）：命令进输入框 → 跳到构建工作台；不可用时
+                // 退化为复制，提示去对话粘贴。
+                const outcome = onPrefillAddPeople();
+                if (outcome === 'set') {
+                  setJustFilled(true);
+                  setView('add');
+                } else if (outcome === 'copied') {
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 2000);
+                }
+              }}
+            >
+              新增成员
+            </Button>
+          )}
         </div>
         {listError !== null && <div style={styles.formError}>{listError}</div>}
         {members.length === 0 && (
@@ -1638,7 +1735,11 @@ function MembersTab({
             还没有成员。点「新增成员」，在对话里补全信息，角色构建师会帮你构建人设。
           </div>
         )}
-        {members.map((m) => {
+        {[
+          ...members,
+        ]
+          .sort((a, b) => (a.name === LEADER_NAME ? -1 : b.name === LEADER_NAME ? 1 : 0))
+          .map((m) => {
           const teamNames = teamsOf(m.name);
           const isLeader = m.name === LEADER_NAME;
           return (

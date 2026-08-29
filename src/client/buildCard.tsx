@@ -23,15 +23,37 @@ const CARD_STATUS: Record<BuildSession['status'], { label: string; color: string
 const SPIN_KEYFRAMES = '@keyframes eteams-card-spin{to{transform:rotate(360deg)}}';
 
 /**
+ * 发送即跳转的去重标记（模块级，docs/19.16）：卡片会随聊天重渲染频繁重
+ * 挂载，useRef 每次归零会把用户从对话页反复拽回面板——按 startedAt 全局
+ * 只跳一次，用户之后可以自由切回对话 tab。
+ */
+let jumpedSessionAt: number | null = null;
+let lastSeenSessionAt: number | null = null;
+/** 用户手动点过宿主 tab = 接管导航：挂起的自动跳转让位（不再拽人）。 */
+let userTookOver = false;
+if (typeof document !== 'undefined') {
+  const flag = '__eteamsTabTakeoverLatch__';
+  const g = globalThis as Record<string, unknown>;
+  if (g[flag] !== true) {
+    g[flag] = true;
+    document.addEventListener(
+      'click',
+      (e) => {
+        const tab = (e.target as HTMLElement | null)?.closest?.('button[role="tab"]');
+        if (tab !== null && tab !== undefined) userTookOver = true;
+      },
+      true,
+    );
+  }
+}
+
+/**
  * The in-conversation card for `/eteam` command runs. The keyed slot owner is
  * `{ node: commandNode }`; the card renders live build state instead of the
  * generic command summary.
  */
 export function EteamBuildCard(_props: { node?: unknown }): ReactNode {
   const [build, setBuild] = useState<BuildSession | null | 'loading'>('loading');
-  // 发送即跳转（docs/19.16）：首次拉取发现「新鲜」active 会话（20s 内开启）
-  // 就直接打开成员创建页。老会话/历史卡片不跳，避免回滚历史时被拽走。
-  const jumpedRef = useRef<number | null>(null);
   // 受理写盘与首次拉取存在竞态：扑空（null）时以 800ms 有界重试（~20s），
   // 避免错过刚受理的会话；旧历史卡片重试完自然停。
   const nullRetriesRef = useRef(0);
@@ -44,13 +66,21 @@ export function EteamBuildCard(_props: { node?: unknown }): ReactNode {
         .then((s) => {
           if (!alive) return;
           setBuild(s);
+          if (s !== null) {
+            // 新会话（新一轮 /eteam）重置接管标记，让新构建重新获得跳转资格。
+            if (lastSeenSessionAt !== null && s.startedAt !== lastSeenSessionAt) {
+              userTookOver = false;
+            }
+            lastSeenSessionAt = s.startedAt;
+          }
           if (
             s !== null &&
             s.status === 'active' &&
             Date.now() - s.startedAt < 20_000 &&
-            jumpedRef.current !== s.startedAt
+            !userTookOver &&
+            jumpedSessionAt !== s.startedAt
           ) {
-            jumpedRef.current = s.startedAt;
+            jumpedSessionAt = s.startedAt;
             openMemberBuilder();
           }
           const status = s?.status;
@@ -79,6 +109,7 @@ export function EteamBuildCard(_props: { node?: unknown }): ReactNode {
     build === 'loading' || build === null ? null : CARD_STATUS[build.status];
   const name =
     build === 'loading' || build === null ? '新成员' : (build.draft?.name ?? '新成员');
+  const avatar = build === 'loading' || build === null ? undefined : build.draft?.avatar;
   const step = build === 'loading' || build === null ? '' : build.step;
 
   return (
@@ -102,7 +133,7 @@ export function EteamBuildCard(_props: { node?: unknown }): ReactNode {
         role="button"
         title="点击打开成员创建页"
       >
-        <Avatar name={name} size={34} />
+        <Avatar name={name} seed={avatar?.seed} salt={avatar?.salt} size={34} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
             style={{

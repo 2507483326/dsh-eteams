@@ -10,7 +10,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { atomicWriteText } from '../state/store.js';
-import { upsertRosterMember } from './roster.js';
+import { avatarSeedFor, upsertRosterMember } from './roster.js';
 
 export type BuildStatus = 'active' | 'awaiting_confirmation' | 'confirmed' | 'cancelled';
 
@@ -30,6 +30,11 @@ export interface BuildDraft {
   provider?: string;
   model?: string;
   reasoningEffort?: string;
+  /**
+   * Pre-assigned avatar pair (docs/14): generated once when the draft first
+   * gets a name, so the face is stable from card/preview through confirm.
+   */
+  avatar?: { seed: number; salt: number };
 }
 
 /** One build session (docs/19.9.1). */
@@ -44,6 +49,10 @@ export interface BuildSession {
   draft: BuildDraft | null;
   note: string;
   updatedAt: number;
+  /** Durable id of the background builder child, for cancel-time interrupt. */
+  agentId?: string;
+  /** Main-session id the builder child was spawned under (interrupt authority). */
+  parentSessionId?: string;
 }
 
 interface BuildFile {
@@ -88,6 +97,12 @@ export interface BuildReport {
   request?: string;
   draft?: BuildDraft;
   note?: string;
+  /**
+   * Marks a deliberate brand-new build (the /eteam handler opening over a
+   * terminal session). Ordinary builder reports never set this — so a
+   * cancelled session cannot be resurrected by a late background report.
+   */
+  newBuild?: boolean;
 }
 
 /**
@@ -110,6 +125,11 @@ export async function reportBuildProgress(
   if (current !== null && !terminal && !TRANSITIONS[current.status].includes(requested)) {
     throw new Error(`非法状态迁移：${current.status} → ${requested}`);
   }
+  if (terminal && report.newBuild !== true) {
+    // 已结束的会话只允许显式 newBuild 开新局——防止后台构建代理的迟到播报
+    // 把用户已放弃/已入库的构建复活（docs/19.16）。
+    throw new Error(`构建会话已结束（${current?.status}），普通播报不再写入`);
+  }
   if (current === null || terminal) {
     if (requested !== 'active') {
       throw new Error(
@@ -125,7 +145,7 @@ export async function reportBuildProgress(
       step: report.step ?? '收到需求',
       stepsDone: report.stepsDone ?? [],
       request: report.request ?? '',
-      draft: report.draft ?? null,
+      draft: ensureDraftAvatar(report.draft ?? null),
       note: report.note ?? '',
       updatedAt: now,
     };
@@ -138,17 +158,27 @@ export async function reportBuildProgress(
     step: report.step ?? current.step,
     stepsDone: report.stepsDone ?? current.stepsDone,
     request: report.request ?? current.request,
-    draft:
+    draft: ensureDraftAvatar(
       report.draft === undefined
         ? current.draft
         : current.draft === null
           ? report.draft
           : { ...current.draft, ...report.draft },
+    ),
     note: report.note ?? current.note,
     updatedAt: now,
   };
   await writeSession(stateRoot, next);
   return next;
+}
+
+/** One-time avatar assignment: stable face from first preview through confirm. */
+function ensureDraftAvatar(draft: BuildDraft | null): BuildDraft | null {
+  if (draft === null || draft.avatar !== undefined || draft.name === '') return draft;
+  return {
+    ...draft,
+    avatar: { seed: avatarSeedFor(draft.name), salt: Math.floor(Math.random() * 1000) },
+  };
 }
 
 /**
@@ -174,6 +204,7 @@ export async function confirmBuildSession(
     ...(draft.rules !== undefined ? { rules: draft.rules } : {}),
     ...(draft.executionPrompt !== undefined ? { executionPrompt: draft.executionPrompt } : {}),
     ...(draft.personaMd !== undefined ? { personaMd: draft.personaMd } : {}),
+    ...(draft.avatar !== undefined ? { avatar: draft.avatar } : {}),
     ...(draft.provider !== undefined ? { provider: draft.provider } : {}),
     ...(draft.model !== undefined ? { model: draft.model } : {}),
     ...(draft.reasoningEffort !== undefined ? { reasoningEffort: draft.reasoningEffort } : {}),
@@ -206,6 +237,41 @@ export async function cancelBuildSession(stateRoot: string): Promise<BuildSessio
   };
   await writeSession(stateRoot, next);
   return next;
+}
+
+/**
+ * Resume a cancelled build (docs/19.16): the session file keeps the full
+ * context (stepsDone/draft/request), and the panel wakes the durable builder
+ * child via followup — the child continues from where it was interrupted.
+ * Only cancelled sessions resume; a confirmed build already landed in the
+ * roster and starts a fresh build via /eteam instead.
+ */
+export async function resumeBuildSession(stateRoot: string): Promise<BuildSession> {
+  const current = readBuildSession(stateRoot);
+  if (current === null) throw new Error('没有可恢复的构建会话');
+  if (current.status !== 'cancelled') {
+    throw new Error(`仅已放弃的构建可恢复（当前状态：${current.status}）`);
+  }
+  const next: BuildSession = {
+    ...current,
+    status: 'active',
+    step: current.step === '已入库' ? '继续构建' : current.step,
+    note: '已恢复——从中断处继续',
+    updatedAt: Date.now(),
+  };
+  await writeSession(stateRoot, next);
+  return next;
+}
+
+/** Record the background builder child id + parent session (cancel-time interrupt). */
+export async function setBuildAgentId(
+  stateRoot: string,
+  info: { agentId: string; parentSessionId: string },
+): Promise<void> {
+  const current = readBuildSession(stateRoot);
+  if (current === null) return;
+  if (current.agentId === info.agentId && current.parentSessionId === info.parentSessionId) return;
+  await writeSession(stateRoot, { ...current, ...info });
 }
 
 async function writeSession(stateRoot: string, session: BuildSession): Promise<void> {

@@ -137,6 +137,8 @@ export interface BuildDraft {
   provider?: string;
   model?: string;
   reasoningEffort?: string;
+  /** Pre-assigned avatar pair — stable face from first preview through confirm. */
+  avatar?: { seed: number; salt: number };
 }
 
 /** One build session (docs/19.9.1). */
@@ -150,6 +152,10 @@ export interface BuildSession {
   draft: BuildDraft | null;
   note: string;
   updatedAt: number;
+  /** Durable id of the background builder child (host-side; cancel interrupt). */
+  agentId?: string;
+  /** Main-session id the builder child was spawned under. */
+  parentSessionId?: string;
 }
 
 /** Poll the single build-session slot (null when no session exists). */
@@ -159,6 +165,11 @@ export async function fetchBuildState(): Promise<BuildSession | null> {
     session?: BuildSession;
   };
   return body.empty === true || body.session === undefined ? null : body.session;
+}
+
+/** Resume a cancelled build — host wakes the durable builder child. */
+export async function resumeBuild(): Promise<void> {
+  await requestJson(`${API_BASE}/rolebuilder/resume`, { method: 'POST' });
 }
 
 /** Confirm the pending draft — host persists to the roster atomically. */

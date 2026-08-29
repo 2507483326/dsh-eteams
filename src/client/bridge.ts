@@ -23,17 +23,55 @@ const EXCLUDED_ANCESTORS = `[${ETEAMS_DATA_ATTR}],[role="menu"],[role="dialog"],
 export const GOTO_ADD_EVENT = 'eteams:goto-add';
 
 /**
+ * Pending jump signal (module level): openMemberBuilder fires BEFORE the
+ * host tab switches, so ETeamsView is often not yet mounted and would miss
+ * the window event — it consumes this flag on mount instead. One-shot.
+ */
+let pendingGotoAdd = false;
+
+/** Whether a jump request is waiting; consumes it (one-shot). */
+export function consumePendingGotoAdd(): boolean {
+  const value = pendingGotoAdd;
+  pendingGotoAdd = false;
+  return value;
+}
+
+/**
  * Activate the 团队 tab AND open the member-builder workbench
  * （成员 → 新增）：fires the cross-component signal first, then clicks the
  * host tab. The card in the conversation uses this for its click-through.
+ * Both paths covered: the window event for the already-mounted panel, the
+ * pending flag for the about-to-mount panel (tab click → remount).
  *
  * @returns whether the tab element was found and clicked.
  */
 export function openMemberBuilder(): boolean {
+  pendingGotoAdd = true;
   if (typeof window !== 'undefined' && typeof window.CustomEvent === 'function') {
     window.dispatchEvent(new CustomEvent(GOTO_ADD_EVENT));
   }
   return activateETeamsTab();
+}
+
+/**
+ * Activate the conversation (对话) view — the counterpart of
+ * {@link activateETeamsTab} for going back to the chat while a build runs.
+ * Strategy: click the host tab whose label is 对话; if the labels differ,
+ * click the first tab that is not the eteams panel; final fallback is the
+ * first visible tab (the chat is the ring's default view).
+ *
+ * @returns whether a tab element was found and clicked.
+ */
+export function activateConversationTab(): boolean {
+  const tabs = Array.from(
+    document.querySelectorAll<HTMLButtonElement>('button[role="tab"]'),
+  ).filter((el) => el.offsetParent !== null && !el.closest(`[${ETEAMS_DATA_ATTR}]`));
+  const byLabel = tabs.find((el) => el.textContent?.trim() === '对话');
+  const notOurs = tabs.find((el) => el.textContent?.trim() !== '团队');
+  const target = byLabel ?? notOurs ?? tabs[0];
+  if (target === undefined) return false;
+  target.click();
+  return true;
 }
 
 /**

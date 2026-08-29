@@ -22,6 +22,7 @@ import {
   confirmBuildSession,
   readBuildSession,
   reportBuildProgress,
+  resumeBuildSession,
   roleBuilderFile,
 } from '../src/host/runtime/roleBuilder';
 import { MEMBER_DENIED_TOOLS } from '../src/host/runtime/members';
@@ -134,9 +135,14 @@ describe('D18 对话式新增成员', () => {
       members: { name: string }[];
     };
     expect(roster.members.some((m) => m.name === 'data-eng')).toBe(true);
-    // 终态会话拒绝继续报告；status=active 的报告开启新一轮
-    await expect(reportBuildProgress(stateRoot, { step: 'x' })).rejects.toThrow(/非法状态迁移/);
-    const fresh = await reportBuildProgress(stateRoot, { status: 'active', request: '新一轮' });
+    // 终态会话拒绝继续报告（docs/19.16：防后台代理迟到播报复活会话）；
+    // 只有显式 newBuild 的 active 报告开启新一轮
+    await expect(reportBuildProgress(stateRoot, { step: 'x' })).rejects.toThrow(/已结束/);
+    const fresh = await reportBuildProgress(stateRoot, {
+      status: 'active',
+      request: '新一轮',
+      newBuild: true,
+    });
     expect(fresh.status).toBe('active');
     expect(fresh.startedAt).toBeGreaterThanOrEqual(s1.startedAt);
   });
@@ -146,6 +152,25 @@ describe('D18 对话式新增成员', () => {
     const c = await cancelBuildSession(stateRoot);
     expect(c.status).toBe('cancelled');
     await expect(cancelBuildSession(stateRoot)).rejects.toThrow();
+  });
+
+  it('resume restores a cancelled build with context (docs/19.16)', async () => {
+    await reportBuildProgress(stateRoot, {
+      request: 'r2',
+      stepsDone: ['收到需求', '查重成员库'],
+      draft: { name: 'partial', role: 'engineer' },
+    });
+    await cancelBuildSession(stateRoot);
+    const resumed = await resumeBuildSession(stateRoot);
+    expect(resumed.status).toBe('active');
+    expect(resumed.stepsDone).toContain('查重成员库');
+    expect(resumed.draft?.name).toBe('partial');
+    // 只有 cancelled 可恢复；confirmed 已落库，重开走 /eteam 新构建
+    await cancelBuildSession(stateRoot);
+    await reportBuildProgress(stateRoot, { status: 'active', newBuild: true });
+    await reportBuildProgress(stateRoot, { status: 'awaiting_confirmation' });
+    await confirmBuildSession(stateRoot, { name: 'partial', role: 'engineer' });
+    await expect(resumeBuildSession(stateRoot)).rejects.toThrow(/仅已放弃/);
   });
 
   it('eteams_build_report is denied to team members (D18-4)', () => {

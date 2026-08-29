@@ -488,3 +488,17 @@ popup 增加 **「＋ 新增成员」** 项：执行与 19.7.1 相同的一键�
 - 对话内 `/eteam` 卡片首次拉取发现 20s 内开启的 active 会话时，自动 `openMemberBuilder()` 跳到成员创建页（`jumpedRef` 按 startedAt 去重；历史卡片不跳）；卡片对 null 有 800ms×25 有界重试，吸收受理写盘与首次拉取的竞态。
 - `eteams_build_report` 配 `presentCall/presentResult`：会话里的进度行收敛为一行「构建进度 · 步骤」，整包 args（含 personaMd 全文）不再渲染进对话。
 - 构建师对话纪律加严：一句确认后立即结束回合，不复述草稿内容。
+
+**体验打磨第二轮（用户反馈 5 项）**：
+- **md 预览无内滚**：`MdEditor` 预览区不再设 `maxHeight/overflow`，铺满展开由页面统一滚动，消灭双滚动条。
+- **构建期头像（vue-avatar 脸）**：`BuildDraft` 增加 `avatar: {seed, salt}`——`reportBuildProgress` 在草稿首次出现名字时一次性生成（seed=`avatarSeedFor(name)`，salt 随机）并随会话持久化；卡片/工作台构建头/确认表单均渲染该脸，confirm 原样透传给 `upsertRosterMember`，脸从预览到入库稳定不变。
+- **构建时可达对话页**：`bridge.activateConversationTab()`（点击宿主 对话 tab，兜底选非本面板 tab）；工作台加「💬 对话页看进度」按钮；`refreshBuild` 不再对新会话强制跳 add 视图（发送时刻的卡片跳转已覆盖），用户可自由浏览面板与对话。
+- **md 编辑器精简**：去掉语法工具栏，仅保留 头部条（Markdown 标识 + 编辑/预览分段切换）+ 编辑器质感文本区（等宽、占位示例 frontmatter、无内框线）。
+- **意图访谈（强制）**：构建流程新增步骤「意图访谈」——起草前必须一次问全（≤5 问，附默认建议）：使用场景/期望产出/语气风格/与现有成员边界/模型路线；用户回复「按你建议」或明确说不用问才可跳过。`BUILD_STEPS` 同步为六步。
+
+**体验打磨第三轮（用户反馈 3 项）**：
+- **选项框访谈**：意图访谈改为调用 harness `ask_user_question`——一次问全 ≤5 问，每问 2-4 个 options，推荐项放首位加「（推荐）」；工具不可用时降级为 `build_report` note 列问题并结束回合。
+- **后台构建代理**：`/eteam` 处理器不再 steer 主会话——用 `ctx.subagents.startContinuable` 生成可续聊后台子代理（label `eteams-rolebuilder`，persona=`ROLE_BUILDER_CHILD_PERSONA`，toolFilter 豁免 build_report/member_list/member_save 三件套、其余沿用成员拒绝清单），主对话发送后立即可用；启动失败退回 steer 保底。
+- **自动跳转让位**：模块级 capture 点击监听器记录「用户点过宿主 tab」（`userTookOver`），挂起中的自动跳转立即失效——用户点对话就留在对话，不再闪跳回团队；新一轮 /eteam（不同 startedAt）重置标记。
+- **构建中可放弃**：工作台构建中分支补「放弃」按钮（`cancelBuildSession` 本就支持 active 态）。配套两处加固：① 会话新增 `agentId/parentSessionId`（handler spawn 后写入），cancel 路由以 `{kind:'user', parentSessionId}` 权限中断后台构建代理；② `reportBuildProgress` 新增 `newBuild` 标记——终态会话只接受显式 newBuild 的新开局，普通迟到播报一律报错（防已放弃构建被后台代理复活），构建师人设同步加「报错即停」纪律。
+- **放弃后可继续**：`resumeBuildSession` 仅允许 cancelled → active（confirmed 已落库不可恢复，重开走 /eteam）；会话文件保存完整上下文（stepsDone/draft/request），工作台已放弃分支渲染「继续构建」按钮——宿主 `POST /rolebuilder/resume` 翻转状态并经 `subagents.followup` 唤醒持久化构建代理从中断处接着跑（上下文零丢失）。
