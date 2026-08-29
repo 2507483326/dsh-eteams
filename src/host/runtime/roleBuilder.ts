@@ -7,7 +7,7 @@
  *
  * @module dsh-eteams/runtime/roleBuilder
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { atomicWriteText } from '../state/store.js';
 import { avatarSeedFor, upsertRosterMember } from './roster.js';
@@ -53,6 +53,8 @@ export interface BuildSession {
   agentId?: string;
   /** Main-session id the builder child was spawned under (interrupt authority). */
   parentSessionId?: string;
+  /** Pending/answered intent interview (docs/19.16). */
+  interview?: InterviewState;
 }
 
 interface BuildFile {
@@ -77,6 +79,67 @@ export function roleBuilderFile(stateRoot: string): string {
   return join(stateRoot, 'rolebuilder.json');
 }
 
+/**
+ * Side-car file for the builder-child identity (docs/19.16): the dispatcher
+ * records it right after spawning the subagent — BEFORE the child's first
+ * report creates the session. `reportBuildProgress` stamps it onto the fresh
+ * session and consumes the file, so cancel/resume/interview can always find
+ * the child even though the session did not exist at spawn time.
+ */
+function agentRefFile(stateRoot: string): string {
+  return join(stateRoot, 'rolebuilder-agent.json');
+}
+
+interface AgentRef {
+  agentId: string;
+  parentSessionId: string;
+}
+
+/** Record the background builder child id + parent session (spawn-time). */
+export async function setBuildAgentId(
+  stateRoot: string,
+  info: { agentId: string; parentSessionId: string },
+): Promise<void> {
+  await atomicWriteText(agentRefFile(stateRoot), `${JSON.stringify(info, null, 2)}\n`);
+}
+
+/** Read the pending child identity, if any. */
+export function readBuilderAgentRef(stateRoot: string): AgentRef | null {
+  const file = agentRefFile(stateRoot);
+  if (!existsSync(file)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as Partial<AgentRef>;
+    if (typeof parsed.agentId !== 'string' || typeof parsed.parentSessionId !== 'string') {
+      return null;
+    }
+    return { agentId: parsed.agentId, parentSessionId: parsed.parentSessionId };
+  } catch {
+    return null;
+  }
+}
+
+/** Stamp the pending child identity onto a session and consume the side file. */
+async function stampAgentRef(stateRoot: string, session: BuildSession): Promise<BuildSession> {
+  const ref = readBuilderAgentRef(stateRoot);
+  if (ref === null || session.agentId !== undefined) return session;
+  await rmSync(agentRefFile(stateRoot), { force: true });
+  return { ...session, agentId: ref.agentId, parentSessionId: ref.parentSessionId };
+}
+
+/**
+ * Resolve the builder child for host-side followup/interrupt: prefer the id
+ * stamped on the session; fall back to a not-yet-consumed spawn-time ref.
+ */
+export function builderChildRef(
+  stateRoot: string,
+  session: BuildSession | null,
+): AgentRef | null {
+  if (session?.agentId !== undefined && session?.parentSessionId !== undefined) {
+    return { agentId: session.agentId, parentSessionId: session.parentSessionId };
+  }
+  return readBuilderAgentRef(stateRoot);
+}
+
 /** Read the session; missing or malformed file yields null. */
 export function readBuildSession(stateRoot: string): BuildSession | null {
   const file = roleBuilderFile(stateRoot);
@@ -98,6 +161,12 @@ export interface BuildReport {
   draft?: BuildDraft;
   note?: string;
   /**
+   * Publish an intent interview (docs/19.16): the builder child posts its
+   * questions; the workbench renders them; answers arrive via
+   * `answerBuildInterview` and are relayed back to the child by the host.
+   */
+  interview?: { questions: InterviewQuestion[] };
+  /**
    * Marks a deliberate brand-new build (the /eteam handler opening over a
    * terminal session). Ordinary builder reports never set this — so a
    * cancelled session cannot be resurrected by a late background report.
@@ -115,8 +184,28 @@ export async function reportBuildProgress(
   stateRoot: string,
   report: BuildReport,
 ): Promise<BuildSession> {
-  const current = readBuildSession(stateRoot);
   const now = Date.now();
+  // 显式 newBuild = 开一个全新构建：无条件覆盖任何现有会话（含待确认——
+  // 新请求让位旧草稿，与 /eteam 处理器语义一致）。后台构建代理被纪律禁止
+  // 传该标记，其迟到播报仍走下方终态守卫（docs/19.16）。
+  if (report.newBuild === true) {
+    const fresh: BuildSession = {
+      schemaVersion: 1,
+      startedAt: now,
+      status: 'active',
+      step: report.step ?? '收到需求',
+      stepsDone: report.stepsDone ?? [],
+      request: report.request ?? '',
+      draft: ensureDraftAvatar(report.draft ?? null),
+      note: report.note ?? '',
+      updatedAt: now,
+    };
+    // 子代理首播报开启会话时，把派发时记录的 child 身份合并进来并消费旁路文件。
+    const stamped = await stampAgentRef(stateRoot, fresh);
+    await writeSession(stateRoot, stamped);
+    return stamped;
+  }
+  const current = readBuildSession(stateRoot);
   const requested = report.status ?? current?.status ?? 'active';
   const terminal =
     current !== null && (current.status === 'confirmed' || current.status === 'cancelled');
@@ -125,18 +214,14 @@ export async function reportBuildProgress(
   if (current !== null && !terminal && !TRANSITIONS[current.status].includes(requested)) {
     throw new Error(`非法状态迁移：${current.status} → ${requested}`);
   }
-  if (terminal && report.newBuild !== true) {
+  if (terminal) {
     // 已结束的会话只允许显式 newBuild 开新局——防止后台构建代理的迟到播报
     // 把用户已放弃/已入库的构建复活（docs/19.16）。
     throw new Error(`构建会话已结束（${current?.status}），普通播报不再写入`);
   }
-  if (current === null || terminal) {
+  if (current === null) {
     if (requested !== 'active') {
-      throw new Error(
-        current === null
-          ? `无法以 ${requested} 开启构建会话（首轮状态必须为 active）`
-          : `非法状态迁移：${current.status} → ${requested}`,
-      );
+      throw new Error(`无法以 ${requested} 开启构建会话（首轮状态必须为 active）`);
     }
     const fresh: BuildSession = {
       schemaVersion: 1,
@@ -149,8 +234,9 @@ export async function reportBuildProgress(
       note: report.note ?? '',
       updatedAt: now,
     };
-    await writeSession(stateRoot, fresh);
-    return fresh;
+    const stamped = await stampAgentRef(stateRoot, fresh);
+    await writeSession(stateRoot, stamped);
+    return stamped;
   }
   const next: BuildSession = {
     ...current,
@@ -166,10 +252,63 @@ export async function reportBuildProgress(
           : { ...current.draft, ...report.draft },
     ),
     note: report.note ?? current.note,
+    interview:
+      report.interview !== undefined
+        ? { questions: report.interview.questions }
+        : current.interview,
     updatedAt: now,
   };
   await writeSession(stateRoot, next);
   return next;
+}
+
+/**
+ * Store the user's interview answers (docs/19.16): the host route calls this
+ * and then wakes the builder child with a formatted followup. Idempotent
+ * re-answers overwrite (the panel allows correcting before the child resumes).
+ */
+export async function answerBuildInterview(
+  stateRoot: string,
+  answers: { id: string; choice: string }[],
+): Promise<BuildSession> {
+  const current = readBuildSession(stateRoot);
+  if (current === null || current.interview === undefined) {
+    throw new Error('没有待回答的意图访谈');
+  }
+  const next: BuildSession = {
+    ...current,
+    interview: { ...current.interview, answers, answeredAt: Date.now() },
+    note: '意图访谈已作答——构建代理恢复中',
+    updatedAt: Date.now(),
+  };
+  await writeSession(stateRoot, next);
+  return next;
+}
+
+/** One selectable option in an intent-interview question. */
+export interface InterviewOption {
+  label: string;
+  description?: string;
+}
+
+/** One intent-interview question rendered as an option list in the workbench. */
+export interface InterviewQuestion {
+  id: string;
+  question: string;
+  options: InterviewOption[];
+  /** Allow multiple selections (answers joined with 「、」). */
+  multi?: boolean;
+}
+
+/**
+ * Intent-interview state carried on the session (docs/19.16): the builder
+ * child publishes questions here; the workbench renders them as a clickable
+ * questionnaire; the host relays answers back to the child via followup.
+ */
+export interface InterviewState {
+  questions: InterviewQuestion[];
+  answers?: { id: string; choice: string }[];
+  answeredAt?: number;
 }
 
 /** One-time avatar assignment: stable face from first preview through confirm. */
@@ -261,17 +400,6 @@ export async function resumeBuildSession(stateRoot: string): Promise<BuildSessio
   };
   await writeSession(stateRoot, next);
   return next;
-}
-
-/** Record the background builder child id + parent session (cancel-time interrupt). */
-export async function setBuildAgentId(
-  stateRoot: string,
-  info: { agentId: string; parentSessionId: string },
-): Promise<void> {
-  const current = readBuildSession(stateRoot);
-  if (current === null) return;
-  if (current.agentId === info.agentId && current.parentSessionId === info.parentSessionId) return;
-  await writeSession(stateRoot, { ...current, ...info });
 }
 
 async function writeSession(stateRoot: string, session: BuildSession): Promise<void> {

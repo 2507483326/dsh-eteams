@@ -83,3 +83,15 @@
 {"at":1787990432212,"version":"v0.2.0","entry":{"at":1787990429599,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
 {"at":1787990835428,"version":"v0.2.0","entry":{"at":1787990833424,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
 {"at":1787990990223,"version":"v0.2.0","entry":{"at":1787990987422,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1787991721916,"version":"v0.2.0","entry":{"at":1787990987422,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1787991721916,"version":"v0.2.0","entry":{"at":1787991719913,"kind":"error","message":"Uncaught ReferenceError: exports is not defined","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=ba0428e22045:1:23"}}
+{"at":1787991722615,"version":"v0.2.0","entry":{"at":1787991720609,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1787991754892,"version":"v0.2.0","entry":{"at":1787990987422,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1787991754892,"version":"v0.2.0","entry":{"at":1787991719913,"kind":"error","message":"Uncaught ReferenceError: exports is not defined","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=ba0428e22045:1:23"}}
+{"at":1787991754892,"version":"v0.2.0","entry":{"at":1787991752886,"kind":"error","message":"Uncaught SyntaxError: Identifier 'react_jsx_runtime' has already been declared","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=ba0428e22045:1:1"}}
+{"at":1787991754907,"version":"v0.2.0","entry":{"at":1787991720609,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1787991754907,"version":"v0.2.0","entry":{"at":1787991752886,"kind":"error","message":"Uncaught SyntaxError: Identifier 'react_jsx_runtime' has already been declared","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=ba0428e22045:1:1"}}
+{"at":1787991755609,"version":"v0.2.0","entry":{"at":1787991753602,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1787991828010,"version":"v0.2.0","entry":{"at":1787991826002,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1787992363219,"version":"v0.2.0","entry":{"at":1787992361215,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1787993131784,"version":"v0.2.0","entry":{"at":1787993129779,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}

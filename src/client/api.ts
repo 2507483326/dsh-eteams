@@ -141,6 +141,27 @@ export interface BuildDraft {
   avatar?: { seed: number; salt: number };
 }
 
+/** One selectable option in an intent-interview question (docs/19.16). */
+export interface InterviewOption {
+  label: string;
+  description?: string;
+}
+
+/** One intent-interview question rendered as an option list in the workbench. */
+export interface InterviewQuestion {
+  id: string;
+  question: string;
+  options: InterviewOption[];
+  multi?: boolean;
+}
+
+/** Intent-interview state carried on the build session (docs/19.16). */
+export interface InterviewState {
+  questions: InterviewQuestion[];
+  answers?: { id: string; choice: string }[];
+  answeredAt?: number;
+}
+
 /** One build session (docs/19.9.1). */
 export interface BuildSession {
   schemaVersion: number;
@@ -156,6 +177,8 @@ export interface BuildSession {
   agentId?: string;
   /** Main-session id the builder child was spawned under. */
   parentSessionId?: string;
+  /** Pending/answered intent interview (docs/19.16). */
+  interview?: InterviewState;
 }
 
 /** Poll the single build-session slot (null when no session exists). */
@@ -170,6 +193,15 @@ export async function fetchBuildState(): Promise<BuildSession | null> {
 /** Resume a cancelled build — host wakes the durable builder child. */
 export async function resumeBuild(): Promise<void> {
   await requestJson(`${API_BASE}/rolebuilder/resume`, { method: 'POST' });
+}
+
+/** Submit intent-interview answers — host relays them to the builder child. */
+export async function submitInterview(answers: { id: string; choice: string }[]): Promise<void> {
+  await requestJson(`${API_BASE}/rolebuilder/interview`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ answers }),
+  });
 }
 
 /** Confirm the pending draft — host persists to the roster atomically. */

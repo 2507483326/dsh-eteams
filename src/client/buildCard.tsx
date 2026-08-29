@@ -28,19 +28,24 @@ const SPIN_KEYFRAMES = '@keyframes eteams-card-spin{to{transform:rotate(360deg)}
  * 只跳一次，用户之后可以自由切回对话 tab。
  */
 let jumpedSessionAt: number | null = null;
-let lastSeenSessionAt: number | null = null;
-/** 用户手动点过宿主 tab = 接管导航：挂起的自动跳转让位（不再拽人）。 */
-let userTookOver = false;
+/** 用户最后一次点击的时间戳（capture）：会话开启之后的任何点击 = 接管导航。 */
+let lastUserClickAt = 0;
 if (typeof document !== 'undefined') {
-  const flag = '__eteamsTabTakeoverLatch__';
+  const flag = '__eteamsClickLatch__';
   const g = globalThis as Record<string, unknown>;
   if (g[flag] !== true) {
     g[flag] = true;
+    // 任何用户点击都记时间戳：自动跳转仅当「会话开启（startedAt）之后用户
+    // 没有点过任何东西」才允许。判定与宿主 tab 的标记结构完全解耦（存在
+    // button[role=tab] 与旧版 leaf div 两种变体，按选择器匹配会漏——漏掉的
+    // 那次点击之后，受理竞态窗口内的重试跳转就会把用户从对话拽回团队）。
+    // 发送动作发生在会话创建之前，不影响本次跳转资格；我们自己
+    // openMemberBuilder 的程序化点击也落在跳转之后，只影响同会话的后续
+    // 跳转（本就不存在）。
     document.addEventListener(
       'click',
-      (e) => {
-        const tab = (e.target as HTMLElement | null)?.closest?.('button[role="tab"]');
-        if (tab !== null && tab !== undefined) userTookOver = true;
+      () => {
+        lastUserClickAt = Date.now();
       },
       true,
     );
@@ -66,18 +71,11 @@ export function EteamBuildCard(_props: { node?: unknown }): ReactNode {
         .then((s) => {
           if (!alive) return;
           setBuild(s);
-          if (s !== null) {
-            // 新会话（新一轮 /eteam）重置接管标记，让新构建重新获得跳转资格。
-            if (lastSeenSessionAt !== null && s.startedAt !== lastSeenSessionAt) {
-              userTookOver = false;
-            }
-            lastSeenSessionAt = s.startedAt;
-          }
           if (
             s !== null &&
             s.status === 'active' &&
             Date.now() - s.startedAt < 20_000 &&
-            !userTookOver &&
+            lastUserClickAt < s.startedAt &&
             jumpedSessionAt !== s.startedAt
           ) {
             jumpedSessionAt = s.startedAt;
@@ -111,6 +109,9 @@ export function EteamBuildCard(_props: { node?: unknown }): ReactNode {
     build === 'loading' || build === null ? '新成员' : (build.draft?.name ?? '新成员');
   const avatar = build === 'loading' || build === null ? undefined : build.draft?.avatar;
   const step = build === 'loading' || build === null ? '' : build.step;
+  const interviewPending =
+    build !== 'loading' && build !== null &&
+    build.interview !== undefined && build.interview.answers === undefined;
 
   return (
     <ClientErrorBoundary label="成员创建卡片">
@@ -158,6 +159,20 @@ export function EteamBuildCard(_props: { node?: unknown }): ReactNode {
                 }}
               >
                 {status.label}
+              </span>
+            )}
+            {interviewPending && (
+              <span
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  padding: '1px 8px',
+                  borderRadius: 999,
+                  color: 'var(--dsw-alias-brand-primary, #4b7bec)',
+                  background: 'var(--dsw-alias-interactive-bg-active, rgba(75,123,236,0.12))',
+                }}
+              >
+                ✍️ 意图访谈待作答
               </span>
             )}
           </div>

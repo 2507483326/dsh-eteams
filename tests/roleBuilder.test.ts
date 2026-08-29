@@ -18,12 +18,15 @@ import {
 } from '../src/host/prompts/roleBuilder';
 import { PRESET_MEMBER_ROLES, ROLE_TEMPLATES } from '../src/host/prompts/persona';
 import {
+  answerBuildInterview,
+  builderChildRef,
   cancelBuildSession,
   confirmBuildSession,
   readBuildSession,
   reportBuildProgress,
   resumeBuildSession,
   roleBuilderFile,
+  setBuildAgentId,
 } from '../src/host/runtime/roleBuilder';
 import { MEMBER_DENIED_TOOLS } from '../src/host/runtime/members';
 import { ensurePresetMembers, upsertRosterMember } from '../src/host/runtime/roster';
@@ -171,6 +174,54 @@ describe('D18 对话式新增成员', () => {
     await reportBuildProgress(stateRoot, { status: 'awaiting_confirmation' });
     await confirmBuildSession(stateRoot, { name: 'partial', role: 'engineer' });
     await expect(resumeBuildSession(stateRoot)).rejects.toThrow(/仅已放弃/);
+  });
+
+  it('intent interview lands in the session and records answers (docs/19.16)', async () => {
+    await reportBuildProgress(stateRoot, { request: 'r3' });
+    await reportBuildProgress(stateRoot, {
+      step: '意图访谈',
+      interview: {
+        questions: [
+          { id: 'q1', question: '使用场景？', options: [{ label: 'A' }, { label: 'B' }] },
+          { id: 'q2', question: '语气？', options: [{ label: 'C' }, { label: 'D' }], multi: true },
+        ],
+      },
+    });
+    const pending = readBuildSession(stateRoot);
+    expect(pending?.interview?.questions).toHaveLength(2);
+    expect(pending?.interview?.answers).toBeUndefined();
+    const answered = await answerBuildInterview(stateRoot, [
+      { id: 'q1', choice: 'A' },
+      { id: 'q2', choice: 'C、D' },
+    ]);
+    expect(answered.interview?.answers).toEqual([
+      { id: 'q1', choice: 'A' },
+      { id: 'q2', choice: 'C、D' },
+    ]);
+    // 没有 interview 的会话不能作答
+    await reportBuildProgress(stateRoot, { status: 'active', newBuild: true });
+    await expect(answerBuildInterview(stateRoot, [{ id: 'q1', choice: 'A' }])).rejects.toThrow(
+      /没有待回答/,
+    );
+  });
+
+  it('spawn-time agent ref stamps onto the child-opened session (docs/19.16)', async () => {
+    // 派发时会话尚不存在：身份先落旁路文件
+    await setBuildAgentId(stateRoot, { agentId: 'child-1', parentSessionId: 'parent-1' });
+    expect(readBuildSession(stateRoot)).toBeNull();
+    // 子代理首播报（newBuild）开会话：身份合并、旁路文件消费
+    const fresh = await reportBuildProgress(stateRoot, {
+      request: 'r4',
+      newBuild: true,
+      step: '收到需求',
+    });
+    expect(fresh.agentId).toBe('child-1');
+    expect(fresh.parentSessionId).toBe('parent-1');
+    expect(builderChildRef(stateRoot, readBuildSession(stateRoot))?.agentId).toBe('child-1');
+    // 旁路文件已被消费：无会话引用时解析为 null（身份只存活在会话里）
+    expect(builderChildRef(stateRoot, null)).toBeNull();
+    await reportBuildProgress(stateRoot, { status: 'active', newBuild: true });
+    expect(builderChildRef(stateRoot, readBuildSession(stateRoot))).toBeNull();
   });
 
   it('eteams_build_report is denied to team members (D18-4)', () => {

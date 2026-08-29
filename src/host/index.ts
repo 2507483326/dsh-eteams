@@ -32,11 +32,7 @@ import { createMemberTools } from './tools/memberTools.js';
 import { installMemberRuntime, MEMBER_DENIED_TOOLS } from './runtime/members.js';
 import { installWebSurface, rootForWrites } from './runtime/webui.js';
 import type { RuntimeContext } from './runtime/base.js';
-import {
-  readBuildSession,
-  reportBuildProgress,
-  setBuildAgentId,
-} from './runtime/roleBuilder.js';
+import { readBuildSession, setBuildAgentId } from './runtime/roleBuilder.js';
 import { CAPTAIN_SECTION_SHORT } from './prompts/captain.js';
 import { composeCaptainPersona } from './prompts/persona.js';
 import { personaDigest } from './prompts/persona.js';
@@ -152,37 +148,42 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
             images: false,
           },
           handler: ({ agent, rawInput }) => {
-            // 受理即开构建会话（docs/19.16）：不等构建师首次播报（模型启动有
-            // 数秒延迟）——命令受理瞬间就把 active 会话落盘，对话卡片与面板
-            // 立即呈现「创建中」。已存在的待确认草稿自动让位（放弃旧稿），
-            // 否则新构建会被状态机挡住。best-effort：写失败则退回等首播。
+            // 门禁 + 派发（docs/19.16）：命令处理器只做两件事——① 已有构建
+            // 进行中（active/awaiting）则不派发，让用户先处理现有构建；
+            // ② 直接把激活消息投给可续聊的后台子代理（角色构建师）。会话
+            // 不在这里预开——卡片在子代理首次播报（newBuild 开会话）后出现；
+            // childId 先记入旁路文件 rolebuilder-agent.json，子代理首播报
+            // 开会话时由宿主合并（docs/19.16）。启动失败退回 steer 主会话。
             void (async () => {
               let root: string | null = null;
               try {
                 root = rootForWrites(ctx, config);
                 const current = readBuildSession(root);
-                if (current !== null && current.status === 'awaiting_confirmation') {
-                  await reportBuildProgress(root, {
-                    status: 'cancelled',
-                    note: '新构建请求已受理，旧待确认草稿自动放弃',
-                  });
+                if (
+                  current !== null &&
+                  (current.status === 'active' || current.status === 'awaiting_confirmation')
+                ) {
+                  agent.steer(
+                    createUserMessage({
+                      content: [
+                        {
+                          type: 'text',
+                          text: `已有成员构建在进行中（${current.draft?.name || '未命名'} · ${current.step}）。请到面板完成或放弃该构建后再发起新的 /eteam。`,
+                        },
+                      ],
+                      source: {
+                        kind: 'plugin',
+                        plugin: 'dsh-eteams',
+                        form: 'notice',
+                        summary: '已有构建进行中——未派发新构建',
+                      },
+                    }),
+                  );
+                  return;
                 }
-                await reportBuildProgress(root, {
-                  status: 'active',
-                  step: '收到需求',
-                  stepsDone: ['收到需求'],
-                  request: buildActivationMessage(rawInput),
-                  note: '命令已受理——角色构建师接手中',
-                  newBuild: true,
-                });
               } catch {
-                // 状态文件不可写（无工作区等）：卡片退回等构建师首次播报。
+                // 状态读不到时不拦：照常派发（子代理首播报的 newBuild 会开新局）。
               }
-              // 后台构建（用户反馈：不卡主对话）：不再 steer 主会话——把激活
-              // 消息投给一个可续聊的后台子代理（角色构建师），主对话发送后立即
-              // 可用。子代理拿到构建三件套（build_report/member_list/member_save，
-              // 从成员拒绝清单里豁免），其余领队工具照旧拒绝；childId 记入会话
-              // 供放弃时中断。启动失败退回 steer 主会话，保证流程永不哑火。
               try {
                 const subagents = (ctx as unknown as RuntimeContext).subagents;
                 if (subagents?.startContinuable === undefined) {
@@ -230,7 +231,7 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
             })();
             return {
               kind: 'success' as const,
-              text: '成员构建已在后台开始——对话卡片与面板实时显示进度，主对话不受影响。',
+              text: '成员构建已派给后台代理——卡片将在其首次播报时出现。',
             };
           },
         };

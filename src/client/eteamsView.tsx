@@ -31,8 +31,10 @@ import {
   fetchRoster,
   removeTeamMember,
   resumeBuild,
+  submitInterview,
   type BuildDraft,
   type BuildSession,
+  type InterviewQuestion,
   type RosterMember,
 } from './api';
 import {
@@ -598,6 +600,9 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
   const [openAddTick, setOpenAddTick] = useState(0);
   useEffect(() => {
     const h = (): void => {
+      // 已挂载路径由窗口事件处理；顺带消费 pending 标记，防止标记滞留到
+      // 下一次挂载时把用户误拽回创建页（docs/19.16）。
+      consumePendingGotoAdd();
       setTab('roster');
       setOpenAddTick((t) => t + 1);
     };
@@ -1255,6 +1260,29 @@ function MembersTab({
     refreshBuild();
   };
 
+  // 意图访谈作答（docs/19.16）：后台构建代理把问题写进会话，工作台渲染为
+  // 选项问卷；提交后宿主把答案经 followup 发回代理继续构建。
+  const [interviewPick, setInterviewPick] = useState<Record<string, string[]>>({});
+  const togglePick = (id: string, label: string, multi: boolean): void => {
+    setInterviewPick((prev) => {
+      const cur = prev[id] ?? [];
+      if (cur.includes(label)) {
+        return { ...prev, [id]: cur.filter((x) => x !== label) };
+      }
+      return { ...prev, [id]: multi ? [...cur, label] : [label] };
+    });
+  };
+  const submitInterviewAnswers = async (questions: InterviewQuestion[]): Promise<void> => {
+    const answers = questions
+      .map((q) => ({ id: q.id, choice: (interviewPick[q.id] ?? []).join('、') }))
+      .filter((a) => a.choice !== '');
+    if (answers.length === 0) return;
+    setConfirming(true);
+    await submitInterview(answers).catch(() => undefined);
+    setConfirming(false);
+    refreshBuild();
+  };
+
   // 通过对话创建（用户要求）：面板生成命令，用户粘贴到会话里由领队执行
   // eteams_member_save 入库——面板不直连写成员。personaMd（完整角色手册）
   // 以 Markdown 围栏附在命令尾部，由领队原样作为 personaMd 参数传入。
@@ -1346,6 +1374,79 @@ function MembersTab({
                   放弃
                 </Button>
               </div>
+              {build.interview !== undefined && build.interview.answers === undefined && (
+                // 意图访谈问卷（docs/19.16）：后台代理的问题在这里作答，
+                // 提交后宿主把答案发回代理继续构建。
+                <div
+                  style={{
+                    border: `1px solid ${T.accent}`,
+                    borderRadius: 10,
+                    padding: '10px 12px',
+                    margin: '10px 0 4px',
+                  }}
+                >
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>✍️ 意图访谈——请作答</div>
+                  <div style={styles.muted}>后台构建代理在等你的答案，提交后它继续起草。</div>
+                  {build.interview.questions.map((q) => {
+                    const picked = interviewPick[q.id] ?? [];
+                    const done = picked.length > 0;
+                    return (
+                      <div key={q.id} style={{ marginTop: 10 }}>
+                        <div style={{ fontSize: 12.5, fontWeight: 600 }}>
+                          {q.question}
+                          {!done && <span style={{ color: T.accent }}> ·</span>}
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 5 }}>
+                          {q.options.map((o) => {
+                            const active = picked.includes(o.label);
+                            return (
+                              <button
+                                key={o.label}
+                                type="button"
+                                onClick={() => togglePick(q.id, o.label, q.multi === true)}
+                                style={{
+                                  textAlign: 'left',
+                                  padding: '5px 9px',
+                                  borderRadius: 8,
+                                  border: `1px solid ${active ? T.accent : T.border}`,
+                                  background: active
+                                    ? 'var(--dsw-alias-interactive-bg-active, rgba(75,123,236,0.12))'
+                                    : 'transparent',
+                                  color: 'inherit',
+                                  cursor: 'pointer',
+                                  fontSize: 12,
+                                  lineHeight: 1.5,
+                                }}
+                              >
+                                <div style={{ fontWeight: active ? 600 : 400 }}>{o.label}</div>
+                                {o.description !== undefined && o.description !== '' && (
+                                  <div style={styles.muted}>{o.description}</div>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      disabled={
+                        confirming ||
+                        build.interview.questions.some(
+                          (q) => (interviewPick[q.id] ?? []).length === 0,
+                        )
+                      }
+                      onClick={() => void submitInterviewAnswers(build.interview?.questions ?? [])}
+                    >
+                      提交回答
+                    </Button>
+                    <span style={styles.muted}>提交后构建代理自动继续。</span>
+                  </div>
+                </div>
+              )}
               <div style={{ margin: '10px 0 4px' }}>
                 {BUILD_STEPS.map((s) => {
                   const done = build.stepsDone.includes(s);

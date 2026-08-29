@@ -35,6 +35,7 @@ import { listTeams, envForAgent, resolveCaller } from './identity.js';
 import { readBox } from '../runtime/notifier.js';
 import { readRoster, upsertRosterMember } from '../runtime/roster.js';
 import {
+  readBuildSession,
   reportBuildProgress,
   type BuildDraft,
 } from '../runtime/roleBuilder.js';
@@ -313,10 +314,57 @@ export function createCaptainTools(
           provider: str('LLM provider（与 model 同给才生效）'),
           model: str('LLM model'),
           reasoningEffort: str('推理力度'),
+          avatar: {
+            type: 'object' as const,
+            description: '头像对（seed/salt）——newBuild 新开时留空由宿主自动分配',
+            properties: {
+              seed: { type: 'integer' as const, description: '头像 seed' },
+              salt: { type: 'integer' as const, description: '头像 salt' },
+            },
+            additionalProperties: false,
+          },
         },
         additionalProperties: false,
       },
       note: str('一句话进度（面板时间线旁展示）'),
+      interview: {
+        type: 'object' as const,
+        description:
+          '意图访谈（后台构建代理与用户交互的唯一通道，docs/19.16）：把问题写入会话，工作台渲染为选项问卷，宿主把用户答案经 followup 发回。发布后立即结束回合等答案。',
+        properties: {
+          questions: {
+            type: 'array' as const,
+            description: '问题列表（一次问全 ≤5 问）',
+            items: {
+              type: 'object' as const,
+              properties: {
+                id: str('问题唯一 id'),
+                question: str('问题文本'),
+                options: {
+                  type: 'array' as const,
+                  description: '2-4 个选项，推荐项放首位并在 label 尾加「（推荐）」',
+                  items: {
+                    type: 'object' as const,
+                    properties: {
+                      label: str('选项文案'),
+                      description: str('选项说明（可省）'),
+                    },
+                    additionalProperties: false,
+                  },
+                },
+                multi: { type: 'boolean' as const, description: '允许多选（缺省单选）' },
+              },
+              additionalProperties: false,
+            },
+          },
+        },
+        additionalProperties: false,
+      },
+      newBuild: {
+        type: 'boolean' as const,
+        description:
+          '开一个全新构建（docs/19.16）：无条件覆盖现有会话（含待确认/已结束）。仅主对话构建师开启新需求时传 true；后台构建代理与普通步进播报禁止传。',
+      },
     },
     output: {
       schema: {
@@ -350,6 +398,10 @@ export function createCaptainTools(
         ...(args.request !== undefined ? { request: args.request } : {}),
         ...(args.draft !== undefined ? { draft: args.draft as BuildDraft } : {}),
         ...(args.note !== undefined ? { note: args.note } : {}),
+        ...(args.interview !== undefined
+          ? { interview: args.interview as { questions: never[] } }
+          : {}),
+        ...(args.newBuild === true ? { newBuild: true } : {}),
       });
       return {
         ok: true as const,
@@ -726,7 +778,8 @@ export function createCaptainTools(
 
   const teamStatusTool = defineTool({
     name: 'eteams_team_status',
-    description: '查看团队概览：阶段、成员与状态、任务与执行链进度、待决策、领队邮箱近况。',
+    description:
+      '查看团队概览：阶段、成员与状态、任务与执行链进度、待决策、领队邮箱近况、构建会话（角色构建师派发前用它判断是否已有构建进行中）。',
     parameters: {},
     output: {
       schema: {
@@ -742,7 +795,14 @@ export function createCaptainTools(
     execute: async (_args, exec) => {
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
       const caller = await resolveCaller(env, exec.agent!);
-      return { ok: true as const, view: teamView(env, caller.team) };
+      const view = teamView(env, caller.team);
+      // 构建会话行（docs/19.16）：调度员只看这一行决定是否派发新构建。
+      const build = readBuildSession(stateRootOf(env));
+      (view as Record<string, unknown>)['构建会话'] =
+        build === null
+          ? null
+          : `${build.status} · ${build.step}${build.draft?.name ? ` · ${build.draft.name}` : ''}（更新于 ${Math.max(0, Math.round((Date.now() - build.updatedAt) / 1000))} 秒前）`;
+      return { ok: true as const, view };
     },
   });
 

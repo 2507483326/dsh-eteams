@@ -38,6 +38,8 @@ import {
 } from './roster.js';
 import { addMember, createTeam, removeMember } from './teamOps.js';
 import {
+  answerBuildInterview,
+  builderChildRef,
   cancelBuildSession,
   confirmBuildSession,
   readBuildSession,
@@ -712,8 +714,9 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                 // 否则代理还在空转、下一次播报只会撞上状态机报错。
                 const before = readBuildSession(root);
                 const session = await cancelBuildSession(root);
-                const agentId = before?.agentId;
-                const parentSessionId = before?.parentSessionId;
+                const child = builderChildRef(root, before);
+                const agentId = child?.agentId;
+                const parentSessionId = child?.parentSessionId;
                 if (agentId !== undefined && agentId !== '' && parentSessionId !== undefined) {
                   try {
                     (ctx as unknown as RuntimeContext).subagents?.interrupt?.(agentId as SessionId, {
@@ -743,8 +746,9 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                 const root = rootForWrites(ctx, config);
                 const before = readBuildSession(root);
                 const session = await resumeBuildSession(root);
-                const agentId = before?.agentId;
-                const parentSessionId = before?.parentSessionId;
+                const child = builderChildRef(root, before);
+                const agentId = child?.agentId;
+                const parentSessionId = child?.parentSessionId;
                 if (agentId !== undefined && agentId !== '' && parentSessionId !== undefined) {
                   const parent = (ctx as unknown as RuntimeContext).agents?.get(parentSessionId);
                   if (parent !== undefined) {
@@ -762,6 +766,65 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                       );
                     } catch {
                       // child 不在了：会话保持 active，用户可重新 /eteam 接管
+                    }
+                  }
+                }
+                sendJson(res, 200, { ok: true, status: session.status });
+              } catch (e) {
+                sendError(res, 400, e instanceof Error ? e.message : String(e));
+              }
+              return;
+            }
+            // POST /rolebuilder/interview — user answered the intent interview
+            // in the workbench (docs/19.16): store the answers, then wake the
+            // durable builder child with a formatted transcript so it continues
+            // drafting. This is the background child's only user-facing channel.
+            if (
+              req.method === 'POST' &&
+              segments[0] === 'rolebuilder' &&
+              segments.length === 2 &&
+              segments[1] === 'interview'
+            ) {
+              try {
+                const root = rootForWrites(ctx, config);
+                const before = readBuildSession(root);
+                const body = parseJsonObject(await readBody(req));
+                const rawAnswers = Array.isArray(body.answers) ? body.answers : [];
+                const answers = rawAnswers
+                  .filter((a): a is Record<string, unknown> => typeof a === 'object' && a !== null)
+                  .map((a) => ({ id: str(a.id), choice: str(a.choice) }))
+                  .filter((a) => a.id !== '' && a.choice !== '');
+                if (answers.length === 0) {
+                  sendError(res, 400, 'answers 不能为空');
+                  return;
+                }
+                const session = await answerBuildInterview(root, answers);
+                const child = builderChildRef(root, before);
+                const agentId = child?.agentId;
+                const parentSessionId = child?.parentSessionId;
+                if (agentId !== undefined && agentId !== '' && parentSessionId !== undefined) {
+                  const parent = (ctx as unknown as RuntimeContext).agents?.get(parentSessionId);
+                  if (parent !== undefined) {
+                    const transcript = (before?.interview?.questions ?? [])
+                      .map((q) => {
+                        const hit = answers.find((a) => a.id === q.id);
+                        return `- ${q.question}\n  → ${hit?.choice ?? '（未答）'}`;
+                      })
+                      .join('\n');
+                    try {
+                      await (ctx as unknown as RuntimeContext).subagents?.followup?.(
+                        parent,
+                        agentId as SessionId,
+                        [
+                          {
+                            type: 'text',
+                            text: `用户已在面板完成意图访谈，逐题作答如下：\n${transcript}\n请按答案继续构建流程（起草统一手册 → 深化领域章节 → 完成草稿）。`,
+                          },
+                        ],
+                        { source: { kind: 'plugin', plugin: 'dsh-eteams' } },
+                      );
+                    } catch {
+                      // child 不在了：答案保留在会话里，用户可重新 /eteam 接管
                     }
                   }
                 }
