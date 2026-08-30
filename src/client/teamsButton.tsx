@@ -11,14 +11,17 @@
  *   composer draft (never auto-send; clipboard fallback) and jumps to the
  *   member-builder view of the 团队 tab page (D18-1).
  *
- * Member rows are selectable: the selected member's avatar + name replace
- * the button label, and the host asserts a system-prompt persona band for
- * the session (per-assembly dynamic section keyed by the session agent) so
- * the conversation speaks as that role — no draft text, nothing sent.
- * Selection persists per session in localStorage and re-asserts to the host
- * on mount. Team rows jump to the panel with that team selected. When the
- * slot's `inputActions` kit is unavailable the new-member prefill degrades
- * to clipboard copy.
+ * Member and team rows are selectable: the selected member's avatar + name
+ * (or the team's chip + name) replace the button label, highlighted while a
+ * selection is active, with a hover-revealed × to clear. For a member the
+ * host asserts a system-prompt persona band for the session (per-assembly
+ * dynamic section keyed by the session agent) so the conversation speaks as
+ * that role — no draft text, nothing sent. Selections persist per session
+ * in localStorage and re-assert to the host on mount. Clicking the button
+ * ALWAYS toggles this popup (opened on the tab matching the selection) —
+ * panel navigation stays with the 新增 shortcuts. When the slot's
+ * `inputActions` kit is unavailable the new-member prefill degrades to
+ * clipboard copy.
  *
  * @module dsh-eteams/client/teamsButton
  */
@@ -139,20 +142,10 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
     }
   };
 
-  // Button click is context-aware (docs/13.8.2): with nothing selected it
-  // toggles the popup; with a member selected it opens the panel's 成员 tab;
-  // with a team selected it opens the panel's 团队 tab on that team.
+  // Button click ALWAYS toggles the popup（用户反馈：无论什么状态都点开小
+  // 弹窗选择）—— the popup opens on the tab matching the selection; the
+  // hover × clears it. Panel navigation stays with the 新增 actions.
   const onButtonClick = (): void => {
-    if (selectedMember !== null) {
-      setOpen(false);
-      enterTeamsPanel({ roster: true });
-      return;
-    }
-    if (selectedTeam !== null) {
-      setOpen(false);
-      enterTeamsPanel({ creator: true, teamId: selectedTeam.teamId });
-      return;
-    }
     setOpen((v) => !v);
   };
 
@@ -492,9 +485,18 @@ function TeamsPopup(props: {
   // plus window resize and captured scroll. Until the first measurement the
   // panel stays invisible (no flash at 0,0).
   const [pos, setPos] = useState<CSSProperties | null>(null);
+  // Anti-flicker positioning（用户反馈：切换成员时闪一下）： continuous rAF
+  // tracking instead of event listeners. Events left gaps — selecting swaps
+  // the button face (width change → tool-row reflow) and mutates the panel
+  // (hint text), and the old RO/scroll-only approach repositioned a frame
+  // late, so the card visibly lagged then snapped. Reading rects per frame
+  // with a change-guard keeps the card glued with ZERO re-renders while
+  // nothing moves.
   useLayoutEffect(() => {
     const panel = panelRef.current;
     if (panel === null) return;
+    let raf = 0;
+    let last = '';
     const compute = (): void => {
       const r = anchor.getBoundingClientRect();
       const w = panel.offsetWidth;
@@ -503,18 +505,18 @@ function TeamsPopup(props: {
       const gap = 6;
       const left = Math.min(Math.max(r.right - w, margin), window.innerWidth - margin - w);
       const top = Math.max(margin, r.top - gap - h);
+      const key = `${left}|${top}`;
+      if (key === last) return; // no-op guard: no setState, no re-render
+      last = key;
       setPos({ left, top });
     };
-    compute();
-    const ro = new ResizeObserver(compute);
-    ro.observe(panel);
-    window.addEventListener('resize', compute);
-    window.addEventListener('scroll', compute, true);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener('resize', compute);
-      window.removeEventListener('scroll', compute, true);
+    const loop = (): void => {
+      compute();
+      raf = requestAnimationFrame(loop);
     };
+    compute();
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
   }, [anchor]);
   const state = useActivityMonitor();
   const [roster, setRoster] = useState<RosterMember[] | null>(null);
@@ -615,11 +617,9 @@ function TeamsPopup(props: {
                   data-selected={isTeamSelected ? 'true' : undefined}
                   style={S.row}
                   onClick={() => onSelectTeam({ teamId: t.teamId, name: t.name })}
-                  title={
-                    isTeamSelected
-                      ? `${t.name}（已选，点击取消；按钮直达团队页）`
-                      : `选择 ${t.name}（按钮直达团队页）· ${t.goal}`
-                  }
+                  // Static title（防闪烁）：切换选中时 title 不变，原生 tooltip
+                  // 不会在指针下重弹。
+                  title={`${t.name} · ${t.goal}`}
                 >
                   <span style={S.rowName}>{t.name}</span>
                   {isTeamSelected ? (
@@ -648,7 +648,9 @@ function TeamsPopup(props: {
                 data-selected={isSelected ? 'true' : undefined}
                 style={S.row}
                 onClick={() => onSelectMember(m)}
-                title={isSelected ? `${m.name}（已选，点击取消）` : `选择 ${m.name} · ${m.role}（对话将以该角色输出）`}
+                // Static title（防闪烁）：同上——title 随选中变化会让原生
+                // tooltip 在指针下重弹一次。
+                title={`${m.name} · ${m.role}（点击选中/取消，对话将以该角色输出）`}
               >
                 <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={22} />
                 <span style={S.rowName}>{m.name}</span>
@@ -662,7 +664,7 @@ function TeamsPopup(props: {
           <div style={S.hint}>对话将以「{selectedMember.name}」的角色输出（再次点击该成员可取消）。</div>
         )}
         {tab === 'team' && selectedTeam !== null && (
-          <div style={S.hint}>已选「{selectedTeam.name}」——点按钮直达团队页（再次点击该团队可取消）。</div>
+          <div style={S.hint}>已选「{selectedTeam.name}」（再次点击该团队可取消）。</div>
         )}
       </div>
 

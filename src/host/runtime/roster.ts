@@ -118,6 +118,16 @@ export async function upsertRosterMember(
 /** The team leader is itself a preset member: default-joined, undeletable. */
 export const LEADER_NAME = '项目牧羊人';
 
+/**
+ * The role-builder persona is a system member too: listed under the leader,
+ * protected from deletion (用户反馈：角色构建师不能删除). Unlike the leader
+ * it may be edited via upsert (its handbook can evolve).
+ */
+export const ROLE_BUILDER_NAME = '角色构建师';
+
+/** Names removeRosterMember always rejects (host-side guard). */
+const PROTECTED_FROM_DELETE: readonly string[] = [LEADER_NAME, ROLE_BUILDER_NAME];
+
 /** Fixed salts so the preset members look the same in every workspace. */
 const PRESET_SALTS: Record<string, number> = {
   前端开发者: 11,
@@ -211,13 +221,16 @@ function staleDistilledDoc(md: string | undefined): boolean {
 }
 
 /**
- * Remove one roster entry by name. The leader (项目牧羊人) is a member too,
- * but it is protected: deletion is rejected (用户模型：领队不可删除).
+ * Remove one roster entry by name. The leader (项目牧羊人) and the role
+ * builder (角色构建师) are system members and protected: deletion is
+ * rejected (用户模型：领队/角色构建师不可删除).
  */
 export async function removeRosterMember(stateRoot: string, name: string): Promise<void> {
   const trimmed = name.trim();
   if (trimmed === '') throw new Error('成员名不能为空');
-  if (trimmed === LEADER_NAME) throw new Error('领队成员不可删除');
+  if (PROTECTED_FROM_DELETE.includes(trimmed)) {
+    throw new Error(`「${trimmed}」为系统保留成员，不可删除`);
+  }
   const members = readRoster(stateRoot);
   const next = members.filter((m) => m.name !== trimmed);
   if (next.length === members.length) throw new Error(`成员「${trimmed}」不存在`);

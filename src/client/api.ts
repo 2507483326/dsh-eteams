@@ -37,6 +37,8 @@ export interface NewMemberInput {
   style?: string;
   skills?: string;
   executionPrompt?: string;
+  /** Full Markdown role playbook (all persona content lives here now). */
+  personaMd?: string;
 }
 
 async function requestJson(url: string, init?: RequestInit): Promise<unknown> {

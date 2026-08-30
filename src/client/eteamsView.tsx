@@ -42,6 +42,7 @@ import {
   fetchRoster,
   removeTeamMember,
   resumeBuild,
+  saveRosterMember,
   submitInterview,
   type BuildDraft,
   type BuildSession,
@@ -69,6 +70,18 @@ export { PHASE_LABELS };
 
 /** The leader is a member too — default-joined, undeletable (用户定稿模型). */
 const LEADER_NAME = '项目牧羊人';
+/** The role-builder persona is a system member as well: undeletable,
+ * listed right under the leader (用户反馈：角色构建师不能删除). */
+const ROLE_BUILDER_NAME = '角色构建师';
+/** Members the panel never offers a delete button for (host enforces too). */
+const PROTECTED_MEMBERS: readonly string[] = [LEADER_NAME, ROLE_BUILDER_NAME];
+
+/** Sort rank: leader first, role builder second, everyone else after. */
+function memberRank(name: string): number {
+  if (name === LEADER_NAME) return 0;
+  if (name === ROLE_BUILDER_NAME) return 1;
+  return 2;
+}
 
 const STATUS_GROUPS: { id: string; label: string; statuses: string[]; tone: Tone }[] = [
   { id: 'active', label: '执行中', statuses: ['in_progress', 'retrying'], tone: 'info' },
@@ -170,6 +183,9 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 13,
     lineHeight: 1.55,
     color: T.text,
+    /* 横向滚动条治理（用户反馈）：任何内部溢出都在这里截断，绝不外溢
+    到宿主页面/整页团队页；滚动只发生在 content 列内。 */
+    overflow: 'hidden',
   },
   rail: {
     display: 'flex',
@@ -181,7 +197,15 @@ const styles: Record<string, CSSProperties> = {
     paddingRight: 12,
     paddingTop: 2,
   },
-  content: { flex: 1, minWidth: 0, overflowY: 'auto', paddingRight: 2 },
+  content: {
+    flex: 1,
+    minWidth: 0,
+    overflowY: 'auto',
+    /* 竖向滚动条出现会挤压可用宽度，宽子元素随之横向外溢——这里一并截断
+    （用户反馈：内容变高后出现横向滚动条）。 */
+    overflowX: 'hidden',
+    paddingRight: 2,
+  },
   topbar: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' },
   select: {
     padding: '5px 10px',
@@ -748,9 +772,7 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
             <span style={{ ...styles.muted, marginLeft: 'auto' }}>
               {state.error !== null
                 ? `状态加载失败：${state.error}`
-                : `自动刷新（1s）· 更新于 ${
-                    state.fetchedAt === 0 ? '—' : relativeTime(state.fetchedAt, now)
-                  }`}
+                : `更新于 ${state.fetchedAt === 0 ? '—' : relativeTime(state.fetchedAt, now)}`}
             </span>
           </div>
 
@@ -1224,6 +1246,119 @@ function DraftPreview({ draft }: { draft: BuildDraft }): ReactNode {
 }
 
 /** 成员：全体成员（先有员工，再组建团队）——列表 / 构建工作台 / 详情。 */
+/**
+ * Synthesize a handbook skeleton from the legacy structured fields so nothing
+ * is lost when the user first edits a member that predates personaMd (the
+ * digest fields themselves are no longer shown — everything lives in the
+ * handbook now, 用户反馈 2026-09).
+ */
+function handbookSeed(member: RosterMember): string {
+  if (typeof member.personaMd === 'string' && member.personaMd.trim() !== '') {
+    return member.personaMd;
+  }
+  const lines = [`# ${member.name}`, '', `- **角色**：${member.role}`];
+  const fields: [string, string | undefined][] = [
+    ['职责边界', member.duty],
+    ['工作风格', member.style],
+    ['能力', member.skills],
+    ['执行提示', member.executionPrompt],
+  ];
+  for (const [label, value] of fields) {
+    if (typeof value === 'string' && value.trim() !== '') lines.push(`- **${label}**：${value.trim()}`);
+  }
+  if (Array.isArray(member.rules) && member.rules.length > 0) {
+    lines.push('', '## 工作纪律', ...member.rules.filter((r) => r.trim() !== '').map((r) => `- ${r}`));
+  }
+  lines.push('', '## 交付标准', '- （待补充）');
+  return lines.join('\n');
+}
+
+/**
+ * The member detail handbook editor (用户反馈：去掉人设摘要，全部提炼到角色
+ * 手册；成员详情可编辑可保存). Full member upsert on save — the host replaces
+ * the whole entry, so every current field is re-sent with the new handbook.
+ * Read-only for the leader (host rejects leader upserts, 保留名).
+ */
+function HandbookEditor({
+  member,
+  readOnly,
+  onSaved,
+}: {
+  member: RosterMember;
+  readOnly: boolean;
+  onSaved: () => void;
+}): ReactNode {
+  const [text, setText] = useState<string>(() => handbookSeed(member));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  const save = (): void => {
+    setSaving(true);
+    setError(null);
+    setSaved(false);
+    saveRosterMember({
+      name: member.name,
+      role: member.role,
+      ...(member.duty !== undefined ? { duty: member.duty } : {}),
+      ...(member.style !== undefined ? { style: member.style } : {}),
+      ...(member.skills !== undefined ? { skills: member.skills } : {}),
+      ...(Array.isArray(member.rules) ? { rules: member.rules } : {}),
+      ...(member.executionPrompt !== undefined ? { executionPrompt: member.executionPrompt } : {}),
+      ...(member.provider !== undefined ? { provider: member.provider } : {}),
+      ...(member.model !== undefined ? { model: member.model } : {}),
+      ...(member.reasoningEffort !== undefined
+        ? { reasoningEffort: member.reasoningEffort }
+        : {}),
+      ...(member.avatar !== undefined ? { avatar: member.avatar } : {}),
+      personaMd: text,
+    })
+      .then(() => {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2500);
+        onSaved();
+      })
+      .catch((e: unknown) => {
+        setError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => setSaving(false));
+  };
+
+  return (
+    <div style={styles.card}>
+      <div style={{ ...styles.sectionTitle, display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ flex: 1 }}>角色手册（Markdown）</span>
+        {readOnly ? (
+          <span style={styles.muted}>领队为保留成员，手册不可在此修改</span>
+        ) : (
+          <>
+            <Button size="sm" variant="ghost" disabled={saving} onClick={() => setText(handbookSeed(member))}>
+              重置
+            </Button>
+            <Button size="sm" variant="primary" disabled={saving} onClick={save}>
+              保存
+            </Button>
+          </>
+        )}
+      </div>
+      {readOnly ? (
+        <MarkdownText text={text} />
+      ) : (
+        <>
+          <textarea
+            style={{ ...styles.textarea, minHeight: 220, fontFamily: 'ui-monospace, monospace', fontSize: 12 }}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            spellCheck={false}
+          />
+          {error !== null && <div style={styles.formError}>保存失败：{error}</div>}
+          {saved && <div style={{ ...styles.muted, marginTop: 4 }}>✓ 已保存</div>}
+        </>
+      )}
+    </div>
+  );
+}
+
 function MembersTab({
   members,
   pool,
@@ -1244,13 +1379,22 @@ function MembersTab({
   const [detailName, setDetailName] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [role, setRole] = useState('');
-  const [duty, setDuty] = useState('');
-  const [style, setStyle] = useState('');
-  const [skills, setSkills] = useState('');
-  const [executionPrompt, setExecutionPrompt] = useState('');
   const [personaMd, setPersonaMd] = useState('');
   const [copied, setCopied] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
+  // 成员列表搜索 + 分页（用户反馈）：按名字/角色过滤，每页 8 条。
+  const [query, setQuery] = useState('');
+  const [page, setPage] = useState(0);
+  const MEMBER_PAGE_SIZE = 8;
+  const filtered = members.filter((m) => {
+    const q = query.trim().toLowerCase();
+    if (q === '') return true;
+    return m.name.toLowerCase().includes(q) || m.role.toLowerCase().includes(q);
+  });
+  const sortedMembers = [...filtered].sort((a, b) => memberRank(a.name) - memberRank(b.name));
+  const totalPages = Math.max(1, Math.ceil(sortedMembers.length / MEMBER_PAGE_SIZE));
+  const safePage = Math.min(page, totalPages - 1);
+  const pageRows = sortedMembers.slice(safePage * MEMBER_PAGE_SIZE, (safePage + 1) * MEMBER_PAGE_SIZE);
 
   // 构建会话（docs/19.6.2, D18-5）：轮询 /eteams-api/rolebuilder；以 startedAt
   // 为会话键去重自动跳转（用户手动离开后不反复强拉，状态再迁移才再次跳转）。
@@ -1305,14 +1449,16 @@ function MembersTab({
     }
   }, [openAddTick]);
 
-  const del = async (memberName: string): Promise<void> => {
+  // 删除成员（用户反馈）：先弹确认框；失败信息显式上报。领队与角色构建师
+  // 为保留成员，面板不给删除按钮（宿主同样拒删）。
+  const del = (memberName: string): void => {
+    if (!window.confirm(`确定删除成员「${memberName}」？删除后不可恢复。`)) return;
     setListError(null);
-    try {
-      await deleteRosterMember(memberName);
-      onDeleted();
-    } catch (e) {
-      setListError(e instanceof Error ? e.message : String(e));
-    }
+    deleteRosterMember(memberName)
+      .then(() => onDeleted())
+      .catch((e: unknown) => {
+        setListError(e instanceof Error ? e.message : String(e));
+      });
   };
 
   // 确认入库（D18-6 主路径）：修改后的草稿经 POST /rolebuilder/confirm 由
@@ -1391,14 +1537,12 @@ function MembersTab({
   // 手册原文自带 ``` 代码块时用更长的围栏包裹，避免嵌套断裂。
   const maxBacktickRun = personaMd.match(/`{3,}/g)?.reduce((m, f) => Math.max(m, f.length), 0) ?? 0;
   const mdFence = '`'.repeat(Math.max(3, maxBacktickRun + 1));
+  // 全部提炼到角色手册（用户反馈）：结构化字段不再单独收集，人设内容只走
+  // personaMd 全文。
   const command = [
     '用 eteams_member_save 创建成员：',
     `- 名字：${name.trim()}`,
     `- 角色：${role.trim()}`,
-    ...(duty.trim() !== '' ? [`- 职责边界：${duty.trim()}`] : []),
-    ...(style.trim() !== '' ? [`- 工作风格：${style.trim()}`] : []),
-    ...(skills.trim() !== '' ? [`- 能力：${skills.trim()}`] : []),
-    ...(executionPrompt.trim() !== '' ? [`- 执行提示：${executionPrompt.trim()}`] : []),
     ...(personaMd.trim() !== ''
       ? [
           '- 人设手册：把下面围栏内的 Markdown 原文作为 personaMd 参数传入',
@@ -1751,47 +1895,15 @@ function MembersTab({
                     />
                   </div>
                   <details>
-                    <summary style={{ cursor: 'pointer', ...styles.muted }}>可选：人设细节</summary>
+                    <summary style={{ cursor: 'pointer', ...styles.muted, marginTop: 6 }}>
+                      角色手册（可选，Markdown：使命/职责/规则/领域专章/沟通风格/交付标准）
+                    </summary>
                     <div style={{ ...styles.formRow, marginTop: 8 }}>
-                      <span style={styles.formLabel}>职责边界</span>
                       <textarea
-                        style={styles.textarea}
-                        value={duty}
-                        onChange={(e) => setDuty(e.target.value)}
-                      />
-                    </div>
-                    <div style={styles.formRow}>
-                      <span style={styles.formLabel}>工作风格</span>
-                      <textarea
-                        style={styles.textarea}
-                        value={style}
-                        onChange={(e) => setStyle(e.target.value)}
-                      />
-                    </div>
-                    <div style={styles.formRow}>
-                      <span style={styles.formLabel}>能力</span>
-                      <textarea
-                        style={styles.textarea}
-                        value={skills}
-                        onChange={(e) => setSkills(e.target.value)}
-                      />
-                    </div>
-                    <div style={styles.formRow}>
-                      <span style={styles.formLabel}>执行提示</span>
-                      <textarea
-                        style={styles.textarea}
-                        value={executionPrompt}
-                        onChange={(e) => setExecutionPrompt(e.target.value)}
-                      />
-                    </div>
-                    <div style={styles.formRow}>
-                      <span style={styles.formLabel}>
-                        角色手册（可选，Markdown：使命/职责/规则/交付标准）
-                      </span>
-                      <textarea
-                        style={{ ...styles.textarea, minHeight: 90 }}
+                        style={{ ...styles.textarea, minHeight: 220, fontFamily: 'ui-monospace, monospace', fontSize: 12 }}
                         value={personaMd}
                         onChange={(e) => setPersonaMd(e.target.value)}
+                        spellCheck={false}
                       />
                     </div>
                   </details>
@@ -1823,6 +1935,7 @@ function MembersTab({
 
   if (view === 'detail' && detail !== null) {
     const teamNames = teamsOf(detail.name);
+    const isLeader = detail.name === LEADER_NAME;
     return (
       <div>
         <button type="button" style={styles.btn} onClick={() => setView('list')}>
@@ -1840,42 +1953,15 @@ function MembersTab({
               <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>{detail.name}</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
                 <span style={styles.roleChip}>{detail.role}</span>
-                {detail.name === LEADER_NAME && (
-                  <span style={styles.muted}>默认加入团队 · 不可删除</span>
-                )}
+                {isLeader && <span style={styles.roleChip}>领队</span>}
               </div>
             </div>
           </div>
         </div>
-        <div style={styles.card}>
-          <div style={styles.sectionTitle}>人设摘要（D13）</div>
-          {(
-            [
-              ['职责边界', detail.duty],
-              ['工作风格', detail.style],
-              ['能力', detail.skills],
-              ['执行提示', detail.executionPrompt],
-            ] as const
-          ).map(([label, value]) => (
-            <div key={label} style={styles.detailRow}>
-              <span style={styles.detailLabel}>{label}</span>
-              <span style={{ ...styles.muted, ...(value?.trim() ? { color: T.text2 } : {}) }}>
-                {value?.trim() || '未填写'}
-              </span>
-            </div>
-          ))}
-        </div>
-        {detail.personaMd !== undefined && detail.personaMd.trim() !== '' && (
+        <HandbookEditor member={detail} readOnly={isLeader} onSaved={onDeleted} />
+        {teamNames.length > 0 && (
           <div style={styles.card}>
-            <div style={styles.sectionTitle}>角色手册（Markdown）</div>
-            <MarkdownText text={detail.personaMd} />
-          </div>
-        )}
-        <div style={styles.card}>
-          <div style={styles.sectionTitle}>所属团队（{teamNames.length}）</div>
-          {teamNames.length === 0 ? (
-            <div style={styles.muted}>尚未加入任何团队——到「团队」页创建团队后从成员列表拉人。</div>
-          ) : (
+            <div style={styles.sectionTitle}>所属团队（{teamNames.length}）</div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
               {teamNames.map((n) => (
                 <span key={n} style={styles.chip}>
@@ -1883,8 +1969,8 @@ function MembersTab({
                 </span>
               ))}
             </div>
-          )}
-        </div>
+          </div>
+        )}
         {team !== undefined && detailMemberView !== null && (
           <MemberDialog team={team} member={detailMemberView} />
         )}
@@ -1933,55 +2019,86 @@ function MembersTab({
           )}
         </div>
         {listError !== null && <div style={styles.formError}>{listError}</div>}
-        {members.length === 0 && (
+        {members.length === 0 ? (
           <div style={styles.empty}>
             还没有成员。点「新增成员」，在对话里补全信息，角色构建师会帮你构建人设。
           </div>
-        )}
-        {[
-          ...members,
-        ]
-          .sort((a, b) => (a.name === LEADER_NAME ? -1 : b.name === LEADER_NAME ? 1 : 0))
-          .map((m) => {
-          const teamNames = teamsOf(m.name);
-          const isLeader = m.name === LEADER_NAME;
-          return (
-            <div
-              key={m.name}
-              style={styles.memberRow}
-              onClick={() => {
-                setDetailName(m.name);
-                setView('detail');
-              }}
-            >
-              <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={32} />
+        ) : (
+          <>
+            {/* 搜索 + 分页（用户反馈）：按名字/角色过滤，每页 8 条。 */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{m.name}</span>
-                  {isLeader && <span style={styles.roleChip}>领队</span>}
-                </div>
-                <div style={{ ...styles.muted, fontSize: 11, marginTop: 1 }}>
-                  {m.role} ·{' '}
-                  {teamNames.length === 0 ? '尚未加入团队' : `加入团队：${teamNames.join('、')}`}
-                </div>
-              </div>
-              {isLeader ? (
-                <span style={{ ...styles.muted, fontSize: 11 }}>默认加入团队 · 不可删除</span>
-              ) : (
-                <button
-                  type="button"
-                  style={{ ...styles.btn, color: T.err }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void del(m.name);
+                <Input
+                  value={query}
+                  placeholder="搜索成员名或角色…"
+                  onChange={(e) => {
+                    setQuery(e.target.value);
+                    setPage(0); // 新搜索从头翻页
                   }}
-                >
-                  删除
-                </button>
+                />
+              </div>
+              {totalPages > 1 && (
+                <span style={{ ...styles.muted, flexShrink: 0 }}>
+                  {filtered.length} 人 · 第 {safePage + 1}/{totalPages} 页
+                </span>
               )}
             </div>
-          );
-        })}
+            {pageRows.map((m) => {
+              const teamNames = teamsOf(m.name);
+              const isLeader = m.name === LEADER_NAME;
+              const isProtected = PROTECTED_MEMBERS.includes(m.name);
+              return (
+                <div
+                  key={m.name}
+                  style={styles.memberRow}
+                  onClick={() => {
+                    setDetailName(m.name);
+                    setView('detail');
+                  }}
+                >
+                  <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={32} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{m.name}</span>
+                      {isLeader && <span style={styles.roleChip}>领队</span>}
+                    </div>
+                    <div style={{ ...styles.muted, fontSize: 11, marginTop: 1 }}>
+                      {m.role}
+                      {teamNames.length > 0 ? ` · ${teamNames.join('、')}` : ''}
+                    </div>
+                  </div>
+                  {isProtected ? null : (
+                    <button
+                      type="button"
+                      style={{ ...styles.btn, color: T.err }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        del(m.name);
+                      }}
+                    >
+                      删除
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+            {totalPages > 1 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+                <Button size="sm" variant="ghost" disabled={safePage === 0} onClick={() => setPage(safePage - 1)}>
+                  上一页
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={safePage >= totalPages - 1}
+                  onClick={() => setPage(safePage + 1)}
+                >
+                  下一页
+                </Button>
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   );

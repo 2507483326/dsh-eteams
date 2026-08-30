@@ -203,8 +203,10 @@ function TeamsOverlay({ onClose }: { onClose: () => void }): ReactNode {
       </header>
       {/* Plain block wrapper: the view root is `height:100%` + flex row and
       has no width of its own — a block parent lets it fill the pane width
-      instead of shrink-wrapping to its content (the "定死宽度" artifact). */}
-      <div style={{ flex: '1 1 auto', minHeight: 0 }}>
+      instead of shrink-wrapping to its content (the "定死宽度" artifact).
+      overflow hidden keeps tall content scrolling inside the view column —
+      never spilling to the document (横向滚动条治理). */}
+      <div style={{ flex: '1 1 auto', minHeight: 0, overflow: 'hidden' }}>
         {/* The panel only reads sessionId/inputActions off its slot props; the
         page has neither (no session on the not-started screen), so a minimal
         share is cast in — the panel degrades to the all-teams pool and
