@@ -1,5 +1,5 @@
 /**
- * The 团队 activity panel (docs/13.3, M4.5 IA): left rail with 看板/团队/成员/
+ * The 团队 activity panel (docs/13.3, M4.5 IA): left rail with 看板/团队/角色/
  * 任务/汇报, members-first flow (D16), team creation by name only.
  * Renders over host theme variables so light/dark follows the GUI.
  *
@@ -688,7 +688,7 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
   const tabs: { id: 'board' | 'team' | 'roster' | 'tasks' | 'reports'; label: string }[] = [
     { id: 'board', label: '看板' },
     { id: 'team', label: '团队' },
-    { id: 'roster', label: '成员' },
+    { id: 'roster', label: '角色' },
     { id: 'tasks', label: '任务' },
     { id: 'reports', label: '汇报' },
   ];
@@ -840,7 +840,7 @@ function BoardTab({
       <div style={styles.empty}>
         <p>还没有团队。</p>
         <p style={styles.line}>
-          推荐流程：先到「成员」页新增成员，再到「团队」页创建团队并把成员拉进去。
+          推荐流程：先到「角色」页新增角色，再到「团队」页创建团队并把角色拉进去。
         </p>
         <p style={styles.line}>
           也可以在对话中说「用 AgentTeams 做某事」或 <code>/agent-teams</code>
@@ -902,7 +902,7 @@ function BoardTab({
   );
 }
 
-/** 团队：创建（仅名称）+ 组建团队（成员栅格 + 从成员列表拉人）。 */
+/** 团队：创建（仅名称）+ 组建团队（成员栅格 + 从角色列表拉人）。 */
 function TeamTab({
   sessionId,
   team,
@@ -983,7 +983,7 @@ function TeamTab({
       </div>
 
       {team === undefined ? (
-        <div style={styles.empty}>尚未选择团队。创建团队后在这里从「成员」列表拉人组队。</div>
+        <div style={styles.empty}>尚未选择团队。创建团队后在这里从「角色」列表拉人组队。</div>
       ) : (
         <>
           <div style={styles.card}>
@@ -997,7 +997,7 @@ function TeamTab({
                   value={pick}
                   onChange={(e) => setPick(e.target.value)}
                 >
-                  <option value="">— 从成员列表选择 —</option>
+                  <option value="">— 从角色列表选择 —</option>
                   {roster
                     .filter(
                       (m) => m.name !== LEADER_NAME && !team.members.some((t) => t.name === m.name),
@@ -1032,7 +1032,7 @@ function TeamTab({
               ))}
               {team.members.length === 0 && (
                 <div style={styles.muted}>
-                  还没有成员——先到「成员」页新增，或从上方成员列表拉人。
+                  还没有角色——先到「角色」页新增，或从上方角色列表拉人。
                 </div>
               )}
             </div>
@@ -1151,7 +1151,7 @@ function MemberCard({
 /** 构建步骤时间线（docs/19.6.2）——与角色构建师的 eteams_build_report 播报约定一致。 */
 const BUILD_STEPS = [
   '收到需求',
-  '查重成员库',
+  '查重角色库',
   '意图访谈',
   '起草统一手册',
   '深化领域章节',
@@ -1222,7 +1222,7 @@ const PREFILL_STEPS = [
 /** 构建中草稿只读预览（docs/19.6.2）：字段渐次呈现，不可编辑。 */
 function DraftPreview({ draft }: { draft: BuildDraft }): ReactNode {
   const rows: [string, string][] = [
-    ['成员名', draft.name],
+    ['角色名', draft.name],
     ['角色', draft.role],
     ['职责边界', draft.duty ?? ''],
     ['工作风格', draft.style ?? ''],
@@ -1245,7 +1245,7 @@ function DraftPreview({ draft }: { draft: BuildDraft }): ReactNode {
   );
 }
 
-/** 成员：全体成员（先有员工，再组建团队）——列表 / 构建工作台 / 详情。 */
+/** 角色（用户反馈：成员更名角色，不再需要标签）：角色库全体条目（先有角色，再组建团队）——列表 / 构建工作台 / 详情。 */
 /**
  * Synthesize a handbook skeleton from the legacy structured fields so nothing
  * is lost when the user first edits a member that predates personaMd (the
@@ -1274,10 +1274,11 @@ function handbookSeed(member: RosterMember): string {
 }
 
 /**
- * The member detail handbook editor (用户反馈：去掉人设摘要，全部提炼到角色
- * 手册；成员详情可编辑可保存). Full member upsert on save — the host replaces
- * the whole entry, so every current field is re-sent with the new handbook.
- * Read-only for the leader (host rejects leader upserts, 保留名).
+ * The role detail handbook (用户反馈：去掉人设摘要，全部提炼到角色手册；
+ * 详情默认只读渲染，点「编辑」进编辑态，保存/取消收尾). Full member upsert
+ * on save — the host replaces the whole entry, so every current field is
+ * re-sent with the new handbook. Always read-only for the leader (host
+ * rejects leader upserts, 保留名).
  */
 function HandbookEditor({
   member,
@@ -1288,12 +1289,17 @@ function HandbookEditor({
   readOnly: boolean;
   onSaved: () => void;
 }): ReactNode {
-  const [text, setText] = useState<string>(() => handbookSeed(member));
+  // draft === null → read-only Markdown view; string → editing buffer.
+  // Seeded from the CURRENT member on every edit entry, so a roster reload
+  // (post-save) is always what a new edit starts from.
+  const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const display = handbookSeed(member);
 
   const save = (): void => {
+    if (draft === null) return;
     setSaving(true);
     setError(null);
     setSaved(false);
@@ -1311,10 +1317,11 @@ function HandbookEditor({
         ? { reasoningEffort: member.reasoningEffort }
         : {}),
       ...(member.avatar !== undefined ? { avatar: member.avatar } : {}),
-      personaMd: text,
+      personaMd: draft,
     })
       .then(() => {
         setSaved(true);
+        setDraft(null);
         setTimeout(() => setSaved(false), 2500);
         onSaved();
       })
@@ -1329,11 +1336,20 @@ function HandbookEditor({
       <div style={{ ...styles.sectionTitle, display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ flex: 1 }}>角色手册（Markdown）</span>
         {readOnly ? (
-          <span style={styles.muted}>领队为保留成员，手册不可在此修改</span>
+          <span style={styles.muted}>领队为保留角色，手册不可在此修改</span>
+        ) : draft === null ? (
+          <Button size="sm" variant="ghost" onClick={() => setDraft(display)}>
+            编辑
+          </Button>
         ) : (
           <>
-            <Button size="sm" variant="ghost" disabled={saving} onClick={() => setText(handbookSeed(member))}>
-              重置
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={saving}
+              onClick={() => setDraft(null)}
+            >
+              取消
             </Button>
             <Button size="sm" variant="primary" disabled={saving} onClick={save}>
               保存
@@ -1341,18 +1357,20 @@ function HandbookEditor({
           </>
         )}
       </div>
-      {readOnly ? (
-        <MarkdownText text={text} />
+      {draft === null ? (
+        <>
+          <MarkdownText text={display} />
+          {saved && <div style={{ ...styles.muted, marginTop: 4 }}>✓ 已保存</div>}
+        </>
       ) : (
         <>
           <textarea
             style={{ ...styles.textarea, minHeight: 220, fontFamily: 'ui-monospace, monospace', fontSize: 12 }}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
             spellCheck={false}
           />
           {error !== null && <div style={styles.formError}>保存失败：{error}</div>}
-          {saved && <div style={{ ...styles.muted, marginTop: 4 }}>✓ 已保存</div>}
         </>
       )}
     </div>
@@ -1382,7 +1400,7 @@ function MembersTab({
   const [personaMd, setPersonaMd] = useState('');
   const [copied, setCopied] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
-  // 成员列表搜索 + 分页（用户反馈）：按名字/角色过滤，每页 8 条。
+  // 角色列表搜索 + 分页（用户反馈）：按名字/角色字段过滤，每页 8 条。
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(0);
   const MEMBER_PAGE_SIZE = 8;
@@ -1449,10 +1467,10 @@ function MembersTab({
     }
   }, [openAddTick]);
 
-  // 删除成员（用户反馈）：先弹确认框；失败信息显式上报。领队与角色构建师
-  // 为保留成员，面板不给删除按钮（宿主同样拒删）。
+  // 删除角色（用户反馈）：先弹确认框；失败信息显式上报。领队与角色构建师
+  // 为保留角色，面板不给删除按钮（宿主同样拒删）。
   const del = (memberName: string): void => {
-    if (!window.confirm(`确定删除成员「${memberName}」？删除后不可恢复。`)) return;
+    if (!window.confirm(`确定删除角色「${memberName}」？删除后不可恢复。`)) return;
     setListError(null);
     deleteRosterMember(memberName)
       .then(() => onDeleted())
@@ -1540,7 +1558,7 @@ function MembersTab({
   // 全部提炼到角色手册（用户反馈）：结构化字段不再单独收集，人设内容只走
   // personaMd 全文。
   const command = [
-    '用 eteams_member_save 创建成员：',
+    '用 eteams_member_save 创建角色：',
     `- 名字：${name.trim()}`,
     `- 角色：${role.trim()}`,
     ...(personaMd.trim() !== ''
@@ -1561,7 +1579,7 @@ function MembersTab({
     });
   };
 
-  // 该成员已加入的团队（按当前可见团队池计算）。
+  // 该角色已加入的团队（按当前可见团队池计算）。
   const teamsOf = (memberName: string): string[] =>
     pool.filter((t) => t.members.some((mm) => mm.name === memberName)).map((t) => t.name);
 
@@ -1576,7 +1594,7 @@ function MembersTab({
       <div style={{ overflowX: 'hidden', minWidth: 0 }}>
         <style>{'@keyframes eteams-spin{to{transform:rotate(360deg)}}'}</style>
         <Button size="sm" onClick={() => setView('list')}>
-          ← 返回成员列表
+          ← 返回角色列表
         </Button>
         <Button
           size="sm"
@@ -1741,7 +1759,7 @@ function MembersTab({
                 </div>
                 {formError !== null && <div style={styles.formError}>{formError}</div>}
                 <div style={{ ...styles.formRow, marginTop: 8 }}>
-                  <span style={styles.formLabel}>成员名</span>
+                  <span style={styles.formLabel}>角色名</span>
                   <Input
                     value={draftEdit.name}
                     onChange={(e) => setDraftEdit({ ...draftEdit, name: e.target.value })}
@@ -1789,7 +1807,7 @@ function MembersTab({
                   <IconCheckOutline16 />
                 </span>
                 <div style={{ ...styles.line, fontWeight: 600, margin: 0 }}>已入库</div>
-                <span style={fns.pill('ok')}>成员列表已更新</span>
+                <span style={fns.pill('ok')}>角色列表已更新</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
                 <Avatar name={confirmedDraft.name} size={40} />
@@ -1798,7 +1816,7 @@ function MembersTab({
                     {confirmedDraft.name}
                   </div>
                   <div style={styles.muted}>
-                    {confirmedDraft.role} · 已加入成员列表，到「团队」页拉进团队即可使用。
+                    {confirmedDraft.role} · 已加入角色列表，到「团队」页拉进团队即可使用。
                   </div>
                 </div>
               </div>
@@ -1810,7 +1828,7 @@ function MembersTab({
                     setView('detail');
                   }}
                 >
-                  查看成员详情
+                  查看角色详情
                 </Button>
                 <Button
                   size="sm"
@@ -1851,7 +1869,7 @@ function MembersTab({
                 <span style={{ color: T.accent, display: 'inline-flex' }}>
                   <IconSparkle16 />
                 </span>
-                <div style={{ ...styles.line, fontWeight: 600 }}>新增成员 · 角色构建师</div>
+                <div style={{ ...styles.line, fontWeight: 600 }}>新增角色 · 角色构建师</div>
                 <span style={fns.pill('info')}>对话式构建</span>
               </div>
               {justFilled ? (
@@ -1874,7 +1892,7 @@ function MembersTab({
                 </div>
               ) : (
                 <div style={{ ...styles.muted, marginTop: 4 }}>
-                  点成员列表上方的「新增成员」：命令会填进对话输入框，在对话里补全信息后回车，这里实时看构建。
+                  点角色列表上方的「新增角色」：命令会填进对话输入框，在对话里补全信息后回车，这里实时看构建。
                 </div>
               )}
               <details>
@@ -1885,7 +1903,7 @@ function MembersTab({
                   <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
                     <Input
                       value={name}
-                      placeholder="成员名，如：alice"
+                      placeholder="角色名，如：alice"
                       onChange={(e) => setName(e.target.value)}
                     />
                     <Input
@@ -1939,7 +1957,7 @@ function MembersTab({
     return (
       <div>
         <button type="button" style={styles.btn} onClick={() => setView('list')}>
-          ← 返回成员列表
+          ← 返回角色列表
         </button>
         <div style={{ ...styles.card, marginTop: 8 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -1949,13 +1967,8 @@ function MembersTab({
               salt={detail.avatar?.salt}
               size={48}
             />
-            <div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>{detail.name}</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
-                <span style={styles.roleChip}>{detail.role}</span>
-                {isLeader && <span style={styles.roleChip}>领队</span>}
-              </div>
-            </div>
+            {/* 角色（用户反馈）：不再需要标签——名字即身份，手册即人设。 */}
+            <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>{detail.name}</div>
           </div>
         </div>
         <HandbookEditor member={detail} readOnly={isLeader} onSaved={onDeleted} />
@@ -1982,10 +1995,10 @@ function MembersTab({
     <div>
       <div style={styles.card}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-          <div style={{ ...styles.sectionTitle, flex: 1, margin: 0 }}>成员（{members.length}）</div>
+          <div style={{ ...styles.sectionTitle, flex: 1, margin: 0 }}>角色（{members.length}）</div>
           {build !== null &&
           (build.status === 'active' || build.status === 'awaiting_confirmation') ? (
-            // 有未入库的构建草稿：新增入口让位给「待加入成员」，防止误开新
+            // 有未入库的构建草稿：新增入口让位给「待加入角色」，防止误开新
             // 构建把旧草稿顶掉（docs/19.16）。
             <Button
               size="sm"
@@ -1994,7 +2007,7 @@ function MembersTab({
                 setView('add');
               }}
             >
-              待加入成员
+              待加入角色
             </Button>
           ) : (
             <Button
@@ -2014,23 +2027,23 @@ function MembersTab({
                 }
               }}
             >
-              新增成员
+              新增角色
             </Button>
           )}
         </div>
         {listError !== null && <div style={styles.formError}>{listError}</div>}
         {members.length === 0 ? (
           <div style={styles.empty}>
-            还没有成员。点「新增成员」，在对话里补全信息，角色构建师会帮你构建人设。
+            还没有角色。点「新增角色」，在对话里补全信息，角色构建师会帮你构建人设。
           </div>
         ) : (
           <>
-            {/* 搜索 + 分页（用户反馈）：按名字/角色过滤，每页 8 条。 */}
+            {/* 搜索 + 分页（用户反馈）：按名字/角色字段过滤，每页 8 条。 */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <Input
                   value={query}
-                  placeholder="搜索成员名或角色…"
+                  placeholder="搜索角色名…"
                   onChange={(e) => {
                     setQuery(e.target.value);
                     setPage(0); // 新搜索从头翻页
@@ -2039,13 +2052,12 @@ function MembersTab({
               </div>
               {totalPages > 1 && (
                 <span style={{ ...styles.muted, flexShrink: 0 }}>
-                  {filtered.length} 人 · 第 {safePage + 1}/{totalPages} 页
+                  {filtered.length} 个 · 第 {safePage + 1}/{totalPages} 页
                 </span>
               )}
             </div>
             {pageRows.map((m) => {
               const teamNames = teamsOf(m.name);
-              const isLeader = m.name === LEADER_NAME;
               const isProtected = PROTECTED_MEMBERS.includes(m.name);
               return (
                 <div
@@ -2057,15 +2069,14 @@ function MembersTab({
                   }}
                 >
                   <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={32} />
+                  {/* 角色（用户反馈）：不再需要标签——名字即身份。 */}
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{m.name}</span>
-                      {isLeader && <span style={styles.roleChip}>领队</span>}
-                    </div>
-                    <div style={{ ...styles.muted, fontSize: 11, marginTop: 1 }}>
-                      {m.role}
-                      {teamNames.length > 0 ? ` · ${teamNames.join('、')}` : ''}
-                    </div>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{m.name}</span>
+                    {teamNames.length > 0 && (
+                      <div style={{ ...styles.muted, fontSize: 11, marginTop: 1 }}>
+                        {teamNames.join('、')}
+                      </div>
+                    )}
                   </div>
                   {isProtected ? null : (
                     <button

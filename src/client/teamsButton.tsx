@@ -1,27 +1,26 @@
 /**
  * The 团队 button in the composer tool row (`conversation.input.right`).
  *
- * The popup is a small tabbed card — 团队 | 成员 — listing the session's
- * teams (live, via the shared activity monitor) and the member-library
- * roster, with one creation shortcut pinned to the footer of each tab:
+ * The popup is a small tabbed card — 团队 | 角色 — listing the session's
+ * teams (live, via the shared activity monitor) and the role library
+ * (roster), with one creation shortcut pinned to the footer of each tab:
  *
  * - 「＋ 新增团队」 jumps straight to the 团队 tab page (real host tab when
  *   visible, the full-page 团队页 otherwise) with the creation form open;
- * - 「＋ 新增成员」 prefills the `eTeam --add-people` command into the
+ * - 「＋ 新增角色」 prefills the `eTeam --add-people` command into the
  *   composer draft (never auto-send; clipboard fallback) and jumps to the
- *   member-builder view of the 团队 tab page (D18-1).
+ *   role-builder view of the 团队 tab page (D18-1).
  *
- * Member and team rows are selectable: the selected member's avatar + name
+ * Role rows are selectable: the selected role's avatar + name
  * (or the team's chip + name) replace the button label, highlighted while a
- * selection is active, with a hover-revealed × to clear. For a member the
+ * selection is active, with a hover-revealed × to clear. For a role the
  * host asserts a system-prompt persona band for the session (per-assembly
  * dynamic section keyed by the session agent) so the conversation speaks as
  * that role — no draft text, nothing sent. Selections persist per session
  * in localStorage and re-assert to the host on mount. Clicking the button
  * ALWAYS toggles this popup (opened on the tab matching the selection) —
  * panel navigation stays with the 新增 shortcuts. When the slot's
- * `inputActions` kit is unavailable the new-member prefill degrades to
- * clipboard copy.
+ * `inputActions` kit is unavailable the prefill degrades to clipboard copy.
  *
  * @module dsh-eteams/client/teamsButton
  */
@@ -522,7 +521,7 @@ function TeamsPopup(props: {
   const [roster, setRoster] = useState<RosterMember[] | null>(null);
   const [rosterError, setRosterError] = useState(false);
 
-  // 成员库列表：打开时拉一次（面板内已有更完整的增删流程，这里只做快照）。
+  // 角色库列表：打开时拉一次（面板内已有更完整的增删流程，这里只做快照）。
   useEffect(() => {
     let alive = true;
     void fetchRoster()
@@ -582,7 +581,7 @@ function TeamsPopup(props: {
     <div
       ref={panelRef}
       role="dialog"
-      aria-label="团队与成员"
+      aria-label="团队与角色"
       data-eteams="popup"
       style={{
         ...S.card,
@@ -596,7 +595,7 @@ function TeamsPopup(props: {
           团队{teams.length > 0 ? ` · ${teams.length}` : ''}
         </button>
         <button type="button" style={S.tabBtn(tab === 'member')} onClick={() => setTab('member')}>
-          成员{roster !== null && roster.length > 0 ? ` · ${roster.length}` : ''}
+          角色{roster !== null && roster.length > 0 ? ` · ${roster.length}` : ''}
         </button>
       </div>
 
@@ -634,9 +633,9 @@ function TeamsPopup(props: {
             })
           )
         ) : roster === null ? (
-          <div style={S.empty}>成员库加载中…</div>
+          <div style={S.empty}>角色库加载中…</div>
         ) : roster.length === 0 ? (
-          <div style={S.empty}>成员库为空——点下方「新增成员」创建。</div>
+          <div style={S.empty}>角色库为空——点下方「新增角色」创建。</div>
         ) : (
           roster.map((m) => {
             const isSelected = selectedMember?.name === m.name;
@@ -648,9 +647,9 @@ function TeamsPopup(props: {
                 data-selected={isSelected ? 'true' : undefined}
                 style={S.row}
                 onClick={() => onSelectMember(m)}
-                // Static title（防闪烁）：同上——title 随选中变化会让原生
-                // tooltip 在指针下重弹一次。
-                title={`${m.name} · ${m.role}（点击选中/取消，对话将以该角色输出）`}
+                // Static title（防闪烁）：title 随选中变化会让原生 tooltip
+                // 在指针下重弹一次；角色不再展示标签，名字即身份。
+                title={`${m.name}（点击选中/取消，对话将以该角色输出）`}
               >
                 <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={22} />
                 <span style={S.rowName}>{m.name}</span>
@@ -659,9 +658,9 @@ function TeamsPopup(props: {
             );
           })
         )}
-        {tab === 'member' && rosterError && <div style={S.err}>成员库加载失败（稍后重试）</div>}
+        {tab === 'member' && rosterError && <div style={S.err}>角色库加载失败（稍后重试）</div>}
         {tab === 'member' && selectedMember !== null && (
-          <div style={S.hint}>对话将以「{selectedMember.name}」的角色输出（再次点击该成员可取消）。</div>
+          <div style={S.hint}>对话将以「{selectedMember.name}」的角色输出（再次点击该角色可取消）。</div>
         )}
         {tab === 'team' && selectedTeam !== null && (
           <div style={S.hint}>已选「{selectedTeam.name}」（再次点击该团队可取消）。</div>
@@ -675,7 +674,7 @@ function TeamsPopup(props: {
           </button>
         ) : (
           <button type="button" style={S.action} onClick={addMember}>
-            ＋ 新增成员
+            ＋ 新增角色
           </button>
         )}
       </div>

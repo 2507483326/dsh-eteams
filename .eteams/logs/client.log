@@ -123,3 +123,4 @@
 {"at":1788058537446,"version":"v0.2.0","entry":{"at":1788057763109,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
 {"at":1788058537446,"version":"v0.2.0","entry":{"at":1788058534937,"kind":"error","message":"Uncaught ReferenceError: exports is not defined","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=036d8823aee7:1:23"}}
 {"at":1788058538438,"version":"v0.2.0","entry":{"at":1788058535844,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1788059658607,"version":"v0.2.0","entry":{"at":1788059656603,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}

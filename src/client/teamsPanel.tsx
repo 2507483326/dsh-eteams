@@ -21,7 +21,7 @@
  *    hero button（标准模式 neighbor）and the composer popup land on while the
  *    conversation has not started.
  *
- * Pending jump signals (新增团队 / 新增成员 / select-team) are staged BEFORE
+ * Pending jump signals (新增团队 / 新增角色 / select-team) are staged BEFORE
  * either surface opens, so the panel consumes them on mount — the same
  * mount-time consumption pattern as openMemberBuilder (docs/19.16).
  *
@@ -44,9 +44,9 @@ import { HERO_ROW_SELECTOR } from './heroTeamsButton';
 export interface TeamsPanelOptions {
   /** Land on the 团队 tab (its page hosts the 新建团队 form). */
   readonly creator?: boolean;
-  /** Open the 新增成员 flow (panel 成员 tab with the build workbench). */
+  /** Open the 新增角色 flow (panel 角色 tab with the build workbench). */
   readonly memberBuilder?: boolean;
-  /** Land on the 成员 tab (roster page, no add form). */
+  /** Land on the 角色 tab (roster page, no add form). */
   readonly roster?: boolean;
   /** Select this team after landing (teamId). */
   readonly teamId?: string;
