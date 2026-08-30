@@ -206,7 +206,7 @@ const styles: Record<string, CSSProperties> = {
     overflowX: 'hidden',
     paddingRight: 2,
   },
-  topbar: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' },
+  /* topbar style removed with the page-header redesign (用户反馈：去顶栏) */
   select: {
     padding: '5px 10px',
     borderRadius: 8,
@@ -245,7 +245,7 @@ const styles: Record<string, CSSProperties> = {
   memberGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))',
-    gap: 10,
+    gap: 12,
   },
   memberCard: {
     border: `1px solid ${T.border}`,
@@ -261,15 +261,37 @@ const styles: Record<string, CSSProperties> = {
   cardGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))',
-    gap: 10,
+    gap: 12,
+  },
+  /* 列表页头（视觉升级）：标题提级到 14/700，计数弱化为旁注。 */
+  listTitle: { margin: 0, fontSize: 14, fontWeight: 700, color: T.text, flex: 1 },
+  listCount: { fontSize: 12, color: T.text3 },
+  pagePill: {
+    padding: '2px 10px',
+    borderRadius: 999,
+    background: T.sunken,
+    fontSize: 11,
+    color: T.text2,
+    whiteSpace: 'nowrap',
+  },
+  /* 团队卡片里的阶段徽标（视觉升级）：小圆角 pill，弱于「当前」徽标一级。 */
+  phasePill: {
+    padding: '1px 8px',
+    borderRadius: 999,
+    background: T.sunken,
+    fontSize: 11,
+    fontWeight: 500,
+    color: T.text2,
+    whiteSpace: 'nowrap',
+    flexShrink: 0,
   },
   roleCard: {
     position: 'relative',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'flex-start',
-    gap: 8,
-    padding: 12,
+    gap: 10,
+    padding: 14,
     borderRadius: 12,
     minWidth: 0,
     cursor: 'pointer',
@@ -278,7 +300,7 @@ const styles: Record<string, CSSProperties> = {
     /* background/border owned by the `.eteams-role-row` stylesheet so :hover wins */
   },
   teamCard: {
-    padding: 12,
+    padding: 14,
     borderRadius: 12,
     minWidth: 0,
     cursor: 'pointer',
@@ -968,8 +990,11 @@ function TeamTab({
       {/* 团队卡片栅格（用户反馈：列表改卡片）：名称 + 阶段/进度/成员数，
       点击切换当前团队；当前团队高亮描边。多团队时取代原顶栏下拉。 */}
       {pool.length > 0 && (
-        <div style={{ ...styles.card, paddingBottom: 10 }}>
-          <div style={styles.sectionTitle}>团队（{pool.length}）</div>
+        <div style={{ ...styles.card, paddingBottom: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+            <h3 style={styles.listTitle}>团队</h3>
+            <span style={styles.listCount}>{pool.length} 个</span>
+          </div>
           <div style={styles.cardGrid}>
             {pool.map((t) => {
               const active = t.teamId === team?.teamId;
@@ -990,11 +1015,13 @@ function TeamTab({
                     </span>
                     {active && <span style={styles.roleChip}>当前</span>}
                   </div>
-                  <div style={{ ...styles.muted, marginTop: 4, marginBottom: 8 }}>
-                    {PHASE_LABELS[t.phase] ?? t.phase} · {t.progress.completed}/{t.progress.total}{' '}
-                    任务 · {t.members.length} 成员
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
+                    <span style={styles.phasePill}>{PHASE_LABELS[t.phase] ?? t.phase}</span>
+                    <span style={styles.listCount}>
+                      {t.progress.completed}/{t.progress.total} 任务 · {t.members.length} 成员
+                    </span>
                   </div>
-                  <div style={styles.progressTrack}>
+                  <div style={{ ...styles.progressTrack, margin: '10px 0 0' }}>
                     <div
                       style={fns.progressFill(
                         t.progress.total === 0 ? 0 : (t.progress.completed / t.progress.total) * 100,
@@ -1009,7 +1036,9 @@ function TeamTab({
       )}
 
       <div style={styles.card}>
-        <div style={styles.sectionTitle}>新建团队</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+          <h3 style={styles.listTitle}>新建团队</h3>
+        </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <Input
             value={name}
@@ -1039,8 +1068,9 @@ function TeamTab({
       ) : (
         <>
           <div style={styles.card}>
-            <div style={styles.sectionTitle}>
-              团队成员（{team.members.length}）· 领队默认在团，不可移出
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <h3 style={styles.listTitle}>团队成员</h3>
+              <span style={styles.listCount}>{team.members.length} 人 · 领队默认在团</span>
             </div>
             {roster.length > 0 && (
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
@@ -1333,17 +1363,18 @@ function handbookSeed(member: RosterMember): string {
  * rejects leader upserts, 保留名).
  */
 /**
- * 角色 list stylesheet（排版优化）：row hover 与删除按钮的 hover 态内联样式
- * 表达不了（且内联底色会压住 :hover——弹窗行的同一教训），统一走这里；
- * token 直接从主题插值，fallback 已内建。
+ * 角色/团队 list stylesheet（卡片化 + 视觉升级）：hover/抬升/阴影/过渡与删除
+ * 按钮的显隐全部内联样式表达不了（且内联底色会压住 :hover——弹窗行的同一
+ * 教训），统一走这里；token 直接从主题插值，fallback 已内建。
  */
 const ROLE_LIST_CSS = `
-.eteams-role-row{background:${T.surface};border:1px solid ${T.border}}
-.eteams-role-row:hover{background:${T.hover};border-color:${T.border2}}
-.eteams-team-card{background:${T.surface};border:1px solid ${T.border}}
-.eteams-team-card:hover{background:${T.hover};border-color:${T.border2}}
-.eteams-team-card[data-active="true"]{border-color:${T.accent};background:${T.accentSoft}}
-.eteams-role-del{padding:3px 10px;font-size:11px;border-radius:7px;border:1px solid ${T.border2};background:transparent;color:${T.err};cursor:pointer;flex-shrink:0;font-family:inherit;line-height:16px}
+.eteams-role-row{background:${T.surface};border:1px solid ${T.border};box-shadow:0 1px 2px rgba(15,23,42,0.04);transition:background .15s ease,border-color .15s ease,box-shadow .15s ease,transform .15s ease}
+.eteams-role-row:hover{border-color:rgba(75,123,236,0.45);box-shadow:0 6px 16px rgba(15,23,42,0.09);transform:translateY(-1px)}
+.eteams-team-card{background:${T.surface};border:1px solid ${T.border};box-shadow:0 1px 2px rgba(15,23,42,0.04);transition:background .15s ease,border-color .15s ease,box-shadow .15s ease,transform .15s ease}
+.eteams-team-card:hover{border-color:rgba(75,123,236,0.45);box-shadow:0 6px 16px rgba(15,23,42,0.09);transform:translateY(-1px)}
+.eteams-team-card[data-active="true"]{border-color:${T.accent};background:${T.accentSoft};box-shadow:0 2px 10px rgba(75,123,236,0.14)}
+.eteams-role-del{padding:3px 10px;font-size:11px;border-radius:7px;border:1px solid ${T.border2};background:${T.surface};color:${T.err};cursor:pointer;flex-shrink:0;font-family:inherit;line-height:16px;opacity:0;transition:opacity .15s ease,border-color .15s ease,background .15s ease}
+.eteams-role-row:hover .eteams-role-del,.eteams-role-row:focus-within .eteams-role-del{opacity:1}
 .eteams-role-del:hover{border-color:${T.err};background:${T.errBg}}
 .eteams-role-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .eteams-team-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -2029,19 +2060,32 @@ function MembersTab({
         <button type="button" style={styles.btn} onClick={() => setView('list')}>
           ← 返回角色列表
         </button>
-        <div style={{ ...styles.card, marginTop: 8 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <Avatar
-              name={detail.name}
-              seed={detail.avatar?.seed}
-              salt={detail.avatar?.salt}
-              size={48}
-            />
+        <div style={{ ...styles.card, marginTop: 8, padding: '16px 18px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            {/* 头像描边环（视觉升级）：与卡片描边同色系，柔和不抢戏。 */}
+            <div
+              style={{
+                borderRadius: '50%',
+                padding: 2,
+                border: `2px solid ${T.accentSoft}`,
+                lineHeight: 0,
+              }}
+            >
+              <Avatar
+                name={detail.name}
+                seed={detail.avatar?.seed}
+                salt={detail.avatar?.salt}
+                size={52}
+              />
+            </div>
             {/* 角色（用户反馈）：不再需要标签——名字即身份，手册即人设。 */}
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 16, fontWeight: 700, color: T.text }}>{detail.name}</div>
+              <div style={{ fontSize: 17, fontWeight: 700, color: T.text }}>{detail.name}</div>
+              <div style={{ ...styles.muted, fontSize: 11, marginTop: 2 }}>
+                {isLeader ? '系统保留角色 · 手册只读' : '点击下方「编辑」可修改角色手册'}
+              </div>
               {teamNames.length > 0 && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
                   {teamNames.map((n) => (
                     <span key={n} style={styles.chip}>
                       {n}
@@ -2063,8 +2107,9 @@ function MembersTab({
   return (
     <div>
       <div style={styles.card}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-          <div style={{ ...styles.sectionTitle, flex: 1, margin: 0 }}>角色（{members.length}）</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+          <h3 style={styles.listTitle}>角色</h3>
+          <span style={styles.listCount}>{members.length} 个</span>
           {build !== null &&
           (build.status === 'active' || build.status === 'awaiting_confirmation') ? (
             // 有未入库的构建草稿：新增入口让位给「待加入角色」，防止误开新
@@ -2195,7 +2240,7 @@ function MembersTab({
                 >
                   上一页
                 </Button>
-                <span style={styles.muted}>
+                <span style={styles.pagePill}>
                   第 {safePage + 1} / {totalPages} 页 · 共 {filtered.length} 个
                 </span>
                 <Button
