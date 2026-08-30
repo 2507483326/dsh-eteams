@@ -124,3 +124,20 @@
 {"at":1788058537446,"version":"v0.2.0","entry":{"at":1788058534937,"kind":"error","message":"Uncaught ReferenceError: exports is not defined","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=036d8823aee7:1:23"}}
 {"at":1788058538438,"version":"v0.2.0","entry":{"at":1788058535844,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
 {"at":1788059658607,"version":"v0.2.0","entry":{"at":1788059656603,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1788067372210,"version":"v0.2.0","entry":{"at":1788054057287,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1788067372210,"version":"v0.2.0","entry":{"at":1788058534937,"kind":"error","message":"Uncaught ReferenceError: exports is not defined","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=036d8823aee7:1:23"}}
+{"at":1788067372210,"version":"v0.2.0","entry":{"at":1788067370206,"kind":"error","message":"Uncaught SyntaxError: Identifier 'react_jsx_runtime' has already been declared","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=036d8823aee7:1:1"}}
+{"at":1788067372224,"version":"v0.2.0","entry":{"at":1788057763109,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1788067372224,"version":"v0.2.0","entry":{"at":1788058534937,"kind":"error","message":"Uncaught ReferenceError: exports is not defined","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=036d8823aee7:1:23"}}
+{"at":1788067372224,"version":"v0.2.0","entry":{"at":1788067370206,"kind":"error","message":"Uncaught SyntaxError: Identifier 'react_jsx_runtime' has already been declared","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=036d8823aee7:1:1"}}
+{"at":1788067372238,"version":"v0.2.0","entry":{"at":1788058535844,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1788067372238,"version":"v0.2.0","entry":{"at":1788067370206,"kind":"error","message":"Uncaught SyntaxError: Identifier 'react_jsx_runtime' has already been declared","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=036d8823aee7:1:1"}}
+{"at":1788067372250,"version":"v0.2.0","entry":{"at":1788059656603,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1788067372250,"version":"v0.2.0","entry":{"at":1788067370206,"kind":"error","message":"Uncaught SyntaxError: Identifier 'react_jsx_runtime' has already been declared","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=036d8823aee7:1:1"}}
+{"at":1788067373180,"version":"v0.2.0","entry":{"at":1788067371177,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1788067499618,"version":"v0.2.0","entry":{"at":1788067497613,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1788067970768,"version":"v0.2.0","entry":{"at":1788067968766,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1788070175579,"version":"v0.2.0","entry":{"at":1788070173576,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1788070498421,"version":"v0.2.0","entry":{"at":1788070496400,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1788070965696,"version":"v0.2.0","entry":{"at":1788070963688,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1788071348411,"version":"v0.2.0","entry":{"at":1788071346021,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}

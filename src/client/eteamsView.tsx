@@ -216,7 +216,7 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 12,
     fontWeight: 500,
   },
-  title: { margin: 0, fontSize: 16, fontWeight: 700, letterSpacing: 0.2 },
+  /* title style removed with the topbar 团队 span (用户反馈：去顶栏标题) */
   card: {
     border: `1px solid ${T.border}`,
     borderRadius: 12,
@@ -256,18 +256,33 @@ const styles: Record<string, CSSProperties> = {
     flexDirection: 'column',
     gap: 8,
   },
-  memberRow: {
-    width: '100%',
-    display: 'flex',
-    alignItems: 'center',
+  /* memberRow removed with the row-list layout (用户反馈：列表改卡片) */
+  /* 卡片化（用户反馈）：角色列表与团队列表的卡片栅格。 */
+  cardGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))',
     gap: 10,
-    padding: '9px 10px',
-    borderRadius: 10,
-    border: '1px solid transparent',
-    background: 'transparent',
+  },
+  roleCard: {
+    position: 'relative',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: 8,
+    padding: 12,
+    borderRadius: 12,
+    minWidth: 0,
     cursor: 'pointer',
     textAlign: 'left',
     color: T.text,
+    /* background/border owned by the `.eteams-role-row` stylesheet so :hover wins */
+  },
+  teamCard: {
+    padding: 12,
+    borderRadius: 12,
+    minWidth: 0,
+    cursor: 'pointer',
+    /* background/border owned by the `.eteams-team-card` stylesheet so :hover wins */
   },
   roleChip: {
     display: 'inline-block',
@@ -738,6 +753,9 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
   return (
     <ClientErrorBoundary label="团队面板">
       <div style={styles.root} data-eteams="view">
+        {/* 卡片化样式（用户反馈）：角色/团队卡片与删除按钮的 hover 态一次注入，
+        面板内与整页团队页共用同一渲染根，注入一次即可。 */}
+        <style>{ROLE_LIST_CSS}</style>
         <div style={styles.rail}>
           {tabs.map((t) => (
             <button
@@ -752,29 +770,13 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
         </div>
 
         <div style={styles.content}>
-          <div style={styles.topbar}>
-            {pool.length > 0 ? (
-              <select
-                style={styles.select}
-                value={team?.teamId ?? ''}
-                onChange={(e) => setActiveId(e.target.value)}
-              >
-                {pool.map((t) => (
-                  <option key={t.teamId} value={t.teamId}>
-                    {t.name}（{PHASE_LABELS[t.phase] ?? t.phase} {t.progress.completed}/
-                    {t.progress.total}）
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <span style={styles.title}>团队</span>
-            )}
-            <span style={{ ...styles.muted, marginLeft: 'auto' }}>
-              {state.error !== null
-                ? `状态加载失败：${state.error}`
-                : `更新于 ${state.fetchedAt === 0 ? '—' : relativeTime(state.fetchedAt, now)}`}
-            </span>
-          </div>
+          {/* 顶栏（用户反馈）：团队切换改为「团队」页的卡片栅格，这里只保留
+          状态加载失败的就地提示；空态兜底在 BoardTab。 */}
+          {state.error !== null && (
+            <div style={{ ...styles.formError, marginBottom: 12 }}>
+              状态加载失败：{state.error}
+            </div>
+          )}
 
           {activeTab === 'board' && (
             <BoardTab team={team} now={now} fetchedAt={state.fetchedAt} error={state.error} />
@@ -782,8 +784,10 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
           {activeTab === 'team' && (
             <TeamTab
               sessionId={props.sessionId}
+              pool={pool}
               team={team}
               roster={roster}
+              onSelectTeam={(id) => setActiveId(id)}
               agentActivity={agentActivity}
               onOpenReports={(name) => {
                 setDialogMember(name);
@@ -905,15 +909,20 @@ function BoardTab({
 /** 团队：创建（仅名称）+ 组建团队（成员栅格 + 从角色列表拉人）。 */
 function TeamTab({
   sessionId,
+  pool,
   team,
   roster,
+  onSelectTeam,
   agentActivity,
   onOpenReports,
 }: {
   /** Current session id; undefined on the overlay panel (no session yet). */
   sessionId: string | undefined;
+  /** All teams in the pool (卡片化：团队列表在这里选择). */
+  pool: TeamSnapshot[];
   team: TeamSnapshot | undefined;
   roster: RosterMember[];
+  onSelectTeam: (teamId: string) => void;
   /** Member subagent activity dots (docs/20.4 P4): childId → running/inactive. */
   agentActivity: Record<string, string>;
   onOpenReports: (name: string) => void;
@@ -956,6 +965,49 @@ function TeamTab({
 
   return (
     <div>
+      {/* 团队卡片栅格（用户反馈：列表改卡片）：名称 + 阶段/进度/成员数，
+      点击切换当前团队；当前团队高亮描边。多团队时取代原顶栏下拉。 */}
+      {pool.length > 0 && (
+        <div style={{ ...styles.card, paddingBottom: 10 }}>
+          <div style={styles.sectionTitle}>团队（{pool.length}）</div>
+          <div style={styles.cardGrid}>
+            {pool.map((t) => {
+              const active = t.teamId === team?.teamId;
+              return (
+                <div
+                  key={t.teamId}
+                  className="eteams-team-card"
+                  style={styles.teamCard}
+                  data-active={active ? 'true' : 'false'}
+                  onClick={() => onSelectTeam(t.teamId)}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span
+                      className="eteams-team-name"
+                      style={{ fontSize: 13, fontWeight: 600, color: T.text, flex: 1 }}
+                    >
+                      {t.name}
+                    </span>
+                    {active && <span style={styles.roleChip}>当前</span>}
+                  </div>
+                  <div style={{ ...styles.muted, marginTop: 4, marginBottom: 8 }}>
+                    {PHASE_LABELS[t.phase] ?? t.phase} · {t.progress.completed}/{t.progress.total}{' '}
+                    任务 · {t.members.length} 成员
+                  </div>
+                  <div style={styles.progressTrack}>
+                    <div
+                      style={fns.progressFill(
+                        t.progress.total === 0 ? 0 : (t.progress.completed / t.progress.total) * 100,
+                      )}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div style={styles.card}>
         <div style={styles.sectionTitle}>新建团队</div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -1280,6 +1332,23 @@ function handbookSeed(member: RosterMember): string {
  * re-sent with the new handbook. Always read-only for the leader (host
  * rejects leader upserts, 保留名).
  */
+/**
+ * 角色 list stylesheet（排版优化）：row hover 与删除按钮的 hover 态内联样式
+ * 表达不了（且内联底色会压住 :hover——弹窗行的同一教训），统一走这里；
+ * token 直接从主题插值，fallback 已内建。
+ */
+const ROLE_LIST_CSS = `
+.eteams-role-row{background:${T.surface};border:1px solid ${T.border}}
+.eteams-role-row:hover{background:${T.hover};border-color:${T.border2}}
+.eteams-team-card{background:${T.surface};border:1px solid ${T.border}}
+.eteams-team-card:hover{background:${T.hover};border-color:${T.border2}}
+.eteams-team-card[data-active="true"]{border-color:${T.accent};background:${T.accentSoft}}
+.eteams-role-del{padding:3px 10px;font-size:11px;border-radius:7px;border:1px solid ${T.border2};background:transparent;color:${T.err};cursor:pointer;flex-shrink:0;font-family:inherit;line-height:16px}
+.eteams-role-del:hover{border-color:${T.err};background:${T.errBg}}
+.eteams-role-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.eteams-team-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+`;
+
 function HandbookEditor({
   member,
   readOnly,
@@ -1955,7 +2024,8 @@ function MembersTab({
     const teamNames = teamsOf(detail.name);
     const isLeader = detail.name === LEADER_NAME;
     return (
-      <div>
+      // 排版优化：详情列限宽，长手册行不至于拉满整栏难以阅读。
+      <div style={{ maxWidth: 780 }}>
         <button type="button" style={styles.btn} onClick={() => setView('list')}>
           ← 返回角色列表
         </button>
@@ -1968,22 +2038,21 @@ function MembersTab({
               size={48}
             />
             {/* 角色（用户反馈）：不再需要标签——名字即身份，手册即人设。 */}
-            <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>{detail.name}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 16, fontWeight: 700, color: T.text }}>{detail.name}</div>
+              {teamNames.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                  {teamNames.map((n) => (
+                    <span key={n} style={styles.chip}>
+                      {n}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
         <HandbookEditor member={detail} readOnly={isLeader} onSaved={onDeleted} />
-        {teamNames.length > 0 && (
-          <div style={styles.card}>
-            <div style={styles.sectionTitle}>所属团队（{teamNames.length}）</div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {teamNames.map((n) => (
-                <span key={n} style={styles.chip}>
-                  {n}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
         {team !== undefined && detailMemberView !== null && (
           <MemberDialog team={team} member={detailMemberView} />
         )}
@@ -2050,54 +2119,85 @@ function MembersTab({
                   }}
                 />
               </div>
-              {totalPages > 1 && (
-                <span style={{ ...styles.muted, flexShrink: 0 }}>
-                  {filtered.length} 个 · 第 {safePage + 1}/{totalPages} 页
-                </span>
-              )}
             </div>
-            {pageRows.map((m) => {
-              const teamNames = teamsOf(m.name);
-              const isProtected = PROTECTED_MEMBERS.includes(m.name);
-              return (
-                <div
-                  key={m.name}
-                  style={styles.memberRow}
-                  onClick={() => {
-                    setDetailName(m.name);
-                    setView('detail');
-                  }}
-                >
-                  <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={32} />
-                  {/* 角色（用户反馈）：不再需要标签——名字即身份。 */}
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{m.name}</span>
-                    {teamNames.length > 0 && (
-                      <div style={{ ...styles.muted, fontSize: 11, marginTop: 1 }}>
-                        {teamNames.join('、')}
-                      </div>
+            {/* 角色卡片栅格（用户反馈：列表改卡片）：头像在上、名字与所属团队
+            在下，删除按钮悬于右上角；hover/描边由 ROLE_LIST_CSS 接管。 */}
+            <div style={styles.cardGrid}>
+              {pageRows.map((m) => {
+                const teamNames = teamsOf(m.name);
+                const isProtected = PROTECTED_MEMBERS.includes(m.name);
+                return (
+                  <div
+                    key={m.name}
+                    className="eteams-role-row"
+                    style={styles.roleCard}
+                    onClick={() => {
+                      setDetailName(m.name);
+                      setView('detail');
+                    }}
+                  >
+                    {isProtected ? null : (
+                      <button
+                        type="button"
+                        className="eteams-role-del"
+                        style={{ position: 'absolute', top: 8, right: 8 }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          del(m.name);
+                        }}
+                      >
+                        删除
+                      </button>
                     )}
+                    <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={40} />
+                    {/* 角色（用户反馈）：不再需要标签——名字即身份。 */}
+                    <div style={{ minWidth: 0 }}>
+                      <span
+                        className="eteams-role-name"
+                        style={{
+                          fontSize: 13,
+                          fontWeight: 600,
+                          color: T.text,
+                          display: 'block',
+                          maxWidth: '100%',
+                        }}
+                      >
+                        {m.name}
+                      </span>
+                      {teamNames.length > 0 && (
+                        <div
+                          className="eteams-role-name"
+                          style={{ ...styles.muted, fontSize: 11, marginTop: 2 }}
+                        >
+                          {teamNames.join('、')}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  {isProtected ? null : (
-                    <button
-                      type="button"
-                      style={{ ...styles.btn, color: T.err }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        del(m.name);
-                      }}
-                    >
-                      删除
-                    </button>
-                  )}
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
             {totalPages > 1 && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
-                <Button size="sm" variant="ghost" disabled={safePage === 0} onClick={() => setPage(safePage - 1)}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 12,
+                  marginTop: 10,
+                }}
+              >
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={safePage === 0}
+                  onClick={() => setPage(safePage - 1)}
+                >
                   上一页
                 </Button>
+                <span style={styles.muted}>
+                  第 {safePage + 1} / {totalPages} 页 · 共 {filtered.length} 个
+                </span>
                 <Button
                   size="sm"
                   variant="ghost"

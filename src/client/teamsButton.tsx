@@ -79,6 +79,10 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
   const [selectedTeam, setSelectedTeam] = useState<{ teamId: string; name: string } | null>(() =>
     loadSelectedTeam(sessionId),
   );
+  // Host sync failure surface (角色接管): the POST is fire-and-forget for
+  // latency, but its outcome lands here — a stale host (app not restarted
+  // since the feature shipped) must be VISIBLE, not silently swallowed.
+  const [personaError, setPersonaError] = useState<string | null>(null);
   useEffect(() => {
     ensurePopupStyle();
     const restore = (): void => {
@@ -88,9 +92,12 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
         forgetSelectedTeam(sessionId);
         setSelectedTeam(null);
         if (sessionId !== undefined) {
-          void setSessionPersona(sessionId, member).catch((error: unknown) => {
-            recordClientDiag('persona-restore', error instanceof Error ? error.message : String(error));
-          });
+          setSessionPersona(sessionId, member)
+            .then(() => setPersonaError(null))
+            .catch((error: unknown) => {
+              setPersonaError(error instanceof Error ? error.message : String(error));
+              recordClientDiag('persona-restore', error instanceof Error ? error.message : String(error));
+            });
         }
         return;
       }
@@ -105,9 +112,12 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
     setSelectedTeam(null);
     forgetSelectedTeam(sessionId);
     if (sessionId === undefined) return;
-    void clearSessionPersona(sessionId).catch((error: unknown) => {
-      recordClientDiag('persona-clear', error instanceof Error ? error.message : String(error));
-    });
+    clearSessionPersona(sessionId)
+      .then(() => setPersonaError(null))
+      .catch((error: unknown) => {
+        setPersonaError(error instanceof Error ? error.message : String(error));
+        recordClientDiag('persona-clear', error instanceof Error ? error.message : String(error));
+      });
   };
 
   const selectMember = (member: RosterMember): void => {
@@ -118,14 +128,20 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
     forgetSelectedTeam(sessionId);
     if (sessionId === undefined) return;
     if (next === null) {
-      void clearSessionPersona(sessionId).catch((error: unknown) => {
-        recordClientDiag('persona-clear', error instanceof Error ? error.message : String(error));
-      });
+      clearSessionPersona(sessionId)
+        .then(() => setPersonaError(null))
+        .catch((error: unknown) => {
+          setPersonaError(error instanceof Error ? error.message : String(error));
+          recordClientDiag('persona-clear', error instanceof Error ? error.message : String(error));
+        });
       return;
     }
-    void setSessionPersona(sessionId, next).catch((error: unknown) => {
-      recordClientDiag('persona-set', error instanceof Error ? error.message : String(error));
-    });
+    setSessionPersona(sessionId, next)
+      .then(() => setPersonaError(null))
+      .catch((error: unknown) => {
+        setPersonaError(error instanceof Error ? error.message : String(error));
+        recordClientDiag('persona-set', error instanceof Error ? error.message : String(error));
+      });
   };
 
   const selectTeam = (team: { teamId: string; name: string }): void => {
@@ -213,6 +229,7 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
               inputActions={props.inputActions}
               selectedMember={selectedMember}
               selectedTeam={selectedTeam}
+              personaError={personaError}
               onSelectMember={selectMember}
               onSelectTeam={selectTeam}
               initialTab={selectedMember !== null ? 'member' : 'team'}
@@ -470,6 +487,7 @@ function TeamsPopup(props: {
   inputActions?: { setDraft: (text: string) => void };
   selectedMember: RosterMember | null;
   selectedTeam: { teamId: string; name: string } | null;
+  personaError?: string | null;
   onSelectMember: (member: RosterMember) => void;
   onSelectTeam: (team: { teamId: string; name: string }) => void;
   initialTab: 'team' | 'member';
@@ -659,7 +677,10 @@ function TeamsPopup(props: {
           })
         )}
         {tab === 'member' && rosterError && <div style={S.err}>角色库加载失败（稍后重试）</div>}
-        {tab === 'member' && selectedMember !== null && (
+        {tab === 'member' && props.personaError !== null && props.personaError !== undefined && (
+          <div style={S.err}>角色接管失败：{props.personaError}——重启 DeepSeek 后重试。</div>
+        )}
+        {tab === 'member' && selectedMember !== null && (props.personaError === null || props.personaError === undefined) && (
           <div style={S.hint}>对话将以「{selectedMember.name}」的角色输出（再次点击该角色可取消）。</div>
         )}
         {tab === 'team' && selectedTeam !== null && (

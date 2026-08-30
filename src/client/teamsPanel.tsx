@@ -181,22 +181,19 @@ function TeamsOverlay({ onClose }: { onClose: () => void }): ReactNode {
         color: T.text,
       }}
     >
+      {/* 顶栏（用户反馈）：去掉「团队」标题与提示文案，只留右侧返回。 */}
       <header
         style={{
           flex: '0 0 auto',
           display: 'flex',
           alignItems: 'center',
+          justifyContent: 'flex-end',
           gap: 10,
-          height: 48,
+          height: 44,
           padding: '0 16px',
           borderBottom: `1px solid ${T.border}`,
         }}
       >
-        <span style={{ fontSize: 14, fontWeight: 600 }}>团队</span>
-        <span style={{ fontSize: 12, color: T.text3 }}>
-          开始对话后，这里也会作为「团队」标签页出现在顶栏
-        </span>
-        <div style={{ flex: 1 }} />
         <Button variant="outline" size="sm" onClick={onClose}>
           返回
         </Button>

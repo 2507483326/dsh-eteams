@@ -38,16 +38,29 @@ describe('sessionPersonaSection', () => {
     expect(sessionPersonaSection(undefined)).toBe('');
   });
 
-  it('digests the personaMd playbook into a bounded hint', () => {
+  it('embeds the full personaMd playbook verbatim, not a lossy digest', () => {
     setSessionPersona('sess-md', {
       name: '研究员',
       personaMd: ['---', '# 手册', '第一要点', '', '第二要点', ...Array.from({ length: 30 }, (_, i) => `填充行${i}`)].join('\n'),
     });
     const band = sessionPersonaSection('sess-md');
+    // 用户反馈（只注入一部分感觉不全）：手册全文进带，结构标题与尾部内容都不丢。
+    expect(band).toContain('完整角色手册原文');
+    expect(band).toContain('# 手册');
     expect(band).toContain('第一要点');
     expect(band).toContain('第二要点');
-    expect(band).not.toContain('# 手册');
-    expect(band).not.toContain('填充行29'); // bounded — no full-playbook dump
+    expect(band).toContain('填充行29');
+  });
+
+  it('neutralizes {{variable}} markers so handbooks cannot break interpolation', () => {
+    setSessionPersona('sess-tpl', {
+      name: '模板师',
+      personaMd: '示例：{{model}} 与 {{cwd}} 是宿主变量，必须原样展示',
+    });
+    const band = sessionPersonaSection('sess-tpl');
+    expect(band).toContain('｛｛model｝｝');
+    expect(band).toContain('｛｛cwd｝｝');
+    expect(band).not.toContain('{{model}}');
   });
 
   it('clear drops the band entirely', () => {

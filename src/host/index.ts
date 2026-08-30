@@ -136,12 +136,15 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
 
   // 3b2) Session persona takeover (docs/13.8.2, dynamic): when the panel
   // selects a member for a session, that session's agent speaks as the
-  // member. The section is a per-assembly provider — the assembling scope IS
-  // the agent (`assembleContextFor` passes `scope: agent`) and a session
-  // agent's id IS its sessionId, so the band reaches exactly that session's
-  // agent; every other agent assembles `''`, which contributes nothing. The
-  // store lives in runtime/sessionPersona.ts and is fed by the
-  // /eteams-api/session-persona routes — no conversation message involved.
+  // member. Dual-channel registration — the assembling scope IS the agent
+  // (`assembleContextFor` passes `scope: agent`) and a session agent's id IS
+  // its sessionId, so the band reaches exactly that session's agent; every
+  // other agent assembles `''`, which contributes nothing. The store lives in
+  // runtime/sessionPersona.ts and is fed by the /eteams-api/session-persona
+  // routes — no conversation message involved.
+  //
+  // Channel 1 — system-prompt SECTION (order 107): verified live in the
+  // desktop harness (the session agent's system prompt carries the band).
   try {
     ctx.systemPrompt.section({
       name: 'eteams-session-persona',
@@ -151,6 +154,37 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
     log.info('eteams: session persona section registered');
   } catch (error) {
     log.warn('eteams: session persona section registration failed: %s', String(error));
+  }
+  // Channel 2 — runtime CONTEXT via ctx.inject (order 900, reads last = the
+  // freshest slot in the per-turn "Current runtime context…" snapshot).
+  // Persisted sessions show `header.system` EMPTY while that snapshot message
+  // carries plugin context contributions (sandbox:policy et al., registered by
+  // dsh-sandbox-policy through `ctx.inject(['systemPrompt'], (scope) =>
+  // scope.systemPrompt.context(...))` — the canonical cross-plugin pattern).
+  // Duplicating the band across both channels is deliberate: whichever channel
+  // a given composition renders, the takeover survives.
+  try {
+    type SystemPromptScope = {
+      systemPrompt: {
+        context(contribution: {
+          name: string;
+          order: number;
+          text: (context: { scope?: unknown }) => string;
+        }): unknown;
+      };
+    };
+    (ctx as unknown as {
+      inject(deps: string[], fn: (scope: SystemPromptScope) => void): void;
+    }).inject(['systemPrompt'], (scope) => {
+      scope.systemPrompt.context({
+        name: 'eteams-session-persona',
+        order: 900, // late in the snapshot: reads last, i.e. freshest
+        text: (context) => sessionPersonaSection(sessionIdOfScope(context.scope)),
+      });
+      log.info('eteams: session persona context registered');
+    });
+  } catch (error) {
+    log.warn('eteams: session persona context registration failed: %s', String(error));
   }
 
   // 3c) /eteam slash command (docs/19.4, D18): the command-plane entry for
