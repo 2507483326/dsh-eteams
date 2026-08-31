@@ -2049,8 +2049,8 @@ function MembersTab({
     const teamNames = teamsOf(detail.name);
     const isLeader = detail.name === LEADER_NAME;
     return (
-      // 排版优化：详情列限宽，长手册行不至于拉满整栏难以阅读。
-      <div style={{ maxWidth: 780 }}>
+      // 版式：详情列不再限宽（用户要求解除固定宽度），面板全宽利用
+      <div>
         <button type="button" style={styles.btn} onClick={() => setView('list')}>
           ← 返回角色列表
         </button>
@@ -2332,7 +2332,7 @@ function ReportsTab({
 }): ReactNode {
   return (
     <div>
-      <div style={{ ...styles.formRow, maxWidth: 320 }}>
+      <div style={styles.formRow}>
         <span style={styles.formLabel}>选择成员</span>
         <select
           style={styles.select}

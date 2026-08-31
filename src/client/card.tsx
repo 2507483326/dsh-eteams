@@ -161,7 +161,6 @@ export function ETeamsCard({ node }: { node: { data: unknown } }): ReactNode {
           borderRadius: 12,
           padding: '12px 16px',
           margin: '8px 0',
-          maxWidth: 560,
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>

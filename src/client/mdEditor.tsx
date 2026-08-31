@@ -189,6 +189,12 @@ export function MdEditor({
   const methodsRef = useRef<MDXEditorMethods | null>(null);
   const lastEmittedRef = useRef<string | null>(null);
   const dark = useHostDark();
+  // 弹层容器（code-blocks/theming 文档：语言选择器、链接对话框等经
+  // overlayContainer portal 到此元素）。默认 portal 到 body 用 viewport
+  // 坐标定位——宿主面板容器带 transform/contain 时 fixed 定位会被重新
+  // 锚定，弹窗位置出现偏差；挂到编辑器外层（position:relative、无
+  // overflow 裁剪）后弹层与锚点同坐标系，定位精准。
+  const [overlayEl, setOverlayEl] = useState<HTMLDivElement | null>(null);
 
   // 受控同步：仅当外部 value ≠ 最近一次发出的值（面板换成员/构建刷新）
   // 时整体重置；用户打字产生的回环（value === lastEmitted）不动编辑器。
@@ -251,11 +257,13 @@ export function MdEditor({
 
   return (
     <div
+      ref={setOverlayEl}
       style={{
+        position: 'relative',
         border: `1px solid ${T.border2}`,
         borderRadius: 10,
         background: T.surface,
-        overflow: 'hidden',
+        overflow: 'visible',
       }}
     >
       {/* 编辑器头部：Markdown 标识 + 说明（WYSIWYG 后编辑/预览切换退役） */}
@@ -267,6 +275,7 @@ export function MdEditor({
           padding: '6px 10px',
           borderBottom: `1px solid ${T.border}`,
           background: T.sunken,
+          borderRadius: '10px 10px 0 0',
         }}
       >
         <span style={{ fontSize: 11, fontWeight: 600, color: T.text3, letterSpacing: 0.4 }}>
@@ -276,7 +285,7 @@ export function MdEditor({
         <span style={{ flex: 1 }} />
         <span style={{ fontSize: 10.5, color: T.text3 }}>格式工具栏随焦点出现</span>
       </div>
-      <div style={{ minHeight }}>
+      <div style={{ minHeight, overflow: 'hidden', borderRadius: '0 0 10px 10px' }}>
         <MDXEditor
           ref={methodsRef}
           markdown={value}
@@ -286,6 +295,7 @@ export function MdEditor({
           }}
           onError={({ error }) => recordClientDiag('mdx-editor', `markdown 处理失败: ${error}`)}
           plugins={plugins}
+          overlayContainer={overlayEl}
           className={`eteams-mdx${dark ? ' dark-theme' : ''}`}
           contentEditableClassName="eteams-mdx-content"
           placeholder={'开始撰写角色手册：frontmatter + 身份 / 使命 / 规则 / 领域专章…'}

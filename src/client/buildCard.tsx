@@ -122,7 +122,6 @@ export function EteamBuildCard(_props: { node?: unknown }): ReactNode {
           borderRadius: 12,
           padding: '10px 14px',
           margin: '6px 0',
-          maxWidth: 560,
           display: 'flex',
           alignItems: 'center',
           gap: 10,

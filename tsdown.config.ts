@@ -26,6 +26,13 @@ function mdxEditorCssInline() {
   // 整个 client bundle 求值失败 → 插件客户端全灭 → 宿主进恢复模式。
   // highlight-mark 只服务 ==高亮== 语法，人设手册用不到——整链 stub 掉。
   const UVU_ASSERT_STUB_ID = '\0dsh-eteams:uvu-assert-stub-js';
+  // 补丁缺陷修复：cordis 补丁版 CodeMirrorEditor.js 把 basicSetup 内联成
+  // _eteamsHiLineGutter/_eteamsSynHi 等 14 个别名扩展，但没有写任何别名
+  // 绑定——运行时一进代码块就 ReferenceError，被挂载 try/catch 吞掉后
+  // 降级为纯文本编辑器（表现即「代码块无高亮」）。extensions 数组里本来
+  // 就有 basicSetup + basicLight + 语言支持扩展，整体换回 ...extensions，
+  // 功能一个不少且无重复。
+  const CM_MOUNT_RE = /\.\.\.extensions\.filter\(\(x\) => x !== basicSetup\),\s*_eteamsHiLineGutter\(\),[\s\S]*?_eteamsHiSelMatches\(\)/;
   return {
     name: 'dsh-eteams:mdxeditor-css-inline',
     resolveId(id: string) {
@@ -33,6 +40,13 @@ function mdxEditorCssInline() {
       if (id === '@codemirror/language-data') return LANG_STUB_ID;
       if (id === 'uvu/assert' || id === 'uvu') return UVU_ASSERT_STUB_ID;
       return null;
+    },
+    transform(code: string, id: string) {
+      if (!id.replace(/\\/g, '/').includes('@mdxeditor/editor/dist/plugins/codemirror/CodeMirrorEditor.js')) {
+        return null;
+      }
+      if (!CM_MOUNT_RE.test(code)) return null;
+      return code.replace(CM_MOUNT_RE, '...extensions');
     },
     load(id: string) {
       if (id === CSS_VIRTUAL_ID) {
