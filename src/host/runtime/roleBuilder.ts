@@ -263,6 +263,8 @@ export interface InterviewOption {
 export interface InterviewQuestion {
   id: string;
   question: string;
+  /** Optional group heading: models often carry ask_user_question's header habit — render it above the question. */
+  header?: string;
   options: InterviewOption[];
   /** Allow multiple selections (answers joined with 「、」). */
   multi?: boolean;
@@ -329,8 +331,16 @@ export async function confirmBuildSession(
   return { session: next, memberName: stored.name };
 }
 
-/** Cancel the session; only active/awaiting sessions can be cancelled. */
-export async function cancelBuildSession(stateRoot: string): Promise<BuildSession> {
+/**
+ * Cancel the session; only active/awaiting sessions can be cancelled.
+ * `note` lets callers distinguish user abandonment from dispatch-failure
+ * rollback（派发失败的会话必须标回 cancelled，否则无子代理的 active 会话
+ * 会卡住 /eteam 的门禁）.
+ */
+export async function cancelBuildSession(
+  stateRoot: string,
+  note = '已放弃本次构建',
+): Promise<BuildSession> {
   const current = readBuildSession(stateRoot);
   if (current === null) throw new Error('没有进行中的构建会话');
   if (!TRANSITIONS[current.status].includes('cancelled')) {
@@ -339,7 +349,7 @@ export async function cancelBuildSession(stateRoot: string): Promise<BuildSessio
   const next: BuildSession = {
     ...current,
     status: 'cancelled',
-    note: '已放弃本次构建',
+    note,
     updatedAt: Date.now(),
   };
   await writeSession(stateRoot, next);

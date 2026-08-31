@@ -33,7 +33,7 @@ import { installMemberRuntime } from './runtime/members.js';
 import { installWebSurface, rootForWrites } from './runtime/webui.js';
 import { sessionPersonaSection, sessionIdOfScope } from './runtime/sessionPersona.js';
 import type { RuntimeContext } from './runtime/base.js';
-import { readBuildSession } from './runtime/roleBuilder.js';
+import { readBuildSession, reportBuildProgress, cancelBuildSession } from './runtime/roleBuilder.js';
 import { spawnBuildPhase } from './runtime/builderPhases.js';
 import { CAPTAIN_SECTION_SHORT } from './prompts/captain.js';
 import { composeCaptainPersona } from './prompts/persona.js';
@@ -241,15 +241,39 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
                 if (subagents?.start === undefined) {
                   throw new Error('subagents 服务不可用');
                 }
+                const stateRoot = root ?? rootForWrites(ctx, config);
+                // 立即受理（docs/19.16 用户迭代）：派发前先把受理会话写上磁盘
+                // ——卡片/新增页首轮轮询即命中、自动跳转立刻发生；request 用
+                // 用户原文，子代理从磁盘读到的就是新需求（不再继承旧会话）。
+                await reportBuildProgress(stateRoot, {
+                  newBuild: true,
+                  step: '收到需求',
+                  stepsDone: ['收到需求'],
+                  request: buildActivationMessage(rawInput),
+                  note: '构建请求已受理——角色构建师启动中',
+                });
                 spawnBuildPhase({
                   ctx: { subagents },
                   config,
                   parent: agent,
-                  stateRoot: root ?? rootForWrites(ctx, config),
+                  stateRoot,
                   kind: 'start',
                   logger: log,
+                  onSpawnFailure: () => {
+                    // 派发被拒 → 回滚成 cancelled，别让无子代理的 active 会话
+                    // 卡住下一次 /eteam 的门禁。
+                    void cancelBuildSession(stateRoot, '构建派发失败——请重新发起 /eteam').catch(
+                      () => undefined,
+                    );
+                  },
                 });
               } catch {
+                // 受理已落盘的场合一并回滚（pre-write 成功但同步段炸了）。
+                if (root !== null) {
+                  void cancelBuildSession(root, '构建派发失败——请重新发起 /eteam').catch(
+                    () => undefined,
+                  );
+                }
                 agent.steer(
                   createUserMessage({
                     content: [{ type: 'text', text: buildActivationMessage(rawInput) }],
@@ -268,7 +292,7 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
             })();
             return {
               kind: 'success' as const,
-              text: '成员构建已派给后台代理——卡片将在其首次播报时出现。',
+              text: '成员构建已受理——创建卡片与新增页已显示构建状态，意图访谈将在其上出现。',
             };
           },
         };

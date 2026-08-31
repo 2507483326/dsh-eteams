@@ -186,6 +186,8 @@ export interface InterviewOption {
 export interface InterviewQuestion {
   id: string;
   question: string;
+  /** Optional group heading (rendered small above the question). */
+  header?: string;
   options: InterviewOption[];
   multi?: boolean;
 }

@@ -1685,6 +1685,13 @@ function MembersTab({
   if (view === 'add') {
     // 闭包内无法从外层条件继承窄化，这里先固化已入库草稿。
     const confirmedDraft = build !== null && build.status === 'confirmed' ? build.draft : null;
+    // 访谈未答 = 阶段代理按设计已结束回合，此刻在等用户——显示「等你作答」
+    // 而不是转圈的「工作中」，否则看起来像卡死（显示状态要诚实）。
+    const interviewWaiting =
+      build !== null &&
+      build.status === 'active' &&
+      build.interview !== undefined &&
+      build.interview.answers === undefined;
     return (
       <div style={{ overflowX: 'hidden', minWidth: 0 }}>
         <style>{'@keyframes eteams-spin{to{transform:rotate(360deg)}}'}</style>
@@ -1703,7 +1710,9 @@ function MembersTab({
           {build !== null && build.status === 'active' && (
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                {build.draft?.avatar !== undefined ? (
+                {interviewWaiting ? (
+                  <span style={{ fontSize: 16, lineHeight: 1 }}>✍️</span>
+                ) : build.draft?.avatar !== undefined ? (
                   <Avatar
                     name={build.draft.name}
                     seed={build.draft.avatar.seed}
@@ -1722,11 +1731,25 @@ function MembersTab({
                   </span>
                 )}
                 <div style={{ ...styles.line, fontWeight: 600, margin: 0 }}>
-                  {build.draft?.name !== undefined && build.draft.name !== ''
-                    ? `角色构建师工作中 · ${build.draft.name}…`
-                    : '角色构建师工作中…'}
+                  {interviewWaiting ? (
+                    <>
+                      意图访谈待作答
+                      {build.draft?.name !== undefined && build.draft.name !== ''
+                        ? ` · ${build.draft.name}`
+                        : ''}
+                      ——答案提交后自动续跑
+                    </>
+                  ) : build.draft?.name !== undefined && build.draft.name !== '' ? (
+                    `角色构建师工作中 · ${build.draft.name}…`
+                  ) : (
+                    '角色构建师工作中…'
+                  )}
                 </div>
-                <span style={fns.pill('info')}>构建中</span>
+                {interviewWaiting ? (
+                  <span style={fns.pill('warn')}>等你作答</span>
+                ) : (
+                  <span style={fns.pill('info')}>构建中</span>
+                )}
                 <span style={{ flex: 1 }} />
                 {/* 构建中也能放弃（docs/19.16）：作废会话并中断后台构建代理。 */}
                 <Button size="sm" disabled={confirming} onClick={() => void abandon()}>
@@ -1751,6 +1774,9 @@ function MembersTab({
                     const done = picked.length > 0;
                     return (
                       <div key={q.id} style={{ marginTop: 10 }}>
+                        {q.header !== undefined && q.header !== '' && (
+                          <div style={styles.muted}>{q.header}</div>
+                        )}
                         <div style={{ fontSize: 12.5, fontWeight: 600 }}>
                           {q.question}
                           {!done && <span style={{ color: T.accent }}> ·</span>}

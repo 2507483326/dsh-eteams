@@ -59,8 +59,8 @@ if (typeof document !== 'undefined') {
  */
 export function EteamBuildCard(_props: { node?: unknown }): ReactNode {
   const [build, setBuild] = useState<BuildSession | null | 'loading'>('loading');
-  // 受理写盘与首次拉取存在竞态：扑空（null）时以 800ms 有界重试（~20s），
-  // 避免错过刚受理的会话；旧历史卡片重试完自然停。
+  // 受理即写盘后首轮轮询即命中；扑空（null）时仍以 800ms 有界重试兜底
+  // （宿主重启/磁盘慢的场合），旧历史卡片重试完自然停。
   const nullRetriesRef = useRef(0);
 
   useEffect(() => {
@@ -84,13 +84,13 @@ export function EteamBuildCard(_props: { node?: unknown }): ReactNode {
           const status = s?.status;
           if (status === 'active' || status === 'awaiting_confirmation') {
             timer = window.setTimeout(tick, 1500);
-          } else if (s === null && nullRetriesRef.current < 25) {
+          } else if (s === null && nullRetriesRef.current < 75) {
             nullRetriesRef.current += 1;
             timer = window.setTimeout(tick, 800);
           }
         })
         .catch(() => {
-          if (alive && nullRetriesRef.current < 25) {
+          if (alive && nullRetriesRef.current < 75) {
             nullRetriesRef.current += 1;
             timer = window.setTimeout(tick, 1500);
           }
@@ -188,24 +188,29 @@ export function EteamBuildCard(_props: { node?: unknown }): ReactNode {
             {build === 'loading' ? (
               <span>连接构建会话…</span>
             ) : build !== null && (build.status === 'active' || build.status === 'awaiting_confirmation') ? (
-              <>
-                <span
-                  style={{
-                    display: 'inline-block',
-                    width: 12,
-                    height: 12,
-                    borderRadius: '50%',
-                    border: '2px solid var(--dsw-alias-brand-primary, #4b7bec)',
-                    borderTopColor: 'transparent',
-                    animation: 'eteams-card-spin 0.9s linear infinite',
-                  }}
-                />
-                <span>
-                  {build.status === 'active'
-                    ? `角色构建师工作中 · ${step !== '' ? step : '准备中'}`
-                    : '草稿就绪——待你确认入库'}
-                </span>
-              </>
+              build.status === 'active' && interviewPending ? (
+                // 访谈未答 = 阶段代理按设计已结束回合，不是卡死——别转圈装忙。
+                <span>✍️ 意图访谈待作答——点开回答后自动续跑</span>
+              ) : (
+                <>
+                  <span
+                    style={{
+                      display: 'inline-block',
+                      width: 12,
+                      height: 12,
+                      borderRadius: '50%',
+                      border: '2px solid var(--dsw-alias-brand-primary, #4b7bec)',
+                      borderTopColor: 'transparent',
+                      animation: 'eteams-card-spin 0.9s linear infinite',
+                    }}
+                  />
+                  <span>
+                    {build.status === 'active'
+                      ? `角色构建师工作中 · ${step !== '' ? step : '准备中'}`
+                      : '草稿就绪——待你确认入库'}
+                  </span>
+                </>
+              )
             ) : build !== null && build.status === 'confirmed' ? (
               <span>构建完成，成员已入库——点击查看详情</span>
             ) : (

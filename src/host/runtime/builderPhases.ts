@@ -41,7 +41,7 @@ export function buildPhasePrompt(kind: BuildPhaseKind, stateRoot: string): strin
       ROLE_BUILDER_CHILD_PERSONA,
       '',
       '【本阶段任务】（完成即结束回合，不等待任何后续消息）',
-      '第一条播报必须 eteams_build_report(status=active, newBuild=true, step=收到需求, stepsDone=[收到需求], request=激活原文, note=新构建请求受理——<成员名>) → eteams_member_list 查重（结果并入 note，重名要向用户点明是更新）→ 意图访谈：eteams_build_report(status=active, step=意图访谈, interview={questions:[…]}) 一次问全 ≤5 问，每问 2-4 个 options，推荐项放首位加「（推荐）」→ 立即结束回合（用户在面板作答后宿主会派下一阶段代理）。本阶段不起草。',
+      '会话已由宿主开启（status=active，request=激活原文）。直接开始：eteams_member_list 查重（重名要向用户点明是更新）→ eteams_build_report(status=active, step=查重成员库, note=查重结果) → 意图访谈：eteams_build_report(status=active, step=意图访谈, interview={questions:[…]}) 一次问全 ≤5 问，每问 2-4 个 options，推荐项放首位加「（推荐）」→ 立即结束回合（用户在面板作答后宿主会派下一阶段代理）。本阶段不起草。禁止传 newBuild（会话已开启，覆写会重置会话身份、让卡片重复跳转）；若播报报「会话已结束/已取消」类错误，立即结束回合。',
       '',
       '【激活原文】',
       session?.request ?? '',
@@ -96,11 +96,19 @@ export function spawnBuildPhase(args: {
   stateRoot: string;
   kind: BuildPhaseKind;
   logger?: { warn(message: string): void };
+  /**
+   * Spawn-rejection hook（受理即写盘的配套）：调用方在派发前已把受理会话
+   * 写上磁盘（active），start() 一旦被拒（NO_PROVIDER/能力缺失/创建窗口
+   * 失败），必须把会话回滚成 cancelled——否则一个没有子代理的 active 会话
+   * 会卡住 /eteam 门禁，用户只能手动去面板放弃。
+   */
+  onSpawnFailure?: (error: unknown) => void;
 }): void {
-  const { ctx, config, parent, stateRoot, kind, logger } = args;
+  const { ctx, config, parent, stateRoot, kind, logger, onSpawnFailure } = args;
   const subagents = ctx.subagents;
   if (subagents?.start === undefined) {
     logger?.warn(`eteams: builder phase ${kind} NOT spawned — subagents service unavailable`);
+    onSpawnFailure?.(new Error('subagents 服务不可用'));
     return;
   }
   const failMessage = (stage: string, error: unknown): string =>
@@ -126,6 +134,7 @@ export function spawnBuildPhase(args: {
     .then((run) => {
       if (run === undefined) {
         logger?.warn(`eteams: builder phase ${kind} start returned no run`);
+        onSpawnFailure?.(new Error('subagents.start 返回空 run'));
         return;
       }
       // 官方契约（docs/20.2.1）：消费方必须始终 dispose 一次性 run——自然
@@ -141,5 +150,6 @@ export function spawnBuildPhase(args: {
     })
     .catch((error) => {
       logger?.warn(failMessage('spawn FAILED', error));
+      onSpawnFailure?.(error);
     });
 }

@@ -37,6 +37,7 @@ import { readRoster, upsertRosterMember } from '../runtime/roster.js';
 import {
   readBuildSession,
   reportBuildProgress,
+  cancelBuildSession,
   type BuildDraft,
 } from '../runtime/roleBuilder.js';
 import { spawnBuildPhase } from '../runtime/builderPhases.js';
@@ -341,6 +342,7 @@ export function createCaptainTools(
               properties: {
                 id: str('问题唯一 id'),
                 question: str('问题文本'),
+                header: str('问题题头（可省）：模型常沿用 ask_user_question 的 header 习惯，工作台渲染为问题上方的小标题'),
                 options: {
                   type: 'array' as const,
                   description: '2-4 个选项，推荐项放首位并在 label 尾加「（推荐）」',
@@ -447,6 +449,15 @@ export function createCaptainTools(
         };
       }
       if (!exec.agent) throw new ETeamsError('无法识别调用者（exec.agent 缺失）');
+      // 立即受理（与 /eteam 命令同语义）：先写盘再派发——卡片/面板首轮轮询
+      // 即命中，request 用工具入参的用户原文（修复子代理继承旧会话需求）。
+      await reportBuildProgress(root, {
+        newBuild: true,
+        step: '收到需求',
+        stepsDone: ['收到需求'],
+        request: args.request,
+        note: '构建请求已受理——角色构建师启动中',
+      });
       spawnBuildPhase({
         ctx: env.ctx,
         config,
@@ -454,11 +465,14 @@ export function createCaptainTools(
         stateRoot: root,
         kind: 'start',
         logger: env.ctx.logger,
+        onSpawnFailure: () => {
+          void cancelBuildSession(root, '构建派发失败——可重新派发').catch(() => undefined);
+        },
       });
       return {
         ok: true as const,
         spawned: true,
-        detail: '已派发构建——后台构建中，卡片将随首次播报出现',
+        detail: '已受理并派发——创建卡片与新增页已显示构建状态，意图访谈将在其上出现',
       };
     },
   });
