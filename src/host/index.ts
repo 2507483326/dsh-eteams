@@ -247,6 +247,7 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
                   parent: agent,
                   stateRoot: root ?? rootForWrites(ctx, config),
                   kind: 'start',
+                  logger: log,
                 });
               } catch {
                 agent.steer(

@@ -1,0 +1,11 @@
+specialized/specialized-korean-business-navigator.md	专项部
+specialized/specialized-mcp-builder.md	专项部
+specialized/specialized-meeting-assistant.md	专项部
+specialized/specialized-model-qa.md	专项部
+specialized/specialized-pricing-optimizer.md	专项部
+specialized/specialized-risk-assessor.md	专项部
+specialized/specialized-salesforce-architect.md	专项部
+specialized/specialized-workflow-architect.md	专项部
+specialized/study-abroad-advisor.md	专项部
+specialized/technical-translator-agent.md	专项部
+specialized/zk-steward.md	专项部

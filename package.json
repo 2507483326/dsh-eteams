@@ -1,6 +1,6 @@
 {
   "name": "dsh-eteams",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "ETeams for DeepSeek Harness: captain-led multi-agent team collaboration with execution chains, task slots, member dialogs and persistent state",
   "type": "module",
   "main": "lib/index.js",

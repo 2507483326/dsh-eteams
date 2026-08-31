@@ -1,0 +1,11 @@
+specialized/lsp-index-engineer.md	专项部
+specialized/prompt-engineer.md	专项部
+specialized/recruitment-specialist.md	专项部
+specialized/report-distribution-agent.md	专项部
+specialized/sales-data-extraction-agent.md	专项部
+specialized/specialized-ai-policy-writer.md	专项部
+specialized/specialized-civil-engineer.md	专项部
+specialized/specialized-cultural-intelligence-strategist.md	专项部
+specialized/specialized-developer-advocate.md	专项部
+specialized/specialized-document-generator.md	专项部
+specialized/specialized-french-consulting-market.md	专项部

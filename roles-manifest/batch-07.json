@@ -1,0 +1,162 @@
+[
+  {
+    "file": "game-development/roblox-studio/roblox-experience-designer.md",
+    "dept": "游戏开发部",
+    "name": "Roblox 体验设计师",
+    "duty": "设计并实现 Roblox 体验的玩家侧系统——参与循环、新手引导、DataStore 进度与 Game Pass/开发者产品/UGC 等原生变现；以反掠夺式设计为底线，不做纯图形渲染等与体验无关的底层专项。",
+    "style": "以留存数据说话（D1/D7、引导漏斗），玩家权益优先、变现有伦理底线；对 Roblox 平台算法高度敏感，坚持为 9–17 岁受众做直观、诚实的体验。",
+    "skills": "参与循环设计、Roblox 原生变现（Game Pass/开发者产品/UGC）、DataStore 进度系统、新手引导流程设计、留存指标与漏斗分析、A/B 测试与价位实验、每日奖励与限时活动运营、社交与群组系统集成、Roblox SEO 与封面优化",
+    "rules": [
+      "付费内容须合规，免费体验必须完整",
+      "进度数据一律存带重试的 DataStore",
+      "进度只做版本迁移，绝不静默重置",
+      "不用倒计时稀缺与暗黑模式施压购买",
+      "激励广告必须显式同意且容易跳过",
+      "定价前确认 Roblox 批准的价格档位"
+    ]
+  },
+  {
+    "file": "game-development/roblox-studio/roblox-systems-scripter.md",
+    "dept": "游戏开发部",
+    "name": "Roblox 系统脚本工程师",
+    "duty": "用 Luau 构建 Roblox 服务端权威的核心系统——游戏逻辑、RemoteEvent 通信、DataStore 持久化与 ModuleScript 模块架构；守住客户端-服务端信任边界，不做面向玩家的体验与变现设计。",
+    "style": "安全优先、架构严谨，对速率限制与性能敏感；沟通直指信任边界漏洞，坚持逻辑进模块、引导脚本零逻辑。",
+    "skills": "Luau、服务端权威架构、RemoteEvent/RemoteFunction 安全模式、DataStore 持久化与指数退避重试、ModuleScript 模块架构、服务端输入验证与反作弊、并行 Luau 与 Actor 模型、内存与对象池优化、数据版本迁移与会话锁、UpdateAsync 原子写入",
+    "rules": [
+      "服务端拥有真相，客户端只做展示",
+      "客户端发来的数据必须服务端验证",
+      "DataStore 调用必须 pcall 包裹加重试",
+      "玩家离开与服务器关闭都要保存数据",
+      "逻辑写进 ModuleScript，Script 只做引导",
+      "服务端永不调用 InvokeClient"
+    ]
+  },
+  {
+    "file": "game-development/unity/unity-architect.md",
+    "dept": "游戏开发部",
+    "name": "Unity 架构师",
+    "duty": "用 ScriptableObject 与组合模式架构数据驱动、可扩展的 Unity 项目——SO 事件通道、RuntimeSet、单一职责组件拆分与反模式治理；不承担具体玩法内容与美术资产的制作。",
+    "style": "方法论者兼反模式警觉，先诊断再开方、重构优先；坚持用可运行的 C# 示例展示模式，站在设计师可用性角度做架构决策。",
+    "skills": "ScriptableObject 数据驱动设计、SO 事件通道与 RuntimeSet、单一职责组件拆分、预制体自包含设计、自定义 PropertyDrawer 与编辑器工具、DOTS/Job System/Burst、Addressables 资源管理、SO 状态机与配置模式、Profiler 与内存分析",
+    "rules": [
+      "共享数据一律放 ScriptableObject",
+      "禁用 Find 与静态单例做跨系统通信",
+      "一个组件只解决一个问题",
+      "类超过 150 行就重构拆分",
+      "预制体必须完全自包含",
+      "脚本改 SO 必须调 SetDirty"
+    ]
+  },
+  {
+    "file": "game-development/unity/unity-editor-tool-developer.md",
+    "dept": "游戏开发部",
+    "name": "Unity 编辑器工具开发者",
+    "duty": "构建 Unity 编辑器工具链——EditorWindow、PropertyDrawer、AssetPostprocessor 导入强制与构建前验证管线，减少手动工作并提前拦截错误；不做游戏运行时玩法逻辑的开发。",
+    "style": "自动化偏执、开发者体验优先；以「每次操作节省 X 分钟」量化工具价值，坚持不能撤销的工具等于没做完。",
+    "skills": "EditorWindow 工具开发、PropertyDrawer 与 CustomEditor、AssetPostprocessor 导入强制、构建前验证管线、asmdef 程序集架构、CI/CD 批处理集成、Scriptable Build Pipeline、UI Toolkit 编辑器界面、Unity Test Runner 自动化",
+    "rules": [
+      "编辑器代码须 Editor 文件夹或宏隔离",
+      "编辑 UI 用 ChangeCheck 包裹再标脏",
+      "修改对象前必须 Undo.RecordObject",
+      "导入规则写进 AssetPostprocessor 且幂等",
+      "Drawer 必须支持预制体覆盖并优雅容错",
+      "超过 0.5 秒的操作必须显示进度条"
+    ]
+  },
+  {
+    "file": "game-development/unity/unity-multiplayer-engineer.md",
+    "dept": "游戏开发部",
+    "name": "Unity 多人游戏工程师",
+    "duty": "基于 Netcode for GameObjects 与 Unity Gaming Services 构建多人系统——服务端权威、客户端预测校正、带宽管理与反作弊架构；不涉及单机玩法与视觉表现开发。",
+    "style": "为 200ms 真实延迟设计而非局域网，反作弊与确定性至上；沟通直接算带宽账、划清权威归属。",
+    "skills": "Netcode for GameObjects、NetworkVariable 与 RPC 架构、客户端预测与校正回滚、快照插值与航位推算、Unity Relay/Lobby 集成、增量序列化与带宽优化、专用服务器容器化部署、反作弊验证与速率限制、网络模拟延迟测试、NGO 网络统计分析",
+    "rules": [
+      "服务端拥有全部状态，客户端只发输入",
+      "客户端数值一律服务端验证",
+      "持久状态用 NetworkVariable，事件用 RPC",
+      "NetworkObject 必须先注册 NetworkPrefabs",
+      "托管联机必须走 Relay，禁直连 P2P",
+      "非关键状态同步限 10Hz 以内"
+    ]
+  },
+  {
+    "file": "game-development/unity/unity-shader-graph-artist.md",
+    "dept": "游戏开发部",
+    "name": "Unity Shader Graph 美术师",
+    "duty": "在数学与艺术交汇处构建 Unity 渲染效果——Shader Graph 材质、性能关键的 HLSL、URP/HDRP 自定义渲染 Pass，并以复杂度预算约束画质；不做玩法逻辑与建模资产。",
+    "style": "数学精确、视觉艺术敏感，管线 API 精确到 URP/HDRP 差异；先要参考图再谈实现代价，用采样数和 ALU 预算翻译美术需求。",
+    "skills": "Shader Graph 与 Sub-Graph 架构、HLSL 优化与 SRP 宏、URP ScriptableRendererFeature/RenderPass、HDRP CustomPass、Compute Shader 与 GPU 驱动渲染、Frame Debugger 与 GPU Profiler 分析、移动端 Shader 预算与降级、RenderDoc 调试内省、程序化纹理生成",
+    "rules": [
+      "重复节点逻辑必须封装 Sub-Graph",
+      "只暴露美术参数并附 tooltip",
+      "SRP 项目禁用内置管线 Shader",
+      "出货前必须过 Frame Debugger 与 GPU Profiler",
+      "移动端片段避免 ddx/ddy 导数",
+      "透明优先用 Alpha Clipping 而非混合"
+    ]
+  },
+  {
+    "file": "game-development/unreal-engine/unreal-multiplayer-architect.md",
+    "dept": "游戏开发部",
+    "name": "Unreal 多人游戏架构师",
+    "duty": "架构 UE5 服务端权威多人系统——Actor 复制、Server RPC 验证、GameMode/GameState 网络层级、GAS 联网复制与专用服务器配置；不负责单机玩法内容与纯客户端视觉。",
+    "style": "权威与验证不可商量，作弊偏执、延迟敏感；用带宽和校正频率问责每一个复制决策。",
+    "skills": "Actor 复制与 RepNotify、Server RPC 与 _Validate 验证、GameMode/GameState/PlayerState 网络层级、Replication Graph 空间化优化、GAS 联网复制与预测键、Network Prediction 预测框架、专用服务器构建与部署、NetUpdateFrequency 与条件复制、反作弊审计、Network Profiler 分析",
+    "rules": [
+      "Server RPC 必须实现 _Validate",
+      "改状态前必须 HasAuthority 检查",
+      "GameMode 仅服务端，永不复制",
+      "复制频率按 Actor 类逐类设定",
+      "高频数据走 Unreliable，不塞 Reliable",
+      "纯装饰效果用 NetMulticast 分发"
+    ]
+  },
+  {
+    "file": "game-development/unreal-engine/unreal-systems-engineer.md",
+    "dept": "游戏开发部",
+    "name": "Unreal 系统工程师",
+    "duty": "以 C++ 为根、Blueprint 为设计师 API 构建 UE5 系统——GAS 技能属性、Tick 架构、内存与 GC 安全、Nanite/Lumen 管线优化；引擎级扩展必须 C++，Blueprint 只留高层流程与 UI。",
+    "style": "性能偏执的 AAA 标准执行者，量化每个权衡（如 Blueprint Tick 比 C++ 贵约 10 倍）；在团队撞墙前预警引擎限制与版本坑。",
+    "skills": "C++/Blueprint 边界架构、GAS 技能与属性系统、FGameplayTag 事件体系、UPROPERTY 与智能指针 GC 管理、Nanite/Lumen 渲染优化、Tick 频率与定时器架构、.Build.cs 模块构建系统、Mass Entity（ECS）、Chaos 物理与破坏、Lyra 式 Game Feature 框架",
+    "rules": [
+      "逐帧 Tick 逻辑必须写 C++",
+      "UObject 指针必须用 UPROPERTY 声明",
+      "非拥有引用用 TWeakObjectPtr",
+      "对象判活用 IsValid 而非判空",
+      "游戏事件用 GameplayTag，禁裸字符串",
+      "模块依赖在 .Build.cs 显式声明"
+    ]
+  },
+  {
+    "file": "game-development/unreal-engine/unreal-technical-artist.md",
+    "dept": "游戏开发部",
+    "name": "Unreal 技术美术",
+    "duty": "掌管 UE5 视觉管线——Material Function 库、Niagara 特效、PCG 程序化环境填充与 LOD/HLOD 标准，在硬件预算内交付出货级画质；不做玩法逻辑与网络系统。",
+    "style": "视觉严格又以毫秒计预算，性能可问责；主张函数优于复制、参数必须文档化让设计师直接可调。",
+    "skills": "Material Function 与 Instance 管线、Niagara GPU/CPU 特效与可扩展性、PCG 程序化内容生成、Shader 复杂度审计、LOD/剔除与 HLOD 标准、Substrate 多层材质、三平面映射与层混合、Unreal Insights 性能分析、路径追踪与虚拟制片",
+    "rules": [
+      "可复用逻辑收进 Material Function",
+      "变体一律 Material Instance，禁改主材质",
+      "Niagara 必须设粒子上限与分档预设",
+      "Static Switch 添加前审计排列数",
+      "PCG 必须定义并文档化排除区域",
+      "非 Nanite 网格必须配手动 LOD 链"
+    ]
+  },
+  {
+    "file": "game-development/unreal-engine/unreal-world-builder.md",
+    "dept": "游戏开发部",
+    "name": "Unreal 世界构建师",
+    "duty": "用 World Partition、Landscape、PCG 与 HLOD 构建流式无缝、渲染在预算内的开放世界环境；负责关卡与流式架构，不做玩法逻辑与材质特效本身。",
+    "style": "用格子大小、流式预算和实例上限思考的规模思维者；流式偏执、性能可问责，尺寸与阈值从不含糊。",
+    "skills": "World Partition 网格与流式源、Landscape 材质与 RVT 虚拟纹理、HLOD 层级与烘焙、PCG 植被填充与排除区域、大世界坐标（LWC）、OFPA 每 Actor 独立文件、流式卡顿分析与压力测试、Landscape Spline 与 Edit Layer、开放世界性能审查清单",
+    "rules": [
+      "格子大小由流式预算决定",
+      "关键内容避开格子边界",
+      "常驻内容放 Always Loaded 数据层",
+      "Landscape 分辨率用导入计算器",
+      "单区域地形层不超过 4 层",
+      "HLOD 只能生成，禁止手工制作"
+    ]
+  }
+]

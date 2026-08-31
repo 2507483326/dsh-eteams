@@ -453,6 +453,7 @@ export function createCaptainTools(
         parent: exec.agent,
         stateRoot: root,
         kind: 'start',
+        logger: env.ctx.logger,
       });
       return {
         ok: true as const,

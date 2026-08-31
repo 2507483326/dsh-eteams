@@ -14,7 +14,7 @@ export const PLUGIN_ID = 'eteams';
 export const TOOL_PREFIX = 'eteams_';
 
 /** Current plugin version (mirrors package.json). */
-export const PLUGIN_VERSION = '0.2.2';
+export const PLUGIN_VERSION = '0.2.3';
 
 /** Initial on-disk state schema version (docs/11: starts at 2). */
 export const STATE_SCHEMA_VERSION = 2;

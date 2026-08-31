@@ -36,7 +36,16 @@ export function parseMemberLabel(
   return { teamId: rest.slice(0, sep), memberName: rest.slice(sep + 1) };
 }
 
-/** Captain tool names denied to members (one visibility, loud deny). */
+/**
+ * Captain tool names denied to members (one visibility, loud deny).
+ * Every entry MUST be a registered tool name: spawn applies the list via
+ * `tools.restrict({ deny })`, which fails loudly on unknown names inside
+ * the child creation window. `eteams_approve_plan` deliberately is NOT
+ * here — approval is panel-driven and the tool is never registered
+ * (lifecycle.test.ts asserts its absence), so denying it would abort
+ * every member/builder spawn with `tools.restrict() names unknown
+ * global tool "eteams_approve_plan"`.
+ */
 export const MEMBER_DENIED_TOOLS: readonly string[] = [
   'eteams_create_team',
   'eteams_add_member',
@@ -54,7 +63,6 @@ export const MEMBER_DENIED_TOOLS: readonly string[] = [
   'eteams_suspend_task',
   'eteams_resume_task',
   'eteams_cancel_task',
-  'eteams_approve_plan',
   'eteams_archive_team',
   'eteams_delete_team',
 ];

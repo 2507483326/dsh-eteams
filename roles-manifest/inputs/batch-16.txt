@@ -1,0 +1,12 @@
+specialized/accounts-payable-agent.md	专项部
+specialized/agentic-identity-trust.md	专项部
+specialized/agents-orchestrator.md	专项部
+specialized/automation-governance-architect.md	专项部
+specialized/blockchain-security-auditor.md	专项部
+specialized/compliance-auditor.md	专项部
+specialized/corporate-training-designer.md	专项部
+specialized/data-consolidation-agent.md	专项部
+specialized/gaokao-college-advisor.md	专项部
+specialized/government-digital-presales-consultant.md	专项部
+specialized/healthcare-marketing-compliance.md	专项部
+specialized/identity-graph-operator.md	专项部

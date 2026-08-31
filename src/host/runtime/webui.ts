@@ -782,7 +782,12 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                     parent,
                     stateRoot: root,
                     kind: 'resume',
+                    logger: (ctx as unknown as RuntimeContext).logger,
                   });
+                } else {
+                  (ctx as unknown as RuntimeContext).logger.warn(
+                    `eteams: rolebuilder resume — parent session ${parentSessionId ?? '(none)'} is not live, phase not spawned`,
+                  );
                 }
                 sendJson(res, 200, { ok: true, status: session.status });
               } catch (e) {
@@ -824,7 +829,12 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                     parent,
                     stateRoot: root,
                     kind: 'continue',
+                    logger: (ctx as unknown as RuntimeContext).logger,
                   });
+                } else {
+                  (ctx as unknown as RuntimeContext).logger.warn(
+                    `eteams: rolebuilder interview continue — parent session ${parentSessionId ?? '(none)'} is not live, phase not spawned`,
+                  );
                 }
                 sendJson(res, 200, { ok: true, status: session.status });
               } catch (e) {

@@ -1,0 +1,8 @@
+support/support-analytics-reporter.md	支持部
+support/support-executive-summary-generator.md	支持部
+support/support-finance-tracker.md	支持部
+support/support-infrastructure-maintainer.md	支持部
+support/support-legal-compliance-checker.md	支持部
+support/support-recruitment-specialist.md	支持部
+support/support-supply-chain-strategist.md	支持部
+support/support-support-responder.md	支持部

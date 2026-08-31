@@ -84,6 +84,10 @@ export function buildPhasePrompt(kind: BuildPhaseKind, stateRoot: string): strin
  * Spawn one one-shot builder phase (fire-and-forget): the child settles when
  * its turn ends. Also remembers the spawning main-session id so host routes
  * can attribute later phases to a live parent.
+ *
+ * Failure policy: this function never throws, but spawn failures are NOT
+ * silently discarded — pass a `logger` so rejections surface in the host
+ * log (a swallowed rejection here looked exactly like "/eteam 没有反应").
  */
 export function spawnBuildPhase(args: {
   ctx: { subagents: RuntimeContext['subagents'] };
@@ -91,12 +95,22 @@ export function spawnBuildPhase(args: {
   parent: Agent;
   stateRoot: string;
   kind: BuildPhaseKind;
+  logger?: { warn(message: string): void };
 }): void {
-  const { ctx, config, parent, stateRoot, kind } = args;
+  const { ctx, config, parent, stateRoot, kind, logger } = args;
   const subagents = ctx.subagents;
-  if (subagents?.start === undefined) return;
+  if (subagents?.start === undefined) {
+    logger?.warn(`eteams: builder phase ${kind} NOT spawned — subagents service unavailable`);
+    return;
+  }
+  const failMessage = (stage: string, error: unknown): string =>
+    `eteams: builder phase ${kind} ${stage} — no card will appear: ${
+      error instanceof Error ? error.message : String(error)
+    }`;
   void setBuildParentSession(stateRoot, String(parent.id))
-    .catch(() => undefined)
+    .catch((error) => {
+      logger?.warn(failMessage('parent-ref write failed', error));
+    })
     .then(() =>
       subagents.start(config.memberProvider, {
         label: 'eteams-rolebuilder',
@@ -110,13 +124,22 @@ export function spawnBuildPhase(args: {
       }),
     )
     .then((run) => {
-      if (run === undefined) return;
+      if (run === undefined) {
+        logger?.warn(`eteams: builder phase ${kind} start returned no run`);
+        return;
+      }
       // 官方契约（docs/20.2.1）：消费方必须始终 dispose 一次性 run——自然
       // 完结后立即释放资源、到达静止，而不是把释放时机交给运行时。
       void run.result
-        .catch(() => undefined)
+        .catch((error) => {
+          logger?.warn(failMessage('child turn failed', error));
+        })
         .then(() => run.dispose())
-        .catch(() => undefined);
+        .catch((error) => {
+          logger?.warn(failMessage('dispose failed', error));
+        });
     })
-    .catch(() => undefined);
+    .catch((error) => {
+      logger?.warn(failMessage('spawn FAILED', error));
+    });
 }

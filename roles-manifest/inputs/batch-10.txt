@@ -1,0 +1,11 @@
+marketing/marketing-social-media-strategist.md	营销部
+marketing/marketing-tiktok-strategist.md	营销部
+marketing/marketing-twitter-engager.md	营销部
+marketing/marketing-video-optimization-specialist.md	营销部
+marketing/marketing-wechat-official-account.md	营销部
+marketing/marketing-wechat-operator.md	营销部
+marketing/marketing-weibo-strategist.md	营销部
+marketing/marketing-weixin-channels-strategist.md	营销部
+marketing/marketing-xiaohongshu-operator.md	营销部
+marketing/marketing-xiaohongshu-specialist.md	营销部
+marketing/marketing-zhihu-strategist.md	营销部
