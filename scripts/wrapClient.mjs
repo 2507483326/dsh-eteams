@@ -23,13 +23,20 @@
  * `react/jsx-runtime`, and every package listed in the manifest's
  * `dsh.client.inject` array into the factory's `require`.
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import process from 'node:process';
 
+// tsdown writes the raw CJS bundle to lib/client.stage.js (staging name —
+// never served by the host). This script wraps it and REPLACES lib/client.js
+// atomically (tmp file + rename), so a running DSH instance can never observe
+// a half-written or envelope-less client bundle (that used to crash the
+// renderer: "exports is not defined" / duplicate-declaration SyntaxErrors).
+const stagePath = new URL('../lib/client.stage.js', import.meta.url);
 const clientPath = new URL('../lib/client.js', import.meta.url);
+const tmpPath = new URL('../lib/client.js.tmp', import.meta.url);
 const pkgPath = new URL('../package.json', import.meta.url);
 
-const body = readFileSync(clientPath, 'utf8');
+const body = readFileSync(stagePath, 'utf8');
 const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
 
 if (body.includes('__ModuleLoader__')) {
@@ -57,5 +64,7 @@ const wrapped = [
   '',
 ].join('\n');
 
-writeFileSync(clientPath, wrapped);
-console.log(`wrap-client: wrapped lib/client.js as id ${JSON.stringify(pkg.name)}`);
+writeFileSync(tmpPath, wrapped);
+renameSync(tmpPath, clientPath); // same-volume rename: atomic swap-in
+unlinkSync(stagePath);
+console.log(`wrap-client: wrapped lib/client.stage.js -> lib/client.js (atomic) as id ${JSON.stringify(pkg.name)}`);

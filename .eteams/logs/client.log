@@ -146,3 +146,17 @@
 {"at":1788072956289,"version":"v0.2.0","entry":{"at":1788072954286,"kind":"error","message":"Uncaught ReferenceError: exports is not defined","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=b0c7ae84f57e:1:23"}}
 {"at":1788072956955,"version":"v0.2.0","entry":{"at":1788072954951,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
 {"at":1788073002504,"version":"v0.2.0","entry":{"at":1788073000500,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1788099423914,"version":"v0.2.0","entry":{"at":1788099421903,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1788099544410,"version":"v0.2.0","entry":{"at":1788099542163,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1788102488679,"version":"v0.2.0","entry":{"at":1788102486672,"kind":"error","message":"Uncaught ReferenceError: exports is not defined","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=23febb203a5d:1:23"}}
+{"at":1788102488693,"version":"v0.2.0","entry":{"at":1788099542163,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1788102488693,"version":"v0.2.0","entry":{"at":1788102486672,"kind":"error","message":"Uncaught ReferenceError: exports is not defined","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=23febb203a5d:1:23"}}
+{"at":1788102898416,"version":"v0.2.0","entry":{"at":1788102895951,"kind":"error","message":"Uncaught SyntaxError: Identifier 'willChangeRe' has already been declared","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=23febb203a5d:1:1"}}
+{"at":1788102898429,"version":"v0.2.0","entry":{"at":1788099542163,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1788102898429,"version":"v0.2.0","entry":{"at":1788102486672,"kind":"error","message":"Uncaught ReferenceError: exports is not defined","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=23febb203a5d:1:23"}}
+{"at":1788102898429,"version":"v0.2.0","entry":{"at":1788102895952,"kind":"error","message":"Uncaught SyntaxError: Identifier 'willChangeRe' has already been declared","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=23febb203a5d:1:1"}}
+{"at":1788145633284,"version":"v0.2.0","entry":{"at":1788145631262,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
+{"at":1788146074247,"version":"v0.2.1","entry":{"at":1788146072140,"kind":"bundle","message":"eteams client bundle loaded v0.2.1"}}
+{"at":1788146113703,"version":"v0.2.1","entry":{"at":1788146111554,"kind":"bundle","message":"eteams client bundle loaded v0.2.1"}}
+{"at":1788146438242,"version":"v0.2.1","entry":{"at":1788146436196,"kind":"bundle","message":"eteams client bundle loaded v0.2.1"}}
+{"at":1788146644924,"version":"v0.2.1","entry":{"at":1788146642580,"kind":"bundle","message":"eteams client bundle loaded v0.2.1"}}

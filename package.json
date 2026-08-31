@@ -1,6 +1,6 @@
 {
   "name": "dsh-eteams",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "ETeams for DeepSeek Harness: captain-led multi-agent team collaboration with execution chains, task slots, member dialogs and persistent state",
   "type": "module",
   "main": "lib/index.js",
@@ -53,7 +53,7 @@
     }
   },
   "scripts": {
-    "build": "node scripts/clean.mjs && tsc -p tsconfig.host.json && tsc -p tsconfig.client.json && tsdown && node scripts/wrapClient.mjs",
+    "build": "node scripts/clean.mjs && tsc -p tsconfig.host.json && tsc -p tsconfig.client.json && tsdown && node scripts/wrapClient.mjs && node scripts/smokeEnvelope.mjs",
     "typecheck": "tsc -p tsconfig.host.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -158,6 +158,7 @@
     "@deepseek-ai/dsh-workspace": "0.1.0-rc.8",
     "@deepseek-ai/schemastery": "^3.18.1",
     "@eslint/js": "^10.0.1",
+    "@mdxeditor/editor": "^4.2.3",
     "@types/node": "^24.13.3",
     "@types/react": "~18.3.1",
     "@types/react-dom": "^18.3.7",

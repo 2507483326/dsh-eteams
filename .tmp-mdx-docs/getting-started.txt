@@ -1,0 +1,71 @@
+MDXEditor - the Rich Text Markdown Editor React ComponentMarkdown editing can be
+even more delightful.
+MDXEditor is an open-source React component that allows
+users to author markdown documents naturally.
+ Just like in Google docs or Notion.
+Try it liveGet started
+
+Style the content editable area with your content CSS class
+
+```
+<MdxEditor
+  markdown={markdown}
+  className={className}
+  contentEditableClassName="my-prose-class"
+/>
+
+```
+
+No more need for edit ↔ preview.
+
+What you see is what you get. Style the rich text with the same styles as your actual page.
+Read more about content styling
+Code blocks with syntax highlighting and language-aware editing
+Configure the code block languages your project uses and let authors edit snippets directly in the document.
+Code blocks docs
+Enable CodeMirror for editable code blocks
+
+```
+<MdxEditor
+  markdown={markdown}
+  plugins={[
+    codeBlockPlugin(),
+    codeMirrorPlugin({
+      codeBlockLanguages: {
+        tsx: 'TypeScript',
+        css: 'CSS'
+      }
+    })
+  ]}
+/>
+
+```
+
+Use `+` as a bullet sign, `_` as emphasis
+
+```
+<MdxEditor
+  markdown={markdown}
+  toMarkdownOptions={{
+    bullet: '+',
+    emphasis: '_'
+  }}
+/>
+
+```
+
+Consistent, configurable markdown output
+The component exposes properties that allow you to tune how the editor content gets converted to markdown. This lets you adjust formatting like the bullet style, the whitespace settings, the emphasis markers.
+Markdown processing explained
+
+Feature overview
+Table editor
+Link dialog
+Image support
+Front-matter editor
+Markdown shortcuts
+Diff/source view
+Directives
+MarkdownX Components
+Customizable toolbar
+Copyright © 2023 Petyo Ivanov

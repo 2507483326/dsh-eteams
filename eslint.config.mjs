@@ -26,6 +26,8 @@ export default tseslint.config(
       'docs/**',
       // Throwaway asar scanner (CJS, sandbox-only).
       '**/*.cjs',
+      // 临时工作目录（文档缓存等，不入库）。
+      '.tmp-*/**',
     ],
   },
 

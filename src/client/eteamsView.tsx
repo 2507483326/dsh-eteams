@@ -1464,12 +1464,7 @@ function HandbookEditor({
         </>
       ) : (
         <>
-          <textarea
-            style={{ ...styles.textarea, minHeight: 220, fontFamily: 'ui-monospace, monospace', fontSize: 12 }}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            spellCheck={false}
-          />
+          <MdEditor value={draft} onChange={setDraft} minHeight={220} />
           {error !== null && <div style={styles.formError}>保存失败：{error}</div>}
         </>
       )}
@@ -2017,11 +2012,10 @@ function MembersTab({
                       角色手册（可选，Markdown：使命/职责/规则/领域专章/沟通风格/交付标准）
                     </summary>
                     <div style={{ ...styles.formRow, marginTop: 8 }}>
-                      <textarea
-                        style={{ ...styles.textarea, minHeight: 220, fontFamily: 'ui-monospace, monospace', fontSize: 12 }}
+                      <MdEditor
                         value={personaMd}
-                        onChange={(e) => setPersonaMd(e.target.value)}
-                        spellCheck={false}
+                        onChange={setPersonaMd}
+                        minHeight={220}
                       />
                     </div>
                   </details>
