@@ -1,9 +1,11 @@
 /.npm-cache
 /node_modules
 /lib
+/lib/tailwind.gen.css
 /debug.log
 /.eteams/logs
 /.eteams/logs
 /.tmp
 /.eteams
 .dsh-worktrees/
+/.tmp-tw-docs

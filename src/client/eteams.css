@@ -1,0 +1,20 @@
+/*
+ * dsh-eteams 客户端 Tailwind 唯一输入文件（文件名 camelCase，遵守 ESLint filename-case）。
+ *
+ * 管线（docs/21-client-ui-stack.md D19a）：
+ *   pnpm build
+ *     → node scripts/buildTailwind.mjs    tailwind CLI：本文件 + tailwind.config.ts
+ *                                         → lib/tailwind.gen.css（--minify，gitignore）
+ *     → tsdown tailwindCssInline 虚拟模块  产物以字符串内联进单文件 CJS envelope
+ *                                         （虚拟 id 不以 .css 结尾，规避 css-guard）
+ *     → 运行时 src/client/tailwind.ts     ensureEteamsStyles() 幂等注入
+ *                                         <style data-dsh-eteams-tw>（S2 落地）
+ *
+ * 作用域（D19b）：corePlugins.preflight=false（全局 reset 绝不进宿主 DOM）；
+ * important='.eteams-ui'（工具类形如 `.eteams-ui .flex`，双向隔离）。
+ * S3 将在下方 @layer base 手写 shadcn 语义 token 桥（附录 A，全部限定
+ * .eteams-ui 作用域、不用 @apply）。
+ */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

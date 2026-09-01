@@ -32,7 +32,8 @@ function mdxEditorCssInline() {
   // 降级为纯文本编辑器（表现即「代码块无高亮」）。extensions 数组里本来
   // 就有 basicSetup + basicLight + 语言支持扩展，整体换回 ...extensions，
   // 功能一个不少且无重复。
-  const CM_MOUNT_RE = /\.\.\.extensions\.filter\(\(x\) => x !== basicSetup\),\s*_eteamsHiLineGutter\(\),[\s\S]*?_eteamsHiSelMatches\(\)/;
+  const CM_MOUNT_RE =
+    /\.\.\.extensions\.filter\(\(x\) => x !== basicSetup\),\s*_eteamsHiLineGutter\(\),[\s\S]*?_eteamsHiSelMatches\(\)/;
   return {
     name: 'dsh-eteams:mdxeditor-css-inline',
     resolveId(id: string) {
@@ -42,7 +43,11 @@ function mdxEditorCssInline() {
       return null;
     },
     transform(code: string, id: string) {
-      if (!id.replace(/\\/g, '/').includes('@mdxeditor/editor/dist/plugins/codemirror/CodeMirrorEditor.js')) {
+      if (
+        !id
+          .replace(/\\/g, '/')
+          .includes('@mdxeditor/editor/dist/plugins/codemirror/CodeMirrorEditor.js')
+      ) {
         return null;
       }
       if (!CM_MOUNT_RE.test(code)) return null;
@@ -61,6 +66,39 @@ function mdxEditorCssInline() {
       }
       if (id === UVU_ASSERT_STUB_ID) {
         return 'export const ok = () => {}; export default { ok };';
+      }
+      return null;
+    },
+  };
+}
+
+/**
+ * 把 lib/tailwind.gen.css（scripts/buildTailwind.mjs 产物）改道为虚拟 JS
+ * 模块（字符串导出）。与 mdxEditorCssInline 同一手法：虚拟 id 带 \0 前缀、
+ * 不以 .css 结尾，规避 css-guard 的 /\.css$/ 过滤器（单文件 CJS envelope
+ * 没有独立 CSS 通道）。产物缺失即报可读错误——pnpm build 已把
+ * buildTailwind 串在 tsc 之后、tsdown 之前，正常流程不会命中。
+ */
+function tailwindCssInline() {
+  const TW_VIRTUAL_ID = '\0dsh-eteams:tailwind-css-js';
+  return {
+    name: 'dsh-eteams:tailwind-css-inline',
+    resolveId(id: string) {
+      if (id === './tailwind.gen.css') return TW_VIRTUAL_ID;
+      return null;
+    },
+    load(id: string) {
+      if (id === TW_VIRTUAL_ID) {
+        let css: string;
+        try {
+          css = readFileSync(new URL('./lib/tailwind.gen.css', import.meta.url), 'utf8');
+        } catch (error) {
+          throw new Error(
+            '[tsdown:tailwindCssInline] lib/tailwind.gen.css 读取失败——先运行 `node scripts/buildTailwind.mjs`（pnpm build 已自动串步）。',
+            { cause: error },
+          );
+        }
+        return `export default ${JSON.stringify(css)};`;
       }
       return null;
     },
@@ -94,7 +132,7 @@ export default [
     sourcemap: false,
     clean: false,
     outExtensions: () => ({ js: '.js' }),
-    plugins: [mdxEditorCssInline()],
+    plugins: [mdxEditorCssInline(), tailwindCssInline()],
     // lexical 的 default 分支（.mjs）带 top-level await（运行时在 dev/prod
     // 间二选一），CJS 输出不支持 TLA。rolldown 对 import 语句默认用
     // ["import","node","default"] 解析 exports——'node' 命中 @lexical/react
