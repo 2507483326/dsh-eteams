@@ -130,13 +130,13 @@ export interface BackdropPalette {
   gridLine: string;
   /** 高地图基础着色（中性阴影档，≤0.07）。 */
   terrainShade: string;
-  /** 高地图峰顶着色（sky 点缀，≤0.07）。 */
+  /** 高地图峰顶着色（DSW 蓝点缀，≤0.07；docs/23 D21e）。 */
   terrainPeak: string;
   /** 坦克车身（≤0.4）。 */
   tankBody: string;
   /** 坦克履带/炮管深档（≤0.4）。 */
   tankDark: string;
-  /** 坦克点缀像素（sky 档，≤0.4）。 */
+  /** 坦克点缀像素（DSW 蓝档，≤0.4；docs/23 D21e）。 */
   tankAccent: string;
   /** 画布级合成透明度上限（D20e：0.5，组件以 CSS opacity 兜底）。 */
   compositeAlpha: number;
@@ -180,27 +180,27 @@ function round3(v: number): number {
   return Math.round(v * 1000) / 1000;
 }
 
-/** 从宿主变量名读色的采样键（D20h）。缺省一律落官网字面色。 */
+/** 从宿主变量名读色的采样键（D20h；docs/23 D21e：brand 改 DSW 蓝源）。缺省
+ * 一律落字面兜底（DSW 蓝 deepseek-500 / slate 族）。 */
 export interface PaletteVarNames {
   /** 主文字色（网格/阴影基底，亮暗自适应）。 */
   readonly label: string;
-  /** 品牌主色（sky 点缀）。 */
+  /** 品牌点缀色（DSW 蓝：宿主 button-info-fill，亮暗自适应）。 */
   readonly brand: string;
 }
 
 export const DEFAULT_PALETTE_VARS: PaletteVarNames = {
   label: '--dsw-alias-label-secondary',
-  brand: '--dsw-alias-brand-primary',
+  brand: '--dsw-alias-button-info-fill',
 };
 
-/**
- * 采样调色板（D20h）：`read(name)` 由组件提供（getComputedStyle 包一层），
- * 返回 null/undefined/空串即用官网字面兜底（sky-500/slate 族）。本函数纯：
- * 同一组输入色产出同一调色板，测试直接喂假 read。
- */
+/** 采样调色板（D20h；docs/23 D21e）：`read(name)` 由组件提供
+ * （getComputedStyle 包一层），返回 null/undefined/空串即用字面兜底
+ * （DSW 蓝 deepseek-500 / slate 族）。本函数纯：同一组输入色产出同一
+ * 调色板，测试直接喂假 read。 */
 export function sampleBackdropPalette(read: (name: string) => string | null): BackdropPalette {
   const label = read(DEFAULT_PALETTE_VARS.label)?.trim() || '#475569';
-  const brand = read(DEFAULT_PALETTE_VARS.brand)?.trim() || '#0ea5e9';
+  const brand = read(DEFAULT_PALETTE_VARS.brand)?.trim() || '#4176e6';
   return {
     // 官网网格 [0.04]；canvas 上 0.05 封顶保证存在感略高于网页静态格（D20e）。
     gridLine: withAlpha(label, 0.05),
@@ -225,7 +225,7 @@ export interface StaticOp {
   color: string;
 }
 
-/** 高地图峰顶阈值：高度 ≥ 0.8 的格子叠 sky 点缀。 */
+/** 高地图峰顶阈值：高度 ≥ 0.8 的格子叠 DSW 蓝点缀（D21e）。 */
 const PEAK_THRESHOLD = 0.8;
 
 /**
@@ -312,7 +312,7 @@ export function planStaticLayer(
 
 /* —— 像素坦克（D20f）—— */
 
-/** sprite 像素语义：0 空 / 1 车身 / 2 深档（履带·炮管）/ 3 sky 点缀。 */
+/** sprite 像素语义：0 空 / 1 车身 / 2 深档（履带·炮管）/ 3 DSW 蓝点缀（D21e）。 */
 export type SpritePixel = 0 | 1 | 2 | 3;
 
 /**

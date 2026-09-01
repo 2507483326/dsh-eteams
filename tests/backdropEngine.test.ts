@@ -92,21 +92,27 @@ describe('withAlpha', () => {
   });
 });
 
-describe('sampleBackdropPalette (D20h)', () => {
-  it('falls back to the official palette when host vars are absent', () => {
+describe('sampleBackdropPalette (D20h/D21e)', () => {
+  it('falls back to the DSW-blue literal palette when host vars are absent', () => {
     const p = sampleBackdropPalette(() => null);
     // 网格线 = label 兜底 #475569 at 0.05
     expect(p.gridLine).toBe('rgba(71,85,105,0.05)');
-    expect(p.terrainPeak).toBe('rgba(14,165,233,0.07)');
-    expect(p.tankAccent).toBe('rgba(14,165,233,0.4)');
+    // 品牌点缀兜底 = deepseek-500 #4176e6（docs/23 D21e）
+    expect(p.terrainPeak).toBe('rgba(65,118,230,0.07)');
+    expect(p.tankAccent).toBe('rgba(65,118,230,0.4)');
     expect(p.compositeAlpha).toBe(COMPOSITE_ALPHA_CAP);
   });
 
-  it('respects host-provided colors and alpha caps (D20e)', () => {
+  it('respects host-provided colors and alpha caps (D20e/D21e)', () => {
     const p = sampleBackdropPalette((name) =>
-      name === '--dsw-alias-label-secondary' ? '#94a3b8' : '#0284c7',
+      name === '--dsw-alias-label-secondary'
+        ? '#94a3b8'
+        : name === '--dsw-alias-button-info-fill'
+          ? '#679efe'
+          : 'rgba(0,0,0,0)',
     );
     expect(p.gridLine.startsWith('rgba(148,163,184,')).toBe(true);
+    expect(p.tankAccent.startsWith('rgba(103,158,254,')).toBe(true);
     for (const color of [p.gridLine, p.terrainShade, p.terrainPeak]) {
       expect(alphaOf(color)).toBeLessThanOrEqual(0.07 + 1e-9);
     }
