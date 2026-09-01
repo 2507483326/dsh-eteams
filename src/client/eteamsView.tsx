@@ -41,20 +41,10 @@ import { ClientErrorBoundary } from './diagnostics';
 import { MdEditor } from './mdEditor';
 import {
   addTeamMember,
-  cancelBuild,
-  confirmBuild,
   createTeamViaPanel,
-  deleteRosterMember,
   fetchAgentActivity,
-  fetchBuildState,
-  fetchRoster,
   removeTeamMember,
-  restartBuild,
-  resumeBuild,
-  saveRosterMember,
-  submitInterview,
   type BuildDraft,
-  type BuildSession,
   type InterviewQuestion,
   type RosterMember,
 } from './api';
@@ -67,6 +57,16 @@ import {
   type TeamSnapshot,
 } from './monitor';
 import { getApp, type RootState } from './store/app';
+import type { BuildState } from './store/models/build';
+import type { RosterState } from './store/models/roster';
+
+/**
+ * S10（docs/21-client-ui-stack.md）：roster/build 两键已随 models/index.ts
+ * 注册进单例 store（运行时 state 完整）；RootState 的类型收口在
+ * store/app.ts（本步 inScope 之外），这里局部扩展读取面——类型并拢后
+ * 本别名即可删除。
+ */
+type PanelRootState = RootState & { roster: RosterState; build: BuildState };
 
 const PHASE_LABELS: Record<string, string> = {
   staged: '草案',
@@ -720,7 +720,9 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
   // 任务 id，dialogMember=成员对话框选中的成员名。
   const expandedTask = useSelector((s: RootState) => s.ui.drawerTaskId);
   const dialogMember = useSelector((s: RootState) => s.ui.dialogMember);
-  const [roster, setRoster] = useState<RosterMember[]>([]);
+  // S10：成员库列表迁入 roster model——useSelector 读、refreshRoster 发
+  // `roster/fetchRoster`（takeLatest 防叠）。
+  const roster = useSelector((s: PanelRootState) => s.roster.list);
   // 成员子代理活动点（docs/20.4 P4）：childId → running/inactive。旧运行时
   // 无 listChildren 时返回空表——面板不渲染点，不误导。
   const [agentActivity, setAgentActivity] = useState<Record<string, string>>({});
@@ -789,10 +791,10 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
       : (team.members.find((m) => m.name === dialogMember) ?? null);
 
   const refreshRoster = useCallback((): void => {
-    void fetchRoster()
-      .then(setRoster)
-      .catch(() => undefined);
-  }, []);
+    // S10：直接 await api 的调用点改 dispatch。失败由 effect 落
+    // state.error——迁移前这里 .catch(() => undefined) 同为静默面。
+    void dispatch({ type: 'roster/fetchRoster' });
+  }, [dispatch]);
   useEffect(() => {
     if (activeTab === 'roster' || activeTab === 'team') refreshRoster();
   }, [activeTab, refreshRoster]);
@@ -1443,6 +1445,7 @@ function HandbookEditor({
   readOnly: boolean;
   onSaved: () => void;
 }): ReactNode {
+  const dispatch = useDispatch();
   // draft === null → read-only Markdown view; string → editing buffer.
   // Seeded from the CURRENT member on every edit entry, so a roster reload
   // (post-save) is always what a new edit starts from.
@@ -1454,33 +1457,45 @@ function HandbookEditor({
 
   const save = (): void => {
     if (draft === null) return;
-    setSaving(true);
-    setError(null);
-    setSaved(false);
-    saveRosterMember({
-      name: member.name,
-      role: member.role,
-      ...(member.duty !== undefined ? { duty: member.duty } : {}),
-      ...(member.style !== undefined ? { style: member.style } : {}),
-      ...(member.skills !== undefined ? { skills: member.skills } : {}),
-      ...(Array.isArray(member.rules) ? { rules: member.rules } : {}),
-      ...(member.executionPrompt !== undefined ? { executionPrompt: member.executionPrompt } : {}),
-      ...(member.provider !== undefined ? { provider: member.provider } : {}),
-      ...(member.model !== undefined ? { model: member.model } : {}),
-      ...(member.reasoningEffort !== undefined ? { reasoningEffort: member.reasoningEffort } : {}),
-      ...(member.avatar !== undefined ? { avatar: member.avatar } : {}),
-      personaMd: draft,
-    })
-      .then(() => {
+    // S10：保存改发 `roster/saveRoster`（effect 透传 api，失败 reject——
+    // dispatch promise 即 dva effect 的完成信号），组件 catch 面保持迁移
+    // 前行为（保存失败的显式提示）。
+    void (async (): Promise<void> => {
+      setSaving(true);
+      setError(null);
+      setSaved(false);
+      try {
+        await dispatch({
+          type: 'roster/saveRoster',
+          payload: {
+            name: member.name,
+            role: member.role,
+            ...(member.duty !== undefined ? { duty: member.duty } : {}),
+            ...(member.style !== undefined ? { style: member.style } : {}),
+            ...(member.skills !== undefined ? { skills: member.skills } : {}),
+            ...(Array.isArray(member.rules) ? { rules: member.rules } : {}),
+            ...(member.executionPrompt !== undefined
+              ? { executionPrompt: member.executionPrompt }
+              : {}),
+            ...(member.provider !== undefined ? { provider: member.provider } : {}),
+            ...(member.model !== undefined ? { model: member.model } : {}),
+            ...(member.reasoningEffort !== undefined
+              ? { reasoningEffort: member.reasoningEffort }
+              : {}),
+            ...(member.avatar !== undefined ? { avatar: member.avatar } : {}),
+            personaMd: draft,
+          },
+        });
         setSaved(true);
         setDraft(null);
         setTimeout(() => setSaved(false), 2500);
         onSaved();
-      })
-      .catch((e: unknown) => {
+      } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
-      })
-      .finally(() => setSaving(false));
+      } finally {
+        setSaving(false);
+      }
+    })();
   };
 
   return (
@@ -1535,6 +1550,7 @@ function MembersTab({
   /** 创建卡片跳转信号：>0 时打开新增工作台（docs/19.9.5）。 */
   openAddTick: number;
 }): ReactNode {
+  const dispatch = useDispatch();
   const [view, setView] = useState<'list' | 'add' | 'detail'>('list');
   const [detailName, setDetailName] = useState<string | null>(null);
   const [name, setName] = useState('');
@@ -1559,9 +1575,11 @@ function MembersTab({
     (safePage + 1) * MEMBER_PAGE_SIZE,
   );
 
-  // 构建会话（docs/19.6.2, D18-5）：轮询 /eteams-api/rolebuilder；以 startedAt
-  // 为会话键去重自动跳转（用户手动离开后不反复强拉，状态再迁移才再次跳转）。
-  const [build, setBuild] = useState<BuildSession | null>(null);
+  // 构建会话（docs/19.6.2, D18-5）：S10 迁入 build model——session 经
+  // useSelector 读取，轮询照旧由 refreshBuild 发 `build/fetchBuild`；
+  // 以 startedAt 为会话键去重自动跳转（用户手动离开后不反复强拉，状态
+  // 再迁移才再次跳转）的侧效应搬进下方 useEffect。
+  const build = useSelector((s: PanelRootState) => s.build.session);
   const [justFilled, setJustFilled] = useState(false);
   const [draftEdit, setDraftEdit] = useState<DraftEdit>(EMPTY_EDIT);
   const [confirming, setConfirming] = useState(false);
@@ -1571,32 +1589,35 @@ function MembersTab({
   const draftInitRef = useRef(0);
 
   const refreshBuild = useCallback((): void => {
-    void fetchBuildState()
-      .then((s) => {
-        setBuild(s);
-        if (s === null) return;
-        if (s.startedAt !== seenSessionRef.current) {
-          seenSessionRef.current = s.startedAt;
-          // 新会话不再强制跳创建页（docs/19.16）：发送时刻由对话卡片负责
-          // openMemberBuilder——这里强跳会把用户每次回面板都拽进 add 视图，
-          // 导致「构建时进不去对话/看板」。
-        }
-        if (s.status === 'awaiting_confirmation' && seenReviewRef.current !== s.startedAt) {
-          seenReviewRef.current = s.startedAt;
-          setView('add');
-        }
-        // 待确认草稿到达/刷新时重置编辑表单（对话里继续调整 → 表单跟着刷新）。
-        if (
-          s.status === 'awaiting_confirmation' &&
-          s.draft !== null &&
-          s.updatedAt !== draftInitRef.current
-        ) {
-          draftInitRef.current = s.updatedAt;
-          setDraftEdit(fromBuildDraft(s.draft));
-        }
-      })
-      .catch(() => undefined);
-  }, []);
+    // S10：直接 await api 的调用点改 dispatch；失败由 effect 落 state.error
+    // ——迁移前这里 .catch(() => undefined) 同为静默面。
+    void dispatch({ type: 'build/fetchBuild' });
+  }, [dispatch]);
+  // 会话侧效应（原 refreshBuild .then 内联逻辑，数据源改 store）：以
+  // startedAt 为会话键去重自动跳转（用户手动离开后不反复强拉，状态再
+  // 迁移才再次跳转）；待确认草稿到达/刷新时重置编辑表单（对话里继续
+  // 调整 → 表单跟着刷新）。
+  useEffect(() => {
+    if (build === null) return;
+    if (build.startedAt !== seenSessionRef.current) {
+      seenSessionRef.current = build.startedAt;
+      // 新会话不再强制跳创建页（docs/19.16）：发送时刻由对话卡片负责
+      // openMemberBuilder——这里强跳会把用户每次回面板都拽进 add 视图，
+      // 导致「构建时进不去对话/看板」。
+    }
+    if (build.status === 'awaiting_confirmation' && seenReviewRef.current !== build.startedAt) {
+      seenReviewRef.current = build.startedAt;
+      setView('add');
+    }
+    if (
+      build.status === 'awaiting_confirmation' &&
+      build.draft !== null &&
+      build.updatedAt !== draftInitRef.current
+    ) {
+      draftInitRef.current = build.updatedAt;
+      setDraftEdit(fromBuildDraft(build.draft));
+    }
+  }, [build]);
   useEffect(() => {
     refreshBuild();
     const h = setInterval(refreshBuild, 1500);
@@ -1617,11 +1638,15 @@ function MembersTab({
   const del = (memberName: string): void => {
     if (!window.confirm(`确定删除角色「${memberName}」？删除后不可恢复。`)) return;
     setListError(null);
-    deleteRosterMember(memberName)
-      .then(() => onDeleted())
-      .catch((e: unknown) => {
+    // S10：删除改发 `roster/deleteRoster`；失败 reject → 显式上报（行为不变）。
+    void (async (): Promise<void> => {
+      try {
+        await dispatch({ type: 'roster/deleteRoster', payload: memberName });
+        onDeleted();
+      } catch (e) {
         setListError(e instanceof Error ? e.message : String(e));
-      });
+      }
+    })();
   };
 
   // 确认入库（D18-6 主路径）：修改后的草稿经 POST /rolebuilder/confirm 由
@@ -1630,21 +1655,26 @@ function MembersTab({
     setConfirming(true);
     setFormError(null);
     try {
-      await confirmBuild({
-        name: draftEdit.name.trim(),
-        role: draftEdit.role.trim(),
-        duty: draftEdit.duty,
-        style: draftEdit.style,
-        skills: draftEdit.skills,
-        rules: draftEdit.rulesText
-          .split('\n')
-          .map((r) => r.trim())
-          .filter((r) => r !== ''),
-        executionPrompt: draftEdit.executionPrompt,
-        personaMd: draftEdit.personaMd,
-        ...(build !== null && build.draft?.avatar !== undefined
-          ? { avatar: build.draft.avatar }
-          : {}),
+      // S10：确认入库改发 `build/confirmBuild`（effect 透传 api，失败 reject
+      // → 表单错误提示，行为不变）。
+      await dispatch({
+        type: 'build/confirmBuild',
+        payload: {
+          name: draftEdit.name.trim(),
+          role: draftEdit.role.trim(),
+          duty: draftEdit.duty,
+          style: draftEdit.style,
+          skills: draftEdit.skills,
+          rules: draftEdit.rulesText
+            .split('\n')
+            .map((r) => r.trim())
+            .filter((r) => r !== ''),
+          executionPrompt: draftEdit.executionPrompt,
+          personaMd: draftEdit.personaMd,
+          ...(build !== null && build.draft?.avatar !== undefined
+            ? { avatar: build.draft.avatar }
+            : {}),
+        },
       });
       onDeleted();
     } catch (e) {
@@ -1657,7 +1687,13 @@ function MembersTab({
 
   const abandon = async (): Promise<void> => {
     setConfirming(true);
-    await cancelBuild().catch(() => undefined);
+    // S10：放弃改发 `build/cancelBuild`（effect 失败上抛；组件侧迁移前就
+    // 吞错——.catch(() => undefined)——行为不变）。
+    try {
+      await dispatch({ type: 'build/cancelBuild' });
+    } catch {
+      // 与迁移前一致：放弃失败不打断面板，轮询会带回会话真实状态。
+    }
     setConfirming(false);
     refreshBuild();
   };
@@ -1666,7 +1702,13 @@ function MembersTab({
   // 宿主恢复会话并唤醒后台构建代理，从中断处接着跑。
   const resume = async (): Promise<void> => {
     setConfirming(true);
-    await resumeBuild().catch(() => undefined);
+    // S10：继续构建改发 `build/resumeBuild`（同上：effect 失败上抛，
+    // 组件侧吞错行为不变）。
+    try {
+      await dispatch({ type: 'build/resumeBuild' });
+    } catch {
+      // 与迁移前一致：恢复失败不打断面板。
+    }
     setConfirming(false);
     refreshBuild();
   };
@@ -1693,11 +1735,13 @@ function MembersTab({
     if (answers.length === 0) return;
     setConfirming(true);
     setInterviewError(null);
-    const outcome = await submitInterview(answers).then(
-      () => null,
-      (e: unknown) => (e instanceof Error ? e.message : String(e)),
-    );
-    if (outcome !== null) setInterviewError(outcome);
+    // S10：作答改发 `build/submitInterview`；失败 reject → 显式提示
+    // （提交失败不再静默的迁移前要求保持不变）。
+    try {
+      await dispatch({ type: 'build/submitInterview', payload: answers });
+    } catch (e) {
+      setInterviewError(e instanceof Error ? e.message : String(e));
+    }
     setConfirming(false);
     refreshBuild();
   };
@@ -1705,11 +1749,12 @@ function MembersTab({
   const restartBuildAgent = async (): Promise<void> => {
     setConfirming(true);
     setInterviewError(null);
-    const outcome = await restartBuild().then(
-      () => null,
-      (e: unknown) => (e instanceof Error ? e.message : String(e)),
-    );
-    if (outcome !== null) setInterviewError(outcome);
+    // S10：重启改发 `build/restartBuild`；失败 reject → 显式提示（行为不变）。
+    try {
+      await dispatch({ type: 'build/restartBuild' });
+    } catch (e) {
+      setInterviewError(e instanceof Error ? e.message : String(e));
+    }
     setConfirming(false);
     refreshBuild();
   };
