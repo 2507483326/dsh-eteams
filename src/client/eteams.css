@@ -12,9 +12,61 @@
  *
  * 作用域（D19b）：corePlugins.preflight=false（全局 reset 绝不进宿主 DOM）；
  * important='.eteams-ui'（工具类形如 `.eteams-ui .flex`，双向隔离）。
- * S3 将在下方 @layer base 手写 shadcn 语义 token 桥（附录 A，全部限定
- * .eteams-ui 作用域、不用 @apply）。
+ *
+ * S3 令牌桥（D19c + 附录 A）：@layer base 手写 shadcn 语义 token，全部限定
+ * .eteams-ui 作用域、不用 @apply。右值一律 `var(--dsw-alias-…, 字面兜底)`——
+ * 宿主变量是完整色值（亮暗跟随零 JS），禁用 /alpha 修饰；有别名可用的 token
+ * 绝不写成纯字面色。
  */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  /*
+   * shadcn 语义 token ↔ 宿主变量桥（docs/21 附录 A，S3）。
+   * 挂在 .eteams-ui 上，由 tailwind.config.ts theme.extend.colors 以
+   * var(--token) 消费；宿主变量缺省时落到字面兜底（浅色基准）。
+   */
+  .eteams-ui {
+    /* 背景 / 前景 */
+    --background: var(--dsw-alias-bg-layer-1, #ffffff);
+    --foreground: var(--dsw-alias-label-primary, #1f2328);
+    --card: var(--dsw-alias-bg-layer-2, #ffffff);
+    --card-foreground: var(--dsw-alias-label-primary, #1f2328);
+    --popover: var(--dsw-alias-bg-layer-2, #ffffff);
+    --popover-foreground: var(--dsw-alias-label-primary, #1f2328);
+    /* 主色 / 次级 / 弱化 / 强调 */
+    --primary: var(--dsw-alias-brand-primary, #4b7bec);
+    --primary-foreground: var(--dsw-alias-label-primary-foreground, #ffffff);
+    --secondary: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.12));
+    --secondary-foreground: var(--dsw-alias-label-primary, #1f2328);
+    --muted: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.12));
+    --muted-foreground: var(--dsw-alias-label-tertiary, #6b7280);
+    --accent: var(--dsw-alias-accent, var(--dsw-alias-brand-primary, #4b7bec));
+    --accent-foreground: var(--dsw-alias-label-primary, #1f2328);
+    --destructive: var(--dsw-alias-state-error-primary, #d64545);
+    /* 附录 A 之外的微调：shadcn destructive 变体（button 等，S4 起）需要
+       on-destructive 文本色；宿主无专用别名，复用 label-primary-foreground
+       （与 --primary-foreground 同源），字面兜底 #ffffff。 */
+    --destructive-foreground: var(--dsw-alias-label-primary-foreground, #ffffff);
+    /* 边框 / 输入 / 焦点环 */
+    --border: var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.35));
+    --input: var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.35));
+    --ring: var(--dsw-alias-brand-primary, #4b7bec);
+    /* 圆角：直定 0.75rem（=12px，对齐 card.tsx 现行值），shadcn 惯例由
+       tailwind.config.ts 的 borderRadius lg/md/sm 从 --radius 衍生 */
+    --radius: 0.75rem;
+    /* 扩展 token（超出 shadcn 标准集，服务既有 Tone 徽标语义） */
+    --success: var(--dsw-alias-state-success-primary, #2e9e5b);
+    --warning: var(--dsw-alias-state-warn-primary, #c78a1d);
+    --business: var(--dsw-alias-state-business-primary, var(--primary));
+  }
+
+  /* shadcn 脚手架「* { @apply border-border }」的手动作用域版（D19c：限定
+     .eteams-ui 子树、不用 @apply），默认边框色绝不溢出宿主 DOM。 */
+  .eteams-ui,
+  .eteams-ui * {
+    border-color: var(--border);
+  }
+}
