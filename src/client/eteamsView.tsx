@@ -172,8 +172,10 @@ const T = {
   surface: 'var(--dsw-alias-bg-layer-1, #ffffff)',
   border: 'var(--dsw-alias-border-l1, rgba(100,116,139,0.14))',
   border2: 'var(--dsw-alias-border-l2, rgba(100,116,139,0.26))',
-  accent: 'var(--dsw-alias-brand-primary, #0ea5e9)',
-  accentSoft: 'var(--dsw-alias-interactive-bg-active, rgba(14,165,233,0.12))',
+  // docs/23 D21a/b：accent 全族换 DSW 蓝源（brand-primary 宿主实测近黑），
+  // 品牌淡底换 business-tertiary 淡底对。
+  accent: 'var(--dsw-alias-button-info-fill, #4176e6)',
+  accentSoft: 'var(--dsw-alias-state-business-tertiary, rgba(65,118,230,0.12))',
   err: 'var(--dsw-alias-state-error-primary, #b91c1c)',
   // ⚠️ 主题的 state-*-secondary 是实心 400 色（amber-400/green-400/red-400），
   // 不是 10% 淡色调——实心底 + 实心 fg 会同色相打架（橙字橙底不可读，用户
@@ -231,8 +233,9 @@ const 字面量插值，运行时动态值一律 inline style——S5/S11 既有
 
 /** 边框沿用原 l1 档（shadcn --border 桥的是 l2，任意值直引保持视觉；S11 先例）。 */
 const BORDER_L1_CLASS = 'border-[color:var(--dsw-alias-border-l1,rgba(100,116,139,0.14))]';
-/** 次级文字：label-secondary 无语义 token（附录 A 未桥接），任意值直引。 */
-const TEXT2_CLASS = 'text-[color:var(--dsw-alias-label-secondary,#47546c)]';
+/** 次级文字：label-secondary 无语义 token（附录 A 未桥接），任意值直引
+ * （docs/23 D21d：兜底换官网 slate-600 #475569）。 */
+const TEXT2_CLASS = 'text-[color:var(--dsw-alias-label-secondary,#475569)]';
 /** 原 styles.muted（12px / 三级灰 token / overflow-wrap:anywhere），
  * S12–S14 各批次区块共用的类常量。 */
 const MUTED_CLASS = 'text-[12px] leading-[1.55] text-muted-foreground [overflow-wrap:anywhere]';
@@ -252,13 +255,15 @@ const BANNER_CLASS =
 （Card 默认 bg-card 是 layer-2）、l1 边框、原阴影；px-4 py-3.5 = 14px 16px。
 eteams-ui 字面量随 Card 根（S5 试点双保险）。 */
 const PANEL_CARD_CLASS = `eteams-ui mb-3 min-w-0 border border-solid bg-background px-4 py-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.03)] ${BORDER_L1_CLASS}`;
-/** 原 styles.progressTrack（6px 高 / sunken 淡底 / 999 圆角 / 上 10 下 6）。 */
+/** 原 styles.progressTrack（6px 高 / sunken 淡底 / 999 圆角 / 上 10 下 6；
+ * docs/23 D21d 兜底换官网 slate-100）。 */
 const PROGRESS_TRACK_CLASS =
-  'mt-2.5 mb-1.5 h-1.5 overflow-hidden rounded-full bg-[color:var(--dsw-alias-bg-layer-2,#edf0f4)]';
-/** 原 fns.progressFill 的静态面：accent→info 渐变（任意值完整字面量）；
-宽度百分比是运行时动态值，保留 inline style（S14 清点口径，S5 card 先例）。 */
+  'mt-2.5 mb-1.5 h-1.5 overflow-hidden rounded-full bg-[color:var(--dsw-alias-bg-layer-2,#f1f5f9)]';
+/** 原 fns.progressFill 的静态面（docs/23 D21a：渐变两端同桥 DSW 蓝——宿主内
+ * info-fill 与 business-primary 同值即纯色档，对齐官网纯色进度条观感）；
+ * 宽度百分比是运行时动态值，保留 inline style（S14 清点口径，S5 card 先例）。 */
 const PROGRESS_FILL_CLASS =
-  'h-full rounded-full bg-[linear-gradient(90deg,var(--dsw-alias-brand-primary,#0ea5e9),var(--dsw-alias-state-business-primary,#1d4ed8))]';
+  'h-full rounded-full bg-[linear-gradient(90deg,var(--dsw-alias-button-info-fill,#4176e6),var(--dsw-alias-state-business-primary,#4176e6))]';
 /** 原 styles.eventRow（7px 上下距 / 13px / 次级文字 / 下边线）。 */
 const EVENT_ROW_CLASS = `border-b border-solid py-[7px] text-[13px] leading-[1.55] ${BORDER_L1_CLASS} ${TEXT2_CLASS}`;
 /** 原 styles.rail（窄栏态：84px / 3px 纵向间距 / 右分隔线 / 上 2 右 12）。
@@ -286,13 +291,14 @@ const RAIL_LINK_IDLE_CLASS =
 const RAIL_LINK_ACTIVE_CLASS = 'border-current font-semibold text-primary';
 
 /** 侧栏按钮（窄栏态，原 fns.railBtn）：active/idle 两态都是完整字面量映射（无拼接，
-teamsButton tabBtnClass 同款）；active 底=交互激活、字=brand 主色 token。 */
+teamsButton tabBtnClass 同款）；docs/23 D21b：active 底改品牌淡底 token
+（business-tertiary 淡底对）、字=brand 主色 token（D21a 后即 DSW 蓝）。 */
 const railBtnClass = (active: boolean): string =>
   cn(
     'block w-full cursor-pointer rounded-[8px] border-none px-2.5 py-[7px] text-left text-xs leading-[1.55] [letter-spacing:0.2px]',
     active
-      ? 'bg-[color:var(--dsw-alias-interactive-bg-active,rgba(14,165,233,0.12))] font-semibold text-primary'
-      : 'bg-transparent font-medium text-[color:var(--dsw-alias-label-secondary,#47546c)]',
+      ? 'bg-business-tint font-semibold text-primary'
+      : 'bg-transparent font-medium text-[color:var(--dsw-alias-label-secondary,#475569)]',
   );
 
 /** 宽栏导航链接类名（官网三态查表；同 railBtnClass 的映射表口径）。 */
@@ -323,20 +329,21 @@ const LIST_COUNT_CLASS = 'text-[12px] text-muted-foreground';
 const MEMBER_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(230px,1fr))] gap-3';
 /** 原 styles.memberCard（成员卡片：l1 边框 / 12px 圆角 / 8px 纵向间距）。 */
 const MEMBER_CARD_CLASS = `flex flex-col gap-2 rounded-xl border border-solid bg-background p-3 ${BORDER_L1_CLASS}`;
-/** 原 styles.roleChip（品牌淡底小徽标）：S14 团队卡片「当前」复用。 */
+/** 原 styles.roleChip（品牌淡底小徽标）：S14 团队卡片「当前」复用；
+ * docs/23 D21b 底色改品牌淡底 token。 */
 const ROLE_CHIP_CLASS =
-  'inline-block rounded-full bg-[color:var(--dsw-alias-interactive-bg-active,rgba(14,165,233,0.12))] px-[9px] py-px text-[11px] font-semibold text-primary';
+  'inline-block rounded-full bg-business-tint px-[9px] py-px text-[11px] font-semibold text-primary';
 /** 原 styles.btn（描边小按钮）：移出团队在调用点叠 text-destructive。 */
 const BTN_CLASS = `cursor-pointer rounded-[8px] border border-solid bg-background px-3 py-[5px] text-[12px] font-medium ${TEXT2_CLASS}`;
 /** 原 styles.drawer（sunken 抽屉面板）：任务抽屉已升级为 Dialog，现仅成员
 汇报时间线使用。 */
-const DRAWER_CLASS = `mt-2 mb-3.5 rounded-[10px] border border-solid bg-[color:var(--dsw-alias-bg-layer-2,#edf0f4)] px-3.5 py-3 ${BORDER_L1_CLASS}`;
+const DRAWER_CLASS = `mt-2 mb-3.5 rounded-[10px] border border-solid bg-[color:var(--dsw-alias-bg-layer-2,#f1f5f9)] px-3.5 py-3 ${BORDER_L1_CLASS}`;
 /** 原 styles.dialogItem（汇报时间线条目）。 */
 const DIALOG_ITEM_CLASS = `my-1 rounded-[8px] border border-solid bg-background px-2.5 py-[7px] text-[12.5px] ${BORDER_L1_CLASS} ${TEXT2_CLASS}`;
 /** 原 styles.taskRow（任务行：l1 下边线 / 8px 圆角 / 指针）。 */
 const TASK_ROW_CLASS = `cursor-pointer rounded-[8px] border-b border-solid px-2 py-2.5 ${BORDER_L1_CLASS}`;
 /** 原 styles.chip（依赖小芯片）：S14 角色详情的所属团队芯片复用。 */
-const CHIP_CLASS = `mr-1 mb-0.5 inline-block rounded-[6px] bg-[color:var(--dsw-alias-bg-layer-2,#edf0f4)] px-[7px] py-px text-[11px] ${TEXT2_CLASS}`;
+const CHIP_CLASS = `mr-1 mb-0.5 inline-block rounded-[6px] bg-[color:var(--dsw-alias-bg-layer-2,#f1f5f9)] px-[7px] py-px text-[11px] ${TEXT2_CLASS}`;
 /** 原 styles.attempt（执行线路尝试条目：l2 左描边；--border 桥即 l2 档）。 */
 const ATTEMPT_CLASS = 'my-2.5 border-l-2 border-solid border-border py-0.5 pl-3';
 /** 任务详情 Dialog 的调用面覆盖：限宽收高可滚动 + 面板文字基准（portal
@@ -352,11 +359,11 @@ PILL_FG 的 700 级深色档——ok/warn/err 是刻意硬编码的深色（stat
 const PILL_BASE_CLASS =
   'inline-flex w-fit items-center gap-[5px] rounded-full px-[9px] py-px text-[11px] font-medium';
 const PILL_TONE_CLASS: Record<Tone, string> = {
-  info: 'bg-[color:rgba(29,78,216,0.1)] text-business',
+  info: 'bg-business-tint text-business',
   ok: 'bg-[color:var(--dsw-static-green-100,#e6faed)] text-[#15803d]',
   warn: 'bg-[color:var(--dsw-static-amber-100,#fef5e7)] text-[#b45309]',
   err: 'bg-[color:var(--dsw-static-red-100,#fee2e2)] text-[#b91c1c]',
-  muted: 'bg-[color:var(--dsw-alias-bg-layer-2,#edf0f4)] text-muted-foreground',
+  muted: 'bg-[color:var(--dsw-alias-bg-layer-2,#f1f5f9)] text-muted-foreground',
 };
 /** 原 fns.dot 的类名版（完整字面量映射）：dot 走饱和 primary token（与
 PILL_FG 的深档文字互不影响，S12 既有口径）。 */
@@ -388,7 +395,7 @@ const FORM_ERROR_CLASS = 'mb-2 mt-1 text-[12px] text-destructive';
 const CARD_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(210px,1fr))] gap-3';
 /** 原 styles.phasePill（团队卡片阶段徽标：淡底弱化档）。 */
 const PHASE_PILL_CLASS =
-  'shrink-0 whitespace-nowrap rounded-full bg-[color:var(--dsw-alias-bg-layer-2,#edf0f4)] px-2 py-px text-[11px] font-medium text-[color:var(--dsw-alias-label-secondary,#47546c)]';
+  'shrink-0 whitespace-nowrap rounded-full bg-[color:var(--dsw-alias-bg-layer-2,#f1f5f9)] px-2 py-px text-[11px] font-medium text-[color:var(--dsw-alias-label-secondary,#475569)]';
 /** 原 styles.teamCard（底色/边框/悬停仍由 .eteams-team-card 样式表接管）。 */
 const TEAM_CARD_CLASS = 'min-w-0 cursor-pointer rounded-xl p-3.5';
 /** 原 styles.roleCard（同上：底色/边框/悬停由 .eteams-role-row 样式表接管）。 */
@@ -396,18 +403,18 @@ const ROLE_CARD_CLASS =
   'relative flex min-w-0 cursor-pointer flex-col items-start gap-2.5 rounded-xl p-3.5 text-left text-foreground';
 /** 原 styles.pagePill（分页计数 pill）。 */
 const PAGE_PILL_CLASS =
-  'whitespace-nowrap rounded-full bg-[color:var(--dsw-alias-bg-layer-2,#edf0f4)] px-2.5 py-0.5 text-[11px] text-[color:var(--dsw-alias-label-secondary,#47546c)]';
+  'whitespace-nowrap rounded-full bg-[color:var(--dsw-alias-bg-layer-2,#f1f5f9)] px-2.5 py-0.5 text-[11px] text-[color:var(--dsw-alias-label-secondary,#475569)]';
 /** 原 styles.detailRow / detailLabel（构建中草稿预览行；l1 下边线任意值直引）。 */
 const DETAIL_ROW_CLASS = `flex gap-2.5 border-b border-solid py-[7px] text-[12px] leading-[1.55] ${BORDER_L1_CLASS}`;
 const DETAIL_LABEL_CLASS = 'w-16 shrink-0 pt-px text-[11px] font-semibold text-muted-foreground';
 /** 原 styles.cmdChip（预填命令芯片：等宽字体 + l1 边框 + 次级文字）。 */
-const CMD_CHIP_CLASS = `mt-2 break-all rounded-[8px] border border-solid bg-[color:var(--dsw-alias-bg-layer-2,#edf0f4)] px-[11px] py-[9px] text-[12px] leading-[1.7] font-mono ${BORDER_L1_CLASS} ${TEXT2_CLASS}`;
+const CMD_CHIP_CLASS = `mt-2 break-all rounded-[8px] border border-solid bg-[color:var(--dsw-alias-bg-layer-2,#f1f5f9)] px-[11px] py-[9px] text-[12px] leading-[1.7] font-mono ${BORDER_L1_CLASS} ${TEXT2_CLASS}`;
 /** 原 styles.buildStep / stepRow / stepNum / prefillBanner（构建工作台）。 */
 const BUILD_STEP_CLASS = 'flex items-center gap-2 py-[3px] text-[12.5px]';
 const STEP_ROW_CLASS = `mt-2 flex items-start gap-2 text-[12.5px] leading-[1.55] ${TEXT2_CLASS}`;
 const STEP_NUM_CLASS =
-  'mt-px inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-[color:var(--dsw-alias-interactive-bg-active,rgba(14,165,233,0.12))] text-[11px] font-semibold text-primary';
-const PREFILL_BANNER_CLASS = `mt-2.5 flex items-start gap-2 rounded-[10px] border border-solid bg-[color:rgba(29,78,216,0.1)] px-3 py-2.5 ${BORDER_L1_CLASS}`;
+  'mt-px inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-business-tint text-[11px] font-semibold text-primary';
+const PREFILL_BANNER_CLASS = `mt-2.5 flex items-start gap-2 rounded-[10px] border border-solid bg-business-tint px-3 py-2.5 ${BORDER_L1_CLASS}`;
 
 /** S13：执行链站点行——✔/●/◌ 结构原样保留，仅样式改 Tailwind 类。 */
 function TaskStations({ task }: { task: TaskView }): ReactNode {
@@ -1373,10 +1380,10 @@ function handbookSeed(member: RosterMember): string {
  */
 const ROLE_LIST_CSS = `
 .eteams-role-row{background:${T.surface};border:1px solid ${T.border};box-shadow:0 1px 2px rgba(15,23,42,0.04);transition:background .15s ease,border-color .15s ease,box-shadow .15s ease,transform .15s ease}
-.eteams-role-row:hover{border-color:rgba(14,165,233,0.45);box-shadow:0 6px 16px rgba(15,23,42,0.09);transform:translateY(-1px)}
+.eteams-role-row:hover{border-color:rgba(65,118,230,0.45);box-shadow:0 6px 16px rgba(15,23,42,0.09);transform:translateY(-1px)}
 .eteams-team-card{background:${T.surface};border:1px solid ${T.border};box-shadow:0 1px 2px rgba(15,23,42,0.04);transition:background .15s ease,border-color .15s ease,box-shadow .15s ease,transform .15s ease}
-.eteams-team-card:hover{border-color:rgba(14,165,233,0.45);box-shadow:0 6px 16px rgba(15,23,42,0.09);transform:translateY(-1px)}
-.eteams-team-card[data-active="true"]{border-color:${T.accent};background:${T.accentSoft};box-shadow:0 2px 10px rgba(14,165,233,0.14)}
+.eteams-team-card:hover{border-color:rgba(65,118,230,0.45);box-shadow:0 6px 16px rgba(15,23,42,0.09);transform:translateY(-1px)}
+.eteams-team-card[data-active="true"]{border-color:${T.accent};background:${T.accentSoft};box-shadow:0 2px 10px rgba(65,118,230,0.14)}
 .eteams-role-del{padding:3px 10px;font-size:11px;border-radius:7px;border:1px solid ${T.border2};background:${T.surface};color:${T.err};cursor:pointer;flex-shrink:0;font-family:inherit;line-height:16px;opacity:0;transition:opacity .15s ease,border-color .15s ease,background .15s ease}
 .eteams-role-row:hover .eteams-role-del,.eteams-role-row:focus-within .eteams-role-del{opacity:1}
 .eteams-role-del:hover{border-color:${T.err};background:${T.errBg}}
@@ -1857,7 +1864,7 @@ function MembersTab({
                         <div className="text-[12.5px] font-semibold">
                           {q.question}
                           {q.multi === true && (
-                            <span className="ml-1.5 rounded-full bg-[color:rgba(29,78,216,0.1)] px-[7px] py-px text-[11px] font-medium text-business">
+                            <span className="ml-1.5 rounded-full bg-business-tint px-[7px] py-px text-[11px] font-medium text-business">
                               可多选
                             </span>
                           )}
@@ -1874,7 +1881,7 @@ function MembersTab({
                                 className={cn(
                                   'cursor-pointer rounded-[8px] border border-solid px-[9px] py-[5px] text-left text-[12px] leading-[1.5] text-inherit',
                                   active
-                                    ? 'border-primary bg-[color:var(--dsw-alias-interactive-bg-active,rgba(14,165,233,0.12))]'
+                                    ? 'border-primary bg-business-tint'
                                     : `bg-transparent ${BORDER_L1_CLASS}`,
                                 )}
                               >
@@ -2163,8 +2170,8 @@ function MembersTab({
         </button>
         <Card className={cn(PANEL_CARD_CLASS, 'mt-2 px-[18px] py-4')}>
           <div className="flex items-center gap-3.5">
-            {/* 头像描边环（视觉升级）：与卡片描边同色系，柔和不抢戏。 */}
-            <div className="rounded-full border-2 border-solid p-0.5 leading-none border-[color:var(--dsw-alias-interactive-bg-active,rgba(14,165,233,0.12))]">
+            {/* 头像描边环（视觉升级）：品牌淡底档（D21b token），柔和不抢戏。 */}
+            <div className="rounded-full border-2 border-solid p-0.5 leading-none border-business-tint">
               <Avatar
                 name={detail.name}
                 seed={detail.avatar?.seed}

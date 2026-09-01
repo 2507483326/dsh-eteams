@@ -22,6 +22,11 @@
  * sky-500 主色 / slate 系中性阶（浅色基准；暗色仍由宿主别名驱动）；
  * D20b：--eteams-font-sans/-mono 字体栈令牌（官网 sans=Inter var、
  * mono=Fira Code VF；不打包字体文件，未装即落系统兜底，docs/22 22.1.2）。
+ * docs/23 D21a/b（二期，用户指令「DSW 蓝 可以复用」）：宿主实测
+ * --dsw-alias-brand-primary 为近黑（#0f1115）非蓝——accent 全族改桥
+ * --dsw-alias-button-info-fill（DSW/DeepSeek 蓝：亮 #4176e6 / 暗 #679efe，
+ * 宿主主按钮同源、亮暗自动）；品牌淡底改桥 state-business-tertiary
+ * （--business-tint）；sky 兜底字面量随之换 DSW 蓝族；中性 slate 兜底不变。
  */
 @tailwind base;
 @tailwind components;
@@ -49,8 +54,9 @@
     --card-foreground: var(--dsw-alias-label-primary, #0f172a);
     --popover: var(--dsw-alias-bg-layer-2, #ffffff);
     --popover-foreground: var(--dsw-alias-label-primary, #0f172a);
-    /* 主色 / 次级 / 弱化 / 强调（主色 sky-500；中性淡底 slate-100） */
-    --primary: var(--dsw-alias-brand-primary, #0ea5e9);
+    /* 主色 / 次级 / 弱化 / 强调（docs/23 D21a：DSW 蓝——宿主 button-info-fill
+       同源，亮 #4176e6/暗 #679efe 自动切换；中性淡底 slate-100） */
+    --primary: var(--dsw-alias-button-info-fill, #4176e6);
     --primary-foreground: var(--dsw-alias-label-primary-foreground, #ffffff);
     --secondary: var(--dsw-alias-interactive-bg-hover, #f1f5f9);
     --secondary-foreground: var(--dsw-alias-label-primary, #0f172a);
@@ -68,10 +74,11 @@
        on-destructive 文本色；宿主无专用别名，复用 label-primary-foreground
        （与 --primary-foreground 同源），字面兜底 #ffffff。 */
     --destructive-foreground: var(--dsw-alias-label-primary-foreground, #ffffff);
-    /* 边框 / 输入 / 焦点环（官网侧栏细线：slate-200 档） */
+    /* 边框 / 输入 / 焦点环（官网侧栏细线：slate-200 档；docs/23 D21a：焦点环
+       随 accent 改桥 DSW 蓝 button-info-fill） */
     --border: var(--dsw-alias-border-l2, #e2e8f0);
     --input: var(--dsw-alias-border-l2, #e2e8f0);
-    --ring: var(--dsw-alias-brand-primary, #0ea5e9);
+    --ring: var(--dsw-alias-button-info-fill, #4176e6);
     /* 圆角：直定 0.75rem（=12px，对齐 card.tsx 现行值），shadcn 惯例由
        tailwind.config.ts 的 borderRadius lg/md/sm 从 --radius 衍生 */
     --radius: 0.75rem;
@@ -80,6 +87,10 @@
     --success: var(--dsw-alias-state-success-primary, #16a34a);
     --warning: var(--dsw-alias-state-warn-primary, #d97706);
     --business: var(--dsw-alias-state-business-primary, var(--primary));
+    /* docs/23 D21b：品牌淡底对（chips/选中底语义源）——宿主 business-tertiary
+       亮 deepseek-100 #e4edfd / 暗 deepseek-800 #34415b；兜底 DSW 蓝 12% 调。
+       tailwind.config.ts business.tint 消费为 bg/border-business-tint 工具类。 */
+    --business-tint: var(--dsw-alias-state-business-tertiary, rgba(65, 118, 230, 0.12));
   }
 
   /* shadcn 脚手架「* { @apply border-border }」的手动作用域版（D19c：限定

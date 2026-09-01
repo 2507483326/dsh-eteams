@@ -230,7 +230,7 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
           <Button
             variant="ghost"
             size="sm"
-            className="group data-[selected=true]:bg-[color:var(--dsw-alias-interactive-bg-active,rgba(14,165,233,0.12))] data-[selected=true]:text-primary"
+            className="group data-[selected=true]:bg-business-tint data-[selected=true]:text-primary"
             data-selected={selectedMember !== null || selectedTeam !== null ? 'true' : undefined}
             aria-label="团队"
             aria-haspopup="dialog"
@@ -380,12 +380,13 @@ function forgetSelectedTeam(sessionId: string | undefined): void {
 :hover，Tailwind 变体可以——样式表随之删除）：
 - 行默认透明底：`<button>` 带 UA 背景，必须显式压住（原样式表同款理由）；
 - hover 底 = 交互悬停（--muted 桥即 interactive-bg-hover，同一宿主变量）；
-- 选中底 = 交互激活（无语义 token，任意值直引；与 hover 同特异性时按产物
-  源序 data-[selected] 靠后取胜，等同原样式表的规则先后）；
+- 选中底 = 品牌淡底（docs/23 D21b：business-tertiary 淡底对，token
+  bg-business-tint；与 hover 同特异性时按产物源序 data-[selected] 靠后
+  取胜，等同原样式表的规则先后）；
 - preflight 已关：UA 字体/背景的显式覆盖逐项保留（text-[13px]、
   [font-family:inherit]、bg-transparent），视觉与迁移前一致。 */
 const ROW_CLASS =
-  'flex w-full cursor-pointer items-center gap-2 rounded-[8px] border-none bg-transparent px-[9px] py-[7px] text-left text-[13px] text-foreground [font-family:inherit] hover:bg-muted data-[selected=true]:bg-[color:var(--dsw-alias-interactive-bg-active,rgba(14,165,233,0.12))]';
+  'flex w-full cursor-pointer items-center gap-2 rounded-[8px] border-none bg-transparent px-[9px] py-[7px] text-left text-[13px] text-foreground [font-family:inherit] hover:bg-muted data-[selected=true]:bg-business-tint';
 const ROW_NAME_CLASS = 'min-w-0 truncate font-medium';
 const ROW_META_CLASS = 'ml-auto shrink-0 text-[11px] text-muted-foreground';
 const EMPTY_CLASS = 'px-2.5 py-3.5 text-center text-xs text-muted-foreground';
@@ -409,7 +410,7 @@ const tabBtnClass = (active: boolean): string =>
     'flex-1 cursor-pointer rounded-[8px] border-none px-2 py-[5px] text-center text-xs leading-[18px]',
     active
       ? 'bg-background font-semibold text-primary shadow-[inset_0_0_0_1px_var(--dsw-alias-border-l1,rgba(100,116,139,0.14))]'
-      : 'bg-transparent font-medium text-[color:var(--dsw-alias-label-secondary,#47546c)]',
+      : 'bg-transparent font-medium text-[color:var(--dsw-alias-label-secondary,#475569)]',
   );
 
 /* 按钮选中面（原 S.faceName/S.teamChip 与 `.eteams-teams-clear` 迁移）：

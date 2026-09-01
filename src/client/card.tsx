@@ -220,7 +220,9 @@ function ETeamsCardBody({ node }: { node: { data: unknown } }): ReactNode {
             <div className="h-[5px] overflow-hidden rounded-full bg-border">
               {/* R1-F5：进度条填充要实心品牌色——--accent 改映射 interactive
               淡底后（原首跳死映射恒落 brand-primary），这里改 bg-primary，
-              渲染色不变（--accent 原本就恒等于 brand-primary）。 */}
+              渲染色不变（--accent 原本就恒等于 brand-primary）。
+              docs/23 D21a：--primary 已改桥 button-info-fill——本条随之呈现
+              DSW 蓝（宿主内与主按钮同源）。 */}
               <div
                 className="h-full bg-primary"
                 style={{

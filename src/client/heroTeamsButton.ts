@@ -45,7 +45,7 @@ const STYLE_ID = 'eteams-hero-button-style';
 const HERO_BUTTON_CSS = `
 .eteams-hero-btn{max-width:min(100%,240px);min-height:28px;color:var(--dsw-alias-label-primary,#1c2430);white-space:nowrap;cursor:pointer;background:transparent;border:none;border-radius:16px;align-items:center;gap:4px;padding:0 10px;font-size:13px;font-weight:500;line-height:20px;display:inline-flex;font-family:inherit;overflow:hidden}
 .eteams-hero-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(100,116,139,0.08))}
-.eteams-hero-btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#0ea5e9);outline-offset:1px}
+.eteams-hero-btn:focus-visible{outline:2px solid var(--dsw-alias-button-info-fill,#4176e6);outline-offset:1px}
 `;
 
 let installed = false;

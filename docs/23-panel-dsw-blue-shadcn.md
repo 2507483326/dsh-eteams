@@ -131,8 +131,8 @@
 
 | 步骤 | commit | 内容 | 体积（lib/client.js） |
 | --- | --- | --- | --- |
-| 基线 | （本次） | 四绿门基线（本会话非受限环境实测）；本文档 | 4,134,608 B |
-| S23-1 | — | — | — |
+| 基线 | d04b85c | 四绿门基线（本会话非受限环境实测）；本文档 | 4,134,608 B |
+| S23-1 | （本次） | DSW 蓝令牌二期：--primary/--ring 改桥 button-info-fill；新增 --business-tint（business-tertiary 淡底对）+ tailwind.config business.tint；全客户端 sky 兜底/旧中性兜底清换（eteamsView ×17 位、teamsButton ×3、buildCard、heroTeamsButton、card 注释）；mdEditor/backdropEngine/avatar 按例外不动 | 4,134,111 B |
 | S23-2 | — | — | — |
 | S23-3 | — | — | — |
 | S23-4 | — | — | — |
