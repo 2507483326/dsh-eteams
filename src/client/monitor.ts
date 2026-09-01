@@ -8,13 +8,13 @@
  * S7 快照事实源在 store/models/activity：fetch 成功 → `activity/set`（整包
  * 替换），失败 → `activity/setError`（reducer 保留 last good 快照，只更新
  * fetchedAt/error）。本模块不再持有模块级 state/listeners——React 订阅统一
- * 走 useActivityState（优先 useSelector；Providerless 表面回退为直连同一
- * 单例 store 的 useSyncExternalStore 订阅，读的是同一份 dva state）。
+ * 走 useActivityState（无条件 useSelector，R2-F2：21.5.3 五表面根 Provider
+ * 拓扑已补齐，Providerless 回退分支与 rules-of-hooks 豁免随之删除）。
  *
  * @module dsh-eteams/client/monitor
  */
-import { useContext, useEffect, useSyncExternalStore } from 'react';
-import { ReactReduxContext, useSelector } from 'react-redux';
+import { useEffect } from 'react';
+import { useSelector } from 'react-redux';
 import { getApp, type RootState } from './store/app';
 
 /** Base URL served by the host web surface. */
@@ -142,27 +142,16 @@ export interface ActivityState {
  * React subscription over the polled activity state（S7：快照已迁 dva，
  * 签名与返回类型不变——card/eteamsView/teamsButton 消费方零改动）。
  *
- * 优先 useSelector（D19e「组件优先 useSelector」），前提是祖先树里有
- * react-redux Provider。当前三消费方都不满足：ETeamsView 的 Provider 包在
- * 自己 JSX 内部（其自身 hook 调用位于 Provider 之外），ETeamsCard /
- * TeamsButton 根部尚未包 Provider（21.5.3 由各自表面步骤落地）——故回退为
- * 直连单例 store 的 useSyncExternalStore 订阅。两条路径读同一份 dva state
- * （同一 store、同一 activity 切片），重渲染粒度一致（切片引用变化才重
- * 渲染）。Provider 是否在祖先树由表面根决定、组件实例一生不变，hook 调用
- * 序恒定；待 Provider 补齐后回退分支与本 disable 可一并删除。
+ * 无条件 useSelector（D19e「组件优先 useSelector」）。前提——祖先树里有
+ * react-redux Provider——由 21.5.3 表面拓扑保证：五个表面根（ETeamsView /
+ * TeamsButton / ETeamsCard / EteamBuildCard / teamsPanel）各自根部包
+ * `<Provider store={getApp().store}>`（单例 store，多 Provider 同 store 无害；
+ * portal 渲染的 TeamsPopup 仍是 TeamsButton 的 React 树子节点，上下文穿透）。
+ * R1-F2：此前的 useContext 条件分支、Providerless 回退（useSyncExternalStore
+ * 直连单例 store）与两处 react-hooks/rules-of-hooks 豁免随拓扑落地一并删除。
  */
 export function useActivityState(): ActivityState {
-  if (useContext(ReactReduxContext) !== null) {
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- Provider 是否在祖先树对每个组件实例恒定（见上），调用序稳定；待 21.5.3 Provider 补齐后本 disable 随回退分支一并删除
-    return useSelector((s: RootState) => s.activity);
-  }
-  const store = getApp().store;
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- 同上：本分支只在 Providerless 表面（card/teamsButton/ETeamsView 自身）渲染时触达，实例一生恒定
-  return useSyncExternalStore(
-    store.subscribe,
-    () => store.getState().activity,
-    () => store.getState().activity,
-  );
+  return useSelector((s: RootState) => s.activity);
 }
 
 async function fetchState(): Promise<void> {

@@ -25,6 +25,7 @@
  * @module dsh-eteams/client/card
  */
 import { type ReactNode } from 'react';
+import { Provider } from 'react-redux';
 import type { Context } from '@deepseek-ai/cordis';
 import { Avatar } from './avatar';
 import { activateETeamsTab } from './bridge';
@@ -34,6 +35,7 @@ import { Card } from './components/ui/card';
 import { ClientErrorBoundary } from './diagnostics';
 import { useActivityState, type TeamSnapshot } from './monitor';
 import { PHASE_LABELS } from './phaseLabels';
+import { getApp } from './store/app';
 
 /** Card state folded from the create-team tool events. */
 interface CardState {
@@ -160,77 +162,90 @@ function findTeam(
   return state.teams.find((t) => t.name === data.teamName);
 }
 
-/** The in-transcript card renderer (live via polled snapshots). */
+/**
+ * The in-transcript card renderer (live via polled snapshots).
+ * R2-F2（docs/21 21.5.3）：表面根包 Provider——本组件自身的 hook 调用
+ * （useActivityState → useSelector）必须在 Provider 子树内，故拆为
+ * 「包装层（错误边界 + Provider）+ 内体（hook 消费 + 表面根）」两层；
+ * 单例 store，多 Provider 同 store 无害。
+ */
 export function ETeamsCard({ node }: { node: { data: unknown } }): ReactNode {
+  return (
+    <ClientErrorBoundary label="团队卡片">
+      <Provider store={getApp().store}>
+        <ETeamsCardBody node={node} />
+      </Provider>
+    </ClientErrorBoundary>
+  );
+}
+
+/** Card body — mounted inside the Provider (see {@link ETeamsCard}). */
+function ETeamsCardBody({ node }: { node: { data: unknown } }): ReactNode {
   const state = useActivityState();
   const data = node.data as { teamId: string | null; teamName: string; goal?: string };
   const team = findTeam(state, data);
   return (
-    <ClientErrorBoundary label="团队卡片">
-      {/* 表面根（D19b）：.eteams-ui 作用域根，工具类经后代选择器作用于子树。 */}
-      <div className="eteams-ui">
-        <Card className="eteams-ui my-2 border-solid px-4 py-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <strong>🐳 {data.teamName}</strong>
+    /* 表面根（D19b）：.eteams-ui 作用域根，工具类经后代选择器作用于子树。 */
+    <div className="eteams-ui">
+      <Card className="eteams-ui my-2 border-solid px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <strong>🐳 {data.teamName}</strong>
+          <Badge
+            variant="outline"
+            className="rounded-full border-solid px-2 py-px text-[11px] font-normal"
+          >
+            {team !== undefined ? (PHASE_LABELS[team.phase] ?? team.phase) : '连接中…'}
+          </Badge>
+          {team !== undefined && team.pendingDecisions.length > 0 && (
             <Badge
               variant="outline"
-              className="rounded-full border-solid px-2 py-px text-[11px] font-normal"
+              className="rounded-full border-solid border-[color:color-mix(in_srgb,var(--warning)_40%,transparent)] px-2 py-px text-[11px] font-normal text-warning"
             >
-              {team !== undefined ? (PHASE_LABELS[team.phase] ?? team.phase) : '连接中…'}
+              △ {team.pendingDecisions.length}
             </Badge>
-            {team !== undefined && team.pendingDecisions.length > 0 && (
-              <Badge
-                variant="outline"
-                className="rounded-full border-solid border-[color:color-mix(in_srgb,var(--warning)_40%,transparent)] px-2 py-px text-[11px] font-normal text-warning"
-              >
-                △ {team.pendingDecisions.length}
-              </Badge>
-            )}
-          </div>
-          {team !== undefined ? (
-            <>
-              <div className="mb-1 mt-2 flex items-center">
-                {team.members.slice(0, 8).map((m) => (
-                  <span key={m.name} className="-mr-1.5" title={`${m.name} · ${m.status}`}>
-                    <Avatar name={m.name} size={26} />
-                  </span>
-                ))}
-                <span className="ml-3 text-xs text-muted-foreground">
-                  {team.members.length} 名成员
-                </span>
-              </div>
-              <div className="h-[5px] overflow-hidden rounded-full bg-border">
-                <div
-                  className="h-full bg-accent"
-                  style={{
-                    width: `${team.progress.total === 0 ? 0 : (team.progress.completed / team.progress.total) * 100}%`,
-                  }}
-                />
-              </div>
-              <div className="my-1.5 text-xs text-muted-foreground">
-                {team.progress.completed}/{team.progress.total} 完成
-                {team.latestEvents.at(-1) !== undefined
-                  ? ` · ${team.latestEvents.at(-1)!.text}`
-                  : ''}
-              </div>
-            </>
-          ) : (
-            <div className="my-1.5 text-xs text-muted-foreground">{data.goal ?? ''}</div>
           )}
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="border-solid"
-            onClick={() => {
-              activateETeamsTab();
-            }}
-          >
-            打开面板
-          </Button>
-        </Card>
-      </div>
-    </ClientErrorBoundary>
+        </div>
+        {team !== undefined ? (
+          <>
+            <div className="mb-1 mt-2 flex items-center">
+              {team.members.slice(0, 8).map((m) => (
+                <span key={m.name} className="-mr-1.5" title={`${m.name} · ${m.status}`}>
+                  <Avatar name={m.name} size={26} />
+                </span>
+              ))}
+              <span className="ml-3 text-xs text-muted-foreground">
+                {team.members.length} 名成员
+              </span>
+            </div>
+            <div className="h-[5px] overflow-hidden rounded-full bg-border">
+              <div
+                className="h-full bg-accent"
+                style={{
+                  width: `${team.progress.total === 0 ? 0 : (team.progress.completed / team.progress.total) * 100}%`,
+                }}
+              />
+            </div>
+            <div className="my-1.5 text-xs text-muted-foreground">
+              {team.progress.completed}/{team.progress.total} 完成
+              {team.latestEvents.at(-1) !== undefined ? ` · ${team.latestEvents.at(-1)!.text}` : ''}
+            </div>
+          </>
+        ) : (
+          <div className="my-1.5 text-xs text-muted-foreground">{data.goal ?? ''}</div>
+        )}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="border-solid"
+          onClick={() => {
+            activateETeamsTab();
+          }}
+        >
+          打开面板
+        </Button>
+      </Card>
+    </div>
   );
 }
 

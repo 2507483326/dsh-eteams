@@ -53,6 +53,7 @@ import {
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { Provider } from 'react-redux';
 import { Button, writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives';
 import { ADD_PEOPLE_TEMPLATE, prefillComposer } from './addPeople';
 import { PHASE_LABELS } from './phaseLabels';
@@ -66,6 +67,7 @@ import {
   type RosterMember,
 } from './api';
 import { useActivityMonitor } from './monitor';
+import { getApp } from './store/app';
 import { Avatar } from './avatar';
 import { cn } from './cn';
 import { Card } from './components/ui/card';
@@ -209,89 +211,95 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
 
   return (
     <ClientErrorBoundary label="团队按钮">
-      {/* 表面根（D19b/S11）：.eteams-ui 作用域根，工具类经后代选择器作用于
-      子树；根自身不承工具类样式，display/align 承重布局保留 inline。 */}
-      <div
-        ref={setAnchorEl}
-        className="eteams-ui"
-        style={{ display: 'inline-flex', alignItems: 'center' }}
-        data-eteams="button"
-      >
-        {/* 选中高亮（原 POPUP_CSS `.eteams-teams-btn[data-selected]` 迁移）：
+      {/* R2-F2（docs/21 21.5.3）：表面根包 Provider——单例 store，多 Provider
+      同 store 无害。TeamsPopup 经 createPortal 挂到 body，但仍是本组件
+      React 树的子节点，context 穿透 portal，弹层内 useActivityMonitor 的
+      useSelector 正常消费。表面根（D19b/S11）：.eteams-ui 作用域根，工具类
+      经后代选择器作用于子树；根自身不承工具类样式，display/align 承重布局
+      保留 inline。 */}
+      <Provider store={getApp().store}>
+        <div
+          ref={setAnchorEl}
+          className="eteams-ui"
+          style={{ display: 'inline-flex', alignItems: 'center' }}
+          data-eteams="button"
+        >
+          {/* 选中高亮（原 POPUP_CSS `.eteams-teams-btn[data-selected]` 迁移）：
         `group` 供 hover 显隐的清除钮用；交互激活底色无语义 token → 任意值
         直引（D19c），文字用 brand 主色 token。 */}
-        <Button
-          variant="ghost"
-          size="sm"
-          className="group data-[selected=true]:bg-[color:var(--dsw-alias-interactive-bg-active,rgba(75,123,236,0.12))] data-[selected=true]:text-primary"
-          data-selected={selectedMember !== null || selectedTeam !== null ? 'true' : undefined}
-          aria-label="团队"
-          aria-haspopup="dialog"
-          aria-expanded={open}
-          onClick={onButtonClick}
-        >
-          {selectedMember !== null ? (
-            <span className={FACE_ROW_CLASS}>
-              <Avatar
-                name={selectedMember.name}
-                seed={selectedMember.avatar?.seed}
-                salt={selectedMember.avatar?.salt}
-                size={18}
-              />
-              <span className={FACE_NAME_CLASS}>{selectedMember.name}</span>
-              <span
-                className={CLEAR_BUTTON_CLASS}
-                role="button"
-                aria-label="取消选择"
-                title="取消选择"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  clearSelection();
-                }}
-              >
-                ×
+          <Button
+            variant="ghost"
+            size="sm"
+            className="group data-[selected=true]:bg-[color:var(--dsw-alias-interactive-bg-active,rgba(75,123,236,0.12))] data-[selected=true]:text-primary"
+            data-selected={selectedMember !== null || selectedTeam !== null ? 'true' : undefined}
+            aria-label="团队"
+            aria-haspopup="dialog"
+            aria-expanded={open}
+            onClick={onButtonClick}
+          >
+            {selectedMember !== null ? (
+              <span className={FACE_ROW_CLASS}>
+                <Avatar
+                  name={selectedMember.name}
+                  seed={selectedMember.avatar?.seed}
+                  salt={selectedMember.avatar?.salt}
+                  size={18}
+                />
+                <span className={FACE_NAME_CLASS}>{selectedMember.name}</span>
+                <span
+                  className={CLEAR_BUTTON_CLASS}
+                  role="button"
+                  aria-label="取消选择"
+                  title="取消选择"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    clearSelection();
+                  }}
+                >
+                  ×
+                </span>
               </span>
-            </span>
-          ) : selectedTeam !== null ? (
-            <span className={FACE_ROW_CLASS}>
-              <span className={TEAM_CHIP_CLASS} aria-hidden={true}>
-                {selectedTeam.name.slice(0, 1)}
+            ) : selectedTeam !== null ? (
+              <span className={FACE_ROW_CLASS}>
+                <span className={TEAM_CHIP_CLASS} aria-hidden={true}>
+                  {selectedTeam.name.slice(0, 1)}
+                </span>
+                <span className={FACE_NAME_CLASS}>{selectedTeam.name}</span>
+                <span
+                  className={CLEAR_BUTTON_CLASS}
+                  role="button"
+                  aria-label="取消选择"
+                  title="取消选择"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    clearSelection();
+                  }}
+                >
+                  ×
+                </span>
               </span>
-              <span className={FACE_NAME_CLASS}>{selectedTeam.name}</span>
-              <span
-                className={CLEAR_BUTTON_CLASS}
-                role="button"
-                aria-label="取消选择"
-                title="取消选择"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  clearSelection();
-                }}
-              >
-                ×
-              </span>
-            </span>
-          ) : (
-            '团队'
-          )}
-        </Button>
-        {open && anchorEl !== null && typeof document !== 'undefined'
-          ? createPortal(
-              <TeamsPopup
-                anchor={anchorEl}
-                inputActions={props.inputActions}
-                selectedMember={selectedMember}
-                selectedTeam={selectedTeam}
-                personaError={personaError}
-                onSelectMember={selectMember}
-                onSelectTeam={selectTeam}
-                initialTab={selectedMember !== null ? 'member' : 'team'}
-                onClose={() => setOpen(false)}
-              />,
-              document.body,
-            )
-          : null}
-      </div>
+            ) : (
+              '团队'
+            )}
+          </Button>
+          {open && anchorEl !== null && typeof document !== 'undefined'
+            ? createPortal(
+                <TeamsPopup
+                  anchor={anchorEl}
+                  inputActions={props.inputActions}
+                  selectedMember={selectedMember}
+                  selectedTeam={selectedTeam}
+                  personaError={personaError}
+                  onSelectMember={selectMember}
+                  onSelectTeam={selectTeam}
+                  initialTab={selectedMember !== null ? 'member' : 'team'}
+                  onClose={() => setOpen(false)}
+                />,
+                document.body,
+              )
+            : null}
+        </div>
+      </Provider>
     </ClientErrorBoundary>
   );
 }

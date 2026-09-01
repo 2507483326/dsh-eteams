@@ -39,12 +39,14 @@
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { Provider } from 'react-redux';
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
 import { activateETeamsTab, stageTeamSignals, teamsTabVisible } from './bridge';
 import { Button } from './components/ui/button';
 import { ClientErrorBoundary, recordClientDiag } from './diagnostics';
 import { ETeamsView } from './eteamsView';
 import { HERO_ROW_SELECTOR } from './heroTeamsButton';
+import { getApp } from './store/app';
 
 /** Landing options for {@link enterTeamsPanel}: which panel view to open. */
 export interface TeamsPanelOptions {
@@ -169,36 +171,40 @@ function TeamsOverlay({ onClose }: { onClose: () => void }): ReactNode {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
   return (
-    /* 表面根（D19b/S11）：.eteams-ui 作用域根——工具类经后代选择器作用于
+    /* R2-F2（docs/21 21.5.3）：表面根包 Provider——单例 store，多 Provider
+    同 store 无害；内嵌 ETeamsView 自带同 store Provider，嵌套无副作用。
+    表面根（D19b/S11）：.eteams-ui 作用域根——工具类经后代选择器作用于
     子树，根自身不承工具类样式（页面在 body 下独立 React 根，自带作用域）。 */
-    <div className="eteams-ui">
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="团队"
-        data-eteams="overlay-page"
-        className="fixed z-[1000] flex flex-col bg-[color:var(--dsw-alias-bg-base,#f6f7f9)] text-foreground"
-        style={{ left: pane.left, top: pane.top, width: pane.width, height: pane.height }}
-      >
-        {/* 顶栏（用户反馈）：去掉「团队」标题与提示文案，只留右侧返回。 */}
-        <header className="flex h-11 flex-none items-center justify-end gap-2.5 border-b border-solid border-[color:var(--dsw-alias-border-l1,rgba(100,116,139,0.14))] px-4">
-          <Button type="button" variant="outline" size="sm" onClick={onClose}>
-            返回
-          </Button>
-        </header>
-        {/* Plain block wrapper: the view root is `height:100%` + flex row and
+    <Provider store={getApp().store}>
+      <div className="eteams-ui">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="团队"
+          data-eteams="overlay-page"
+          className="fixed z-[1000] flex flex-col bg-[color:var(--dsw-alias-bg-base,#f6f7f9)] text-foreground"
+          style={{ left: pane.left, top: pane.top, width: pane.width, height: pane.height }}
+        >
+          {/* 顶栏（用户反馈）：去掉「团队」标题与提示文案，只留右侧返回。 */}
+          <header className="flex h-11 flex-none items-center justify-end gap-2.5 border-b border-solid border-[color:var(--dsw-alias-border-l1,rgba(100,116,139,0.14))] px-4">
+            <Button type="button" variant="outline" size="sm" onClick={onClose}>
+              返回
+            </Button>
+          </header>
+          {/* Plain block wrapper: the view root is `height:100%` + flex row and
         has no width of its own — a block parent lets it fill the pane width
         instead of shrink-wrapping to its content (the "定死宽度" artifact).
         overflow hidden keeps tall content scrolling inside the view column —
         never spilling to the document (横向滚动条治理). */}
-        <div className="min-h-0 flex-1 overflow-hidden">
-          {/* The panel only reads sessionId/inputActions off its slot props; the
+          <div className="min-h-0 flex-1 overflow-hidden">
+            {/* The panel only reads sessionId/inputActions off its slot props; the
           page has neither (no session on the not-started screen), so a minimal
           share is cast in — the panel degrades to the all-teams pool and
           clipboard prefill, both sanctioned fallbacks. */}
-          <ETeamsView {...({ sessionId: undefined } as unknown as ConvViewProps)} />
+            <ETeamsView {...({ sessionId: undefined } as unknown as ConvViewProps)} />
+          </div>
         </div>
       </div>
-    </div>
+    </Provider>
   );
 }
