@@ -17,6 +17,7 @@ import { Provider } from 'react-redux';
 import { Avatar } from './avatar';
 import { openMemberBuilder } from './bridge';
 import { cn } from './cn';
+import { Badge } from './components/ui/badge';
 import { ClientErrorBoundary } from './diagnostics';
 import { fetchBuildState, type BuildSession } from './api';
 import { getApp } from './store/app';
@@ -200,12 +201,19 @@ export function EteamBuildCard(props: { node?: unknown }): ReactNode {
               <div className="flex flex-wrap items-center gap-2 text-[13px] font-semibold">
                 <span>{isOrphan ? '成员构建 · 已结束' : `成员创建中 · ${showName}`}</span>
                 {showStatus !== null && (
-                  <span className={cn(STATUS_PILL_CLASS, showStatus.toneClass)}>
+                  /* docs/23 S23-5：状态 pill 迁 shadcn Badge（视觉口径以
+                      className 覆盖层保留）。 */
+                  <Badge
+                    variant="secondary"
+                    className={cn(STATUS_PILL_CLASS, showStatus.toneClass)}
+                  >
                     {showStatus.label}
-                  </span>
+                  </Badge>
                 )}
                 {showInterviewPending && (
-                  <span className={INTERVIEW_PILL_CLASS}>✍️ 意图访谈待作答</span>
+                  <Badge variant="secondary" className={INTERVIEW_PILL_CLASS}>
+                    ✍️ 意图访谈待作答
+                  </Badge>
                 )}
               </div>
               <div className="mt-0.5 flex items-center gap-1.5 text-[12px] opacity-70">

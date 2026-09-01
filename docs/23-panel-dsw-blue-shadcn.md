@@ -135,7 +135,7 @@
 | S23-1 | bc8f684 | DSW 蓝令牌二期：--primary/--ring 改桥 button-info-fill；新增 --business-tint（business-tertiary 淡底对）+ tailwind.config business.tint；全客户端 sky 兜底/旧中性兜底清换（eteamsView ×17 位、teamsButton ×3、buildCard、heroTeamsButton、card 注释）；mdEditor/backdropEngine/avatar 按例外不动 | 4,134,111 B |
 | S23-2 | f12b31b | shadcn 补库：+@radix-ui/react-select/-tabs/-progress（实测可达、React 18 peer 齐备）；vendor select/tabs/progress/alert（Select 走 getPortalContainer 同款 portal；lucide 三图标深层导入 + 垫片增补；Alert 增 warning 变体）；仅落库未接线——JS 零增量，体积增量全部来自 content 扫描出的组件类 CSS（gen.css +5.5KB 字符串内联） | 4,139,593 B |
 | S23-3 | 327ee1a | eteamsView 控件迁移：手写 BTN/SELECT/PILL/PROGRESS/FORM_ERROR/BANNER/PREFILL_BANNER → shadcn Button(outline·sm)/Select(哨兵空选项)/Badge(Pill 组件+dot)/Progress(transform 技法)/Alert(destructive 紧凑档·warning amber 淡底·default 品牌淡底)；宿主 primitives Button(9 位 primary→default 等)/Input(6 位) 一并换 shadcn 件（icon prop → children）；LIST_TITLE 补官网 h2 签名 tracking-tight；侧栏导航按钮按 D20c 官网签名保留手写 | 4,159,987 B |
-| S23-4 | （本次） | teamsButton 弹层迁移：tab 头手写按钮 → shadcn Tabs 分段控件（触发器紧凑档 + 激活 DSW 蓝文字签名）；footer 虚线新增钮 → shadcn Button outline+dashed；触发钮宿主 Button → 库件 ghost（同 token 同观感，摆脱宿主件依赖） | 4,167,589 B |
-| S23-5 | — | — | — |
+| S23-4 | e1c4baa | teamsButton 弹层迁移：tab 头手写按钮 → shadcn Tabs 分段控件（触发器紧凑档 + 激活 DSW 蓝文字签名）；footer 虚线新增钮 → shadcn Button outline+dashed；触发钮宿主 Button → 库件 ghost（同 token 同观感，摆脱宿主件依赖） | 4,167,589 B |
+| S23-5 | （本次） | card.tsx 进度条 → Progress（bg-primary=DSW 蓝）；buildCard 两枚 pill → Badge；heroTeamsButton 文字兜底换官网 slate-900、focus 环 DSW 蓝源（S23-1 已换）；teamsPanel 核验达标（shadcn Button + 宿主桥中性表面，不动） | 4,167,558 B |
 | S23-6 | — | — | — |
 | S23-7 | — | — | — |

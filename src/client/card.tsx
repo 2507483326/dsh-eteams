@@ -32,6 +32,7 @@ import { activateETeamsTab } from './bridge';
 import { Badge } from './components/ui/badge';
 import { Button } from './components/ui/button';
 import { Card } from './components/ui/card';
+import { Progress } from './components/ui/progress';
 import { ClientErrorBoundary } from './diagnostics';
 import { useActivityState, type TeamSnapshot } from './monitor';
 import { PHASE_LABELS } from './phaseLabels';
@@ -217,19 +218,21 @@ function ETeamsCardBody({ node }: { node: { data: unknown } }): ReactNode {
                 {team.members.length} 名成员
               </span>
             </div>
-            <div className="h-[5px] overflow-hidden rounded-full bg-border">
-              {/* R1-F5：进度条填充要实心品牌色——--accent 改映射 interactive
-              淡底后（原首跳死映射恒落 brand-primary），这里改 bg-primary，
-              渲染色不变（--accent 原本就恒等于 brand-primary）。
-              docs/23 D21a：--primary 已改桥 button-info-fill——本条随之呈现
-              DSW 蓝（宿主内与主按钮同源）。 */}
-              <div
-                className="h-full bg-primary"
-                style={{
-                  width: `${team.progress.total === 0 ? 0 : (team.progress.completed / team.progress.total) * 100}%`,
-                }}
-              />
-            </div>
+            {/* docs/23 S23-5：进度条迁 shadcn Progress（原手写 track/fill 双 div；
+                R1-F5 注记见下——填充色 bg-primary 经 D21a 即 DSW 蓝）。
+                R1-F5：进度条填充要实心品牌色——--accent 改映射 interactive
+                淡底后（原首跳死映射恒落 brand-primary），这里改 bg-primary，
+                渲染色不变（--accent 原本就恒等于 brand-primary）。
+                docs/23 D21a：--primary 已改桥 button-info-fill——本条随之呈现
+                DSW 蓝（宿主内与主按钮同源）。 */}
+            <Progress
+              className="h-[5px]"
+              value={
+                team.progress.total === 0
+                  ? 0
+                  : (team.progress.completed / team.progress.total) * 100
+              }
+            />
             <div className="my-1.5 text-xs text-muted-foreground">
               {team.progress.completed}/{team.progress.total} 完成
               {team.latestEvents.at(-1) !== undefined ? ` · ${team.latestEvents.at(-1)!.text}` : ''}
