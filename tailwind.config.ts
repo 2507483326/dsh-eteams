@@ -80,6 +80,8 @@ const config: Config = {
         },
         business: {
           DEFAULT: 'var(--business)',
+          // docs/23 D21b：品牌淡底对（business-tertiary），chips/选中底用。
+          tint: 'var(--business-tint)',
         },
       },
       borderRadius: {
