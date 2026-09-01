@@ -109,8 +109,22 @@
 
 ### S22-5 预览与总验收（M5）
 
-- 范围：`.tmp/`（gitignored）生成独立预览页（tsc 单文件编译引擎 + 静态 HTML 驱动真实引擎代码），供用户在浏览器打开做视觉验收；最终报告（四绿门结果、体积、commit 清单）。
+- 范围：`.tmp-tw-docs/preview/`（gitignored）生成独立预览页（tsdown IIFE 打包**真实引擎** + 真实 `lib/tailwind.gen.css` + 与 eteamsBackdrop.tsx 逐行同构的接线脚本 + 官网风格宽栏/卡片模拟），供用户在浏览器打开做视觉验收；含亮/暗切换与坦克数量切换（0–3）。
 - 验收：用户视觉确认背景板「低调、右上格子高地图、左下渐隐、坦克微小不抢戏」；侧栏/配色/字体与官网风格对齐。
+
+## 22.6 施工记录（定稿）
+
+| 步骤 | commit | 内容 | 体积（lib/client.js） |
+| --- | --- | --- | --- |
+| 基线 | 6a9488e / c7a40f8 / 0a456b7 | buildTailwind 沙箱退化修复；webui 快照工号用例对齐 2026-09 预置精简（先 upsert 再收编）；本文档 | 4,108,821 B |
+| S22-1 | 8c27fdf | 官网色板兜底 + Inter var/Fira Code 字体栈令牌 + portal 容器字体 inline + 冒烟锚点改顺序无关 | 4,109,054 B |
+| S22-2 | 68dc978 | 宽窄双态侧栏（172px 官网三态 / <720px 回落 84px，ResizeObserver 实测） | — |
+| S22-3 | 0c26806 | backdropEngine 纯逻辑（23 例单测锁 D20e/f/g 硬指标；修复末行/末列格子出界裁切） | — |
+| S22-4 | f53f8bb | eteamsBackdrop 画布薄壳 + 面板接线（作用域根 relative、壳 relative 盖画布） | — |
+| S22-5 | （本次） | 预览页 + 施工记录 | 见总验收报告 |
+
+注：`pnpm test` 在 DSH 桌面沙箱受限模式下因 esbuild 服务 spawn EPERM 无法启动
+（buildTailwind 同源问题，见基线 commit）；需在非受限环境执行。
 
 ## 22.5 风险与对策
 
