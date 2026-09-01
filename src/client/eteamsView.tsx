@@ -30,19 +30,23 @@
  * body 会逃出 `.eteams-ui` 作用域，改挂 body 下 `eteams-ui-portal eteams-ui`
  * 容器）。开合状态不变：expandedTask 仍走 ui model（ui/setDrawerTask），
  * 抽屉仅展开时挂载（track 拉取随挂载触发，同迁移前）、关闭发 null。执行槽
- * 站点 ✔/●/◌ 结构原样保留，仅类名替换。团队卡片栅格/新建团队/角色库/构建
- * 工作台等余下区块与面板壳（styles.root/content）仍留 S14。
+ * 站点 ✔/●/◌ 结构原样保留，仅类名替换。
+ *
+ * S14 收尾批次（docs/21-client-ui-stack.md 21.6 / D19b/D19c）：面板壳
+ * （styles.root/content）与余下区块（团队卡片栅格/新建团队/草稿预览/构建
+ * 工作台/角色库/详情/分页）inline style 全部迁 Tailwind 类，卡片容器统一
+ * shadcn Card（PANEL_CARD_CLASS 覆盖层）。作用域根（.eteams-ui）自身不承
+ * 工具类（`.eteams-ui .utility` 后代选择器机制，S12 注记）——壳布局迁进
+ * 一层内壳（SHELL_CLASS），高度链锚点 height:100% 保留在作用域根 inline
+ * （宿主视图区无 .eteams-ui 祖先，内壳 h-full 只能解析到这里；S13 注记的
+ * 「裸包裹层」顾虑即指此处，锚点落根后高度链与迁移前逐位等价）。styles /
+ * fns / TONE_FG / TONE_BG / PILL_FG 随迁移删除（死代码清理）；PHASE_LABELS
+ * 合并至 phaseLabels.ts（本文件 re-export 兼容 teamsButton 既有导入面）。
+ * 残余 inline 仅：进度条宽度（运行时动态）×2 与壳高度锚点 ×1。
  *
  * @module dsh-eteams/client/eteamsView
  */
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-  type ReactNode,
-} from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
 import {
   Button,
@@ -99,6 +103,7 @@ import {
 import { getApp, type RootState } from './store/app';
 import type { BuildState } from './store/models/build';
 import type { RosterState } from './store/models/roster';
+import { PHASE_LABELS } from './phaseLabels';
 
 /**
  * S10（docs/21-client-ui-stack.md）：roster/build 两键已随 models/index.ts
@@ -108,14 +113,12 @@ import type { RosterState } from './store/models/roster';
  */
 type PanelRootState = RootState & { roster: RosterState; build: BuildState };
 
-const PHASE_LABELS: Record<string, string> = {
-  staged: '草案',
-  running: '运行中',
-  paused: '已暂停',
-  halted: '已停止',
-  completed: '已完成',
-  archived: '已归档',
-};
+/**
+ * S14（docs/21-client-ui-stack.md 21.6 死代码清理项）：团队阶段标签合并
+ * 单一事实源至 phaseLabels.ts——card.tsx 与本文件的两份常量收敛；常量本体
+ * 经上方 import 进入，这里 re-export 保持 teamsButton.tsx 的既有导入面
+ * （`from './eteamsView'`）不变（该文件不在本步 inScope）。
+ */
 export { PHASE_LABELS };
 
 /** The leader is a member too — default-joined, undeletable (用户定稿模型). */
@@ -202,29 +205,6 @@ export { T };
 
 /** Semantic tone — every status color flows through these five buckets. */
 type Tone = 'info' | 'ok' | 'warn' | 'err' | 'muted';
-const TONE_FG: Record<Tone, string> = {
-  info: T.info,
-  ok: T.ok,
-  warn: T.warn,
-  err: T.err,
-  muted: T.text3,
-};
-const TONE_BG: Record<Tone, string> = {
-  info: T.infoBg,
-  ok: T.okBg,
-  warn: T.warnBg,
-  err: T.errBg,
-  muted: T.sunken,
-};
-
-/** Pill 文字专用的深色档：饱和 primary 在淡底上对比度不足（amber-500 尤甚）。 */
-const PILL_FG: Record<Tone, string> = {
-  info: T.info,
-  ok: '#15803d',
-  warn: '#b45309',
-  err: '#b91c1c',
-  muted: T.text3,
-};
 
 /**
  * S12：Tone→工具类映射表（完整字面量，content 扫描可检出——禁 `tone-${x}`
@@ -262,281 +242,11 @@ function memberTone(status: string): Tone {
   return 'muted';
 }
 
-const styles: Record<string, CSSProperties> = {
-  root: {
-    height: '100%',
-    display: 'flex',
-    gap: 16,
-    boxSizing: 'border-box',
-    padding: '14px 18px',
-    fontFamily: 'inherit',
-    fontSize: 13,
-    lineHeight: 1.55,
-    color: T.text,
-    /* 横向滚动条治理（用户反馈）：任何内部溢出都在这里截断，绝不外溢
-    到宿主页面/整页团队页；滚动只发生在 content 列内。 */
-    overflow: 'hidden',
-  },
-  /* rail 样式已随 S12 侧栏迁移删除（RAIL_CLASS）。 */
-  content: {
-    flex: 1,
-    minWidth: 0,
-    overflowY: 'auto',
-    /* 竖向滚动条出现会挤压可用宽度，宽子元素随之横向外溢——这里一并截断
-    （用户反馈：内容变高后出现横向滚动条）。 */
-    overflowX: 'hidden',
-    paddingRight: 2,
-  },
-  /* topbar style removed with the page-header redesign (用户反馈：去顶栏) */
-  /* select 样式已随 S13 成员/任务迁移删除（SELECT_CLASS）。 */
-  /* title style removed with the topbar 团队 span (用户反馈：去顶栏标题) */
-  card: {
-    border: `1px solid ${T.border}`,
-    borderRadius: 12,
-    padding: '14px 16px',
-    marginBottom: 12,
-    background: T.surface,
-    boxShadow: '0 1px 2px rgba(15,23,42,0.03)',
-    minWidth: 0,
-  },
-  sectionTitle: {
-    margin: '0 0 8px',
-    fontSize: 11,
-    fontWeight: 600,
-    color: T.text3,
-    letterSpacing: 0.5,
-  },
-  line: { margin: '4px 0', fontSize: 13, lineHeight: 1.6, color: T.text2 },
-  muted: { fontSize: 12, color: T.text3, overflowWrap: 'anywhere' },
-  progressTrack: {
-    height: 6,
-    borderRadius: 999,
-    background: T.sunken,
-    overflow: 'hidden',
-    margin: '10px 0 6px',
-  },
-  /* memberGrid/memberCard 样式已随 S13 成员迁移删除（MEMBER_GRID_CLASS /
-  MEMBER_CARD_CLASS）。 */
-  /* memberRow removed with the row-list layout (用户反馈：列表改卡片) */
-  /* 卡片化（用户反馈）：角色列表与团队列表的卡片栅格。 */
-  cardGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))',
-    gap: 12,
-  },
-  /* 列表页头（视觉升级）：标题提级到 14/700，计数弱化为旁注。 */
-  listTitle: { margin: 0, fontSize: 14, fontWeight: 700, color: T.text, flex: 1 },
-  listCount: { fontSize: 12, color: T.text3 },
-  pagePill: {
-    padding: '2px 10px',
-    borderRadius: 999,
-    background: T.sunken,
-    fontSize: 11,
-    color: T.text2,
-    whiteSpace: 'nowrap',
-  },
-  /* 团队卡片里的阶段徽标（视觉升级）：小圆角 pill，弱于「当前」徽标一级。 */
-  phasePill: {
-    padding: '1px 8px',
-    borderRadius: 999,
-    background: T.sunken,
-    fontSize: 11,
-    fontWeight: 500,
-    color: T.text2,
-    whiteSpace: 'nowrap',
-    flexShrink: 0,
-  },
-  roleCard: {
-    position: 'relative',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'flex-start',
-    gap: 10,
-    padding: 14,
-    borderRadius: 12,
-    minWidth: 0,
-    cursor: 'pointer',
-    textAlign: 'left',
-    color: T.text,
-    /* background/border owned by the `.eteams-role-row` stylesheet so :hover wins */
-  },
-  teamCard: {
-    padding: 14,
-    borderRadius: 12,
-    minWidth: 0,
-    cursor: 'pointer',
-    /* background/border owned by the `.eteams-team-card` stylesheet so :hover wins */
-  },
-  roleChip: {
-    display: 'inline-block',
-    padding: '2px 9px',
-    borderRadius: 999,
-    fontSize: 11,
-    fontWeight: 600,
-    background: T.accentSoft,
-    color: T.accent,
-  },
-  pill: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 5,
-    padding: '2px 9px',
-    borderRadius: 999,
-    fontSize: 11,
-    fontWeight: 500,
-    width: 'fit-content',
-  },
-  detailRow: {
-    display: 'flex',
-    gap: 10,
-    padding: '7px 0',
-    fontSize: 12,
-    lineHeight: 1.55,
-    borderBottom: `1px solid ${T.border}`,
-  },
-  detailLabel: {
-    width: 64,
-    flexShrink: 0,
-    fontSize: 11,
-    fontWeight: 600,
-    color: T.text3,
-    paddingTop: 1,
-  },
-  /* taskRow/station 样式已随 S13 任务迁移删除（TASK_ROW_CLASS；站点行内类
-  见 TaskStations）。 */
-  /* drawer/attempt 样式已随 S13 迁移删除（DRAWER_CLASS / ATTEMPT_CLASS；
-  任务抽屉升级为 shadcn Dialog）。 */
-  chip: {
-    display: 'inline-block',
-    padding: '1px 7px',
-    margin: '0 4px 2px 0',
-    borderRadius: 6,
-    fontSize: 11,
-    background: T.sunken,
-    color: T.text2,
-  },
-  /* 看板/任务空态已改 EMPTY_CLASS（S12/S13）；本条仍被 团队/角色 空态使用，
-  S14 迁移后删除。 */
-  empty: {
-    textAlign: 'center',
-    padding: '36px 20px',
-    color: T.text3,
-    border: `1px dashed ${T.border2}`,
-    borderRadius: 12,
-    background: 'transparent',
-  },
-  btn: {
-    padding: '5px 12px',
-    fontSize: 12,
-    borderRadius: 8,
-    border: `1px solid ${T.border2}`,
-    background: T.surface,
-    color: T.text2,
-    cursor: 'pointer',
-    fontWeight: 500,
-  },
-  /* banner/eventRow 样式已随 S12 看板迁移删除（BANNER_CLASS / EVENT_ROW_CLASS）。 */
-  /* dialogItem 样式已随 S13 汇报时间线迁移删除（DIALOG_ITEM_CLASS）。 */
-  formRow: { display: 'flex', flexDirection: 'column', gap: 5, marginBottom: 10 },
-  formLabel: { fontSize: 11, fontWeight: 600, color: T.text3, letterSpacing: 0.3 },
-  textarea: {
-    width: '100%',
-    boxSizing: 'border-box',
-    minHeight: 56,
-    padding: '7px 10px',
-    borderRadius: 8,
-    border: `1px solid ${T.border2}`,
-    background: T.surface,
-    color: T.text,
-    fontSize: 12.5,
-    fontFamily: 'inherit',
-    lineHeight: 1.5,
-    resize: 'vertical',
-  },
-  formActions: { display: 'flex', gap: 8, justifyContent: 'flex-end' },
-  formError: { fontSize: 12, color: T.err, margin: '4px 0 8px' },
-  buildStep: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    padding: '3px 0',
-    fontSize: 12.5,
-  },
-  prefillBanner: {
-    display: 'flex',
-    alignItems: 'flex-start',
-    gap: 8,
-    padding: '10px 12px',
-    borderRadius: 10,
-    background: T.infoBg,
-    border: `1px solid ${T.border}`,
-    marginTop: 10,
-  },
-  cmdChip: {
-    marginTop: 8,
-    padding: '9px 11px',
-    borderRadius: 8,
-    background: T.sunken,
-    border: `1px solid ${T.border}`,
-    fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace',
-    fontSize: 12,
-    lineHeight: 1.7,
-    color: T.text2,
-    wordBreak: 'break-all',
-  },
-  stepRow: {
-    display: 'flex',
-    alignItems: 'flex-start',
-    gap: 8,
-    marginTop: 8,
-    fontSize: 12.5,
-    lineHeight: 1.55,
-    color: T.text2,
-  },
-  stepNum: {
-    flexShrink: 0,
-    width: 18,
-    height: 18,
-    borderRadius: 999,
-    background: T.accentSoft,
-    color: T.accent,
-    fontSize: 11,
-    fontWeight: 600,
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 1,
-  },
-  addRow: { display: 'flex', justifyContent: 'flex-end', marginBottom: 10 },
-};
-
-/** Parameterized style factories (tone-mapped, token-driven). */
-const fns = {
-  /* railBtn 已随 S12 侧栏迁移删除（railBtnClass）。progressFill 仍被 团队页
-  进度条使用（S14 迁移后删除；看板进度条已改 PROGRESS_FILL_CLASS）。 */
-  progressFill: (pct: number): CSSProperties => ({
-    height: '100%',
-    width: `${pct}%`,
-    background: `linear-gradient(90deg, ${T.accent}, ${T.info})`,
-    borderRadius: 999,
-  }),
-  /* pill 仍被 S14 的构建工作台区块使用；S13 成员/任务已改 pillClass。
-  dot 已随 S13 成员/任务迁移删除（dotClass）。 */
-  pill: (tone: Tone): CSSProperties => ({
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 5,
-    padding: '2px 9px',
-    borderRadius: 999,
-    fontSize: 11,
-    fontWeight: 500,
-    width: 'fit-content',
-    // pill 的字要够深才压得住淡底：用 700 级深色（dot/步骤标记仍走
-    // TONE_FG 的饱和 primary，互不影响）。
-    color: PILL_FG[tone],
-    background: TONE_BG[tone],
-  }),
-};
+/* styles/fns 两个 inline 工厂已随 S14 收尾迁移整体删除（docs/21 21.6 死
+代码清理）：styles.* → 下方「S14 迁移新增的类名常量」段（或沿用 S12/S13
+既有类常量），fns.pill → pillClass（S13 已备、本批全面板统一），
+fns.progressFill → PROGRESS_FILL_CLASS + 宽度百分比 inline（S5 card 先例：
+运行时动态值保留 inline，S14 清点口径）。 */
 
 /* —— S12 迁移后的类名常量（Tailwind 工具类，完整字面量；模板串组合仅限
 const 字面量插值，运行时动态值一律 inline style——S5/S11 既有口径）—— */
@@ -623,10 +333,10 @@ max-w-xl 压过上游 max-w-lg，rounded-xl 与上游 sm:rounded-lg 同为 12px�
 const DRAWER_DIALOG_CLASS =
   'max-h-[70vh] max-w-xl overflow-y-auto rounded-xl text-[13px] leading-[1.55] text-foreground';
 
-/** 原 fns.pill 的类名版（S13 成员/任务区块；S14 的构建工作台仍用 fns.pill）。
-Pill 文字沿用 PILL_FG 的 700 级深色档——ok/warn/err 是刻意硬编码的深色
-（state-*-primary 饱和档压不住淡底），不走 token；底色沿用 TONE_BG
-（static-*-100 淡底任意值直引，info 为同值 rgba 直引）。 */
+/** 原 fns.pill 的类名版（S13 引入，S14 起全面板统一）。Pill 文字沿用原
+PILL_FG 的 700 级深色档——ok/warn/err 是刻意硬编码的深色（state-*-primary
+饱和档压不住淡底），不走 token；底色沿用原 TONE_BG（static-*-100 淡底任意
+值直引，info 为同值 rgba 直引）。 */
 const PILL_BASE_CLASS =
   'inline-flex w-fit items-center gap-[5px] rounded-full px-[9px] py-px text-[11px] font-medium';
 const PILL_TONE_CLASS: Record<Tone, string> = {
@@ -648,6 +358,44 @@ const DOT_TONE_CLASS: Record<Tone, string> = {
 };
 const pillClass = (tone: Tone): string => cn(PILL_BASE_CLASS, PILL_TONE_CLASS[tone]);
 const dotClass = (tone: Tone): string => cn(DOT_BASE_CLASS, DOT_TONE_CLASS[tone]);
+
+/* —— S14 迁移新增的类名常量（面板壳/团队卡片栅格/构建工作台/角色库收尾；
+完整字面量，同 S12/S13 纪律；置于 S12/S13 段之后——模板串插值在模块初始化
+时求值，须晚于所引用的 BORDER_L1_CLASS/TEXT2_CLASS 等常量）—— */
+
+/** 面板壳（原 styles.root 的布局面）：作用域根（.eteams-ui）自身不承工具类
+（`.eteams-ui .utility` 后代选择器机制），壳布局迁进这层内壳；height 锚点
+仍留作用域根 inline（宿主视图区无 .eteams-ui 祖先，见文件头 S14 注记）。 */
+const SHELL_CLASS =
+  'box-border flex h-full gap-4 overflow-hidden px-[18px] py-3.5 text-[13px] leading-[1.55] text-foreground [font-family:inherit]';
+/** 原 styles.content：内容列（纵滚/横截 + 2px 右距，用户反馈注记原样保留）。 */
+const CONTENT_CLASS = 'min-w-0 flex-1 overflow-x-hidden overflow-y-auto pr-0.5';
+/** 原 styles.formError：语义色走 destructive token（与 state-error 同源，D19c）。 */
+const FORM_ERROR_CLASS = 'mb-2 mt-1 text-[12px] text-destructive';
+/** 原 styles.cardGrid（团队/角色卡片栅格，最小 210px 自适应列）。 */
+const CARD_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(210px,1fr))] gap-3';
+/** 原 styles.phasePill（团队卡片阶段徽标：淡底弱化档）。 */
+const PHASE_PILL_CLASS =
+  'shrink-0 whitespace-nowrap rounded-full bg-[color:var(--dsw-alias-bg-layer-2,#edf0f4)] px-2 py-px text-[11px] font-medium text-[color:var(--dsw-alias-label-secondary,#47546c)]';
+/** 原 styles.teamCard（底色/边框/悬停仍由 .eteams-team-card 样式表接管）。 */
+const TEAM_CARD_CLASS = 'min-w-0 cursor-pointer rounded-xl p-3.5';
+/** 原 styles.roleCard（同上：底色/边框/悬停由 .eteams-role-row 样式表接管）。 */
+const ROLE_CARD_CLASS =
+  'relative flex min-w-0 cursor-pointer flex-col items-start gap-2.5 rounded-xl p-3.5 text-left text-foreground';
+/** 原 styles.pagePill（分页计数 pill）。 */
+const PAGE_PILL_CLASS =
+  'whitespace-nowrap rounded-full bg-[color:var(--dsw-alias-bg-layer-2,#edf0f4)] px-2.5 py-0.5 text-[11px] text-[color:var(--dsw-alias-label-secondary,#47546c)]';
+/** 原 styles.detailRow / detailLabel（构建中草稿预览行；l1 下边线任意值直引）。 */
+const DETAIL_ROW_CLASS = `flex gap-2.5 border-b border-solid py-[7px] text-[12px] leading-[1.55] ${BORDER_L1_CLASS}`;
+const DETAIL_LABEL_CLASS = 'w-16 shrink-0 pt-px text-[11px] font-semibold text-muted-foreground';
+/** 原 styles.cmdChip（预填命令芯片：等宽字体 + l1 边框 + 次级文字）。 */
+const CMD_CHIP_CLASS = `mt-2 break-all rounded-[8px] border border-solid bg-[color:var(--dsw-alias-bg-layer-2,#edf0f4)] px-[11px] py-[9px] text-[12px] leading-[1.7] [font-family:ui-monospace,SFMono-Regular,Consolas,monospace] ${BORDER_L1_CLASS} ${TEXT2_CLASS}`;
+/** 原 styles.buildStep / stepRow / stepNum / prefillBanner（构建工作台）。 */
+const BUILD_STEP_CLASS = 'flex items-center gap-2 py-[3px] text-[12.5px]';
+const STEP_ROW_CLASS = `mt-2 flex items-start gap-2 text-[12.5px] leading-[1.55] ${TEXT2_CLASS}`;
+const STEP_NUM_CLASS =
+  'mt-px inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-[color:var(--dsw-alias-interactive-bg-active,rgba(75,123,236,0.12))] text-[11px] font-semibold text-primary';
+const PREFILL_BANNER_CLASS = `mt-2.5 flex items-start gap-2 rounded-[10px] border border-solid bg-[color:rgba(29,78,216,0.1)] px-3 py-2.5 ${BORDER_L1_CLASS}`;
 
 /** S13：执行链站点行——✔/●/◌ 结构原样保留，仅样式改 Tailwind 类。 */
 function TaskStations({ task }: { task: TaskView }): ReactNode {
@@ -950,78 +698,81 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
     return prefillComposer(actions);
   }, [props]);
 
-  // 表面根（D19b/S12）：宿主 conversation.view 槽位渲染本面板，视图区没有
-  // .eteams-ui 祖先——作用域类字面量必须挂在本元素上，工具类（后代选择器）
-  // 才能生效；作用域根自身不承工具类样式，布局仍由 styles.root inline 承载
-  // （面板壳与 content 列留给 S13/S14，避免加裸包裹层破坏 h-100% 高度链）。
+  // 表面根（D19b/S12/S14）：宿主 conversation.view 槽位渲染本面板，视图区
+  // 没有 .eteams-ui 祖先——作用域类字面量必须挂在本元素上。作用域根自身不承
+  // 工具类（后代选择器机制），壳布局迁进内壳 SHELL_CLASS；唯一保留的 inline
+  // 是高度链锚点 height:100%（内壳 h-full 只能解析到作用域根，见文件头 S14
+  // 注记），其余壳样式全部工具类化。
   return (
-    <div className="eteams-ui" style={styles.root} data-eteams="view">
+    <div className="eteams-ui" style={{ height: '100%' }} data-eteams="view">
       {/* 卡片化样式（用户反馈）：角色/团队卡片与删除按钮的 hover 态一次注入，
         面板内与整页团队页共用同一渲染根，注入一次即可。 */}
       <style>{ROLE_LIST_CSS}</style>
-      <div className={RAIL_CLASS}>
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            className={railBtnClass(activeTab === t.id)}
-            onClick={() => dispatch({ type: 'ui/setNav', payload: t.id })}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <div className={SHELL_CLASS}>
+        <div className={RAIL_CLASS}>
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              className={railBtnClass(activeTab === t.id)}
+              onClick={() => dispatch({ type: 'ui/setNav', payload: t.id })}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
 
-      <div style={styles.content}>
-        {/* 顶栏（用户反馈）：团队切换改为「团队」页的卡片栅格，这里只保留
-          状态加载失败的就地提示；空态兜底在 BoardTab。 */}
-        {state.error !== null && (
-          <div style={{ ...styles.formError, marginBottom: 12 }}>状态加载失败：{state.error}</div>
-        )}
+        <div className={CONTENT_CLASS}>
+          {/* 顶栏（用户反馈）：团队切换改为「团队」页的卡片栅格，这里只保留
+            状态加载失败的就地提示；空态兜底在 BoardTab。 */}
+          {state.error !== null && (
+            <div className={cn(FORM_ERROR_CLASS, 'mb-3')}>状态加载失败：{state.error}</div>
+          )}
 
-        {activeTab === 'board' && (
-          <BoardTab team={team} now={now} fetchedAt={state.fetchedAt} error={state.error} />
-        )}
-        {activeTab === 'team' && (
-          <TeamTab
-            sessionId={props.sessionId}
-            pool={pool}
-            team={team}
-            roster={roster}
-            onSelectTeam={(id) => dispatch({ type: 'ui/setSelectedTeam', payload: id })}
-            agentActivity={agentActivity}
-            onOpenReports={(name) => {
-              dispatch({ type: 'ui/setDialogMember', payload: name });
-              dispatch({ type: 'ui/setNav', payload: 'reports' });
-            }}
-          />
-        )}
-        {activeTab === 'roster' && (
-          <MembersTab
-            members={roster}
-            pool={pool}
-            team={team}
-            onDeleted={refreshRoster}
-            onPrefillAddPeople={prefillAddPeople}
-            openAddTick={openAddTick}
-          />
-        )}
-        {activeTab === 'tasks' && team !== undefined && (
-          <TasksTab
-            team={team}
-            now={now}
-            expandedTask={expandedTask}
-            setExpandedTask={(id) => dispatch({ type: 'ui/setDrawerTask', payload: id })}
-          />
-        )}
-        {activeTab === 'reports' && team !== undefined && (
-          <ReportsTab
-            team={team}
-            dialogMember={dialogMember}
-            setDialogMember={(name) => dispatch({ type: 'ui/setDialogMember', payload: name })}
-            member={dialogMemberView}
-          />
-        )}
+          {activeTab === 'board' && (
+            <BoardTab team={team} now={now} fetchedAt={state.fetchedAt} error={state.error} />
+          )}
+          {activeTab === 'team' && (
+            <TeamTab
+              sessionId={props.sessionId}
+              pool={pool}
+              team={team}
+              roster={roster}
+              onSelectTeam={(id) => dispatch({ type: 'ui/setSelectedTeam', payload: id })}
+              agentActivity={agentActivity}
+              onOpenReports={(name) => {
+                dispatch({ type: 'ui/setDialogMember', payload: name });
+                dispatch({ type: 'ui/setNav', payload: 'reports' });
+              }}
+            />
+          )}
+          {activeTab === 'roster' && (
+            <MembersTab
+              members={roster}
+              pool={pool}
+              team={team}
+              onDeleted={refreshRoster}
+              onPrefillAddPeople={prefillAddPeople}
+              openAddTick={openAddTick}
+            />
+          )}
+          {activeTab === 'tasks' && team !== undefined && (
+            <TasksTab
+              team={team}
+              now={now}
+              expandedTask={expandedTask}
+              setExpandedTask={(id) => dispatch({ type: 'ui/setDrawerTask', payload: id })}
+            />
+          )}
+          {activeTab === 'reports' && team !== undefined && (
+            <ReportsTab
+              team={team}
+              dialogMember={dialogMember}
+              setDialogMember={(name) => dispatch({ type: 'ui/setDialogMember', payload: name })}
+              member={dialogMemberView}
+            />
+          )}
+        </div>
       </div>
     </div>
   );
@@ -1182,60 +933,61 @@ function TeamTab({
   return (
     <div>
       {/* 团队卡片栅格（用户反馈：列表改卡片）：名称 + 阶段/进度/成员数，
-      点击切换当前团队；当前团队高亮描边。多团队时取代原顶栏下拉。 */}
+      点击切换当前团队；当前团队高亮描边。多团队时取代原顶栏下拉。
+      S14：容器换 shadcn Card（PANEL_CARD_CLASS + pb-3 覆盖层），栅格/卡片/
+      徽标/进度条全迁工具类；进度条宽度是运行时动态值（inline，S5 先例）。 */}
       {pool.length > 0 && (
-        <div style={{ ...styles.card, paddingBottom: 12 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-            <h3 style={styles.listTitle}>团队</h3>
-            <span style={styles.listCount}>{pool.length} 个</span>
+        <Card className={cn(PANEL_CARD_CLASS, 'pb-3')}>
+          <div className="mb-2.5 flex items-center gap-2">
+            <h3 className={LIST_TITLE_CLASS}>团队</h3>
+            <span className={LIST_COUNT_CLASS}>{pool.length} 个</span>
           </div>
-          <div style={styles.cardGrid}>
+          <div className={CARD_GRID_CLASS}>
             {pool.map((t) => {
               const active = t.teamId === team?.teamId;
               return (
                 <div
                   key={t.teamId}
-                  className="eteams-team-card"
-                  style={styles.teamCard}
+                  className={cn('eteams-team-card', TEAM_CARD_CLASS)}
                   data-active={active ? 'true' : 'false'}
                   onClick={() => onSelectTeam(t.teamId)}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span
-                      className="eteams-team-name"
-                      style={{ fontSize: 13, fontWeight: 600, color: T.text, flex: 1 }}
-                    >
+                  <div className="flex items-center gap-2">
+                    <span className="eteams-team-name flex-1 text-[13px] font-semibold text-foreground">
                       {t.name}
                     </span>
-                    {active && <span style={styles.roleChip}>当前</span>}
+                    {active && <span className={ROLE_CHIP_CLASS}>当前</span>}
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
-                    <span style={styles.phasePill}>{PHASE_LABELS[t.phase] ?? t.phase}</span>
-                    <span style={styles.listCount}>
+                  <div className="mt-1.5 flex items-center gap-1.5">
+                    <span className={PHASE_PILL_CLASS}>{PHASE_LABELS[t.phase] ?? t.phase}</span>
+                    <span className={LIST_COUNT_CLASS}>
                       {t.progress.completed}/{t.progress.total} 任务 · {t.members.length} 成员
                     </span>
                   </div>
-                  <div style={{ ...styles.progressTrack, margin: '10px 0 0' }}>
+                  <div className={cn(PROGRESS_TRACK_CLASS, 'mb-0')}>
                     <div
-                      style={fns.progressFill(
-                        t.progress.total === 0
-                          ? 0
-                          : (t.progress.completed / t.progress.total) * 100,
-                      )}
+                      className={PROGRESS_FILL_CLASS}
+                      style={{
+                        width: `${
+                          t.progress.total === 0
+                            ? 0
+                            : (t.progress.completed / t.progress.total) * 100
+                        }%`,
+                      }}
                     />
                   </div>
                 </div>
               );
             })}
           </div>
-        </div>
+        </Card>
       )}
 
-      <div style={styles.card}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-          <h3 style={styles.listTitle}>新建团队</h3>
+      <Card className={PANEL_CARD_CLASS}>
+        <div className="mb-2.5 flex items-center gap-2">
+          <h3 className={LIST_TITLE_CLASS}>新建团队</h3>
         </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div className="flex items-center gap-2">
           <Input
             value={name}
             placeholder="团队名称，如：文档迁移小组"
@@ -1251,21 +1003,21 @@ function TeamTab({
             创建
           </Button>
         </div>
-        <div style={styles.muted}>
+        <div className={MUTED_CLASS}>
           {canCreate
             ? '只需名称即可创建（草案阶段）；目标可在看板中与领队继续完善。'
             : '当前还没有进行中的对话——开始对话后即可在这里创建团队。'}
         </div>
-        {error !== null && <div style={styles.formError}>{error}</div>}
-      </div>
+        {error !== null && <div className={FORM_ERROR_CLASS}>{error}</div>}
+      </Card>
 
       {team === undefined ? (
-        <div style={styles.empty}>尚未选择团队。创建团队后在这里从「角色」列表拉人组队。</div>
+        <div className={EMPTY_CLASS}>尚未选择团队。创建团队后在这里从「角色」列表拉人组队。</div>
       ) : (
         <>
-          {/* 团队成员卡（S13）：容器换 shadcn Card（PANEL_CARD_CLASS 覆盖层，
+          {/* 团队成员卡（S13/S14）：容器 shadcn Card（PANEL_CARD_CLASS 覆盖层，
           S12 先例）；拉人选择与成员栅格 Tailwind 化。上方的团队卡片栅格与
-          新建团队卡留 S14（styles.card 内联不变）。 */}
+          新建团队卡已随 S14 一并迁移（同款覆盖层）。 */}
           <Card className={PANEL_CARD_CLASS}>
             <div className="mb-2.5 flex items-center gap-2">
               <h3 className={LIST_TITLE_CLASS}>团队成员</h3>
@@ -1467,10 +1219,10 @@ function fromBuildDraft(d: BuildDraft): DraftEdit {
 function CommandChip({ text }: { text: string }): ReactNode {
   const parts = text.split(/(【成员名称】|【职责】)/g);
   return (
-    <div style={styles.cmdChip}>
+    <div className={CMD_CHIP_CLASS}>
       {parts.map((p, i) =>
         p === '【成员名称】' || p === '【职责】' ? (
-          <span key={i} style={{ color: T.accent, fontWeight: 600 }}>
+          <span key={i} className="font-semibold text-primary">
             {p}
           </span>
         ) : (
@@ -1500,17 +1252,17 @@ function DraftPreview({ draft }: { draft: BuildDraft }): ReactNode {
     ['执行提示', draft.executionPrompt ?? ''],
   ];
   return (
-    <div style={{ ...styles.card, marginTop: 8, padding: 10 }}>
-      <div style={styles.sectionTitle}>草稿预览（构建中，待确认后可编辑）</div>
+    <Card className={cn(PANEL_CARD_CLASS, 'mt-2 p-2.5')}>
+      <div className={SECTION_TITLE_CLASS}>草稿预览（构建中，待确认后可编辑）</div>
       {rows.map(([label, value]) => (
-        <div key={label} style={styles.detailRow}>
-          <span style={styles.detailLabel}>{label}</span>
-          <span style={{ ...styles.muted, ...(value.trim() !== '' ? { color: T.text2 } : {}) }}>
+        <div key={label} className={DETAIL_ROW_CLASS}>
+          <span className={DETAIL_LABEL_CLASS}>{label}</span>
+          <span className={cn(MUTED_CLASS, value.trim() !== '' && TEXT2_CLASS)}>
             {value.trim() !== '' ? value : '…'}
           </span>
         </div>
       ))}
-    </div>
+    </Card>
   );
 }
 
@@ -1635,11 +1387,11 @@ function HandbookEditor({
   };
 
   return (
-    <div style={styles.card}>
-      <div style={{ ...styles.sectionTitle, display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ flex: 1 }}>角色手册（Markdown）</span>
+    <Card className={PANEL_CARD_CLASS}>
+      <div className={cn(SECTION_TITLE_CLASS, 'flex items-center gap-2')}>
+        <span className="flex-1">角色手册（Markdown）</span>
         {readOnly ? (
-          <span style={styles.muted}>领队为保留角色，手册不可在此修改</span>
+          <span className={MUTED_CLASS}>领队为保留角色，手册不可在此修改</span>
         ) : draft === null ? (
           <Button size="sm" variant="ghost" onClick={() => setDraft(display)}>
             编辑
@@ -1658,15 +1410,15 @@ function HandbookEditor({
       {draft === null ? (
         <>
           <MarkdownText text={display} />
-          {saved && <div style={{ ...styles.muted, marginTop: 4 }}>✓ 已保存</div>}
+          {saved && <div className={cn(MUTED_CLASS, 'mt-1')}>✓ 已保存</div>}
         </>
       ) : (
         <>
           <MdEditor value={draft} onChange={setDraft} minHeight={220} />
-          {error !== null && <div style={styles.formError}>保存失败：{error}</div>}
+          {error !== null && <div className={FORM_ERROR_CLASS}>保存失败：{error}</div>}
         </>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -1944,25 +1696,25 @@ function MembersTab({
       build.interview !== undefined &&
       build.interview.answers === undefined;
     return (
-      <div style={{ overflowX: 'hidden', minWidth: 0 }}>
+      <div className="min-w-0 overflow-x-hidden">
         <style>{'@keyframes eteams-spin{to{transform:rotate(360deg)}}'}</style>
         <Button size="sm" onClick={() => setView('list')}>
           ← 返回角色列表
         </Button>
         <Button
           size="sm"
-          style={{ marginLeft: 6 }}
+          className="ml-1.5"
           onClick={() => activateConversationTab()}
           title="切到会话的对话视图，看命令卡片与进度行"
         >
           💬 对话页看进度
         </Button>
-        <div style={{ ...styles.card, marginTop: 8 }}>
+        <Card className={cn(PANEL_CARD_CLASS, 'mt-2')}>
           {build !== null && build.status === 'active' && (
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div className="flex items-center gap-2">
                 {interviewWaiting ? (
-                  <span style={{ fontSize: 16, lineHeight: 1 }}>✍️</span>
+                  <span className="text-[16px] leading-none">✍️</span>
                 ) : build.draft?.avatar !== undefined ? (
                   <Avatar
                     name={build.draft.name}
@@ -1971,17 +1723,11 @@ function MembersTab({
                     size={30}
                   />
                 ) : (
-                  <span
-                    style={{
-                      color: T.accent,
-                      display: 'inline-flex',
-                      animation: 'eteams-spin 1s linear infinite',
-                    }}
-                  >
+                  <span className="inline-flex text-primary [animation:eteams-spin_1s_linear_infinite]">
                     <IconSparkle16 />
                   </span>
                 )}
-                <div style={{ ...styles.line, fontWeight: 600, margin: 0 }}>
+                <div className={cn(LINE_CLASS, 'my-0 font-semibold')}>
                   {interviewWaiting ? (
                     <>
                       意图访谈待作答
@@ -1997,11 +1743,11 @@ function MembersTab({
                   )}
                 </div>
                 {interviewWaiting ? (
-                  <span style={fns.pill('warn')}>等你作答</span>
+                  <span className={pillClass('warn')}>等你作答</span>
                 ) : (
-                  <span style={fns.pill('info')}>构建中</span>
+                  <span className={pillClass('info')}>构建中</span>
                 )}
-                <span style={{ flex: 1 }} />
+                <span className="flex-1" />
                 {interviewWaiting && (
                   <Button
                     size="sm"
@@ -2020,16 +1766,9 @@ function MembersTab({
               {build.interview !== undefined && build.interview.answers === undefined && (
                 // 意图访谈问卷（docs/19.16）：后台代理的问题在这里作答，
                 // 提交后宿主把答案发回代理继续构建。
-                <div
-                  style={{
-                    border: `1px solid ${T.accent}`,
-                    borderRadius: 10,
-                    padding: '10px 12px',
-                    margin: '10px 0 4px',
-                  }}
-                >
-                  <div style={{ fontWeight: 600, fontSize: 13 }}>✍️ 意图访谈——请作答</div>
-                  <div style={styles.muted}>
+                <div className="mb-1 mt-2.5 rounded-[10px] border border-solid border-primary px-3 py-2.5">
+                  <div className="text-[13px] font-semibold">✍️ 意图访谈——请作答</div>
+                  <div className={MUTED_CLASS}>
                     阶段代理是一次性的，前任已收工；提交答案会立即派出新代理继续，或点「重启代理」重新出题。
                   </div>
                   {(() => {
@@ -2039,14 +1778,7 @@ function MembersTab({
                     ).length;
                     if (answered >= qs.length) return null;
                     return (
-                      <div
-                        style={{
-                          marginTop: 6,
-                          fontSize: 12,
-                          fontWeight: 600,
-                          color: 'var(--dsw-alias-state-warn-primary, #b45309)',
-                        }}
-                      >
+                      <div className="mt-1.5 text-[12px] font-semibold text-warning">
                         每题至少选一项才能提交——已答 {answered}/{qs.length}
                         {answered === qs.length - 1
                           ? '，还差 1 题'
@@ -2058,32 +1790,20 @@ function MembersTab({
                     const picked = interviewPick[q.id] ?? [];
                     const done = picked.length > 0;
                     return (
-                      <div key={q.id} style={{ marginTop: 10 }}>
+                      <div key={q.id} className="mt-2.5">
                         {q.header !== undefined && q.header !== '' && (
-                          <div style={styles.muted}>{q.header}</div>
+                          <div className={MUTED_CLASS}>{q.header}</div>
                         )}
-                        <div style={{ fontSize: 12.5, fontWeight: 600 }}>
+                        <div className="text-[12.5px] font-semibold">
                           {q.question}
                           {q.multi === true && (
-                            <span
-                              style={{
-                                marginLeft: 6,
-                                fontSize: 11,
-                                fontWeight: 500,
-                                padding: '1px 7px',
-                                borderRadius: 999,
-                                color: PILL_FG.info,
-                                background: T.infoBg,
-                              }}
-                            >
+                            <span className="ml-1.5 rounded-full bg-[color:rgba(29,78,216,0.1)] px-[7px] py-px text-[11px] font-medium text-business">
                               可多选
                             </span>
                           )}
-                          {!done && <span style={{ color: T.accent }}> ·</span>}
+                          {!done && <span className="text-primary"> ·</span>}
                         </div>
-                        <div
-                          style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 5 }}
-                        >
+                        <div className="mt-[5px] flex flex-col gap-1">
                           {q.options.map((o) => {
                             const active = picked.includes(o.label);
                             return (
@@ -2091,23 +1811,18 @@ function MembersTab({
                                 key={o.label}
                                 type="button"
                                 onClick={() => togglePick(q.id, o.label, q.multi === true)}
-                                style={{
-                                  textAlign: 'left',
-                                  padding: '5px 9px',
-                                  borderRadius: 8,
-                                  border: `1px solid ${active ? T.accent : T.border}`,
-                                  background: active
-                                    ? 'var(--dsw-alias-interactive-bg-active, rgba(75,123,236,0.12))'
-                                    : 'transparent',
-                                  color: 'inherit',
-                                  cursor: 'pointer',
-                                  fontSize: 12,
-                                  lineHeight: 1.5,
-                                }}
+                                className={cn(
+                                  'cursor-pointer rounded-[8px] border border-solid px-[9px] py-[5px] text-left text-[12px] leading-[1.5] text-inherit',
+                                  active
+                                    ? 'border-primary bg-[color:var(--dsw-alias-interactive-bg-active,rgba(75,123,236,0.12))]'
+                                    : `bg-transparent ${BORDER_L1_CLASS}`,
+                                )}
                               >
-                                <div style={{ fontWeight: active ? 600 : 400 }}>{o.label}</div>
+                                <div className={active ? 'font-semibold' : 'font-normal'}>
+                                  {o.label}
+                                </div>
                                 {o.description !== undefined && o.description !== '' && (
-                                  <div style={styles.muted}>{o.description}</div>
+                                  <div className={MUTED_CLASS}>{o.description}</div>
                                 )}
                               </button>
                             );
@@ -2116,7 +1831,7 @@ function MembersTab({
                       </div>
                     );
                   })}
-                  <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div className="mt-2.5 flex items-center gap-2">
                     <Button
                       size="sm"
                       variant="primary"
@@ -2138,55 +1853,42 @@ function MembersTab({
                       提交回答
                     </Button>
                     {interviewError !== null && (
-                      <div
-                        style={{
-                          marginTop: 8,
-                          color: 'var(--dsw-alias-state-err-primary, #b91c1c)',
-                          fontSize: 12,
-                          lineHeight: 1.5,
-                        }}
-                      >
+                      <div className="mt-2 text-[12px] leading-[1.5] text-[color:var(--dsw-alias-state-err-primary,#b91c1c)]">
                         ⚠️ {interviewError}
                       </div>
                     )}
-                    <span style={styles.muted}>提交后构建代理自动继续。</span>
+                    <span className={MUTED_CLASS}>提交后构建代理自动继续。</span>
                   </div>
                 </div>
               )}
-              <div style={{ margin: '10px 0 4px' }}>
+              <div className="mb-1 mt-2.5">
                 {BUILD_STEPS.map((s) => {
                   const done = build.stepsDone.includes(s);
                   const current = !done && build.step === s;
                   const tone: Tone = done ? 'ok' : current ? 'info' : 'muted';
                   return (
-                    <div key={s} style={styles.buildStep}>
-                      <span style={{ color: TONE_FG[tone], fontWeight: 600 }}>
+                    <div key={s} className={BUILD_STEP_CLASS}>
+                      <span className={cn(TONE_CLASS[tone], 'font-semibold')}>
                         {done ? '✔' : current ? '●' : '◌'}
                       </span>
-                      <span style={{ color: done || current ? T.text2 : T.text3 }}>{s}</span>
-                      {current && <span style={styles.muted}>进行中…</span>}
+                      <span className={done || current ? TEXT2_CLASS : 'text-muted-foreground'}>
+                        {s}
+                      </span>
+                      {current && <span className={MUTED_CLASS}>进行中…</span>}
                     </div>
                   );
                 })}
               </div>
-              {build.note !== '' && <div style={styles.muted}>{build.note}</div>}
+              {build.note !== '' && <div className={MUTED_CLASS}>{build.note}</div>}
               {build.request !== '' && (
-                <div style={{ ...styles.muted, marginTop: 4 }}>需求：{build.request}</div>
+                <div className={cn(MUTED_CLASS, 'mt-1')}>需求：{build.request}</div>
               )}
               {build.draft !== null && <DraftPreview draft={build.draft} />}
             </div>
           )}
           {build !== null && build.status === 'awaiting_confirmation' && build.draft !== null && (
             <div>
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  ...styles.line,
-                  fontWeight: 600,
-                }}
-              >
+              <div className={cn('flex items-center gap-2', LINE_CLASS, 'font-semibold')}>
                 {build.draft.avatar !== undefined && (
                   <Avatar
                     name={draftEdit.name.trim() !== '' ? draftEdit.name.trim() : build.draft.name}
@@ -2197,23 +1899,23 @@ function MembersTab({
                 )}
                 草稿已就绪——可直接修改，确认后入库
               </div>
-              {formError !== null && <div style={styles.formError}>{formError}</div>}
-              <div style={{ ...styles.formRow, marginTop: 8 }}>
-                <span style={styles.formLabel}>角色名</span>
+              {formError !== null && <div className={FORM_ERROR_CLASS}>{formError}</div>}
+              <div className={cn(FORM_ROW_CLASS, 'mt-2')}>
+                <span className={FORM_LABEL_CLASS}>角色名</span>
                 <Input
                   value={draftEdit.name}
                   onChange={(e) => setDraftEdit({ ...draftEdit, name: e.target.value })}
                 />
               </div>
-              <div style={styles.formRow}>
-                <span style={styles.formLabel}>角色</span>
+              <div className={FORM_ROW_CLASS}>
+                <span className={FORM_LABEL_CLASS}>角色</span>
                 <Input
                   value={draftEdit.role}
                   onChange={(e) => setDraftEdit({ ...draftEdit, role: e.target.value })}
                 />
               </div>
-              <div style={styles.formRow}>
-                <span style={styles.formLabel}>
+              <div className={FORM_ROW_CLASS}>
+                <span className={FORM_LABEL_CLASS}>
                   人设手册（统一 Markdown：frontmatter + 身份/使命/规则/领域专章/沟通风格）
                 </span>
                 <MdEditor
@@ -2221,7 +1923,7 @@ function MembersTab({
                   onChange={(next) => setDraftEdit({ ...draftEdit, personaMd: next })}
                 />
               </div>
-              <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
+              <div className="mt-2 flex items-center gap-2">
                 <Button
                   size="sm"
                   variant="primary"
@@ -2236,31 +1938,31 @@ function MembersTab({
                 <Button size="sm" disabled={confirming} onClick={() => void abandon()}>
                   放弃
                 </Button>
-                <span style={styles.muted}>也可以在对话里继续调整，这里会跟着刷新。</span>
+                <span className={MUTED_CLASS}>也可以在对话里继续调整，这里会跟着刷新。</span>
               </div>
             </div>
           )}
           {confirmedDraft !== null && (
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ color: T.ok, display: 'inline-flex' }}>
+              <div className="flex items-center gap-2">
+                <span className="inline-flex text-success">
                   <IconCheckOutline16 />
                 </span>
-                <div style={{ ...styles.line, fontWeight: 600, margin: 0 }}>已入库</div>
-                <span style={fns.pill('ok')}>角色列表已更新</span>
+                <div className={cn(LINE_CLASS, 'my-0 font-semibold')}>已入库</div>
+                <span className={pillClass('ok')}>角色列表已更新</span>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
+              <div className="mt-2 flex items-center gap-2.5">
                 <Avatar name={confirmedDraft.name} size={40} />
                 <div>
-                  <div style={{ fontWeight: 600, fontSize: 14, color: T.text }}>
+                  <div className="text-[14px] font-semibold text-foreground">
                     {confirmedDraft.name}
                   </div>
-                  <div style={styles.muted}>
+                  <div className={MUTED_CLASS}>
                     {confirmedDraft.role} · 已加入角色列表，到「团队」页拉进团队即可使用。
                   </div>
                 </div>
               </div>
-              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              <div className="mt-2.5 flex gap-2">
                 <Button
                   size="sm"
                   onClick={() => {
@@ -2284,13 +1986,13 @@ function MembersTab({
           {build !== null && build.status === 'cancelled' && (
             // 已放弃的构建：上下文（步骤/草稿/需求）都保存在会话里，
             // 「继续构建」唤醒后台代理从中断处接着跑（docs/19.16）。
-            <div style={{ ...styles.card, marginBottom: 12 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <div style={{ ...styles.line, fontWeight: 600, margin: 0 }}>已放弃本次构建</div>
-                <span style={fns.pill('muted')}>已中断</span>
+            <Card className={PANEL_CARD_CLASS}>
+              <div className="flex items-center gap-2">
+                <div className={cn(LINE_CLASS, 'my-0 font-semibold')}>已放弃本次构建</div>
+                <span className={pillClass('muted')}>已中断</span>
               </div>
-              {build.note !== '' && <div style={styles.muted}>{build.note}</div>}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+              {build.note !== '' && <div className={MUTED_CLASS}>{build.note}</div>}
+              <div className="mt-2 flex items-center gap-2">
                 <Button
                   size="sm"
                   variant="primary"
@@ -2299,49 +2001,49 @@ function MembersTab({
                 >
                   继续构建
                 </Button>
-                <span style={styles.muted}>上下文已保存——从中断处接着跑，不用从头再来。</span>
+                <span className={MUTED_CLASS}>上下文已保存——从中断处接着跑，不用从头再来。</span>
               </div>
-            </div>
+            </Card>
           )}
           {(build === null || build.status === 'cancelled') && (
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ color: T.accent, display: 'inline-flex' }}>
+              <div className="flex items-center gap-2">
+                <span className="inline-flex text-primary">
                   <IconSparkle16 />
                 </span>
-                <div style={{ ...styles.line, fontWeight: 600 }}>新增角色 · 角色构建师</div>
-                <span style={fns.pill('info')}>对话式构建</span>
+                <div className={cn(LINE_CLASS, 'font-semibold')}>新增角色 · 角色构建师</div>
+                <span className={pillClass('info')}>对话式构建</span>
               </div>
               {justFilled ? (
                 <div>
-                  <div style={styles.prefillBanner}>
-                    <span style={{ color: T.info, fontWeight: 600, fontSize: 12.5 }}>
+                  <div className={PREFILL_BANNER_CLASS}>
+                    <span className="text-[12.5px] font-semibold text-business">
                       ✓ 已填充到对话输入框
                     </span>
                   </div>
                   <CommandChip text={ADD_PEOPLE_TEMPLATE} />
                   {PREFILL_STEPS.map((s, i) => (
-                    <div key={s} style={styles.stepRow}>
-                      <span style={styles.stepNum}>{i + 1}</span>
+                    <div key={s} className={STEP_ROW_CLASS}>
+                      <span className={STEP_NUM_CLASS}>{i + 1}</span>
                       <span>{s}</span>
                     </div>
                   ))}
-                  <div style={{ ...styles.muted, marginTop: 10, fontSize: 11.5 }}>
+                  <div className={cn(MUTED_CLASS, 'mt-2.5 text-[11.5px]')}>
                     提示：已模拟「键入 /eteam +
                     空格」完成命令认领（claimed）——补全两个【】占位符后直接回车即可；编辑正文时命令高亮收起属正常行为。
                   </div>
                 </div>
               ) : (
-                <div style={{ ...styles.muted, marginTop: 4 }}>
+                <div className={cn(MUTED_CLASS, 'mt-1')}>
                   点角色列表上方的「新增角色」：命令会填进对话输入框，在对话里补全信息后回车，这里实时看构建。
                 </div>
               )}
               <details>
-                <summary style={{ cursor: 'pointer', ...styles.muted, marginTop: 10 }}>
+                <summary className={cn('mt-2.5 cursor-pointer', MUTED_CLASS)}>
                   手动创建（不经过角色构建师）
                 </summary>
-                <div style={{ marginTop: 8 }}>
-                  <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                <div className="mt-2">
+                  <div className="mb-2 flex gap-2">
                     <Input
                       value={name}
                       placeholder="角色名，如：alice"
@@ -2354,14 +2056,14 @@ function MembersTab({
                     />
                   </div>
                   <details>
-                    <summary style={{ cursor: 'pointer', ...styles.muted, marginTop: 6 }}>
+                    <summary className={cn('mt-1.5 cursor-pointer', MUTED_CLASS)}>
                       角色手册（可选，Markdown：使命/职责/规则/领域专章/沟通风格/交付标准）
                     </summary>
-                    <div style={{ ...styles.formRow, marginTop: 8 }}>
+                    <div className={cn(FORM_ROW_CLASS, 'mt-2')}>
                       <MdEditor value={personaMd} onChange={setPersonaMd} minHeight={220} />
                     </div>
                   </details>
-                  <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
+                  <div className="mt-2 flex items-center gap-2">
                     <Button
                       size="sm"
                       variant="primary"
@@ -2371,18 +2073,18 @@ function MembersTab({
                     >
                       复制对话命令
                     </Button>
-                    <span style={styles.muted}>
+                    <span className={MUTED_CLASS}>
                       粘贴到对话发送，主会话智能体执行 eteams_member_save 入库；成功后列表会出现。
                     </span>
                   </div>
                   {copied && (
-                    <div style={{ ...styles.muted, marginTop: 6 }}>✓ 已复制——去对话里粘贴发送</div>
+                    <div className={cn(MUTED_CLASS, 'mt-1.5')}>✓ 已复制——去对话里粘贴发送</div>
                   )}
                 </div>
               </details>
             </div>
           )}
-        </div>
+        </Card>
       </div>
     );
   }
@@ -2393,20 +2095,13 @@ function MembersTab({
     return (
       // 版式：详情列不再限宽（用户要求解除固定宽度），面板全宽利用
       <div>
-        <button type="button" style={styles.btn} onClick={() => setView('list')}>
+        <button type="button" className={BTN_CLASS} onClick={() => setView('list')}>
           ← 返回角色列表
         </button>
-        <div style={{ ...styles.card, marginTop: 8, padding: '16px 18px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+        <Card className={cn(PANEL_CARD_CLASS, 'mt-2 px-[18px] py-4')}>
+          <div className="flex items-center gap-3.5">
             {/* 头像描边环（视觉升级）：与卡片描边同色系，柔和不抢戏。 */}
-            <div
-              style={{
-                borderRadius: '50%',
-                padding: 2,
-                border: `2px solid ${T.accentSoft}`,
-                lineHeight: 0,
-              }}
-            >
+            <div className="rounded-full border-2 border-solid p-0.5 leading-none border-[color:var(--dsw-alias-interactive-bg-active,rgba(75,123,236,0.12))]">
               <Avatar
                 name={detail.name}
                 seed={detail.avatar?.seed}
@@ -2415,15 +2110,15 @@ function MembersTab({
               />
             </div>
             {/* 角色（用户反馈）：不再需要标签——名字即身份，手册即人设。 */}
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 17, fontWeight: 700, color: T.text }}>{detail.name}</div>
-              <div style={{ ...styles.muted, fontSize: 11, marginTop: 2 }}>
+            <div className="min-w-0 flex-1">
+              <div className="text-[17px] font-bold text-foreground">{detail.name}</div>
+              <div className={cn(MUTED_CLASS, 'mt-0.5 text-[11px]')}>
                 {isLeader ? '系统保留角色 · 手册只读' : '点击下方「编辑」可修改角色手册'}
               </div>
               {teamNames.length > 0 && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                <div className="mt-2 flex flex-wrap gap-1.5">
                   {teamNames.map((n) => (
-                    <span key={n} style={styles.chip}>
+                    <span key={n} className={CHIP_CLASS}>
                       {n}
                     </span>
                   ))}
@@ -2431,7 +2126,7 @@ function MembersTab({
               )}
             </div>
           </div>
-        </div>
+        </Card>
         <HandbookEditor member={detail} readOnly={isLeader} onSaved={onDeleted} />
         {team !== undefined && detailMemberView !== null && (
           <MemberDialog team={team} member={detailMemberView} />
@@ -2442,10 +2137,10 @@ function MembersTab({
 
   return (
     <div>
-      <div style={styles.card}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-          <h3 style={styles.listTitle}>角色</h3>
-          <span style={styles.listCount}>{members.length} 个</span>
+      <Card className={PANEL_CARD_CLASS}>
+        <div className="mb-2.5 flex items-center gap-2">
+          <h3 className={LIST_TITLE_CLASS}>角色</h3>
+          <span className={LIST_COUNT_CLASS}>{members.length} 个</span>
           {build !== null &&
           (build.status === 'active' || build.status === 'awaiting_confirmation') ? (
             // 有未入库的构建草稿：新增入口让位给「待加入角色」，防止误开新
@@ -2481,16 +2176,16 @@ function MembersTab({
             </Button>
           )}
         </div>
-        {listError !== null && <div style={styles.formError}>{listError}</div>}
+        {listError !== null && <div className={FORM_ERROR_CLASS}>{listError}</div>}
         {members.length === 0 ? (
-          <div style={styles.empty}>
+          <div className={EMPTY_CLASS}>
             还没有角色。点「新增角色」，在对话里补全信息，角色构建师会帮你构建人设。
           </div>
         ) : (
           <>
             {/* 搜索 + 分页（用户反馈）：按名字/角色字段过滤，每页 8 条。 */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="mb-1.5 flex items-center gap-2">
+              <div className="min-w-0 flex-1">
                 <Input
                   value={query}
                   placeholder="搜索角色名…"
@@ -2503,15 +2198,14 @@ function MembersTab({
             </div>
             {/* 角色卡片栅格（用户反馈：列表改卡片）：头像在上、名字与所属团队
             在下，删除按钮悬于右上角；hover/描边由 ROLE_LIST_CSS 接管。 */}
-            <div style={styles.cardGrid}>
+            <div className={CARD_GRID_CLASS}>
               {pageRows.map((m) => {
                 const teamNames = teamsOf(m.name);
                 const isProtected = PROTECTED_MEMBERS.includes(m.name);
                 return (
                   <div
                     key={m.name}
-                    className="eteams-role-row"
-                    style={styles.roleCard}
+                    className={cn('eteams-role-row', ROLE_CARD_CLASS)}
                     onClick={() => {
                       setDetailName(m.name);
                       setView('detail');
@@ -2520,8 +2214,7 @@ function MembersTab({
                     {isProtected ? null : (
                       <button
                         type="button"
-                        className="eteams-role-del"
-                        style={{ position: 'absolute', top: 8, right: 8 }}
+                        className="eteams-role-del absolute right-2 top-2"
                         onClick={(e) => {
                           e.stopPropagation();
                           del(m.name);
@@ -2532,24 +2225,12 @@ function MembersTab({
                     )}
                     <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={40} />
                     {/* 角色（用户反馈）：不再需要标签——名字即身份。 */}
-                    <div style={{ minWidth: 0 }}>
-                      <span
-                        className="eteams-role-name"
-                        style={{
-                          fontSize: 13,
-                          fontWeight: 600,
-                          color: T.text,
-                          display: 'block',
-                          maxWidth: '100%',
-                        }}
-                      >
+                    <div className="min-w-0">
+                      <span className="eteams-role-name block max-w-full text-[13px] font-semibold text-foreground">
                         {m.name}
                       </span>
                       {teamNames.length > 0 && (
-                        <div
-                          className="eteams-role-name"
-                          style={{ ...styles.muted, fontSize: 11, marginTop: 2 }}
-                        >
+                        <div className={cn('eteams-role-name', MUTED_CLASS, 'mt-0.5 text-[11px]')}>
                           {teamNames.join('、')}
                         </div>
                       )}
@@ -2559,15 +2240,7 @@ function MembersTab({
               })}
             </div>
             {totalPages > 1 && (
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 12,
-                  marginTop: 10,
-                }}
-              >
+              <div className="mt-2.5 flex items-center justify-center gap-3">
                 <Button
                   size="sm"
                   variant="ghost"
@@ -2576,7 +2249,7 @@ function MembersTab({
                 >
                   上一页
                 </Button>
-                <span style={styles.pagePill}>
+                <span className={PAGE_PILL_CLASS}>
                   第 {safePage + 1} / {totalPages} 页 · 共 {filtered.length} 个
                 </span>
                 <Button
@@ -2591,7 +2264,7 @@ function MembersTab({
             )}
           </>
         )}
-      </div>
+      </Card>
     </div>
   );
 }

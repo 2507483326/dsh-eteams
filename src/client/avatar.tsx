@@ -5,6 +5,11 @@
  * without storing image data. Falls back to the name-hued initial when no
  * avatar pair exists.
  *
+ * S14（docs/21-client-ui-stack.md 21.6）：本组件是纯 SVG 渲染器，仅容器样式
+ * 迁 Tailwind——静态面（圆角/裁切/居中/字重/前景白）走工具类（全部 Avatar
+ * 消费方都在 `.eteams-ui` 表面内，后代选择器可命中）；随 props 运行时变化的
+ * 尺寸/底色/字号保留 inline（S14 清点口径：动态值）。
+ *
  * @module dsh-eteams/client/avatar
  */
 import type { CSSProperties, ReactNode } from 'react';
@@ -58,6 +63,10 @@ function traits(seed: number, salt: number) {
   };
 }
 
+/** 静态容器面（S14）：工具类；尺寸/底色/字号随 props 动态（见 AVATAR_STYLE）。 */
+const AVATAR_CONTAINER_CLASS =
+  'inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full font-semibold text-white';
+
 /**
  * The member avatar: seeded SVG face when (seed, salt) are supplied, else a
  * stable initial-letter circle. Same pair always renders the same face.
@@ -73,28 +82,24 @@ export function Avatar({
   salt?: number;
   size?: number;
 }): ReactNode {
+  // 动态值（S14 清点口径）：size 直接定宽高、字号按 0.44 比例、底色按名字
+  // 色相——其余容器样式全部走 AVATAR_CONTAINER_CLASS 工具类。
   const style: CSSProperties = {
     width: size,
     height: size,
-    borderRadius: '50%',
-    overflow: 'hidden',
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-    background: `hsl(${hueOf(name)} 55% 45%)`,
-    color: '#fff',
-    fontWeight: 600,
     fontSize: Math.round(size * 0.44),
+    background: `hsl(${hueOf(name)} 55% 45%)`,
   };
   if (seed === undefined || salt === undefined) {
-    return <span style={style}>{name.slice(0, 1)}</span>;
+    return (
+      <span className={AVATAR_CONTAINER_CLASS} style={style}>
+        {name.slice(0, 1)}
+      </span>
+    );
   }
   const t = traits(seed, salt);
-  const k = size / 64; // scale helper not needed — viewBox scales, kept for stroke tuning
-  void k;
   return (
-    <span style={style} data-eteams="avatar">
+    <span className={AVATAR_CONTAINER_CLASS} style={style} data-eteams="avatar">
       <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden={true}>
         <rect width={64} height={64} fill={t.background} />
         {/* shoulders / shirt */}

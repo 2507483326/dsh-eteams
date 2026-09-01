@@ -19,8 +19,8 @@
  *   badge/button 先例的 color-mix() 任意值；类名一律完整字面量（21.5.1
  *   content 扫描纪律，禁拼接）。
  * 行为与降级路径（installCard 的 events 判空、parse 函数群、
- * activateETeamsTab）与迁移前逐字一致；PHASE_LABELS 保留（S14 与
- * eteamsView 合并）。
+ * activateETeamsTab）与迁移前逐字一致；PHASE_LABELS 已合并至
+ * phaseLabels.ts（S14 死代码清理，本文件改从单一事实源导入）。
  *
  * @module dsh-eteams/client/card
  */
@@ -33,6 +33,7 @@ import { Button } from './components/ui/button';
 import { Card } from './components/ui/card';
 import { ClientErrorBoundary } from './diagnostics';
 import { useActivityState, type TeamSnapshot } from './monitor';
+import { PHASE_LABELS } from './phaseLabels';
 
 /** Card state folded from the create-team tool events. */
 interface CardState {
@@ -149,15 +150,6 @@ const eteamsCardDefinition = {
       },
     };
   },
-};
-
-const PHASE_LABELS: Record<string, string> = {
-  staged: '草案',
-  running: '运行中',
-  paused: '已暂停',
-  halted: '已停止',
-  completed: '已完成',
-  archived: '已归档',
 };
 
 function findTeam(

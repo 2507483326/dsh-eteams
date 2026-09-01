@@ -11,6 +11,13 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { PLUGIN_VERSION_LABEL } from './versionLabel';
 
+/**
+ * S14（docs/21-client-ui-stack.md 21.6）：降级框样式迁 Tailwind。边界可能
+ * 包在表面根之外（card/buildCard 的 `.eteams-ui` 根在 children 里，崩溃时
+ * 被整个替换）——工具类是 `.eteams-ui .utility` 后代选择器（D19b），降级框
+ * 自带作用域壳、样式全部落内层，保证崩溃兜底自身可渲染出样式。
+ */
+
 /** Client-side log URL served by the host web surface. */
 const CLIENT_LOG_URL = '/eteams-api/client-log';
 
@@ -121,19 +128,14 @@ export class ClientErrorBoundary extends Component<BoundaryProps, BoundaryState>
   override render(): ReactNode {
     if (this.state.error !== null) {
       return (
-        <div
-          style={{
-            border: '1px solid #c0454566',
-            borderRadius: 10,
-            padding: '12px 16px',
-            margin: 8,
-            fontSize: 13,
-            opacity: 0.85,
-          }}
-        >
-          ⚠️ eteams「{this.props.label}」渲染失败（已记录日志，可继续使用其余功能）
-          <div style={{ opacity: 0.7, fontSize: 12 }}>
-            {String(this.state.error.message).slice(0, 200)}
+        <div className="eteams-ui">
+          {/* 原降级框 inline（1px #c0454566 描边 / 10px 圆角 / 13px / 0.85
+          透明度）→ 工具类；字面色任意值直引（降级路径不依赖 token 桥）。 */}
+          <div className="m-2 rounded-[10px] border border-solid border-[color:#c0454566] px-4 py-3 text-[13px] opacity-85">
+            ⚠️ eteams「{this.props.label}」渲染失败（已记录日志，可继续使用其余功能）
+            <div className="text-[12px] opacity-70">
+              {String(this.state.error.message).slice(0, 200)}
+            </div>
           </div>
         </div>
       );

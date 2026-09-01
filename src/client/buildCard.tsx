@@ -4,23 +4,43 @@
  * 卡片。轮询 /eteams-api/rolebuilder 实时呈现构建状态——创建中（步骤）/
  * 待确认 / 已入库——点击「打开创建页」跳到成员构建工作台。
  *
+ * S14（docs/21-client-ui-stack.md 21.6）：inline style 迁 Tailwind 类。卡片
+ * 原先不在任何 `.eteams-ui` 作用域内——表面根按 D19b 挂作用域类（根自身
+ * 不承工具类，后代选择器机制），卡片样式全部迁内层工具类；状态色改语义
+ * token 类查表（CARD_STATUS.toneClass，完整字面量，content 扫描可检出）。
+ * 跳转/轮询/归属判定等行为逻辑与迁移前逐字一致。
+ *
  * @module dsh-eteams/client/buildCard
  */
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Avatar } from './avatar';
 import { openMemberBuilder } from './bridge';
+import { cn } from './cn';
 import { ClientErrorBoundary } from './diagnostics';
 import { fetchBuildState, type BuildSession } from './api';
 
-/** Status → (label, tone color). */
-const CARD_STATUS: Record<BuildSession['status'], { label: string; color: string }> = {
-  active: { label: '创建中', color: 'var(--dsw-alias-state-business-primary, #1d4ed8)' },
-  awaiting_confirmation: { label: '待确认', color: 'var(--dsw-alias-state-warn-primary, #b45309)' },
-  confirmed: { label: '已入库', color: 'var(--dsw-alias-state-success-primary, #15803d)' },
-  cancelled: { label: '已放弃', color: 'var(--dsw-alias-label-tertiary, #808da4)' },
+/** Status → (label, toneClass)：语义 token 类（active→business、待确认→
+ * warning、已入库→success、放弃→muted-foreground，与原 state-err/warn/
+ * success、label-tertiary 变量同源，D19c）；类名一律完整字面量（21.5.1
+ * content 扫描纪律）。 */
+const CARD_STATUS: Record<BuildSession['status'], { label: string; toneClass: string }> = {
+  active: { label: '创建中', toneClass: 'text-business' },
+  awaiting_confirmation: { label: '待确认', toneClass: 'text-warning' },
+  confirmed: { label: '已入库', toneClass: 'text-success' },
+  cancelled: { label: '已放弃', toneClass: 'text-muted-foreground' },
 };
 
 const SPIN_KEYFRAMES = '@keyframes eteams-card-spin{to{transform:rotate(360deg)}}';
+
+/** 状态 pill（原 inline：11px/500、1px 8px、999 圆角、layer-2 淡底）。 */
+const STATUS_PILL_CLASS =
+  'rounded-full bg-[color:var(--dsw-alias-bg-layer-2,rgba(100,116,139,0.1))] px-2 py-px text-[11px] font-medium';
+/** 访谈待作答 pill（品牌淡底 + brand 主色字）。 */
+const INTERVIEW_PILL_CLASS =
+  'rounded-full bg-[color:var(--dsw-alias-interactive-bg-active,rgba(75,123,236,0.12))] px-2 py-px text-[11px] font-semibold text-primary';
+/** 进度 spinner（标准 border 技法：brand 主色描边、顶部透明、keyframes 旋转）。 */
+const SPINNER_CLASS =
+  'inline-block h-3 w-3 rounded-full border-2 border-solid border-primary border-t-transparent [animation:eteams-card-spin_0.9s_linear_infinite]';
 
 /**
  * 发送即跳转的去重标记（模块级，docs/19.16）：卡片会随聊天重渲染频繁重
@@ -139,128 +159,82 @@ export function EteamBuildCard(props: { node?: unknown }): ReactNode {
   // - orphaned：槽里已是别人的构建 → 用最后匹配快照渲染冻结终态。
   const shown: BuildSession | null | 'loading' =
     myCommandId !== null && orphaned ? lastMatch : build;
-  const showStatus =
-    shown === 'loading' || shown === null ? null : CARD_STATUS[shown.status];
-  const showName = shown === 'loading' || shown === null ? '新成员' : (shown.draft?.name ?? '新成员');
+  const showStatus = shown === 'loading' || shown === null ? null : CARD_STATUS[shown.status];
+  const showName =
+    shown === 'loading' || shown === null ? '新成员' : (shown.draft?.name ?? '新成员');
   const showAvatar = shown === 'loading' || shown === null ? undefined : shown.draft?.avatar;
   const showInterviewPending =
-    shown !== 'loading' && shown !== null &&
-    shown.interview !== undefined && shown.interview.answers === undefined;
+    shown !== 'loading' &&
+    shown !== null &&
+    shown.interview !== undefined &&
+    shown.interview.answers === undefined;
   const isOrphan = myCommandId !== null && orphaned;
 
   return (
     <ClientErrorBoundary label="成员创建卡片">
       <style>{SPIN_KEYFRAMES}</style>
-      <div
-        style={{
-          border: '1px solid var(--dsw-alias-border-l2, rgba(100,116,139,0.26))',
-          borderRadius: 12,
-          padding: '10px 14px',
-          margin: '6px 0',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          cursor: isOrphan ? 'default' : 'pointer',
-          opacity: isOrphan ? 0.72 : 1,
-        }}
-        onClick={() => {
-          if (!isOrphan) openMemberBuilder();
-        }}
-        role="button"
-        title={isOrphan ? '本次构建已结束' : '点击打开成员创建页'}
-      >
-        <Avatar name={showName} seed={showAvatar?.seed} salt={showAvatar?.salt} size={34} />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              flexWrap: 'wrap',
-              fontWeight: 600,
-              fontSize: 13,
-            }}
-          >
-            <span>{isOrphan ? '成员构建 · 已结束' : `成员创建中 · ${showName}`}</span>
-            {showStatus !== null && (
-              <span
-                style={{
-                  fontSize: 11,
-                  fontWeight: 500,
-                  padding: '1px 8px',
-                  borderRadius: 999,
-                  color: showStatus.color,
-                  background: 'var(--dsw-alias-bg-layer-2, rgba(100,116,139,0.1))',
-                }}
-              >
-                {showStatus.label}
-              </span>
-            )}
-            {showInterviewPending && (
-              <span
-                style={{
-                  fontSize: 11,
-                  fontWeight: 600,
-                  padding: '1px 8px',
-                  borderRadius: 999,
-                  color: 'var(--dsw-alias-brand-primary, #4b7bec)',
-                  background: 'var(--dsw-alias-interactive-bg-active, rgba(75,123,236,0.12))',
-                }}
-              >
-                ✍️ 意图访谈待作答
-              </span>
-            )}
-          </div>
-          <div
-            style={{
-              fontSize: 12,
-              opacity: 0.7,
-              marginTop: 2,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-            }}
-          >
-            {isOrphan ? (
-              <span>
-                {shown !== 'loading' && shown !== null && shown.status === 'confirmed'
-                  ? '本次构建已完成入库——新构建请发起 /eteam'
-                  : '本次构建已结束（会话已被新构建取代）'}
-              </span>
-            ) : shown === 'loading' ? (
-              <span>连接构建会话…</span>
-            ) : shown !== null && (shown.status === 'active' || shown.status === 'awaiting_confirmation') ? (
-              shown.status === 'active' && showInterviewPending ? (
-                // 访谈未答 = 阶段代理按设计已结束回合，不是卡死——别转圈装忙。
-                <span>✍️ 意图访谈待作答——点开回答后自动续跑</span>
+      {/* 表面根（D19b/S14）：对话内卡片不在任何 .eteams-ui 作用域内——根
+      自身不承工具类（`.eteams-ui .utility` 后代选择器机制），这里挂作用域
+      类承载 token 变量与字面量，卡片样式全部迁内层。 */}
+      <div className="eteams-ui">
+        <div
+          className={cn(
+            'my-1.5 flex items-center gap-2.5 rounded-xl border border-solid px-3.5 py-2.5',
+            'border-[color:var(--dsw-alias-border-l2,rgba(100,116,139,0.26))]',
+            isOrphan ? 'cursor-default opacity-[0.72]' : 'cursor-pointer opacity-100',
+          )}
+          onClick={() => {
+            if (!isOrphan) openMemberBuilder();
+          }}
+          role="button"
+          title={isOrphan ? '本次构建已结束' : '点击打开成员创建页'}
+        >
+          <Avatar name={showName} seed={showAvatar?.seed} salt={showAvatar?.salt} size={34} />
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2 text-[13px] font-semibold">
+              <span>{isOrphan ? '成员构建 · 已结束' : `成员创建中 · ${showName}`}</span>
+              {showStatus !== null && (
+                <span className={cn(STATUS_PILL_CLASS, showStatus.toneClass)}>
+                  {showStatus.label}
+                </span>
+              )}
+              {showInterviewPending && (
+                <span className={INTERVIEW_PILL_CLASS}>✍️ 意图访谈待作答</span>
+              )}
+            </div>
+            <div className="mt-0.5 flex items-center gap-1.5 text-[12px] opacity-70">
+              {isOrphan ? (
+                <span>
+                  {shown !== 'loading' && shown !== null && shown.status === 'confirmed'
+                    ? '本次构建已完成入库——新构建请发起 /eteam'
+                    : '本次构建已结束（会话已被新构建取代）'}
+                </span>
+              ) : shown === 'loading' ? (
+                <span>连接构建会话…</span>
+              ) : shown !== null &&
+                (shown.status === 'active' || shown.status === 'awaiting_confirmation') ? (
+                shown.status === 'active' && showInterviewPending ? (
+                  // 访谈未答 = 阶段代理按设计已结束回合，不是卡死——别转圈装忙。
+                  <span>✍️ 意图访谈待作答——点开回答后自动续跑</span>
+                ) : (
+                  <>
+                    <span className={SPINNER_CLASS} />
+                    <span>
+                      {shown.status === 'active'
+                        ? `角色构建师工作中 · ${shown.step !== '' ? shown.step : '准备中'}`
+                        : '草稿就绪——待你确认入库'}
+                    </span>
+                  </>
+                )
+              ) : shown !== null && shown.status === 'confirmed' ? (
+                <span>构建完成，成员已入库——点击查看详情</span>
               ) : (
-                <>
-                  <span
-                    style={{
-                      display: 'inline-block',
-                      width: 12,
-                      height: 12,
-                      borderRadius: '50%',
-                      border: '2px solid var(--dsw-alias-brand-primary, #4b7bec)',
-                      borderTopColor: 'transparent',
-                      animation: 'eteams-card-spin 0.9s linear infinite',
-                    }}
-                  />
-                  <span>
-                    {shown.status === 'active'
-                      ? `角色构建师工作中 · ${shown.step !== '' ? shown.step : '准备中'}`
-                      : '草稿就绪——待你确认入库'}
-                  </span>
-                </>
-              )
-            ) : shown !== null && shown.status === 'confirmed' ? (
-              <span>构建完成，成员已入库——点击查看详情</span>
-            ) : (
-              <span>没有进行中的构建会话</span>
-            )}
+                <span>没有进行中的构建会话</span>
+              )}
+            </div>
           </div>
+          {!isOrphan && <span className="shrink-0 text-[12px] opacity-60">打开创建页 →</span>}
         </div>
-        {!isOrphan && <span style={{ fontSize: 12, opacity: 0.6, flexShrink: 0 }}>打开创建页 →</span>}
       </div>
     </ClientErrorBoundary>
   );
