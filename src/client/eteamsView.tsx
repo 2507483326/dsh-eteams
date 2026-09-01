@@ -5,7 +5,14 @@
  *
  * @module dsh-eteams/client/eteamsView
  */
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
 import {
   Button,
@@ -16,6 +23,7 @@ import {
   MarkdownText,
   writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives';
+import { Provider } from 'react-redux';
 import { ADD_PEOPLE_TEMPLATE, prefillComposer, type PrefillOutcome } from './addPeople';
 import { Avatar } from './avatar';
 import {
@@ -58,6 +66,7 @@ import {
   type TaskView,
   type TeamSnapshot,
 } from './monitor';
+import { getApp } from './store/app';
 
 const PHASE_LABELS: Record<string, string> = {
   staged: '草案',
@@ -782,85 +791,86 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
   // 一键预填（docs/19.7.1, D18-1）：共享 helper（addPeople.ts）把命令写入
   // 对话输入框并聚焦；inputActions 不可用时退化为剪贴板复制。不自动发送。
   const prefillAddPeople = useCallback((): PrefillOutcome => {
-    const actions = (props as { inputActions?: { setDraft: (text: string) => void } })
-      .inputActions;
+    const actions = (props as { inputActions?: { setDraft: (text: string) => void } }).inputActions;
     return prefillComposer(actions);
   }, [props]);
 
   return (
-    <ClientErrorBoundary label="团队面板">
-      <div style={styles.root} data-eteams="view">
-        {/* 卡片化样式（用户反馈）：角色/团队卡片与删除按钮的 hover 态一次注入，
+    <Provider store={getApp().store}>
+      <ClientErrorBoundary label="团队面板">
+        <div style={styles.root} data-eteams="view">
+          {/* 卡片化样式（用户反馈）：角色/团队卡片与删除按钮的 hover 态一次注入，
         面板内与整页团队页共用同一渲染根，注入一次即可。 */}
-        <style>{ROLE_LIST_CSS}</style>
-        <div style={styles.rail}>
-          {tabs.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              style={fns.railBtn(activeTab === t.id)}
-              onClick={() => setTab(t.id)}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+          <style>{ROLE_LIST_CSS}</style>
+          <div style={styles.rail}>
+            {tabs.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                style={fns.railBtn(activeTab === t.id)}
+                onClick={() => setTab(t.id)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
 
-        <div style={styles.content}>
-          {/* 顶栏（用户反馈）：团队切换改为「团队」页的卡片栅格，这里只保留
+          <div style={styles.content}>
+            {/* 顶栏（用户反馈）：团队切换改为「团队」页的卡片栅格，这里只保留
           状态加载失败的就地提示；空态兜底在 BoardTab。 */}
-          {state.error !== null && (
-            <div style={{ ...styles.formError, marginBottom: 12 }}>
-              状态加载失败：{state.error}
-            </div>
-          )}
+            {state.error !== null && (
+              <div style={{ ...styles.formError, marginBottom: 12 }}>
+                状态加载失败：{state.error}
+              </div>
+            )}
 
-          {activeTab === 'board' && (
-            <BoardTab team={team} now={now} fetchedAt={state.fetchedAt} error={state.error} />
-          )}
-          {activeTab === 'team' && (
-            <TeamTab
-              sessionId={props.sessionId}
-              pool={pool}
-              team={team}
-              roster={roster}
-              onSelectTeam={(id) => setActiveId(id)}
-              agentActivity={agentActivity}
-              onOpenReports={(name) => {
-                setDialogMember(name);
-                setTab('reports');
-              }}
-            />
-          )}
-          {activeTab === 'roster' && (
-            <MembersTab
-              members={roster}
-              pool={pool}
-              team={team}
-              onDeleted={refreshRoster}
-              onPrefillAddPeople={prefillAddPeople}
-              openAddTick={openAddTick}
-            />
-          )}
-          {activeTab === 'tasks' && team !== undefined && (
-            <TasksTab
-              team={team}
-              now={now}
-              expandedTask={expandedTask}
-              setExpandedTask={setExpandedTask}
-            />
-          )}
-          {activeTab === 'reports' && team !== undefined && (
-            <ReportsTab
-              team={team}
-              dialogMember={dialogMember}
-              setDialogMember={setDialogMember}
-              member={dialogMemberView}
-            />
-          )}
+            {activeTab === 'board' && (
+              <BoardTab team={team} now={now} fetchedAt={state.fetchedAt} error={state.error} />
+            )}
+            {activeTab === 'team' && (
+              <TeamTab
+                sessionId={props.sessionId}
+                pool={pool}
+                team={team}
+                roster={roster}
+                onSelectTeam={(id) => setActiveId(id)}
+                agentActivity={agentActivity}
+                onOpenReports={(name) => {
+                  setDialogMember(name);
+                  setTab('reports');
+                }}
+              />
+            )}
+            {activeTab === 'roster' && (
+              <MembersTab
+                members={roster}
+                pool={pool}
+                team={team}
+                onDeleted={refreshRoster}
+                onPrefillAddPeople={prefillAddPeople}
+                openAddTick={openAddTick}
+              />
+            )}
+            {activeTab === 'tasks' && team !== undefined && (
+              <TasksTab
+                team={team}
+                now={now}
+                expandedTask={expandedTask}
+                setExpandedTask={setExpandedTask}
+              />
+            )}
+            {activeTab === 'reports' && team !== undefined && (
+              <ReportsTab
+                team={team}
+                dialogMember={dialogMember}
+                setDialogMember={setDialogMember}
+                member={dialogMemberView}
+              />
+            )}
+          </div>
         </div>
-      </div>
-    </ClientErrorBoundary>
+      </ClientErrorBoundary>
+    </Provider>
   );
 }
 
@@ -1039,7 +1049,9 @@ function TeamTab({
                   <div style={{ ...styles.progressTrack, margin: '10px 0 0' }}>
                     <div
                       style={fns.progressFill(
-                        t.progress.total === 0 ? 0 : (t.progress.completed / t.progress.total) * 100,
+                        t.progress.total === 0
+                          ? 0
+                          : (t.progress.completed / t.progress.total) * 100,
                       )}
                     />
                   </div>
@@ -1361,10 +1373,15 @@ function handbookSeed(member: RosterMember): string {
     ['执行提示', member.executionPrompt],
   ];
   for (const [label, value] of fields) {
-    if (typeof value === 'string' && value.trim() !== '') lines.push(`- **${label}**：${value.trim()}`);
+    if (typeof value === 'string' && value.trim() !== '')
+      lines.push(`- **${label}**：${value.trim()}`);
   }
   if (Array.isArray(member.rules) && member.rules.length > 0) {
-    lines.push('', '## 工作纪律', ...member.rules.filter((r) => r.trim() !== '').map((r) => `- ${r}`));
+    lines.push(
+      '',
+      '## 工作纪律',
+      ...member.rules.filter((r) => r.trim() !== '').map((r) => `- ${r}`),
+    );
   }
   lines.push('', '## 交付标准', '- （待补充）');
   return lines.join('\n');
@@ -1428,9 +1445,7 @@ function HandbookEditor({
       ...(member.executionPrompt !== undefined ? { executionPrompt: member.executionPrompt } : {}),
       ...(member.provider !== undefined ? { provider: member.provider } : {}),
       ...(member.model !== undefined ? { model: member.model } : {}),
-      ...(member.reasoningEffort !== undefined
-        ? { reasoningEffort: member.reasoningEffort }
-        : {}),
+      ...(member.reasoningEffort !== undefined ? { reasoningEffort: member.reasoningEffort } : {}),
       ...(member.avatar !== undefined ? { avatar: member.avatar } : {}),
       personaMd: draft,
     })
@@ -1458,12 +1473,7 @@ function HandbookEditor({
           </Button>
         ) : (
           <>
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={saving}
-              onClick={() => setDraft(null)}
-            >
+            <Button size="sm" variant="ghost" disabled={saving} onClick={() => setDraft(null)}>
               取消
             </Button>
             <Button size="sm" variant="primary" disabled={saving} onClick={save}>
@@ -1522,7 +1532,10 @@ function MembersTab({
   const sortedMembers = [...filtered].sort((a, b) => memberRank(a.name) - memberRank(b.name));
   const totalPages = Math.max(1, Math.ceil(sortedMembers.length / MEMBER_PAGE_SIZE));
   const safePage = Math.min(page, totalPages - 1);
-  const pageRows = sortedMembers.slice(safePage * MEMBER_PAGE_SIZE, (safePage + 1) * MEMBER_PAGE_SIZE);
+  const pageRows = sortedMembers.slice(
+    safePage * MEMBER_PAGE_SIZE,
+    (safePage + 1) * MEMBER_PAGE_SIZE,
+  );
 
   // 构建会话（docs/19.6.2, D18-5）：轮询 /eteams-api/rolebuilder；以 startedAt
   // 为会话键去重自动跳转（用户手动离开后不反复强拉，状态再迁移才再次跳转）。
@@ -1818,7 +1831,9 @@ function MembersTab({
                   </div>
                   {(() => {
                     const qs = build.interview.questions;
-                    const answered = qs.filter((q) => (interviewPick[q.id] ?? []).length > 0).length;
+                    const answered = qs.filter(
+                      (q) => (interviewPick[q.id] ?? []).length > 0,
+                    ).length;
                     if (answered >= qs.length) return null;
                     return (
                       <div
@@ -1830,7 +1845,9 @@ function MembersTab({
                         }}
                       >
                         每题至少选一项才能提交——已答 {answered}/{qs.length}
-                        {answered === qs.length - 1 ? '，还差 1 题' : `，还差 ${qs.length - answered} 题`}
+                        {answered === qs.length - 1
+                          ? '，还差 1 题'
+                          : `，还差 ${qs.length - answered} 题`}
                       </div>
                     );
                   })()}
@@ -1861,7 +1878,9 @@ function MembersTab({
                           )}
                           {!done && <span style={{ color: T.accent }}> ·</span>}
                         </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 5 }}>
+                        <div
+                          style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 5 }}
+                        >
                           {q.options.map((o) => {
                             const active = picked.includes(o.label);
                             return (
@@ -1905,7 +1924,9 @@ function MembersTab({
                         )
                       }
                       title={
-                        build.interview.questions.some((q) => (interviewPick[q.id] ?? []).length === 0)
+                        build.interview.questions.some(
+                          (q) => (interviewPick[q.id] ?? []).length === 0,
+                        )
                           ? '每题至少选一项后才能提交'
                           : undefined
                       }
@@ -1952,72 +1973,70 @@ function MembersTab({
               {build.draft !== null && <DraftPreview draft={build.draft} />}
             </div>
           )}
-          {build !== null &&
-            build.status === 'awaiting_confirmation' &&
-            build.draft !== null && (
-              <div>
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    ...styles.line,
-                    fontWeight: 600,
-                  }}
-                >
-                  {build.draft.avatar !== undefined && (
-                    <Avatar
-                      name={draftEdit.name.trim() !== '' ? draftEdit.name.trim() : build.draft.name}
-                      seed={build.draft.avatar.seed}
-                      salt={build.draft.avatar.salt}
-                      size={30}
-                    />
-                  )}
-                  草稿已就绪——可直接修改，确认后入库
-                </div>
-                {formError !== null && <div style={styles.formError}>{formError}</div>}
-                <div style={{ ...styles.formRow, marginTop: 8 }}>
-                  <span style={styles.formLabel}>角色名</span>
-                  <Input
-                    value={draftEdit.name}
-                    onChange={(e) => setDraftEdit({ ...draftEdit, name: e.target.value })}
+          {build !== null && build.status === 'awaiting_confirmation' && build.draft !== null && (
+            <div>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  ...styles.line,
+                  fontWeight: 600,
+                }}
+              >
+                {build.draft.avatar !== undefined && (
+                  <Avatar
+                    name={draftEdit.name.trim() !== '' ? draftEdit.name.trim() : build.draft.name}
+                    seed={build.draft.avatar.seed}
+                    salt={build.draft.avatar.salt}
+                    size={30}
                   />
-                </div>
-                <div style={styles.formRow}>
-                  <span style={styles.formLabel}>角色</span>
-                  <Input
-                    value={draftEdit.role}
-                    onChange={(e) => setDraftEdit({ ...draftEdit, role: e.target.value })}
-                  />
-                </div>
-                <div style={styles.formRow}>
-                  <span style={styles.formLabel}>
-                    人设手册（统一 Markdown：frontmatter + 身份/使命/规则/领域专章/沟通风格）
-                  </span>
-                  <MdEditor
-                    value={draftEdit.personaMd}
-                    onChange={(next) => setDraftEdit({ ...draftEdit, personaMd: next })}
-                  />
-                </div>
-                <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
-                  <Button
-                    size="sm"
-                    variant="primary"
-                    icon={<IconPlusOutline16 />}
-                    disabled={
-                      confirming || draftEdit.name.trim() === '' || draftEdit.role.trim() === ''
-                    }
-                    onClick={() => void confirmDraft()}
-                  >
-                    确认入库
-                  </Button>
-                  <Button size="sm" disabled={confirming} onClick={() => void abandon()}>
-                    放弃
-                  </Button>
-                  <span style={styles.muted}>也可以在对话里继续调整，这里会跟着刷新。</span>
-                </div>
+                )}
+                草稿已就绪——可直接修改，确认后入库
               </div>
-            )}
+              {formError !== null && <div style={styles.formError}>{formError}</div>}
+              <div style={{ ...styles.formRow, marginTop: 8 }}>
+                <span style={styles.formLabel}>角色名</span>
+                <Input
+                  value={draftEdit.name}
+                  onChange={(e) => setDraftEdit({ ...draftEdit, name: e.target.value })}
+                />
+              </div>
+              <div style={styles.formRow}>
+                <span style={styles.formLabel}>角色</span>
+                <Input
+                  value={draftEdit.role}
+                  onChange={(e) => setDraftEdit({ ...draftEdit, role: e.target.value })}
+                />
+              </div>
+              <div style={styles.formRow}>
+                <span style={styles.formLabel}>
+                  人设手册（统一 Markdown：frontmatter + 身份/使命/规则/领域专章/沟通风格）
+                </span>
+                <MdEditor
+                  value={draftEdit.personaMd}
+                  onChange={(next) => setDraftEdit({ ...draftEdit, personaMd: next })}
+                />
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  icon={<IconPlusOutline16 />}
+                  disabled={
+                    confirming || draftEdit.name.trim() === '' || draftEdit.role.trim() === ''
+                  }
+                  onClick={() => void confirmDraft()}
+                >
+                  确认入库
+                </Button>
+                <Button size="sm" disabled={confirming} onClick={() => void abandon()}>
+                  放弃
+                </Button>
+                <span style={styles.muted}>也可以在对话里继续调整，这里会跟着刷新。</span>
+              </div>
+            </div>
+          )}
           {confirmedDraft !== null && (
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -2105,7 +2124,8 @@ function MembersTab({
                     </div>
                   ))}
                   <div style={{ ...styles.muted, marginTop: 10, fontSize: 11.5 }}>
-                    提示：已模拟「键入 /eteam + 空格」完成命令认领（claimed）——补全两个【】占位符后直接回车即可；编辑正文时命令高亮收起属正常行为。
+                    提示：已模拟「键入 /eteam +
+                    空格」完成命令认领（claimed）——补全两个【】占位符后直接回车即可；编辑正文时命令高亮收起属正常行为。
                   </div>
                 </div>
               ) : (
@@ -2135,11 +2155,7 @@ function MembersTab({
                       角色手册（可选，Markdown：使命/职责/规则/领域专章/沟通风格/交付标准）
                     </summary>
                     <div style={{ ...styles.formRow, marginTop: 8 }}>
-                      <MdEditor
-                        value={personaMd}
-                        onChange={setPersonaMd}
-                        minHeight={220}
-                      />
+                      <MdEditor value={personaMd} onChange={setPersonaMd} minHeight={220} />
                     </div>
                   </details>
                   <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
