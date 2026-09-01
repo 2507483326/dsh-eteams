@@ -25,19 +25,25 @@
  * either surface opens, so the panel consumes them on mount — the same
  * mount-time consumption pattern as openMemberBuilder (docs/19.16).
  *
+ * S11 样式迁移（docs/21-client-ui-stack.md 21.6 / D19b/D19c）：全屏页的
+ * inline style 迁 Tailwind 类。pane 矩形（left/top/width/height）是实时测量
+ * 的动态值，保留 inline style；静态面（层级/布局/底色/顶栏/内容包裹）全部
+ * 工具类化。D19b 作用域机制：`important: '.eteams-ui'` 把工具类编译成后代
+ * 选择器（`.eteams-ui .utility`）——作用域根自身不承样式，故页面外包一层裸
+ * `.eteams-ui` 包裹根（页面挂在 body 下的独立 React 根，自带作用域），固定
+ * 定位层作为其后代承载全部工具类。底色沿用原 bg-base 档（shadcn --background
+ * 是 layer-1，任意值直引保持视觉）；返回按钮换 shadcn Button（S5 card 先例，
+ * 显式 type="button"）。pane 测量、Esc/resize 监听与降级投递逐字保留。
+ *
  * @module dsh-eteams/client/teamsPanel
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
-import { Button } from '@deepseek-ai/dsh-client-ui-primitives';
-import {
-  activateETeamsTab,
-  stageTeamSignals,
-  teamsTabVisible,
-} from './bridge';
+import { activateETeamsTab, stageTeamSignals, teamsTabVisible } from './bridge';
+import { Button } from './components/ui/button';
 import { ClientErrorBoundary, recordClientDiag } from './diagnostics';
-import { ETeamsView, T } from './eteamsView';
+import { ETeamsView } from './eteamsView';
 import { HERO_ROW_SELECTOR } from './heroTeamsButton';
 
 /** Landing options for {@link enterTeamsPanel}: which panel view to open. */
@@ -71,7 +77,7 @@ export function enterTeamsPanel(opts: TeamsPanelOptions = {}): void {
 
 /**
  * Open the full-page 团队页 (idempotent while open): the full ETeamsView on
- * a plugin-owned fixed layer inset to the app's content pane, mounted
+ * a plugin-owned fixed layer inset to the measured content pane, mounted
  * through a lazy React root on `<body>` so it works on the not-started
  * screen where the host view ring does not render. The root is kept for the
  * page lifetime; closing just renders null.
@@ -163,52 +169,35 @@ function TeamsOverlay({ onClose }: { onClose: () => void }): ReactNode {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="团队"
-      data-eteams="overlay-page"
-      style={{
-        position: 'fixed',
-        left: pane.left,
-        top: pane.top,
-        width: pane.width,
-        height: pane.height,
-        zIndex: 1000,
-        display: 'flex',
-        flexDirection: 'column',
-        background: T.bg,
-        color: T.text,
-      }}
-    >
-      {/* 顶栏（用户反馈）：去掉「团队」标题与提示文案，只留右侧返回。 */}
-      <header
-        style={{
-          flex: '0 0 auto',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'flex-end',
-          gap: 10,
-          height: 44,
-          padding: '0 16px',
-          borderBottom: `1px solid ${T.border}`,
-        }}
+    /* 表面根（D19b/S11）：.eteams-ui 作用域根——工具类经后代选择器作用于
+    子树，根自身不承工具类样式（页面在 body 下独立 React 根，自带作用域）。 */
+    <div className="eteams-ui">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="团队"
+        data-eteams="overlay-page"
+        className="fixed z-[1000] flex flex-col bg-[color:var(--dsw-alias-bg-base,#f6f7f9)] text-foreground"
+        style={{ left: pane.left, top: pane.top, width: pane.width, height: pane.height }}
       >
-        <Button variant="outline" size="sm" onClick={onClose}>
-          返回
-        </Button>
-      </header>
-      {/* Plain block wrapper: the view root is `height:100%` + flex row and
-      has no width of its own — a block parent lets it fill the pane width
-      instead of shrink-wrapping to its content (the "定死宽度" artifact).
-      overflow hidden keeps tall content scrolling inside the view column —
-      never spilling to the document (横向滚动条治理). */}
-      <div style={{ flex: '1 1 auto', minHeight: 0, overflow: 'hidden' }}>
-        {/* The panel only reads sessionId/inputActions off its slot props; the
-        page has neither (no session on the not-started screen), so a minimal
-        share is cast in — the panel degrades to the all-teams pool and
-        clipboard prefill, both sanctioned fallbacks. */}
-        <ETeamsView {...({ sessionId: undefined } as unknown as ConvViewProps)} />
+        {/* 顶栏（用户反馈）：去掉「团队」标题与提示文案，只留右侧返回。 */}
+        <header className="flex h-11 flex-none items-center justify-end gap-2.5 border-b border-solid border-[color:var(--dsw-alias-border-l1,rgba(100,116,139,0.14))] px-4">
+          <Button type="button" variant="outline" size="sm" onClick={onClose}>
+            返回
+          </Button>
+        </header>
+        {/* Plain block wrapper: the view root is `height:100%` + flex row and
+        has no width of its own — a block parent lets it fill the pane width
+        instead of shrink-wrapping to its content (the "定死宽度" artifact).
+        overflow hidden keeps tall content scrolling inside the view column —
+        never spilling to the document (横向滚动条治理). */}
+        <div className="min-h-0 flex-1 overflow-hidden">
+          {/* The panel only reads sessionId/inputActions off its slot props; the
+          page has neither (no session on the not-started screen), so a minimal
+          share is cast in — the panel degrades to the all-teams pool and
+          clipboard prefill, both sanctioned fallbacks. */}
+          <ETeamsView {...({ sessionId: undefined } as unknown as ConvViewProps)} />
+        </div>
       </div>
     </div>
   );

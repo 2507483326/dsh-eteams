@@ -22,6 +22,26 @@
  * panel navigation stays with the 新增 shortcuts. When the slot's
  * `inputActions` kit is unavailable the prefill degrades to clipboard copy.
  *
+ * S11 样式迁移（docs/21-client-ui-stack.md 21.6 / D19b/D19c/D19g）：弹层与
+ * 按钮面的 inline style 与手写注入样式表（POPUP_CSS）全部迁到 Tailwind 类 +
+ * shadcn 基础件（Card 承载弹层卡）。落地注记（沿用 S5 card 试点模式）：
+ * - D19b 作用域机制：`important: '.eteams-ui'` 把工具类编译成后代选择器
+ *   （`.eteams-ui .utility`）——作用域根元素自身不承样式。表面根（composer
+ *   锚点 div）挂 `.eteams-ui`；其 display/align 是宿主工具行里的承重布局
+ *   （宿主 .trailing 容器无法在此证实为 flex），保留 inline style，S14 清点
+ *   时再定。
+ * - 弹层 portal 到 body，不在表面根子树里 → 弹层自带 `.eteams-ui` 包裹根，
+ *   Card 作为其后代承载全部样式；Card 根 className 同样带 `eteams-ui` 字面量
+ *   （content 扫描与 D19b「表面根挂类」双保险，S5 先例）。
+ * - 原 POPUP_CSS 的 :hover / [data-selected] 规则改为 `hover:*` /
+ *   `data-[selected=true]:*` 变体（完整字面量，content 扫描可检出）；交互动
+ *   激活底色无语义 token，走任意值直引（D19c：token 色禁 /alpha 修饰）。
+ * - 边框沿用原 border-l1 档（shadcn --border 桥的是 l2），任意值直引保持
+ *   视觉；preflight 已关，`border-solid` 显式补边框样式（S3 桥只补默认色）。
+ * - 行为与桥接（点击开合、外点/Esc 关闭、rAF 跟随定位、persona 同步、心跳、
+ *   data-eteams 标记）逐字保留；heroTeamsButton.ts 的 `.eteams-hero-btn`
+ *   注入样式不在本文件、未触碰。
+ *
  * @module dsh-eteams/client/teamsButton
  */
 import {
@@ -35,7 +55,7 @@ import {
 import { createPortal } from 'react-dom';
 import { Button, writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives';
 import { ADD_PEOPLE_TEMPLATE, prefillComposer } from './addPeople';
-import { PHASE_LABELS, T } from './eteamsView';
+import { PHASE_LABELS } from './eteamsView';
 import { ClientErrorBoundary, recordClientDiag } from './diagnostics';
 import { enterTeamsPanel } from './teamsPanel';
 import {
@@ -47,6 +67,8 @@ import {
 } from './api';
 import { useActivityMonitor } from './monitor';
 import { Avatar } from './avatar';
+import { cn } from './cn';
+import { Card } from './components/ui/card';
 
 /**
  * Owner share of the input-region slots (`InputZone`): the conversation
@@ -85,7 +107,6 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
   // since the feature shipped) must be VISIBLE, not silently swallowed.
   const [personaError, setPersonaError] = useState<string | null>(null);
   useEffect(() => {
-    ensurePopupStyle();
     const restore = (): void => {
       const member = loadSelectedMember(sessionId);
       setSelectedMember(member);
@@ -97,7 +118,10 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
             .then(() => setPersonaError(null))
             .catch((error: unknown) => {
               setPersonaError(error instanceof Error ? error.message : String(error));
-              recordClientDiag('persona-restore', error instanceof Error ? error.message : String(error));
+              recordClientDiag(
+                'persona-restore',
+                error instanceof Error ? error.message : String(error),
+              );
             });
         }
         return;
@@ -185,11 +209,21 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
 
   return (
     <ClientErrorBoundary label="团队按钮">
-      <div ref={setAnchorEl} style={{ display: 'inline-flex', alignItems: 'center' }} data-eteams="button">
+      {/* 表面根（D19b/S11）：.eteams-ui 作用域根，工具类经后代选择器作用于
+      子树；根自身不承工具类样式，display/align 承重布局保留 inline。 */}
+      <div
+        ref={setAnchorEl}
+        className="eteams-ui"
+        style={{ display: 'inline-flex', alignItems: 'center' }}
+        data-eteams="button"
+      >
+        {/* 选中高亮（原 POPUP_CSS `.eteams-teams-btn[data-selected]` 迁移）：
+        `group` 供 hover 显隐的清除钮用；交互激活底色无语义 token → 任意值
+        直引（D19c），文字用 brand 主色 token。 */}
         <Button
           variant="ghost"
           size="sm"
-          className="eteams-teams-btn"
+          className="group data-[selected=true]:bg-[color:var(--dsw-alias-interactive-bg-active,rgba(75,123,236,0.12))] data-[selected=true]:text-primary"
           data-selected={selectedMember !== null || selectedTeam !== null ? 'true' : undefined}
           aria-label="团队"
           aria-haspopup="dialog"
@@ -197,16 +231,16 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
           onClick={onButtonClick}
         >
           {selectedMember !== null ? (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <span className={FACE_ROW_CLASS}>
               <Avatar
                 name={selectedMember.name}
                 seed={selectedMember.avatar?.seed}
                 salt={selectedMember.avatar?.salt}
                 size={18}
               />
-              <span style={S.faceName}>{selectedMember.name}</span>
+              <span className={FACE_NAME_CLASS}>{selectedMember.name}</span>
               <span
-                className="eteams-teams-clear"
+                className={CLEAR_BUTTON_CLASS}
                 role="button"
                 aria-label="取消选择"
                 title="取消选择"
@@ -219,13 +253,13 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
               </span>
             </span>
           ) : selectedTeam !== null ? (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <span style={S.teamChip} aria-hidden={true}>
+            <span className={FACE_ROW_CLASS}>
+              <span className={TEAM_CHIP_CLASS} aria-hidden={true}>
                 {selectedTeam.name.slice(0, 1)}
               </span>
-              <span style={S.faceName}>{selectedTeam.name}</span>
+              <span className={FACE_NAME_CLASS}>{selectedTeam.name}</span>
               <span
-                className="eteams-teams-clear"
+                className={CLEAR_BUTTON_CLASS}
                 role="button"
                 aria-label="取消选择"
                 title="取消选择"
@@ -241,22 +275,22 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
             '团队'
           )}
         </Button>
-        {open && anchorEl !== null && typeof document !== 'undefined' ? (
-          createPortal(
-            <TeamsPopup
-              anchor={anchorEl}
-              inputActions={props.inputActions}
-              selectedMember={selectedMember}
-              selectedTeam={selectedTeam}
-              personaError={personaError}
-              onSelectMember={selectMember}
-              onSelectTeam={selectTeam}
-              initialTab={selectedMember !== null ? 'member' : 'team'}
-              onClose={() => setOpen(false)}
-            />,
-            document.body,
-          )
-        ) : null}
+        {open && anchorEl !== null && typeof document !== 'undefined'
+          ? createPortal(
+              <TeamsPopup
+                anchor={anchorEl}
+                inputActions={props.inputActions}
+                selectedMember={selectedMember}
+                selectedTeam={selectedTeam}
+                personaError={personaError}
+                onSelectMember={selectMember}
+                onSelectTeam={selectTeam}
+                initialTab={selectedMember !== null ? 'member' : 'team'}
+                onClose={() => setOpen(false)}
+              />,
+              document.body,
+            )
+          : null}
       </div>
     </ClientErrorBoundary>
   );
@@ -332,168 +366,55 @@ function forgetSelectedTeam(sessionId: string | undefined): void {
   }
 }
 
-// ---------- popup row hover / selected styles ----------
+// ---------- S11 迁移后的类名常量（Tailwind 工具类，完整字面量） ----------
 
-const POPUP_STYLE_ID = 'eteams-popup-style';
-/** Inline styles cannot express :hover — rows get their default/hover/
- * selected backgrounds from this one stylesheet instead (token-driven; the
- * default transparent also belongs here because `<button>` carries a UA
- * background that an inline transparent would shadow the hover with).
- * `.eteams-teams-btn` is the composer button itself: highlighted while a
- * member/team is selected, and its right-reserved × clears on hover. */
-const POPUP_CSS = `
-.eteams-ets-row{background:transparent}
-.eteams-ets-row:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(100,116,139,0.08))}
-.eteams-ets-row[data-selected="true"]{background:var(--dsw-alias-interactive-bg-active,rgba(75,123,236,0.12))}
-.eteams-teams-btn[data-selected="true"]{background:var(--dsw-alias-interactive-bg-active,rgba(75,123,236,0.12));color:var(--dsw-alias-brand-primary,#4b7bec)}
-.eteams-teams-clear{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:16px;height:16px;border:none;border-radius:50%;padding:0;font-size:13px;line-height:1;font-family:inherit;color:var(--dsw-alias-label-tertiary,#808da4);background:transparent;cursor:pointer;opacity:0;transition:opacity .12s}
-.eteams-teams-btn:hover .eteams-teams-clear{opacity:1}
-.eteams-teams-clear:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(100,116,139,0.08));color:var(--dsw-alias-label-primary,#1c2430)}
-`;
+/* 原 POPUP_CSS 手写样式表的三态规则迁成变体类（inline style 无法表达
+:hover，Tailwind 变体可以——样式表随之删除）：
+- 行默认透明底：`<button>` 带 UA 背景，必须显式压住（原样式表同款理由）；
+- hover 底 = 交互悬停（--muted 桥即 interactive-bg-hover，同一宿主变量）；
+- 选中底 = 交互激活（无语义 token，任意值直引；与 hover 同特异性时按产物
+  源序 data-[selected] 靠后取胜，等同原样式表的规则先后）；
+- preflight 已关：UA 字体/背景的显式覆盖逐项保留（text-[13px]、
+  [font-family:inherit]、bg-transparent），视觉与迁移前一致。 */
+const ROW_CLASS =
+  'flex w-full cursor-pointer items-center gap-2 rounded-[8px] border-none bg-transparent px-[9px] py-[7px] text-left text-[13px] text-foreground [font-family:inherit] hover:bg-muted data-[selected=true]:bg-[color:var(--dsw-alias-interactive-bg-active,rgba(75,123,236,0.12))]';
+const ROW_NAME_CLASS = 'min-w-0 truncate font-medium';
+const ROW_META_CLASS = 'ml-auto shrink-0 text-[11px] text-muted-foreground';
+const EMPTY_CLASS = 'px-2.5 py-3.5 text-center text-xs text-muted-foreground';
+const ERR_CLASS = 'px-2.5 pb-2 pt-1 text-[11px] text-destructive';
+const HINT_CLASS = 'px-2.5 pb-0.5 pt-1.5 text-[11px] leading-normal text-muted-foreground';
 
-/** Inject the row stylesheet once per page (same pattern as heroTeamsButton). */
-function ensurePopupStyle(): void {
-  if (typeof document === 'undefined' || document.getElementById(POPUP_STYLE_ID) !== null) return;
-  const tag = document.createElement('style');
-  tag.id = POPUP_STYLE_ID;
-  tag.textContent = POPUP_CSS;
-  document.head.appendChild(tag);
-}
+/* 弹层卡体（原 S.card）：bg/background、文字色走语义 token（label-primary/
+ layer-1 与原 T.surface/T.text 同一宿主变量）；边框沿用原 l1 档（shadcn
+ --border 桥 l2，任意值直引保持视觉）；阴影逐字保留原 T.shadow。 */
+const POPUP_BORDER_CLASS = 'border-[color:var(--dsw-alias-border-l1,rgba(100,116,139,0.14))]';
+const TAB_HEADER_CLASS = `flex gap-0.5 border-b border-solid bg-card p-1.5 ${POPUP_BORDER_CLASS}`;
+const LIST_CLASS = 'flex max-h-[260px] flex-col gap-0.5 overflow-x-hidden overflow-y-auto p-1.5';
+const FOOTER_CLASS = `flex border-t border-solid p-1.5 ${POPUP_BORDER_CLASS}`;
+const ACTION_CLASS =
+  'flex-1 cursor-pointer rounded-[8px] border border-dashed bg-transparent px-2 py-1.5 text-center text-xs font-medium leading-[18px] text-primary [font-family:inherit]';
 
-// ---------- the tabbed popup ----------
+/* Tab 按钮（原 S.tabBtn）：active/idle 两态都是完整字面量映射（无拼接）。
+active 的内嵌 1px 描边用 inset shadow 任意值（原 boxShadow 迁移）。 */
+const tabBtnClass = (active: boolean): string =>
+  cn(
+    'flex-1 cursor-pointer rounded-[8px] border-none px-2 py-[5px] text-center text-xs leading-[18px]',
+    active
+      ? 'bg-background font-semibold text-primary shadow-[inset_0_0_0_1px_var(--dsw-alias-border-l1,rgba(100,116,139,0.14))]'
+      : 'bg-transparent font-medium text-[color:var(--dsw-alias-label-secondary,#47546c)]',
+  );
 
-const S = {
-  card: {
-    boxSizing: 'border-box',
-    width: 280,
-    background: T.surface,
-    border: `1px solid ${T.border}`,
-    borderRadius: 12,
-    boxShadow: T.shadow,
-    color: T.text,
-    fontSize: 13,
-    fontFamily: 'inherit',
-    overflow: 'hidden',
-    display: 'flex',
-    flexDirection: 'column',
-  } satisfies CSSProperties,
-  tabHeader: {
-    display: 'flex',
-    gap: 2,
-    padding: 6,
-    borderBottom: `1px solid ${T.border}`,
-    background: T.sunken,
-  } satisfies CSSProperties,
-  tabBtn: (active: boolean): CSSProperties => ({
-    flex: 1,
-    padding: '5px 8px',
-    fontSize: 12,
-    fontWeight: active ? 600 : 500,
-    lineHeight: '18px',
-    textAlign: 'center',
-    cursor: 'pointer',
-    border: 'none',
-    borderRadius: 8,
-    background: active ? T.surface : 'transparent',
-    color: active ? T.accent : T.text2,
-    boxShadow: active ? `inset 0 0 0 1px ${T.border}` : 'none',
-  }),
-  list: {
-    maxHeight: 260,
-    overflowY: 'auto',
-    overflowX: 'hidden',
-    padding: 6,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 2,
-  } satisfies CSSProperties,
-  row: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    width: '100%',
-    padding: '7px 9px',
-    border: 'none',
-    borderRadius: 8,
-    /* background intentionally unset — the stylesheet owns hover/selected
-    (`.eteams-ets-row:hover` / `[data-selected="true"]`); inline would win. */
-    cursor: 'pointer',
-    textAlign: 'left',
-    font: 'inherit',
-    color: T.text,
-  } satisfies CSSProperties,
-  rowName: {
-    fontWeight: 500,
-    minWidth: 0,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  } satisfies CSSProperties,
-  rowMeta: {
-    marginLeft: 'auto',
-    flexShrink: 0,
-    fontSize: 11,
-    color: T.text3,
-  } satisfies CSSProperties,
-  empty: {
-    padding: '14px 10px',
-    fontSize: 12,
-    color: T.text3,
-    textAlign: 'center',
-  } satisfies CSSProperties,
-  err: {
-    padding: '4px 10px 8px',
-    fontSize: 11,
-    color: T.err,
-  } satisfies CSSProperties,
-  faceName: {
-    maxWidth: 120,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    fontWeight: 500,
-  } satisfies CSSProperties,
-  teamChip: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-    width: 18,
-    height: 18,
-    borderRadius: 5,
-    fontSize: 11,
-    fontWeight: 600,
-    /* surface-on-accent: the chip stays visible on the highlighted button */
-    background: T.surface,
-    border: `1px solid ${T.border2}`,
-    color: T.accent,
-  } satisfies CSSProperties,
-  hint: {
-    padding: '6px 10px 2px',
-    fontSize: 11,
-    lineHeight: 1.5,
-    color: T.text3,
-  } satisfies CSSProperties,
-  footer: {
-    borderTop: `1px solid ${T.border}`,
-    padding: 6,
-    display: 'flex',
-  } satisfies CSSProperties,
-  action: {
-    flex: 1,
-    padding: '6px 8px',
-    fontSize: 12,
-    fontWeight: 500,
-    lineHeight: '18px',
-    cursor: 'pointer',
-    border: `1px dashed ${T.border2}`,
-    borderRadius: 8,
-    background: 'transparent',
-    color: T.accent,
-    textAlign: 'center',
-    font: 'inherit',
-  } satisfies CSSProperties,
-};
+/* 按钮选中面（原 S.faceName/S.teamChip 与 `.eteams-teams-clear` 迁移）：
+清除钮 16×16、默认隐藏、hover 按钮时显形（`group-hover` 搭配触发钮上的
+`group`），自身 hover 换交互悬停底与主文字色——逐条对应原样式表。过渡时长
+不用 duration 任意值（时间长度类同时匹配 transition/animation 两个工具、
+属歧义候选不产 CSS），改用任意属性 shorthand，逐字对应原 `transition:opacity .12s`。 */
+const FACE_ROW_CLASS = 'inline-flex items-center gap-1.5';
+const FACE_NAME_CLASS = 'max-w-[120px] truncate font-medium';
+const TEAM_CHIP_CLASS =
+  'inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] border border-solid bg-background text-[11px] font-semibold text-primary';
+const CLEAR_BUTTON_CLASS =
+  'inline-flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded-full border-none bg-transparent p-0 text-[13px] leading-none text-muted-foreground opacity-0 [transition:opacity_120ms] group-hover:opacity-100 hover:bg-muted hover:text-foreground';
 
 /**
  * The popup card, portaled to `<body>` (the composer card would crop an
@@ -615,109 +536,131 @@ function TeamsPopup(props: {
   const teams = state.teams;
 
   return (
-    <div
-      ref={panelRef}
-      role="dialog"
-      aria-label="团队与角色"
-      data-eteams="popup"
-      style={{
-        ...S.card,
-        position: 'fixed',
-        zIndex: 1000,
-        ...(pos ?? { visibility: 'hidden' }),
-      }}
-    >
-      <div style={S.tabHeader}>
-        <button type="button" style={S.tabBtn(tab === 'team')} onClick={() => setTab('team')}>
-          团队{teams.length > 0 ? ` · ${teams.length}` : ''}
-        </button>
-        <button type="button" style={S.tabBtn(tab === 'member')} onClick={() => setTab('member')}>
-          角色{roster !== null && roster.length > 0 ? ` · ${roster.length}` : ''}
-        </button>
-      </div>
+    /* Portal 作用域根（D19b/S11）：弹层挂在 body 下，不在表面根子树里，
+    自带 `.eteams-ui` 包裹，工具类（后代选择器）才作用得到。 */
+    <div className="eteams-ui">
+      <Card
+        ref={panelRef}
+        role="dialog"
+        aria-label="团队与角色"
+        data-eteams="popup"
+        className={cn(
+          'eteams-ui fixed z-[1000] box-border flex w-[280px] flex-col overflow-hidden border-solid bg-background text-[13px] shadow-[0_1px_2px_rgba(15,23,42,0.05),0_6px_18px_rgba(15,23,42,0.06)]',
+          POPUP_BORDER_CLASS,
+          // 首次测量前面板不可见（原 inline visibility:hidden 迁移）。
+          pos === null ? 'invisible' : null,
+        )}
+        style={pos ?? undefined}
+      >
+        <div className={TAB_HEADER_CLASS}>
+          <button
+            type="button"
+            className={tabBtnClass(tab === 'team')}
+            onClick={() => setTab('team')}
+          >
+            团队{teams.length > 0 ? ` · ${teams.length}` : ''}
+          </button>
+          <button
+            type="button"
+            className={tabBtnClass(tab === 'member')}
+            onClick={() => setTab('member')}
+          >
+            角色{roster !== null && roster.length > 0 ? ` · ${roster.length}` : ''}
+          </button>
+        </div>
 
-      <div style={S.list}>
-        {tab === 'team' ? (
-          teams.length === 0 ? (
-            <div style={S.empty}>
-              {state.error !== null ? `状态加载失败：${state.error}` : '还没有团队——点下方「新增团队」创建。'}
-            </div>
+        <div className={LIST_CLASS}>
+          {tab === 'team' ? (
+            teams.length === 0 ? (
+              <div className={EMPTY_CLASS}>
+                {state.error !== null
+                  ? `状态加载失败：${state.error}`
+                  : '还没有团队——点下方「新增团队」创建。'}
+              </div>
+            ) : (
+              teams.map((t) => {
+                const isTeamSelected = selectedTeam?.teamId === t.teamId;
+                return (
+                  <button
+                    key={t.teamId}
+                    type="button"
+                    className={ROW_CLASS}
+                    data-selected={isTeamSelected ? 'true' : undefined}
+                    onClick={() => onSelectTeam({ teamId: t.teamId, name: t.name })}
+                    // Static title（防闪烁）：切换选中时 title 不变，原生 tooltip
+                    // 不会在指针下重弹。
+                    title={`${t.name} · ${t.goal}`}
+                  >
+                    <span className={ROW_NAME_CLASS}>{t.name}</span>
+                    {isTeamSelected ? (
+                      <span className={ROW_META_CLASS}>已选</span>
+                    ) : (
+                      <span className={ROW_META_CLASS}>
+                        {PHASE_LABELS[t.phase] ?? t.phase} · {t.progress.completed}/
+                        {t.progress.total}
+                      </span>
+                    )}
+                  </button>
+                );
+              })
+            )
+          ) : roster === null ? (
+            <div className={EMPTY_CLASS}>角色库加载中…</div>
+          ) : roster.length === 0 ? (
+            <div className={EMPTY_CLASS}>角色库为空——点下方「新增角色」创建。</div>
           ) : (
-            teams.map((t) => {
-              const isTeamSelected = selectedTeam?.teamId === t.teamId;
+            roster.map((m) => {
+              const isSelected = selectedMember?.name === m.name;
               return (
                 <button
-                  key={t.teamId}
+                  key={m.name}
                   type="button"
-                  className="eteams-ets-row"
-                  data-selected={isTeamSelected ? 'true' : undefined}
-                  style={S.row}
-                  onClick={() => onSelectTeam({ teamId: t.teamId, name: t.name })}
-                  // Static title（防闪烁）：切换选中时 title 不变，原生 tooltip
-                  // 不会在指针下重弹。
-                  title={`${t.name} · ${t.goal}`}
+                  className={ROW_CLASS}
+                  data-selected={isSelected ? 'true' : undefined}
+                  onClick={() => onSelectMember(m)}
+                  // Static title（防闪烁）：title 随选中变化会让原生 tooltip
+                  // 在指针下重弹一次；角色不再展示标签，名字即身份。
+                  title={`${m.name}（点击选中/取消，对话将以该角色输出）`}
                 >
-                  <span style={S.rowName}>{t.name}</span>
-                  {isTeamSelected ? (
-                    <span style={S.rowMeta}>已选</span>
-                  ) : (
-                    <span style={S.rowMeta}>
-                      {PHASE_LABELS[t.phase] ?? t.phase} · {t.progress.completed}/{t.progress.total}
-                    </span>
-                  )}
+                  <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={22} />
+                  <span className={ROW_NAME_CLASS}>{m.name}</span>
+                  {isSelected && <span className={ROW_META_CLASS}>已选</span>}
                 </button>
               );
             })
-          )
-        ) : roster === null ? (
-          <div style={S.empty}>角色库加载中…</div>
-        ) : roster.length === 0 ? (
-          <div style={S.empty}>角色库为空——点下方「新增角色」创建。</div>
-        ) : (
-          roster.map((m) => {
-            const isSelected = selectedMember?.name === m.name;
-            return (
-              <button
-                key={m.name}
-                type="button"
-                className="eteams-ets-row"
-                data-selected={isSelected ? 'true' : undefined}
-                style={S.row}
-                onClick={() => onSelectMember(m)}
-                // Static title（防闪烁）：title 随选中变化会让原生 tooltip
-                // 在指针下重弹一次；角色不再展示标签，名字即身份。
-                title={`${m.name}（点击选中/取消，对话将以该角色输出）`}
-              >
-                <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={22} />
-                <span style={S.rowName}>{m.name}</span>
-                {isSelected && <span style={S.rowMeta}>已选</span>}
-              </button>
-            );
-          })
-        )}
-        {tab === 'member' && rosterError && <div style={S.err}>角色库加载失败（稍后重试）</div>}
-        {tab === 'member' && props.personaError !== null && props.personaError !== undefined && (
-          <div style={S.err}>角色接管失败：{props.personaError}——重启 DeepSeek 后重试。</div>
-        )}
-        {tab === 'member' && selectedMember !== null && (props.personaError === null || props.personaError === undefined) && (
-          <div style={S.hint}>对话将以「{selectedMember.name}」的角色输出（再次点击该角色可取消）。</div>
-        )}
-        {tab === 'team' && selectedTeam !== null && (
-          <div style={S.hint}>已选「{selectedTeam.name}」（再次点击该团队可取消）。</div>
-        )}
-      </div>
+          )}
+          {tab === 'member' && rosterError && (
+            <div className={ERR_CLASS}>角色库加载失败（稍后重试）</div>
+          )}
+          {tab === 'member' && props.personaError !== null && props.personaError !== undefined && (
+            <div className={ERR_CLASS}>
+              角色接管失败：{props.personaError}——重启 DeepSeek 后重试。
+            </div>
+          )}
+          {tab === 'member' &&
+            selectedMember !== null &&
+            (props.personaError === null || props.personaError === undefined) && (
+              <div className={HINT_CLASS}>
+                对话将以「{selectedMember.name}」的角色输出（再次点击该角色可取消）。
+              </div>
+            )}
+          {tab === 'team' && selectedTeam !== null && (
+            <div className={HINT_CLASS}>已选「{selectedTeam.name}」（再次点击该团队可取消）。</div>
+          )}
+        </div>
 
-      <div style={S.footer}>
-        {tab === 'team' ? (
-          <button type="button" style={S.action} onClick={addTeam}>
-            ＋ 新增团队
-          </button>
-        ) : (
-          <button type="button" style={S.action} onClick={addMember}>
-            ＋ 新增角色
-          </button>
-        )}
-      </div>
+        <div className={FOOTER_CLASS}>
+          {tab === 'team' ? (
+            <button type="button" className={ACTION_CLASS} onClick={addTeam}>
+              ＋ 新增团队
+            </button>
+          ) : (
+            <button type="button" className={ACTION_CLASS} onClick={addMember}>
+              ＋ 新增角色
+            </button>
+          )}
+        </div>
+      </Card>
     </div>
   );
 }
