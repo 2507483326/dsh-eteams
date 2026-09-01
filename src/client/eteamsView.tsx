@@ -1822,8 +1822,11 @@ function MembersTab({
                     >
                       提交回答
                     </Button>
+                    {/* R1-F6：state-err-primary 是宿主包中不存在的死变量（迁移前
+                    遗留写法，恒走字面兜底、暗色无法随主题翻档）——错误色统一走
+                    destructive token（与 FORM_ERROR_CLASS 等错误面同源）。 */}
                     {interviewError !== null && (
-                      <div className="mt-2 text-[12px] leading-[1.5] text-[color:var(--dsw-alias-state-err-primary,#b91c1c)]">
+                      <div className="mt-2 text-[12px] leading-[1.5] text-destructive">
                         ⚠️ {interviewError}
                       </div>
                     )}
