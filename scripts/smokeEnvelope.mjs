@@ -1,6 +1,8 @@
 /**
  * Envelope 冒烟测试：在 Node 里模拟宿主 ModuleLoader 加载 lib/client.js。
- * 验证：语法可解析、factory 顶层可执行、导出含 apply/inject。
+ * 验证：语法可解析、factory 顶层可执行、导出含 apply/inject；并断言 Tailwind
+ * 内联链路（注入锚点 data-dsh-eteams-tw + lib/tailwind.gen.css 非空且含
+ * `.eteams-ui` 作用域选择器，R1-F4 / docs/21 21.8 首位风险门禁）。
  * 用法：node scripts/smokeEnvelope.mjs
  *
  * 装置说明：bundle 顶层有几处浏览器环境触点（decode-named-character-reference
@@ -54,7 +56,12 @@ globalThis.MutationObserver = class {
 const nodeRequire = createRequire(new URL('..', import.meta.url).href);
 const loaderRequire = (id) => {
   // react 系真实加载（bundle 顶层会用到 JSX runtime 等）。
-  if (id === 'react' || id === 'react/jsx-runtime' || id === 'react-dom' || id === 'react-dom/client') {
+  if (
+    id === 'react' ||
+    id === 'react/jsx-runtime' ||
+    id === 'react-dom' ||
+    id === 'react-dom/client'
+  ) {
     return nodeRequire(id);
   }
   // @deepseek-ai/* 返回轻量 stub：宿主真实注入的是预构建 bundle（不含裸
@@ -106,5 +113,43 @@ const exportsShape = Object.keys(loaded.exports ?? {});
 if (typeof loaded.exports?.apply !== 'function' || !Array.isArray(loaded.exports?.inject)) {
   console.error('SMOKE FAIL: exports shape unexpected:', exportsShape);
   process.exit(1);
+}
+
+// Tailwind 内联断言（R1-F4，docs/21 S1 合同「`.eteams-ui` 选择器断言自 S3 起」
+// + 21.8 首位风险「动态类名被 purge → 样式静默缺失」的自动化门禁兜底）：
+// 此前 smoke 只验证 exports 形状，envelope 是否真的内联了 Tailwind 产物、
+// 作用域选择器是否真的生成，全靠事实通过没有门禁。三连断言，任一失败 exit 1：
+// 1) envelope 源码含注入锚点 data-dsh-eteams-tw（tailwind.ts 的幂等键，
+//    证明 ensureEteamsStyles 注入代码在包内）；
+// 2) lib/tailwind.gen.css 非空；
+// 3) 产物含 `.eteams-ui` 作用域选择器——token 桥块（.eteams-ui{--background:）
+//    与代表工具类（.eteams-ui .flex）各一处，即 important:'.eteams-ui' 真实
+//    生效、purge 没有清空产物。
+const TW_STYLE_ATTRIBUTE = 'data-dsh-eteams-tw';
+if (!code.includes(TW_STYLE_ATTRIBUTE)) {
+  console.error(
+    `SMOKE FAIL: envelope missing ${TW_STYLE_ATTRIBUTE} anchor — Tailwind 注入代码未进包（tailwindCssInline 虚拟模块失效？）`,
+  );
+  process.exit(1);
+}
+const genCssPath = new URL('../lib/tailwind.gen.css', import.meta.url);
+let genCss;
+try {
+  genCss = readFileSync(genCssPath, 'utf8');
+} catch {
+  console.error('SMOKE FAIL: lib/tailwind.gen.css 读取失败——先运行 node scripts/buildTailwind.mjs');
+  process.exit(1);
+}
+if (genCss.length === 0) {
+  console.error('SMOKE FAIL: lib/tailwind.gen.css is empty — Tailwind 产物异常，拒绝放行');
+  process.exit(1);
+}
+for (const selector of ['.eteams-ui{--background:', '.eteams-ui .flex']) {
+  if (!genCss.includes(selector)) {
+    console.error(
+      `SMOKE FAIL: lib/tailwind.gen.css missing scoped selector ${JSON.stringify(selector)} — purge 清空或 important:'.eteams-ui' 失效`,
+    );
+    process.exit(1);
+  }
 }
 console.log(`SMOKE OK: id=${loaded.id}, exports=[${exportsShape.join(', ')}]`);
