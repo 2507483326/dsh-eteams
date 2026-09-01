@@ -234,9 +234,9 @@ describe('panel write routes (M5 first slice)', () => {
     await handler({ method: 'GET', url: '/eteams-api/roster' }, r);
     expect(r.code).toBe(200);
     const parsed = JSON.parse(r.body) as { members: { name: string; role: string }[] };
-    // Four role presets + 角色构建师 (D18-3) + the leader are seeded on first
-    // GET; Alice upserts on top.
-    expect(parsed.members).toHaveLength(7);
+    // 角色构建师 (D18-3) + the leader are seeded on first GET (2026-09 起
+    // 默认角色仅此两项); Alice upserts on top.
+    expect(parsed.members).toHaveLength(3);
     expect(parsed.members.find((m) => m.name === 'Alice')!.role).toBe('writer');
   });
 
@@ -247,31 +247,31 @@ describe('panel write routes (M5 first slice)', () => {
     const first = JSON.parse(r1.body) as {
       members: { name: string; role: string; avatar?: unknown }[];
     };
-    const presetNames = ['前端开发者', '后端架构师', 'UI 设计师', '趣味注入师', '角色构建师'];
+    const presetNames = ['角色构建师'];
     expect(first.members.map((m) => m.name)).toEqual(expect.arrayContaining(presetNames));
     // The leader (项目牧羊人) is also a preset member (默认入团、不可删除).
     const leader = first.members.find((m) => m.name === '项目牧羊人')!;
     expect(leader).toBeDefined();
     expect(leader.role).toContain('领队');
-    expect(first.members).toHaveLength(6);
+    expect(first.members).toHaveLength(2);
     for (const p of first.members) expect(p.avatar).toBeDefined();
 
     // Second GET is idempotent — no duplicates.
     const r2 = res();
     await handler({ method: 'GET', url: '/eteams-api/roster' }, r2);
-    expect((JSON.parse(r2.body) as { members: unknown[] }).members).toHaveLength(6);
+    expect((JSON.parse(r2.body) as { members: unknown[] }).members).toHaveLength(2);
 
     // User edit to a preset is preserved on later GETs.
     await post('/eteams-api/roster', {
-      name: '前端开发者',
-      role: '前端开发者',
+      name: '角色构建师',
+      role: '角色构建师',
       duty: '自定义职责',
     });
     const r3 = res();
     await handler({ method: 'GET', url: '/eteams-api/roster' }, r3);
     const third = JSON.parse(r3.body) as { members: { name: string; duty?: string }[] };
-    expect(third.members).toHaveLength(6);
-    expect(third.members.find((m) => m.name === '前端开发者')!.duty).toBe('自定义职责');
+    expect(third.members).toHaveLength(2);
+    expect(third.members.find((m) => m.name === '角色构建师')!.duty).toBe('自定义职责');
   });
 
   it('deletes roster members but protects the leader', async () => {
@@ -297,19 +297,20 @@ describe('panel write routes (M5 first slice)', () => {
     const { handler, res, post } = await installFake();
     const seeded = res();
     await handler({ method: 'GET', url: '/eteams-api/roster' }, seeded);
+    await post('/eteams-api/roster', { name: 'Dave', role: 'engineer' });
     const created = await post('/eteams-api/team', {
       name: '移出团队测试',
       sessionId: 'sess-panel',
     });
     const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
     const added = await post(`/eteams-api/team/${teamId}/member`, {
-      name: '前端开发者',
+      name: 'Dave',
       fromRoster: true,
     });
     expect(added.code).toBe(200);
     expect(readTeamFromDisk(teamId).members).toHaveLength(1);
 
-    const removed = await post(`/eteams-api/team/${teamId}/member/前端开发者/remove`, {});
+    const removed = await post(`/eteams-api/team/${teamId}/member/Dave/remove`, {});
     expect(removed.code).toBe(200);
     const fresh = readTeamFromDisk(teamId);
     expect(fresh.members.filter((m) => m.status !== 'removed')).toHaveLength(0);
@@ -395,7 +396,7 @@ describe('panel write routes (M5 first slice)', () => {
     await handler({ method: 'GET', url: '/eteams-api/roster' }, seeded);
     const created = await post('/eteams-api/team', { name: '手册团队', sessionId: 'sess-panel' });
     const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
-    await post(`/eteams-api/team/${teamId}/member`, { name: '前端开发者', fromRoster: true });
+    await post(`/eteams-api/team/${teamId}/member`, { name: '角色构建师', fromRoster: true });
     const fresh = readTeamFromDisk(teamId);
     const md = fresh.members[0]!.persona.personaMd;
     expect(md).toBeDefined();
@@ -403,7 +404,7 @@ describe('panel write routes (M5 first slice)', () => {
     expect(md).toContain('核心使命');
     expect(md).toContain('关键规则');
     const { renderPersonaBlock } = await import('../src/host/prompts/persona');
-    const block = renderPersonaBlock(fresh.members[0]!.persona, '前端开发者');
+    const block = renderPersonaBlock(fresh.members[0]!.persona, '角色构建师');
     expect(block).toContain('# 角色手册');
     expect(block).toContain('核心使命');
   });

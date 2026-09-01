@@ -33,16 +33,13 @@ export const PERSONA_BASELINE_RULES: readonly string[] = [
  * Markdown 渲染；duty/skills/style 为摘要蒸馏，执行细节仍由任务合同驱动。
  */
 /**
- * The four agency-agents-zh member roles, in preset seeding order. The host
- * seeds one roster member per role on first panel access (name = role).
+ * Preset seeding order for roster members (name = role). The host seeds one
+ * roster member per role on first panel access. 2026-09：按用户要求精简默认
+ * 角色——只保留 角色构建师（领队 项目牧羊人 由 defaultCaptainPersona 单独
+ * 注入）；前端开发者 / 后端架构师 / UI 设计师 / 趣味注入师 不再预置入库，
+ * ROLE_TEMPLATES 仍保留，手动新增成员按角色标签照常套用。
  */
-export const PRESET_MEMBER_ROLES = [
-  '前端开发者',
-  '后端架构师',
-  'UI 设计师',
-  '趣味注入师',
-  ROLE_BUILDER_NAME,
-] as const;
+export const PRESET_MEMBER_ROLES = [ROLE_BUILDER_NAME] as const;
 
 /** Role template: short summary fields + full Markdown playbook. */
 export interface RoleTemplate {

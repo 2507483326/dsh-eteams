@@ -130,18 +130,15 @@ const PROTECTED_FROM_DELETE: readonly string[] = [LEADER_NAME, ROLE_BUILDER_NAME
 
 /** Fixed salts so the preset members look the same in every workspace. */
 const PRESET_SALTS: Record<string, number> = {
-  前端开发者: 11,
-  后端架构师: 23,
-  'UI 设计师': 37,
-  趣味注入师: 51,
   角色构建师: 67,
 };
 
 /**
- * Seed the four preset members (agency-agents-zh roles, name = role) plus the
- * leader (项目牧羊人) into a workspace roster on first access. Idempotent and
- * non-destructive: existing entries (including user edits to a preset) are
- * never overwritten; only missing presets are inserted.
+ * Seed the preset members (agency-agents-zh roles, name = role; 2026-09 起
+ * 默认仅角色构建师) plus the leader (项目牧羊人) into a workspace roster on
+ * first access. Idempotent and non-destructive: existing entries (including
+ * user edits to a preset) are never overwritten; only missing presets are
+ * inserted.
  */
 export async function ensurePresetMembers(stateRoot: string): Promise<void> {
   const members = readRoster(stateRoot);
