@@ -703,10 +703,12 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
 
 /**
  * Panel body — mounted inside the Provider (see {@link ETeamsView}).
- * S8（docs/21-client-ui-stack.md）：面板导航与团队选择迁入 ui model——
- * tab/activeId 经 useSelector 读取（ui.activeNav / ui.selectedTeamId），变更
- * 走 useDispatch 发 `ui/setNav` / `ui/setSelectedTeam`（goto 桥 handler 的
- * 目标状态同样）。抽屉/对话框开关（S9 起）与输入草稿等瞬态仍留 useState。
+ * S8/S9（docs/21-client-ui-stack.md）：面板导航、团队选择与抽屉/对话框开关
+ * 迁入 ui model——tab/activeId/expandedTask/dialogMember 经 useSelector 读取
+ * （ui.activeNav / ui.selectedTeamId / ui.drawerTaskId / ui.dialogMember），
+ * 变更走 useDispatch 发 `ui/setNav` / `ui/setSelectedTeam` / `ui/setDrawerTask`
+ * / `ui/setDialogMember`（goto 桥 handler 的目标状态同样）。输入草稿、悬停、
+ * openAddTick 信号等组件内瞬态仍留 useState。
  */
 function ETeamsViewBody(props: ConvViewProps): ReactNode {
   const state = useActivityMonitor();
@@ -714,8 +716,10 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
   // 变量名沿用迁移前语义：tab=侧栏导航，activeId=当前选中团队。
   const tab = useSelector((s: RootState) => s.ui.activeNav);
   const activeId = useSelector((s: RootState) => s.ui.selectedTeamId);
-  const [expandedTask, setExpandedTask] = useState<string | null>(null);
-  const [dialogMember, setDialogMember] = useState<string | null>(null);
+  // S9：抽屉/对话框开关迁入 ui model——expandedTask=任务详情抽屉展开的
+  // 任务 id，dialogMember=成员对话框选中的成员名。
+  const expandedTask = useSelector((s: RootState) => s.ui.drawerTaskId);
+  const dialogMember = useSelector((s: RootState) => s.ui.dialogMember);
   const [roster, setRoster] = useState<RosterMember[]>([]);
   // 成员子代理活动点（docs/20.4 P4）：childId → running/inactive。旧运行时
   // 无 listChildren 时返回空表——面板不渲染点，不误导。
@@ -856,7 +860,7 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
             onSelectTeam={(id) => dispatch({ type: 'ui/setSelectedTeam', payload: id })}
             agentActivity={agentActivity}
             onOpenReports={(name) => {
-              setDialogMember(name);
+              dispatch({ type: 'ui/setDialogMember', payload: name });
               dispatch({ type: 'ui/setNav', payload: 'reports' });
             }}
           />
@@ -876,14 +880,14 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
             team={team}
             now={now}
             expandedTask={expandedTask}
-            setExpandedTask={setExpandedTask}
+            setExpandedTask={(id) => dispatch({ type: 'ui/setDrawerTask', payload: id })}
           />
         )}
         {activeTab === 'reports' && team !== undefined && (
           <ReportsTab
             team={team}
             dialogMember={dialogMember}
-            setDialogMember={setDialogMember}
+            setDialogMember={(name) => dispatch({ type: 'ui/setDialogMember', payload: name })}
             member={dialogMemberView}
           />
         )}
