@@ -140,3 +140,4 @@
 | S23-6 | 56c0c81 | 背景板联动：引擎 brand 采样源换 --dsw-alias-button-info-fill（坦克点缀/峰顶 DSW 蓝）、字面兜底 #4176e6、单测断言同步（fallback deepseek-500 + 宿主值档新增 tankAccent 断言）；BACKDROP_SEED 注释放宽；预览页重生成（主题台=真实宿主值 neutral-bluish+deepseek、内容示例=S23 后 shadcn 控件观感、引擎 IIFE+gen.css 重打包）；README 二期一览补记 | 4,167,790 B |
 | S23-7 | 95e571b | 总验收：差距清单 23.1.3 全项勾销；四绿门终跑（typecheck/lint/test 123 例/build 全绿）；体积台账定稿——二期总增量 +33,182 B（基线 4,134,608 → 4,167,790，其中 Radix Select/Tabs/Progress/Alert JS + lucide 三图标 ≈ +28KB、组件类 CSS ≈ +5KB）；用户视觉验收（预览页 `.tmp-tw-docs/preview/preview.html` + GUI 实装） | 4,167,790 B |
 | 补 | ead4491 | 补 S23-1 遗漏提交的 tailwind.config.ts（business.tint 色映射——仓库根路径未被当时的 `git add src docs` 覆盖；产物 gen.css 早已含该规则，纯入库补账） | — |
+| 验收证据补强 | — | 预览页 class 全覆盖核验（136 token × gen.css 规则 = 0 缺失；含 Tailwind 逗号 `\2c ` 选择器编码对齐；发现并修复唯一真缺失 `mt-3`→`mt-2.5`，purge 纪律的实证）；引擎 IIFE 9 个 API 名 + globalName 全导出核验；终点 HEAD 四绿门复跑全绿、体积复测一致（4,167,790 B） | — |
