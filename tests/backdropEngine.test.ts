@@ -208,6 +208,46 @@ describe('rotateSprite / planTankOps (D20f)', () => {
     expect(mirrored[mirrored.length - 1]?.join('')).toBe([...lastRow].reverse().join(''));
   });
 
+  it('keeps the tank silhouette recognizable in all four directions (D21g shape lock)', () => {
+    // 渲染自查教训（R2 轮）：履带必须在行进方向两侧（而非左右整列），
+    // 炮管前伸突出于履带端——否则 90° 旋转后剪影退化为工字梁。
+    // 本锁按「侧带/中带/炮管突出端」结构断言，对镜像/转置通用。
+    for (const dir of [0, 1, 2, 3] as const) {
+      const s = rotateSprite(TANK_SPRITE, dir);
+      const horizontal = dir === 0 || dir === 2;
+      const at = (side: number, along: number): number =>
+        horizontal ? (s[side]?.[along] ?? 0) : (s[along]?.[side] ?? 0);
+      const runOf = (side: number): number[] => {
+        const run: number[] = [];
+        for (let along = 0; along < 7; along++) if (at(side, along) !== 0) run.push(along);
+        return run;
+      };
+      // 侧履带带（side 0/4）：恰 5 像素、全深档(2)、连续。
+      for (const side of [0, 4]) {
+        const run = runOf(side);
+        expect(run, `dir=${dir} side=${side} track`).toHaveLength(5);
+        expect(run[4]! - run[0]!).toBe(4);
+        for (const k of run) expect(at(side, k), `dir=${dir} track tone`).toBe(2);
+      }
+      // 车体带（side 1/3）：恰 4 像素、全车身(1)、连续。
+      for (const side of [1, 3]) {
+        const run = runOf(side);
+        expect(run, `dir=${dir} side=${side} hull`).toHaveLength(4);
+        expect(run[3]! - run[0]!).toBe(3);
+        for (const k of run) expect(at(side, k), `dir=${dir} hull tone`).toBe(1);
+      }
+      // 中带（side 2）：履带带之外恰 2 个相邻深色像素 = 炮管突出端。
+      const trackRun = runOf(0);
+      const barrel = runOf(2).filter((k) => !trackRun.includes(k));
+      expect(barrel, `dir=${dir} barrel protrusion`).toHaveLength(2);
+      expect(barrel[1]! - barrel[0]!).toBe(1);
+      for (const k of barrel) expect(at(2, k), `dir=${dir} barrel tone`).toBe(2);
+      // 全 sprite 恰 1 个 DSW 蓝炮塔像素，位于中带。
+      expect(s.flat().filter((p) => p === 3)).toHaveLength(1);
+      expect(runOf(2).some((k) => at(2, k) === 3)).toBe(true);
+    }
+  });
+
   const palette = sampleBackdropPalette(() => null);
   const tank: Tank = {
     x: 900,
