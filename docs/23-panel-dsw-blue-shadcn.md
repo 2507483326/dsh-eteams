@@ -33,20 +33,20 @@
 - 需新增 vendor：`select`（Radix Select）、`tabs`（Radix Tabs）、`progress`（Radix Progress）、`alert`（无 Radix）。Registry 实测可达，peer 均支持 React 18。
 - 保留手写（shadcn 无对应件、语义为 list item 非 chrome）：弹层/面板的列表行（`ROW_CLASS`/`TASK_ROW_CLASS`/`MEMBER_CARD_CLASS` 等）、侧栏导航链接（官网左边线三态是官网签名，D20c 定稿）、Pill 的圆点（`DOT_*`，Badge 内嵌 span）。
 
-### 23.1.3 官网对标差距清单（逐模块审计结果）
+### 23.1.3 官网对标差距清单（逐模块审计结果；处置列 = S23-x 落实情况）
 
-| 模块 | 差距 | 处置 |
-| --- | --- | --- |
-| 令牌（eteams.css） | `--primary/--ring` 桥 brand-primary（宿主内近黑）；sky 兜底族与「DSW 蓝」指令不符 | D21a 改桥 + 兜底换 DSW 蓝 |
-| 品牌淡底 | chips/选中底桥 interactive-bg-active（中性），官网/品牌语义应为品牌蓝淡底 | D21b 改桥 business-tertiary |
-| eteamsView 排版 | 标题缺官网签名 `tracking-tight` | S23-3 补 |
-| eteamsView 控件 | 手写按钮/select/进度条/横幅/徽标 | S23-3 迁 shadcn |
-| teamsButton 弹层 | tab 头/footer 钮手写；选中底同 D21b | S23-4 |
-| card/buildCard | 进度条手写、芯片底同 D21b | S23-5 |
-| heroTeamsButton | focus outline 桥 brand-primary（宿主内近黑） | S23-5 换 DSW 蓝 |
-| 背景板 | 引擎点缀色采样 brand-primary（宿主内近黑点缀）+ sky 兜底 | S23-6 换源 DSW 蓝 |
-| 预览页 | 主题台用一期官网值，与真实宿主值不一致 | S23-6 换真实宿主值 |
-| 侧栏/字体/结构 | 已达标（S22-1/2 交付，RAIL 三态=官网签名） | 不动 |
+| 模块 | 差距 | 处置 | 落实 |
+| --- | --- | --- | --- |
+| 令牌（eteams.css） | `--primary/--ring` 桥 brand-primary（宿主内近黑）；sky 兜底族与「DSW 蓝」指令不符 | D21a 改桥 + 兜底换 DSW 蓝 | ✅ S23-1（gen.css 实检：--primary/--ring 均桥 button-info-fill #4176e6） |
+| 品牌淡底 | chips/选中底桥 interactive-bg-active（中性），官网/品牌语义应为品牌蓝淡底 | D21b 改桥 business-tertiary（--business-tint token） | ✅ S23-1（bg/border/data-selected 三枚 tint 工具类齐备） |
+| eteamsView 排版 | 标题缺官网签名 `tracking-tight` | S23-3 补 | ✅ S23-3（LIST_TITLE） |
+| eteamsView 控件 | 手写按钮/select/进度条/横幅/徽标 | S23-3 迁 shadcn | ✅ S23-3（含宿主 primitives Button×9/Input×6 换库件） |
+| teamsButton 弹层 | tab 头/footer 钮手写；选中底同 D21b | S23-4 | ✅ S23-4（Tabs 分段控件 + Button outline dashed + 触发钮换库件 ghost） |
+| card/buildCard | 进度条手写、芯片底同 D21b | S23-5 | ✅ S23-5（Progress + Badge） |
+| heroTeamsButton | focus outline 桥 brand-primary（宿主内近黑） | S23-5 换 DSW 蓝 | ✅ S23-1/5（button-info-fill + slate-900 兜底） |
+| 背景板 | 引擎点缀色采样 brand-primary（宿主内近黑点缀）+ sky 兜底 | S23-6 换源 DSW 蓝 | ✅ S23-6（DEFAULT_PALETTE_VARS.brand → button-info-fill，单测同步） |
+| 预览页 | 主题台用一期官网值，与真实宿主值不一致 | S23-6 换真实宿主值 | ✅ S23-6（neutral-bluish + deepseek 双主题台，控件示例 S23 后观感） |
+| 侧栏/字体/结构 | 已达标（S22-1/2 交付，RAIL 三态=官网签名） | 不动 | ✅ 保持（激活态经 D21a 自动呈 DSW 蓝） |
 
 ## 23.2 目标与非目标
 
@@ -137,5 +137,5 @@
 | S23-3 | 327ee1a | eteamsView 控件迁移：手写 BTN/SELECT/PILL/PROGRESS/FORM_ERROR/BANNER/PREFILL_BANNER → shadcn Button(outline·sm)/Select(哨兵空选项)/Badge(Pill 组件+dot)/Progress(transform 技法)/Alert(destructive 紧凑档·warning amber 淡底·default 品牌淡底)；宿主 primitives Button(9 位 primary→default 等)/Input(6 位) 一并换 shadcn 件（icon prop → children）；LIST_TITLE 补官网 h2 签名 tracking-tight；侧栏导航按钮按 D20c 官网签名保留手写 | 4,159,987 B |
 | S23-4 | e1c4baa | teamsButton 弹层迁移：tab 头手写按钮 → shadcn Tabs 分段控件（触发器紧凑档 + 激活 DSW 蓝文字签名）；footer 虚线新增钮 → shadcn Button outline+dashed；触发钮宿主 Button → 库件 ghost（同 token 同观感，摆脱宿主件依赖） | 4,167,589 B |
 | S23-5 | 4c983a4 | card.tsx 进度条 → Progress（bg-primary=DSW 蓝）；buildCard 两枚 pill → Badge；heroTeamsButton 文字兜底换官网 slate-900、focus 环 DSW 蓝源（S23-1 已换）；teamsPanel 核验达标（shadcn Button + 宿主桥中性表面，不动） | 4,167,558 B |
-| S23-6 | （本次） | 背景板联动：引擎 brand 采样源换 --dsw-alias-button-info-fill（坦克点缀/峰顶 DSW 蓝）、字面兜底 #4176e6、单测断言同步（fallback deepseek-500 + 宿主值档新增 tankAccent 断言）；BACKDROP_SEED 注释放宽；预览页重生成（主题台=真实宿主值 neutral-bluish+deepseek、内容示例=S23 后 shadcn 控件观感、引擎 IIFE+gen.css 重打包）；README 二期一览补记 | 4,167,790 B |
-| S23-7 | — | — | — |
+| S23-6 | 56c0c81 | 背景板联动：引擎 brand 采样源换 --dsw-alias-button-info-fill（坦克点缀/峰顶 DSW 蓝）、字面兜底 #4176e6、单测断言同步（fallback deepseek-500 + 宿主值档新增 tankAccent 断言）；BACKDROP_SEED 注释放宽；预览页重生成（主题台=真实宿主值 neutral-bluish+deepseek、内容示例=S23 后 shadcn 控件观感、引擎 IIFE+gen.css 重打包）；README 二期一览补记 | 4,167,790 B |
+| S23-7 | （终稿） | 总验收：差距清单 23.1.3 全项勾销；四绿门终跑（typecheck/lint/test 123 例/build 全绿）；体积台账定稿——二期总增量 +33,182 B（基线 4,134,608 → 4,167,790，其中 Radix Select/Tabs/Progress/Alert JS + lucide 三图标 ≈ +28KB、组件类 CSS ≈ +5KB）；用户视觉验收（预览页 `.tmp-tw-docs/preview/preview.html` + GUI 实装） | 4,167,790 B |
