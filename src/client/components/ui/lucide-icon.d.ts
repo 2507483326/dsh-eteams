@@ -24,3 +24,33 @@ declare module 'lucide-react/dist/esm/icons/x.mjs' {
   const X: ForwardRefExoticComponent<Omit<LucideProps, 'ref'> & RefAttributes<SVGSVGElement>>;
   export default X;
 }
+
+// docs/23 S23-2 增补：Select 的三枚图标（check / chevron-down / chevron-up），
+// 同款深层导入纪律（一个图标只进一个模块）。
+declare module 'lucide-react/dist/esm/icons/check.mjs' {
+  import type { ForwardRefExoticComponent, RefAttributes } from 'react';
+  import type { LucideProps } from 'lucide-react';
+
+  const Check: ForwardRefExoticComponent<Omit<LucideProps, 'ref'> & RefAttributes<SVGSVGElement>>;
+  export default Check;
+}
+
+declare module 'lucide-react/dist/esm/icons/chevron-down.mjs' {
+  import type { ForwardRefExoticComponent, RefAttributes } from 'react';
+  import type { LucideProps } from 'lucide-react';
+
+  const ChevronDown: ForwardRefExoticComponent<
+    Omit<LucideProps, 'ref'> & RefAttributes<SVGSVGElement>
+  >;
+  export default ChevronDown;
+}
+
+declare module 'lucide-react/dist/esm/icons/chevron-up.mjs' {
+  import type { ForwardRefExoticComponent, RefAttributes } from 'react';
+  import type { LucideProps } from 'lucide-react';
+
+  const ChevronUp: ForwardRefExoticComponent<
+    Omit<LucideProps, 'ref'> & RefAttributes<SVGSVGElement>
+  >;
+  export default ChevronUp;
+}

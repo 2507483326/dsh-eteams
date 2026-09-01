@@ -69,7 +69,7 @@
 | --- | --- | --- |
 | D21a | accent 色源 | `--primary`、`--ring` 从 `--dsw-alias-brand-primary` 改桥 `--dsw-alias-button-info-fill`（DSW 蓝：亮 `#4176e6` / 暗 `#679efe`，宿主主按钮同源、亮暗自动切换）；字面兜底 `#4176e6`。`--primary-foreground` 维持 `label-primary-foreground`（宿主在蓝底上即白字） |
 | D21b | 品牌淡底 | 品牌 chips / 选中底 / 窄栏激活底从 `--dsw-alias-interactive-bg-active`（中性暗淡底）改桥 `--dsw-alias-state-business-tertiary`（亮 `#e4edfd` / 暗 `#34415b` 品牌蓝淡底对），兜底 `rgba(65,118,230,0.12)`；hover 淡底维持 `interactive-bg-hover`（官网 hover accent 同为中性） |
-| D21c | shadcn 组件化 | 手写 chrome 迁 shadcn/ui：`Button`（BTN_CLASS 位）、`Badge`（Pill）、`Alert`（错误/横幅）、`Progress`（进度条）、`Select`（原生 select 位）、`Tabs`（弹层 tab 头）。新增 vendor `select/tabs/progress/alert` + devDeps `@radix-ui/react-select/-tabs/-progress`（D19d 纪律：上游快照 + 本仓适配注释，保持最小 diff）。**Radix Portal 越界纪律**：vendored Select 不用上游 Portal（挂 body 会脱离 `.eteams-ui` 作用域），SelectContent 原位渲染（popper 定位不受影响）；Tabs/Progress/Alert 无 portal 天然安全 |
+| D21c | shadcn 组件化 | 手写 chrome 迁 shadcn/ui：`Button`（BTN_CLASS 位）、`Badge`（Pill）、`Alert`（错误/横幅）、`Progress`（进度条）、`Select`（原生 select 位）、`Tabs`（弹层 tab 头）。新增 vendor `select/tabs/progress/alert` + devDeps `@radix-ui/react-select/-tabs/-progress`（D19d 纪律：上游快照 + 本仓适配注释，保持最小 diff）。**Radix Portal 越界纪律**：Select 的 Portal 走 dialog.tsx 同款 `getPortalContainer()` 自管容器（body 下 `.eteams-ui-portal.eteams-ui`，容器即作用域根）——D19b 既有先例，不采用「去 Portal」方案；lucide 三图标（check/chevron-down/chevron-up）深层导入（X 同款纪律）；Tabs/Progress/Alert 无 portal 天然安全。Alert 增 `warning` 变体（本仓扩展，上游仅 default/destructive，服务面板 amber 横幅） |
 | D21d | 中性色口径 | 中性色（label/border/bg 族）维持宿主桥不动：neutral-bluish 与官网 slate 同明度带、色相微差为可接受偏差（用户仅指令蓝的复用）；兜底字面量里残留的旧中性值（`#edf0f4`、`#47546c`）统一换官网 slate 阶（`#f1f5f9`、`#475569`）；sky 兜底全族（`#0ea5e9`、`rgba(14,165,233,*)`）换 DSW 蓝族（`#4176e6`、`rgba(65,118,230,*)`，见 D21a/b 兜底） |
 | D21e | 背景板联动 | 引擎 brand 采样源从 `--dsw-alias-brand-primary` 改 `--dsw-alias-button-info-fill`（坦克点缀像素/高地图峰顶着色 → DSW 蓝），字面兜底 `#4176e6`；`BACKDROP_SEED` 保持 `0x0ea5e9` 致敬位不动（纯种子位）；单测色值断言同步；预览页主题台换真实宿主值（neutral-bluish 中性 + deepseek 蓝），预览=宿主内实况 |
 | D21f | 步进纪律 | 延续 D19f/D20i：每模块 inScope → 四绿门（typecheck/lint/test/build）→ 体积记录 → 独立 commit，master 直行；vitest 在本会话（非受限）实测可跑（123/123 绿），上期 EPERM 障碍不适用 |
@@ -132,8 +132,8 @@
 | 步骤 | commit | 内容 | 体积（lib/client.js） |
 | --- | --- | --- | --- |
 | 基线 | d04b85c | 四绿门基线（本会话非受限环境实测）；本文档 | 4,134,608 B |
-| S23-1 | （本次） | DSW 蓝令牌二期：--primary/--ring 改桥 button-info-fill；新增 --business-tint（business-tertiary 淡底对）+ tailwind.config business.tint；全客户端 sky 兜底/旧中性兜底清换（eteamsView ×17 位、teamsButton ×3、buildCard、heroTeamsButton、card 注释）；mdEditor/backdropEngine/avatar 按例外不动 | 4,134,111 B |
-| S23-2 | — | — | — |
+| S23-1 | bc8f684 | DSW 蓝令牌二期：--primary/--ring 改桥 button-info-fill；新增 --business-tint（business-tertiary 淡底对）+ tailwind.config business.tint；全客户端 sky 兜底/旧中性兜底清换（eteamsView ×17 位、teamsButton ×3、buildCard、heroTeamsButton、card 注释）；mdEditor/backdropEngine/avatar 按例外不动 | 4,134,111 B |
+| S23-2 | （本次） | shadcn 补库：+@radix-ui/react-select/-tabs/-progress（实测可达、React 18 peer 齐备）；vendor select/tabs/progress/alert（Select 走 getPortalContainer 同款 portal；lucide 三图标深层导入 + 垫片增补；Alert 增 warning 变体）；仅落库未接线——JS 零增量，体积增量全部来自 content 扫描出的组件类 CSS（gen.css +5.5KB 字符串内联） | 4,139,593 B |
 | S23-3 | — | — | — |
 | S23-4 | — | — | — |
 | S23-5 | — | — | — |
