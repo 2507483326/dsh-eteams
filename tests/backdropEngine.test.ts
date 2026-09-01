@@ -1,7 +1,9 @@
 /**
- * 背景板引擎单测（docs/22 S22-3 / D20d）：纯逻辑层确定性验证——高度场、
- * 渐隐、调色板采样、静层指令、坦克步进与「不喧宾夺主」硬指标（D20e/f/g）。
- * node 环境无 DOM：被测模块零 DOM 依赖（设计约束本身）。
+ * 背景板引擎单测（docs/22 S22-3 / D20d；docs/23 D21g R2 重定标）：纯逻辑
+ * 层确定性验证——高度场、渐隐、调色板采样（实色基底）、静层指令（单次
+ * 烘焙有效 alpha + 可见性回归锁）、坦克步进与「不喧宾夺主」上限
+ * （D20e/f/g 语义经 D21g 重定标）。node 环境无 DOM：被测模块零 DOM
+ * 依赖（设计约束本身）。
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -92,18 +94,17 @@ describe('withAlpha', () => {
   });
 });
 
-describe('sampleBackdropPalette (D20h/D21e)', () => {
-  it('falls back to the DSW-blue literal palette when host vars are absent', () => {
+describe('sampleBackdropPalette (D20h/D21e/D21g)', () => {
+  it('falls back to solid DSW-blue/slate literal bases when host vars are absent', () => {
     const p = sampleBackdropPalette(() => null);
-    // 网格线 = label 兜底 #475569 at 0.05
-    expect(p.gridLine).toBe('rgba(71,85,105,0.05)');
-    // 品牌点缀兜底 = deepseek-500 #4176e6（docs/23 D21e）
-    expect(p.terrainPeak).toBe('rgba(65,118,230,0.07)');
-    expect(p.tankAccent).toBe('rgba(65,118,230,0.4)');
+    // D21g：调色板只带实色基底（alpha 在使用位单次烘焙）。
+    expect(p.label).toBe('#475569');
+    expect(p.brand).toBe('#4176e6');
     expect(p.compositeAlpha).toBe(COMPOSITE_ALPHA_CAP);
+    expect(COMPOSITE_ALPHA_CAP).toBe(1); // D21g：全局减半层废除
   });
 
-  it('respects host-provided colors and alpha caps (D20e/D21e)', () => {
+  it('passes host-provided solid bases through (D21e var names)', () => {
     const p = sampleBackdropPalette((name) =>
       name === '--dsw-alias-label-secondary'
         ? '#94a3b8'
@@ -111,14 +112,8 @@ describe('sampleBackdropPalette (D20h/D21e)', () => {
           ? '#679efe'
           : 'rgba(0,0,0,0)',
     );
-    expect(p.gridLine.startsWith('rgba(148,163,184,')).toBe(true);
-    expect(p.tankAccent.startsWith('rgba(103,158,254,')).toBe(true);
-    for (const color of [p.gridLine, p.terrainShade, p.terrainPeak]) {
-      expect(alphaOf(color)).toBeLessThanOrEqual(0.07 + 1e-9);
-    }
-    for (const color of [p.tankBody, p.tankDark, p.tankAccent]) {
-      expect(alphaOf(color)).toBeLessThanOrEqual(0.4 + 1e-9);
-    }
+    expect(p.label).toBe('#94a3b8');
+    expect(p.brand).toBe('#679efe');
   });
 });
 
@@ -158,9 +153,20 @@ describe('planStaticLayer', () => {
     }
   });
 
-  it('never exceeds the subtlety caps (D20e)', () => {
+  it('never exceeds the D21g subtlety caps (grid 0.07 / terrain 0.11 / peak 0.13)', () => {
     for (const op of ops) {
-      expect(alphaOf(op.color)).toBeLessThanOrEqual(0.07 + 1e-9);
+      expect(alphaOf(op.color)).toBeLessThanOrEqual(0.13 + 1e-9);
+    }
+  });
+
+  it('keeps the grid VISIBLE in the top-right zone (D21g R2 regression lock)', () => {
+    // R2 缺陷回归锁：一期三重叠乘后网格有效 alpha ~0.001（用户「看不到
+    // 格子」）。定标后右上核心区（x>0.8W、y<0.2H，fade≥0.93）网格段
+    // alpha 必须 ≥ 0.06——可见下限之上（1px 段指令：w===1 或 h===1）。
+    const gridOps = ops.filter((op) => (op.w === 1 || op.h === 1) && op.x > W * 0.8 && op.y < H * 0.2);
+    expect(gridOps.length).toBeGreaterThan(20);
+    for (const op of gridOps) {
+      expect(alphaOf(op.color)).toBeGreaterThanOrEqual(0.06 - 1e-9);
     }
   });
 
@@ -213,20 +219,38 @@ describe('rotateSprite / planTankOps (D20f)', () => {
     rand: mulberry32(3),
   };
 
-  it('emits one rect per sprite pixel with palette colors and pixel size 2-3', () => {
+  it('emits one rect per sprite pixel with baked palette colors and pixel size 2-3', () => {
     const ops: StaticOp[] = planTankOps(tank, CELL, palette);
     const expected = TANK_SPRITE.flat().filter((p) => p !== 0).length;
     expect(ops.length).toBe(expected);
     for (const op of ops) {
       expect(op.w).toBeGreaterThanOrEqual(2);
       expect(op.w).toBeLessThanOrEqual(3);
-      expect(alphaOf(op.color)).toBeLessThanOrEqual(0.4 + 1e-9);
+      // D21g 上限：DSW 蓝点缀 0.62（车身 0.45 / 深档 0.55）。
+      expect(alphaOf(op.color)).toBeLessThanOrEqual(0.62 + 1e-9);
     }
     // 居中：车体包围盒罩住锚点。
     const minX = Math.min(...ops.map((o) => o.x));
     const maxX = Math.max(...ops.map((o) => o.x + o.w));
     expect(tank.x).toBeGreaterThan(minX);
     expect(tank.x).toBeLessThan(maxX);
+  });
+
+  it('renders tanks as recognizable pixel sprites (D21g R2 regression lock)', () => {
+    // R2 缺陷回归锁：一期车身有效 alpha ~0.16 且 sprite 过疏——用户看到
+    // 「三个点」。定标后：≥25 实体像素（7×5 经典轮廓）、车身/深档/点缀
+    // 三档 alpha 均在可辨识带（0.45 / 0.55 / 0.62），像素尺寸 3px（cell
+    // =30 → 全车 21×15px）。
+    expect(TANK_SPRITE.flat().filter((p) => p !== 0).length).toBeGreaterThanOrEqual(25);
+    expect(TANK_SPRITE.flat().filter((p) => p === 3).length).toBeGreaterThanOrEqual(1);
+    const ops: StaticOp[] = planTankOps(tank, CELL, palette);
+    const body = ops.find((o) => alphaOf(o.color) > 0.4 && alphaOf(o.color) < 0.5);
+    const dark = ops.find((o) => alphaOf(o.color) > 0.5 && alphaOf(o.color) < 0.58);
+    const accent = ops.find((o) => alphaOf(o.color) >= 0.62 - 1e-9);
+    expect(body).toBeDefined();
+    expect(dark).toBeDefined();
+    expect(accent).toBeDefined();
+    expect(ops[0]?.w).toBe(3); // cell/10 = 3px/像素
   });
 });
 

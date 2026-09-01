@@ -6,7 +6,10 @@
  *   resize / 换主题重绘（D20e 性能护栏：动画帧只画 ≤3 个坦克 sprite）；
  * - 动层 30fps（rAF + 帧间隔门槛），`document.hidden` 即暂停，
  *   `prefers-reduced-motion: reduce` 降为单帧静图（坦克停在初始位）；
- * - DPR 封顶 2（D20e）；画布级合成透明度 = COMPOSITE_ALPHA_CAP（0.5）；
+ * - DPR 封顶 2（D20e）；画布级合成透明度 = COMPOSITE_ALPHA_CAP（D21g：
+ *   恒 1.0——一期 0.5 全局减半与 palette 预烘焙、使用位系数三重叠乘后
+ *   网格有效 alpha ~0.001 不可见，R2 验收后废除；「不喧宾夺主」改由
+ *   引擎内各元素有效 alpha 定标保证，见 backdropEngine D21g 常量）；
  * - `pointer-events-none` + `aria-hidden`：不吃交互、不进无障碍树——
  *   背景板是纯装饰（D20e「不喧宾夺主」的 DOM 层保证）；
  * - 主题采样（D20h）：从作用域根元素 getComputedStyle 读 `--dsw-alias-*`，

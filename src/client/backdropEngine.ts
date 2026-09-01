@@ -122,28 +122,42 @@ export function createHeightField(cols: number, rows: number, seed: number): Flo
   return out;
 }
 
-/* —— 调色板（D20h）—— */
+/* —— 调色板（D20h 采样 / D21g 定标）—— */
 
-/** 背景板绘制用色（全部 rgba 字符串，alpha 已烘焙进色值）。 */
+/**
+ * 背景板绘制基底色（**实色，不带 alpha**——D21g：alpha 一律在使用位按
+ * 元素语义单次烘焙为最终有效值；一期「palette 预烘焙 × 使用位再乘 ×
+ * 画布 0.5」的三重叠乘是网格/坦克不可见的根因，实测网格有效 alpha 低至
+ * ~0.001，低于感知阈值）。
+ */
 export interface BackdropPalette {
-  /** 网格线（官方先例 slate-900/[0.04] 档，≤0.05）。 */
-  gridLine: string;
-  /** 高地图基础着色（中性阴影档，≤0.07）。 */
-  terrainShade: string;
-  /** 高地图峰顶着色（DSW 蓝点缀，≤0.07；docs/23 D21e）。 */
-  terrainPeak: string;
-  /** 坦克车身（≤0.4）。 */
-  tankBody: string;
-  /** 坦克履带/炮管深档（≤0.4）。 */
-  tankDark: string;
-  /** 坦克点缀像素（DSW 蓝档，≤0.4；docs/23 D21e）。 */
-  tankAccent: string;
-  /** 画布级合成透明度上限（D20e：0.5，组件以 CSS opacity 兜底）。 */
+  /** 中性基底（实色）：网格线 / 高地图阴影 / 坦克车身与深档（亮暗自适应）。 */
+  label: string;
+  /** 品牌点缀基底（实色，DSW 蓝）：峰顶 / 坦克点缀像素（亮暗自适应）。 */
+  brand: string;
+  /** 画布级合成透明度（D21g：恒 1.0——有效 alpha 已在指令级单次烘焙，
+   *  不再做全局减半；保留字段供组件显式接线与测试断言）。 */
   compositeAlpha: number;
 }
 
-/** 画布级合成透明度上限（D20e）。 */
-export const COMPOSITE_ALPHA_CAP = 0.5;
+/**
+ * 画布级合成透明度（D21g：1.0）。D20e 原值 0.5 的「全局减半」与 palette
+ * 预烘焙叠乘后所有元素有效值折半再折半——R2 用户验收（网格不可见/坦克
+ * 弱成点）后废除；「不喧宾夺主」改由下方各元素有效 alpha 上限保证。
+ */
+export const COMPOSITE_ALPHA_CAP = 1;
+
+/* D21g 有效 alpha 定标（= 指令烘焙出的最终屏上值；均远低于正文对比度）：
+ * 网格 0.07（官网 bg-grid 0.04 档 + 宿主中性色较浅的补偿，可见下限之上）；
+ * 高地图 0.11 × height（线性——用户要看得见色斑，原 height² 过度压暗）；
+ * 峰顶 DSW 蓝 0.13 × peak；坦克车身 0.45 / 深档 0.55 / DSW 蓝点缀 0.62
+ * （微小 sprite 上仍属低调，但可辨识为像素坦克——R2 验收反馈定标）。 */
+export const GRID_LINE_ALPHA = 0.07;
+export const TERRAIN_SHADE_ALPHA = 0.11;
+export const TERRAIN_PEAK_ALPHA = 0.13;
+export const TANK_BODY_ALPHA = 0.45;
+export const TANK_DARK_ALPHA = 0.55;
+export const TANK_ACCENT_ALPHA = 0.62;
 
 /**
  * 给完整色值叠 alpha：`#rrggbb` → `rgba(r,g,b,a)`；`rgba(r,g,b,a)` → alpha
@@ -194,23 +208,14 @@ export const DEFAULT_PALETTE_VARS: PaletteVarNames = {
   brand: '--dsw-alias-button-info-fill',
 };
 
-/** 采样调色板（D20h；docs/23 D21e）：`read(name)` 由组件提供
+/** 采样调色板（D20h；docs/23 D21e/D21g）：`read(name)` 由组件提供
  * （getComputedStyle 包一层），返回 null/undefined/空串即用字面兜底
  * （DSW 蓝 deepseek-500 / slate 族）。本函数纯：同一组输入色产出同一
- * 调色板，测试直接喂假 read。 */
+ * 调色板，测试直接喂假 read。基底一律实色（alpha 在使用位单次烘焙）。 */
 export function sampleBackdropPalette(read: (name: string) => string | null): BackdropPalette {
   const label = read(DEFAULT_PALETTE_VARS.label)?.trim() || '#475569';
   const brand = read(DEFAULT_PALETTE_VARS.brand)?.trim() || '#4176e6';
-  return {
-    // 官网网格 [0.04]；canvas 上 0.05 封顶保证存在感略高于网页静态格（D20e）。
-    gridLine: withAlpha(label, 0.05),
-    terrainShade: withAlpha(label, 0.06),
-    terrainPeak: withAlpha(brand, 0.07),
-    tankBody: withAlpha(label, 0.32),
-    tankDark: withAlpha(label, 0.4),
-    tankAccent: withAlpha(brand, 0.4),
-    compositeAlpha: COMPOSITE_ALPHA_CAP,
-  };
+  return { label, brand, compositeAlpha: COMPOSITE_ALPHA_CAP };
 }
 
 /* —— 静层绘制指令（网格 + 高地图）—— */
@@ -243,8 +248,10 @@ export function planStaticLayer(
   const ops: StaticOp[] = [];
   const cols = Math.max(1, Math.ceil(w / cell));
   const rows = Math.max(1, Math.ceil(h / cell));
-  // 高地图：每格按高度着色（低处不可见 → 峰顶微亮），再乘渐隐；
+  // 高地图：每格按高度着色（低处淡 → 峰顶 DSW 蓝），再乘渐隐；
   // 末行/末列格子裁齐画布边界（画布宽高未必是 cell 整数倍）。
+  // D21g：alpha 在此单次烘焙为最终有效值（线性 height——原 height² 过度
+  // 压暗，用户验收反馈「高地图看不见」）。
   for (let cy = 0; cy < rows; cy++) {
     for (let cx = 0; cx < cols; cx++) {
       const height = heights[cy * cols + cx] ?? 0;
@@ -262,7 +269,7 @@ export function planStaticLayer(
           y,
           w: cw,
           h: ch,
-          color: withAlpha(palette.terrainPeak, peakAlpha * 0.07 * fade),
+          color: withAlpha(palette.brand, peakAlpha * TERRAIN_PEAK_ALPHA * fade),
         });
       } else {
         ops.push({
@@ -271,12 +278,13 @@ export function planStaticLayer(
           y,
           w: cw,
           h: ch,
-          color: withAlpha(palette.terrainShade, height * height * 0.07 * fade),
+          color: withAlpha(palette.label, height * TERRAIN_SHADE_ALPHA * fade),
         });
       }
     }
   }
   // 网格线：逐格分段（每段独立乘渐隐），1px 压在格子边界上。
+  // D21g：GRID_LINE_ALPHA 即最终有效 alpha（一次烘焙，无画布减半层）。
   for (let cx = 0; cx <= cols; cx++) {
     const x = Math.min(cx * cell, w - 1);
     for (let cy = 0; cy < rows; cy++) {
@@ -288,7 +296,7 @@ export function planStaticLayer(
         y: cy * cell,
         w: 1,
         h: Math.min(cell, h - cy * cell),
-        color: withAlpha(palette.gridLine, 0.05 * fade),
+        color: withAlpha(palette.label, GRID_LINE_ALPHA * fade),
       });
     }
   }
@@ -303,7 +311,7 @@ export function planStaticLayer(
         y,
         w: Math.min(cell, w - cx * cell),
         h: 1,
-        color: withAlpha(palette.gridLine, 0.05 * fade),
+        color: withAlpha(palette.label, GRID_LINE_ALPHA * fade),
       });
     }
   }
@@ -316,14 +324,17 @@ export function planStaticLayer(
 export type SpritePixel = 0 | 1 | 2 | 3;
 
 /**
- * 坦克 sprite（7×4，朝 +x 右）：炮管右伸、履带镂空点缀；全车仅 16 个实体
- * 像素——「微小」由尺寸（每像素 2–3px）与低 alpha 双重保证（D20e/D20f）。
+ * 坦克 sprite（7×5，朝 +x 右；D21g R2 重画）：左右履带柱（深色贯通）、
+ * 三行连贯车体、右伸炮管（深色）、炮塔中心 1px DSW 蓝点缀——经典俯视
+ * 微坦克轮廓，25 个实体像素。「微小」由像素尺寸（cell/10 ≈ 3px/像素，
+ * 全车 21×15px）与有效 alpha（0.45–0.62，D21g）保证，不靠看不见。
  */
 export const TANK_SPRITE: readonly (readonly SpritePixel[])[] = [
-  [0, 0, 0, 2, 0, 0, 0],
-  [1, 1, 1, 1, 2, 2, 2],
-  [1, 1, 1, 1, 1, 1, 1],
-  [2, 0, 2, 0, 2, 0, 2],
+  [2, 0, 0, 0, 0, 0, 2],
+  [2, 1, 1, 1, 1, 1, 2],
+  [2, 1, 1, 3, 1, 2, 2],
+  [2, 1, 1, 1, 1, 1, 2],
+  [2, 0, 0, 0, 0, 0, 2],
 ];
 
 /** 按 dir 变换 sprite（0 原样 / 1 顺时针 / 2 水平镜像 / 3 逆时针）。 */
@@ -503,7 +514,9 @@ export function createTanks(count: number, w: number, h: number, cell: number, s
 
 /**
  * 规划一辆坦克的绘制指令：以车体中心为锚、按 dir 旋转 sprite，每个实体
- * 像素一条 rect（色值按语义查表、alpha 已在调色板烘焙 ≤0.4）。
+ * 像素一条 rect。D21g：alpha 按语义单次烘焙为最终有效值（车身 0.45 /
+ * 深档 0.55 / DSW 蓝点缀 0.62）；像素尺寸 cell/10（cell=30 → 3px/像素，
+ * 全车 21×15px——比一期 2px/像素大半档，保证像素轮廓可辨识）。
  */
 export function planTankOps(
   tank: Tank,
@@ -513,11 +526,15 @@ export function planTankOps(
   const sprite = rotateSprite(TANK_SPRITE, tank.dir);
   const rows = sprite.length;
   const cols = sprite[0]?.length ?? 0;
-  const px = Math.min(3, Math.max(2, Math.round(cell / 13)));
+  const px = Math.min(3, Math.max(2, Math.round(cell / 10)));
   const originX = tank.x - (cols * px) / 2;
   const originY = tank.y - (rows * px) / 2;
   const colorOf = (p: SpritePixel): string =>
-    p === 1 ? palette.tankBody : p === 2 ? palette.tankDark : palette.tankAccent;
+    p === 1
+      ? withAlpha(palette.label, TANK_BODY_ALPHA)
+      : p === 2
+        ? withAlpha(palette.label, TANK_DARK_ALPHA)
+        : withAlpha(palette.brand, TANK_ACCENT_ALPHA);
   const ops: StaticOp[] = [];
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
