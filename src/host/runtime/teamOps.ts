@@ -23,6 +23,13 @@ import { recordEvent } from '../state/events.js';
 import { sanitizeKey } from '../model/taskMachine.js';
 import { ETeamsError, captainActor, memberActor, stateRootOf, type RuntimeEnv } from './base.js';
 import { renderTeamDocs, teamWorkDirRel } from './docs.js';
+import {
+  allocateEmployeeId,
+  findRosterMember,
+  LEADER_NAME,
+  ROLE_BUILDER_NAME,
+  upsertRosterMember,
+} from './roster.js';
 import { spawnTeamMembers, interruptMember, drainMembers } from './members.js';
 import { deliverMail, notifyCaptain, readBox, requireMember, wakeMember } from './notifier.js';
 
@@ -183,6 +190,12 @@ export async function addMember(
     reasoningEffort?: string;
     /** Pre-generated avatar (docs/14); generated from the name when absent. */
     avatar?: { seed: number; salt: number };
+    /**
+     * 工号 (docs/21). Callers that already resolved a roster entry pass its
+     * 工号 through; otherwise one is adopted from the roster, freshly
+     * allocated, or (for entry-less adds) allocated new.
+     */
+    employeeId?: string;
     /** Origin marker for events (tool / panel). */
     via?: string;
   },
@@ -222,9 +235,20 @@ export async function addMember(
             source: 'override',
           }
         : { provider: 'inherit', model: 'inherit', source: 'inherited' };
+    // 工号（docs/21）：显式传入 > 角色库同号采纳 > 新分配。角色库条目缺号时
+    //（旧版数据）分配后回填角色库，保证同名成员在角色库与各团队共号。
+    const rosterEntry = findRosterMember(root, name);
+    let employeeId = params.employeeId ?? rosterEntry?.employeeId;
+    if (employeeId === undefined || employeeId === '') {
+      employeeId = await allocateEmployeeId(root);
+      if (rosterEntry !== undefined && name !== LEADER_NAME && name !== ROLE_BUILDER_NAME) {
+        await upsertRosterMember(root, { ...rosterEntry, employeeId }).catch(() => undefined);
+      }
+    }
     const member: MemberRecord = {
       id: '',
       name,
+      employeeId,
       role: params.role.trim() || 'member',
       persona: mergePersona(defaultPersonaFor(name, params.role, params.executionPrompt), {
         ...(params.duty !== undefined ? { duty: params.duty } : {}),

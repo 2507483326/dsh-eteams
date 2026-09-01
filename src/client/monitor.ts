@@ -35,6 +35,8 @@ export interface StationView {
 /** Member row of the state snapshot. */
 export interface MemberView {
   name: string;
+  /** 工号 (docs/21): `ET-0001` style; null for legacy members. */
+  employeeId: string | null;
   role: string;
   status: string;
   provider: string;
@@ -91,6 +93,8 @@ export interface EventView {
 /** The team leader (项目牧羊人) as projected by the host — not a roster member. */
 export interface CaptainView {
   name: string;
+  /** 工号 (docs/21); host falls back to 'ET-0001' for an unseeded roster. */
+  employeeId: string;
   role: string;
   duty: string;
   style: string;

@@ -111,6 +111,13 @@ export interface MemberRecord {
   /** Durable child session id (backfilled after spawn; '' while staged). */
   id: string;
   name: string;
+  /**
+   * 工号 (employee id, docs/21): `ET-0001` style, allocated from the
+   * workspace counter at creation. Roster members adopted into a team keep
+   * their roster 工号; direct adds get a fresh one. Optional for legacy
+   * members created before the field existed.
+   */
+  employeeId?: string;
   role: string;
   persona: PersonaRecord;
   modelRoute: ModelRouteSnapshot;

@@ -153,7 +153,11 @@ async function mem<T>(agent: FakeAgent, name: string, args: Record<string, unkno
 
 function readTeam(): TeamState {
   const file = join(workspace, '.eteams');
-  const dirs = readdirSync(file);
+  // Team dirs only — the state root also holds files (roster.json,
+  // employee-seq.json) and sibling dirs (archive/, logs/).
+  const dirs = readdirSync(file, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name);
   const id = dirs[0]!;
   return JSON.parse(readFileSync(join(file, id, 'team.json'), 'utf8')) as TeamState;
 }
