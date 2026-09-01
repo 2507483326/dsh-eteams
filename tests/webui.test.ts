@@ -491,9 +491,19 @@ describe('panel write routes (M5 first slice)', () => {
   it('projects 工号 through the team snapshot (members and captain)', async () => {
     const { handler, res, post } = await installFake();
     await handler({ method: 'GET', url: '/eteams-api/roster' }, res());
+    // 2026-09 起预置只保留 角色构建师（persona.ts PRESET_MEMBER_ROLES），
+    // 前端开发者不再自动入库——先手动 upsert，再 fromRoster 收编。
+    const seeded = await post('/eteams-api/roster', { name: '前端开发者', role: '前端开发者' });
+    expect((JSON.parse(seeded.body) as { member: { name: string } }).member.name).toBe(
+      '前端开发者',
+    );
     const created = await post('/eteams-api/team', { name: '快照团队', sessionId: 'sess-panel' });
     const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
-    await post(`/eteams-api/team/${teamId}/member`, { name: '前端开发者', fromRoster: true });
+    const added = await post(`/eteams-api/team/${teamId}/member`, {
+      name: '前端开发者',
+      fromRoster: true,
+    });
+    expect(added.code).toBe(200);
     const fresh = readTeamFromDisk(teamId);
     const { teamSnapshot } = await import('../src/host/runtime/webui');
     const snap = teamSnapshot(fresh, workspace, config);
