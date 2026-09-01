@@ -21,6 +21,9 @@ import tailwindcssAnimate from 'tailwindcss-animate';
  * - borderRadius 按 shadcn v3 惯例从 --radius 衍生（--radius: 0.75rem，
  *   对齐 card.tsx 现行 12px）。
  * - plugins 先只挂 tailwindcss-animate（v3 侧 shadcn 动画类标准件）。
+ * - fontFamily（docs/22 D20b）：font-sans/font-mono 消费 eteams.css 的
+ *   --eteams-font-sans/-mono 字体栈令牌（官网 Inter var / Fira Code VF +
+ *   系统兜底；不打包字体文件）。
  */
 const config: Config = {
   content: ['src/client/**/*.{ts,tsx}'],
@@ -30,6 +33,10 @@ const config: Config = {
   important: '.eteams-ui',
   theme: {
     extend: {
+      fontFamily: {
+        sans: 'var(--eteams-font-sans)',
+        mono: 'var(--eteams-font-mono)',
+      },
       colors: {
         border: 'var(--border)',
         input: 'var(--input)',

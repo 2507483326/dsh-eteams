@@ -164,8 +164,8 @@ const T = {
   surface: 'var(--dsw-alias-bg-layer-1, #ffffff)',
   border: 'var(--dsw-alias-border-l1, rgba(100,116,139,0.14))',
   border2: 'var(--dsw-alias-border-l2, rgba(100,116,139,0.26))',
-  accent: 'var(--dsw-alias-brand-primary, #4b7bec)',
-  accentSoft: 'var(--dsw-alias-interactive-bg-active, rgba(75,123,236,0.12))',
+  accent: 'var(--dsw-alias-brand-primary, #0ea5e9)',
+  accentSoft: 'var(--dsw-alias-interactive-bg-active, rgba(14,165,233,0.12))',
   err: 'var(--dsw-alias-state-error-primary, #b91c1c)',
   // ⚠️ 主题的 state-*-secondary 是实心 400 色（amber-400/green-400/red-400），
   // 不是 10% 淡色调——实心底 + 实心 fg 会同色相打架（橙字橙底不可读，用户
@@ -250,7 +250,7 @@ const PROGRESS_TRACK_CLASS =
 /** 原 fns.progressFill 的静态面：accent→info 渐变（任意值完整字面量）；
 宽度百分比是运行时动态值，保留 inline style（S14 清点口径，S5 card 先例）。 */
 const PROGRESS_FILL_CLASS =
-  'h-full rounded-full bg-[linear-gradient(90deg,var(--dsw-alias-brand-primary,#4b7bec),var(--dsw-alias-state-business-primary,#1d4ed8))]';
+  'h-full rounded-full bg-[linear-gradient(90deg,var(--dsw-alias-brand-primary,#0ea5e9),var(--dsw-alias-state-business-primary,#1d4ed8))]';
 /** 原 styles.eventRow（7px 上下距 / 13px / 次级文字 / 下边线）。 */
 const EVENT_ROW_CLASS = `border-b border-solid py-[7px] text-[13px] leading-[1.55] ${BORDER_L1_CLASS} ${TEXT2_CLASS}`;
 /** 原 styles.rail（84px 窄栏 / 3px 纵向间距 / 右分隔线 / 上 2 右 12）。 */
@@ -262,7 +262,7 @@ const railBtnClass = (active: boolean): string =>
   cn(
     'block w-full cursor-pointer rounded-[8px] border-none px-2.5 py-[7px] text-left text-xs leading-[1.55] [letter-spacing:0.2px]',
     active
-      ? 'bg-[color:var(--dsw-alias-interactive-bg-active,rgba(75,123,236,0.12))] font-semibold text-primary'
+      ? 'bg-[color:var(--dsw-alias-interactive-bg-active,rgba(14,165,233,0.12))] font-semibold text-primary'
       : 'bg-transparent font-medium text-[color:var(--dsw-alias-label-secondary,#47546c)]',
   );
 
@@ -283,7 +283,7 @@ const MEMBER_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(230px,1fr))] 
 const MEMBER_CARD_CLASS = `flex flex-col gap-2 rounded-xl border border-solid bg-background p-3 ${BORDER_L1_CLASS}`;
 /** 原 styles.roleChip（品牌淡底小徽标）：S14 团队卡片「当前」复用。 */
 const ROLE_CHIP_CLASS =
-  'inline-block rounded-full bg-[color:var(--dsw-alias-interactive-bg-active,rgba(75,123,236,0.12))] px-[9px] py-px text-[11px] font-semibold text-primary';
+  'inline-block rounded-full bg-[color:var(--dsw-alias-interactive-bg-active,rgba(14,165,233,0.12))] px-[9px] py-px text-[11px] font-semibold text-primary';
 /** 原 styles.btn（描边小按钮）：移出团队在调用点叠 text-destructive。 */
 const BTN_CLASS = `cursor-pointer rounded-[8px] border border-solid bg-background px-3 py-[5px] text-[12px] font-medium ${TEXT2_CLASS}`;
 /** 原 styles.drawer（sunken 抽屉面板）：任务抽屉已升级为 Dialog，现仅成员
@@ -337,7 +337,7 @@ const dotClass = (tone: Tone): string => cn(DOT_BASE_CLASS, DOT_TONE_CLASS[tone]
 （`.eteams-ui .utility` 后代选择器机制），壳布局迁进这层内壳；height 锚点
 仍留作用域根 inline（宿主视图区无 .eteams-ui 祖先，见文件头 S14 注记）。 */
 const SHELL_CLASS =
-  'box-border flex h-full gap-4 overflow-hidden px-[18px] py-3.5 text-[13px] leading-[1.55] text-foreground [font-family:inherit]';
+  'box-border flex h-full gap-4 overflow-hidden px-[18px] py-3.5 text-[13px] leading-[1.55] text-foreground font-sans';
 /** 原 styles.content：内容列（纵滚/横截 + 2px 右距，用户反馈注记原样保留）。 */
 const CONTENT_CLASS = 'min-w-0 flex-1 overflow-x-hidden overflow-y-auto pr-0.5';
 /** 原 styles.formError：语义色走 destructive token（与 state-error 同源，D19c）。 */
@@ -359,12 +359,12 @@ const PAGE_PILL_CLASS =
 const DETAIL_ROW_CLASS = `flex gap-2.5 border-b border-solid py-[7px] text-[12px] leading-[1.55] ${BORDER_L1_CLASS}`;
 const DETAIL_LABEL_CLASS = 'w-16 shrink-0 pt-px text-[11px] font-semibold text-muted-foreground';
 /** 原 styles.cmdChip（预填命令芯片：等宽字体 + l1 边框 + 次级文字）。 */
-const CMD_CHIP_CLASS = `mt-2 break-all rounded-[8px] border border-solid bg-[color:var(--dsw-alias-bg-layer-2,#edf0f4)] px-[11px] py-[9px] text-[12px] leading-[1.7] [font-family:ui-monospace,SFMono-Regular,Consolas,monospace] ${BORDER_L1_CLASS} ${TEXT2_CLASS}`;
+const CMD_CHIP_CLASS = `mt-2 break-all rounded-[8px] border border-solid bg-[color:var(--dsw-alias-bg-layer-2,#edf0f4)] px-[11px] py-[9px] text-[12px] leading-[1.7] font-mono ${BORDER_L1_CLASS} ${TEXT2_CLASS}`;
 /** 原 styles.buildStep / stepRow / stepNum / prefillBanner（构建工作台）。 */
 const BUILD_STEP_CLASS = 'flex items-center gap-2 py-[3px] text-[12.5px]';
 const STEP_ROW_CLASS = `mt-2 flex items-start gap-2 text-[12.5px] leading-[1.55] ${TEXT2_CLASS}`;
 const STEP_NUM_CLASS =
-  'mt-px inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-[color:var(--dsw-alias-interactive-bg-active,rgba(75,123,236,0.12))] text-[11px] font-semibold text-primary';
+  'mt-px inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-[color:var(--dsw-alias-interactive-bg-active,rgba(14,165,233,0.12))] text-[11px] font-semibold text-primary';
 const PREFILL_BANNER_CLASS = `mt-2.5 flex items-start gap-2 rounded-[10px] border border-solid bg-[color:rgba(29,78,216,0.1)] px-3 py-2.5 ${BORDER_L1_CLASS}`;
 
 /** S13：执行链站点行——✔/●/◌ 结构原样保留，仅样式改 Tailwind 类。 */
@@ -1283,10 +1283,10 @@ function handbookSeed(member: RosterMember): string {
  */
 const ROLE_LIST_CSS = `
 .eteams-role-row{background:${T.surface};border:1px solid ${T.border};box-shadow:0 1px 2px rgba(15,23,42,0.04);transition:background .15s ease,border-color .15s ease,box-shadow .15s ease,transform .15s ease}
-.eteams-role-row:hover{border-color:rgba(75,123,236,0.45);box-shadow:0 6px 16px rgba(15,23,42,0.09);transform:translateY(-1px)}
+.eteams-role-row:hover{border-color:rgba(14,165,233,0.45);box-shadow:0 6px 16px rgba(15,23,42,0.09);transform:translateY(-1px)}
 .eteams-team-card{background:${T.surface};border:1px solid ${T.border};box-shadow:0 1px 2px rgba(15,23,42,0.04);transition:background .15s ease,border-color .15s ease,box-shadow .15s ease,transform .15s ease}
-.eteams-team-card:hover{border-color:rgba(75,123,236,0.45);box-shadow:0 6px 16px rgba(15,23,42,0.09);transform:translateY(-1px)}
-.eteams-team-card[data-active="true"]{border-color:${T.accent};background:${T.accentSoft};box-shadow:0 2px 10px rgba(75,123,236,0.14)}
+.eteams-team-card:hover{border-color:rgba(14,165,233,0.45);box-shadow:0 6px 16px rgba(15,23,42,0.09);transform:translateY(-1px)}
+.eteams-team-card[data-active="true"]{border-color:${T.accent};background:${T.accentSoft};box-shadow:0 2px 10px rgba(14,165,233,0.14)}
 .eteams-role-del{padding:3px 10px;font-size:11px;border-radius:7px;border:1px solid ${T.border2};background:${T.surface};color:${T.err};cursor:pointer;flex-shrink:0;font-family:inherit;line-height:16px;opacity:0;transition:opacity .15s ease,border-color .15s ease,background .15s ease}
 .eteams-role-row:hover .eteams-role-del,.eteams-role-row:focus-within .eteams-role-del{opacity:1}
 .eteams-role-del:hover{border-color:${T.err};background:${T.errBg}}
@@ -1784,7 +1784,7 @@ function MembersTab({
                                 className={cn(
                                   'cursor-pointer rounded-[8px] border border-solid px-[9px] py-[5px] text-left text-[12px] leading-[1.5] text-inherit',
                                   active
-                                    ? 'border-primary bg-[color:var(--dsw-alias-interactive-bg-active,rgba(75,123,236,0.12))]'
+                                    ? 'border-primary bg-[color:var(--dsw-alias-interactive-bg-active,rgba(14,165,233,0.12))]'
                                     : `bg-transparent ${BORDER_L1_CLASS}`,
                                 )}
                               >
@@ -2074,7 +2074,7 @@ function MembersTab({
         <Card className={cn(PANEL_CARD_CLASS, 'mt-2 px-[18px] py-4')}>
           <div className="flex items-center gap-3.5">
             {/* 头像描边环（视觉升级）：与卡片描边同色系，柔和不抢戏。 */}
-            <div className="rounded-full border-2 border-solid p-0.5 leading-none border-[color:var(--dsw-alias-interactive-bg-active,rgba(75,123,236,0.12))]">
+            <div className="rounded-full border-2 border-solid p-0.5 leading-none border-[color:var(--dsw-alias-interactive-bg-active,rgba(14,165,233,0.12))]">
               <Avatar
                 name={detail.name}
                 seed={detail.avatar?.seed}

@@ -39,7 +39,7 @@ const STATUS_PILL_CLASS =
   'rounded-full bg-[color:var(--dsw-alias-bg-layer-2,rgba(100,116,139,0.1))] px-2 py-px text-[11px] font-medium';
 /** 访谈待作答 pill（品牌淡底 + brand 主色字）。 */
 const INTERVIEW_PILL_CLASS =
-  'rounded-full bg-[color:var(--dsw-alias-interactive-bg-active,rgba(75,123,236,0.12))] px-2 py-px text-[11px] font-semibold text-primary';
+  'rounded-full bg-[color:var(--dsw-alias-interactive-bg-active,rgba(14,165,233,0.12))] px-2 py-px text-[11px] font-semibold text-primary';
 /** 进度 spinner（标准 border 技法：brand 主色描边、顶部透明、keyframes 旋转）。 */
 const SPINNER_CLASS =
   'inline-block h-3 w-3 rounded-full border-2 border-solid border-primary border-t-transparent [animation:eteams-card-spin_0.9s_linear_infinite]';

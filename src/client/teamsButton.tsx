@@ -230,7 +230,7 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
           <Button
             variant="ghost"
             size="sm"
-            className="group data-[selected=true]:bg-[color:var(--dsw-alias-interactive-bg-active,rgba(75,123,236,0.12))] data-[selected=true]:text-primary"
+            className="group data-[selected=true]:bg-[color:var(--dsw-alias-interactive-bg-active,rgba(14,165,233,0.12))] data-[selected=true]:text-primary"
             data-selected={selectedMember !== null || selectedTeam !== null ? 'true' : undefined}
             aria-label="团队"
             aria-haspopup="dialog"
@@ -385,7 +385,7 @@ function forgetSelectedTeam(sessionId: string | undefined): void {
 - preflight 已关：UA 字体/背景的显式覆盖逐项保留（text-[13px]、
   [font-family:inherit]、bg-transparent），视觉与迁移前一致。 */
 const ROW_CLASS =
-  'flex w-full cursor-pointer items-center gap-2 rounded-[8px] border-none bg-transparent px-[9px] py-[7px] text-left text-[13px] text-foreground [font-family:inherit] hover:bg-muted data-[selected=true]:bg-[color:var(--dsw-alias-interactive-bg-active,rgba(75,123,236,0.12))]';
+  'flex w-full cursor-pointer items-center gap-2 rounded-[8px] border-none bg-transparent px-[9px] py-[7px] text-left text-[13px] text-foreground [font-family:inherit] hover:bg-muted data-[selected=true]:bg-[color:var(--dsw-alias-interactive-bg-active,rgba(14,165,233,0.12))]';
 const ROW_NAME_CLASS = 'min-w-0 truncate font-medium';
 const ROW_META_CLASS = 'ml-auto shrink-0 text-[11px] text-muted-foreground';
 const EMPTY_CLASS = 'px-2.5 py-3.5 text-center text-xs text-muted-foreground';

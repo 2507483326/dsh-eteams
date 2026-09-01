@@ -17,6 +17,11 @@
  * .eteams-ui 作用域、不用 @apply。右值一律 `var(--dsw-alias-…, 字面兜底)`——
  * 宿主变量是完整色值（亮暗跟随零 JS），禁用 /alpha 修饰；有别名可用的 token
  * 绝不写成纯字面色。
+ *
+ * docs/22 D20a：字面兜底值整族换成 tailwindcss.cn（v3 官网）色板——
+ * sky-500 主色 / slate 系中性阶（浅色基准；暗色仍由宿主别名驱动）；
+ * D20b：--eteams-font-sans/-mono 字体栈令牌（官网 sans=Inter var、
+ * mono=Fira Code VF；不打包字体文件，未装即落系统兜底，docs/22 22.1.2）。
  */
 @tailwind base;
 @tailwind components;
@@ -24,47 +29,56 @@
 
 @layer base {
   /*
-   * shadcn 语义 token ↔ 宿主变量桥（docs/21 附录 A，S3）。
+   * shadcn 语义 token ↔ 宿主变量桥（docs/21 附录 A，S3；docs/22 D20a 色板兜底）。
    * 挂在 .eteams-ui 上，由 tailwind.config.ts theme.extend.colors 以
-   * var(--token) 消费；宿主变量缺省时落到字面兜底（浅色基准）。
+   * var(--token) 消费；宿主变量缺省时落到官网色板字面兜底（浅色基准）。
    */
   .eteams-ui {
-    /* 背景 / 前景 */
+    /* 字体栈令牌（D20b）：官网 Inter var / Fira Code VF + 系统兜底，
+       中文补 PingFang SC / Microsoft YaHei 档（宿主未装 Inter 时 CJK 不劣化）。 */
+    --eteams-font-sans: 'Inter var', 'Inter', ui-sans-serif, system-ui, -apple-system,
+      'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'PingFang SC',
+      'Microsoft YaHei', sans-serif;
+    --eteams-font-mono: 'Fira Code VF', 'Fira Code', ui-monospace, SFMono-Regular, Menlo,
+      Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+
+    /* 背景 / 前景（官网：白底 + slate-900 标题文字） */
     --background: var(--dsw-alias-bg-layer-1, #ffffff);
-    --foreground: var(--dsw-alias-label-primary, #1f2328);
+    --foreground: var(--dsw-alias-label-primary, #0f172a);
     --card: var(--dsw-alias-bg-layer-2, #ffffff);
-    --card-foreground: var(--dsw-alias-label-primary, #1f2328);
+    --card-foreground: var(--dsw-alias-label-primary, #0f172a);
     --popover: var(--dsw-alias-bg-layer-2, #ffffff);
-    --popover-foreground: var(--dsw-alias-label-primary, #1f2328);
-    /* 主色 / 次级 / 弱化 / 强调 */
-    --primary: var(--dsw-alias-brand-primary, #4b7bec);
+    --popover-foreground: var(--dsw-alias-label-primary, #0f172a);
+    /* 主色 / 次级 / 弱化 / 强调（主色 sky-500；中性淡底 slate-100） */
+    --primary: var(--dsw-alias-brand-primary, #0ea5e9);
     --primary-foreground: var(--dsw-alias-label-primary-foreground, #ffffff);
-    --secondary: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.12));
-    --secondary-foreground: var(--dsw-alias-label-primary, #1f2328);
-    --muted: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.12));
-    --muted-foreground: var(--dsw-alias-label-tertiary, #6b7280);
+    --secondary: var(--dsw-alias-interactive-bg-hover, #f1f5f9);
+    --secondary-foreground: var(--dsw-alias-label-primary, #0f172a);
+    --muted: var(--dsw-alias-interactive-bg-hover, #f1f5f9);
+    --muted-foreground: var(--dsw-alias-label-tertiary, #64748b);
     /* R1-F5：宿主包无 --dsw-alias-accent（对照已装 dsh-client-ui-theme
        主题表核实，亮/暗两块均无）——原首跳是死映射，恒落到 brand-primary
        兜底。shadcn accent 语义 = hover 浅高亮底，改映射宿主真实存在的
        interactive 档淡底（宿主自身 hover-accent 同款变量，亮暗双值齐备），
        字面兜底与 --secondary/--muted 同档中性色。 */
-    --accent: var(--dsw-alias-interactive-bg-hover-accent, rgba(128, 128, 128, 0.12));
-    --accent-foreground: var(--dsw-alias-label-primary, #1f2328);
-    --destructive: var(--dsw-alias-state-error-primary, #d64545);
+    --accent: var(--dsw-alias-interactive-bg-hover-accent, #f1f5f9);
+    --accent-foreground: var(--dsw-alias-label-primary, #0f172a);
+    --destructive: var(--dsw-alias-state-error-primary, #dc2626);
     /* 附录 A 之外的微调：shadcn destructive 变体（button 等，S4 起）需要
        on-destructive 文本色；宿主无专用别名，复用 label-primary-foreground
        （与 --primary-foreground 同源），字面兜底 #ffffff。 */
     --destructive-foreground: var(--dsw-alias-label-primary-foreground, #ffffff);
-    /* 边框 / 输入 / 焦点环 */
-    --border: var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.35));
-    --input: var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.35));
-    --ring: var(--dsw-alias-brand-primary, #4b7bec);
+    /* 边框 / 输入 / 焦点环（官网侧栏细线：slate-200 档） */
+    --border: var(--dsw-alias-border-l2, #e2e8f0);
+    --input: var(--dsw-alias-border-l2, #e2e8f0);
+    --ring: var(--dsw-alias-brand-primary, #0ea5e9);
     /* 圆角：直定 0.75rem（=12px，对齐 card.tsx 现行值），shadcn 惯例由
        tailwind.config.ts 的 borderRadius lg/md/sm 从 --radius 衍生 */
     --radius: 0.75rem;
-    /* 扩展 token（超出 shadcn 标准集，服务既有 Tone 徽标语义） */
-    --success: var(--dsw-alias-state-success-primary, #2e9e5b);
-    --warning: var(--dsw-alias-state-warn-primary, #c78a1d);
+    /* 扩展 token（超出 shadcn 标准集，服务既有 Tone 徽标语义；兜底取
+       Tailwind green-600 / amber-600 档，浅底可读性优先） */
+    --success: var(--dsw-alias-state-success-primary, #16a34a);
+    --warning: var(--dsw-alias-state-warn-primary, #d97706);
     --business: var(--dsw-alias-state-business-primary, var(--primary));
   }
 

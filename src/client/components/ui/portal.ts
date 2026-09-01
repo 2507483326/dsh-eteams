@@ -22,6 +22,10 @@ export function getPortalContainer(): HTMLElement {
   if (container === null || !container.isConnected) {
     const el = document.createElement('div');
     el.className = 'eteams-ui-portal eteams-ui';
+    // 作用域根自身不承后代工具类（D19b 机制），字体栈（docs/22 D20b）以
+    // inline 落在容器上：portal 进来的浮层文字与面板同字体（浮层内后代
+    // 继承 inline 值；token 定义在 .eteams-ui 即本容器，var 可解析）。
+    el.style.fontFamily = 'var(--eteams-font-sans)';
     document.body.appendChild(el);
     container = el;
   }

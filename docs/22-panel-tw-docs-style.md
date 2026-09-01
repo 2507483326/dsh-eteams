@@ -87,7 +87,8 @@
 
 ### S22-1 设计令牌：字体 + 官网色板兜底（M1）
 
-- 范围：`src/client/eteams.css`（字体令牌 + shadcn 语义 token 兜底值换官网色板：primary→sky-500、foreground→slate-900、muted-foreground→slate-500 等）、`tailwind.config.ts`（fontFamily sans/mono）、`eteamsView.tsx` 仅壳与等宽芯片两处类名换 font 工具类。
+- 范围：`src/client/eteams.css`（字体令牌 + shadcn 语义 token 兜底值换官网色板：primary→sky-500、foreground→slate-900、muted-foreground→slate-500 等）、`tailwind.config.ts`（fontFamily sans/mono）、`eteamsView.tsx`（壳 font-sans、等宽芯片 font-mono）、`components/ui/portal.ts`（portal 容器 inline 字体栈——作用域根不承后代工具类）。
+- 施工补充（实施时定稿）：全客户端 stale 品牌兜底字面量（`#4b7bec` 族 / `rgba(75,123,236,*)` 族）一并换成 sky 族（`#0ea5e9` / `rgba(14,165,233,*)`）——eteamsView / buildCard / teamsButton / heroTeamsButton；例外保留：avatar.tsx 调色板（非 token）、mdEditor.tsx（非目标）。
 - 不变式：宿主别名桥逐字保留（只动兜底字面值）；`/alpha` 禁令不破。
 - 验收：四绿门；`lib/tailwind.gen.css` 含新字体栈与新兜底值；面板无视觉回归（token 别名在宿主环境下优先于兜底，理论上仅暗色精调的兜底差可见）。
 

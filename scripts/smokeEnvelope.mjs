@@ -122,9 +122,10 @@ if (typeof loaded.exports?.apply !== 'function' || !Array.isArray(loaded.exports
 // 1) envelope 源码含注入锚点 data-dsh-eteams-tw（tailwind.ts 的幂等键，
 //    证明 ensureEteamsStyles 注入代码在包内）；
 // 2) lib/tailwind.gen.css 非空；
-// 3) 产物含 `.eteams-ui` 作用域选择器——token 桥块（.eteams-ui{--background:）
-//    与代表工具类（.eteams-ui .flex）各一处，即 important:'.eteams-ui' 真实
-//    生效、purge 没有清空产物。
+// 3) 产物含 `.eteams-ui` 作用域选择器——token 桥块（压缩后形如 `.eteams-ui{--…`，
+//    docs/22 S22-1 起块内含字体栈令牌，锚点改为顺序无关）与代表工具类
+//    （.eteams-ui .flex）各一处、--background 令牌真实在产物中，即
+//    important:'.eteams-ui' 真实生效、purge 没有清空产物。
 const TW_STYLE_ATTRIBUTE = 'data-dsh-eteams-tw';
 if (!code.includes(TW_STYLE_ATTRIBUTE)) {
   console.error(
@@ -144,7 +145,7 @@ if (genCss.length === 0) {
   console.error('SMOKE FAIL: lib/tailwind.gen.css is empty — Tailwind 产物异常，拒绝放行');
   process.exit(1);
 }
-for (const selector of ['.eteams-ui{--background:', '.eteams-ui .flex']) {
+for (const selector of ['.eteams-ui{--', '--background:', '.eteams-ui .flex']) {
   if (!genCss.includes(selector)) {
     console.error(
       `SMOKE FAIL: lib/tailwind.gen.css missing scoped selector ${JSON.stringify(selector)} — purge 清空或 important:'.eteams-ui' 失效`,
