@@ -29,6 +29,16 @@ function canRunJs(candidate) {
     encoding: 'utf8',
     timeout: 15_000,
   });
+  if (probe.error?.code === 'EPERM') {
+    // DSH 桌面沙箱禁止子进程管道 stdio（PowerShell 管道不受影响，但
+    // Node spawnSync 默认 pipe 必被拒）。退化成纯退出码探针：GUI 模式
+    // 「exit 0 却什么都不干」的假成功由下方产物存在性自检兜底拒绝。
+    const bare = spawnSync(candidate, ['-e', 'process.exit(0)'], {
+      stdio: 'ignore',
+      timeout: 15_000,
+    });
+    return bare.status === 0;
+  }
   return probe.status === 0 && probe.stdout === 'ok';
 }
 
@@ -65,11 +75,10 @@ const result = spawnSync(
     outputFile,
     '--minify',
   ],
-  { cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe'] },
+  // stdio ignore：沙箱下 pipe 会 EPERM；CLI 的产出是文件不是 stdout，
+  // 产物存在性自检兜底，无信息损失。
+  { cwd: repoRoot, stdio: 'ignore' },
 );
-
-if (result.stdout?.length) process.stdout.write(result.stdout);
-if (result.stderr?.length) process.stderr.write(result.stderr);
 
 if (result.error) {
   console.error(`[buildTailwind] spawn 失败：${result.error.message}`);
