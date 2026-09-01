@@ -82,4 +82,15 @@ export default tseslint.config(
       'unicorn/filename-case': 'off',
     },
   },
+
+  // shadcn/ui vendored components (docs/21-client-ui-stack.md D19d): kebab-case
+  // filenames are the upstream registry convention. Kept LAST on purpose:
+  // flat config is last-match-wins per rule, so this must come after the
+  // project-wide camelCase block above.
+  {
+    files: ['src/client/components/**'],
+    rules: {
+      'unicorn/filename-case': ['error', { cases: { kebabCase: true } }],
+    },
+  },
 );

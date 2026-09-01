@@ -1,0 +1,21 @@
+{
+  "$comment": "仅 CLI 参考用：本仓不跑 shadcn CLI（手动 vendoring 到 src/client/components/ui/，docs/21-client-ui-stack.md D19d）。本文件按 shadcn 标准布局记录映射关系，供人工对照与未来 CLI 接入；aliases 用仓库真实路径（rootDir=src/client，无 paths 别名）。",
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "style": "new-york",
+  "rsc": false,
+  "tsx": true,
+  "tailwind": {
+    "config": "tailwind.config.ts",
+    "css": "src/client/eteams.css",
+    "baseColor": "neutral",
+    "cssVariables": true,
+    "prefix": ""
+  },
+  "aliases": {
+    "components": "src/client/components",
+    "utils": "src/client/cn",
+    "ui": "src/client/components/ui",
+    "lib": "src/client",
+    "hooks": "src/client/hooks"
+  }
+}
