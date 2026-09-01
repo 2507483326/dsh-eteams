@@ -1,13 +1,21 @@
 /**
  * Client-side activity monitor (docs/12.4): a single polling loop over the
- * host `/eteams-api/state` route feeding a `useSyncExternalStore`
- * snapshot store. Cadence: 1s while any team exists, 5s probe when none
- * (keeps a cardless session able to discover a team created later), paused
- * while the document is hidden (docs/13.7).
+ * host `/eteams-api/state` route feeding the dva `activity` model
+ * (docs/21-client-ui-stack.md S7 / D19e). Cadence: 1s while any team exists,
+ * 5s probe when none (keeps a cardless session able to discover a team
+ * created later), paused while the document is hidden (docs/13.7).
+ *
+ * S7 快照事实源在 store/models/activity：fetch 成功 → `activity/set`（整包
+ * 替换），失败 → `activity/setError`（reducer 保留 last good 快照，只更新
+ * fetchedAt/error）。本模块不再持有模块级 state/listeners——React 订阅统一
+ * 走 useActivityState（优先 useSelector；Providerless 表面回退为直连同一
+ * 单例 store 的 useSyncExternalStore 订阅，读的是同一份 dva state）。
  *
  * @module dsh-eteams/client/monitor
  */
-import { useEffect, useSyncExternalStore } from 'react';
+import { useContext, useEffect, useSyncExternalStore } from 'react';
+import { ReactReduxContext, useSelector } from 'react-redux';
+import { getApp, type RootState } from './store/app';
 
 /** Base URL served by the host web surface. */
 export const STATE_URL = '/eteams-api/state';
@@ -130,37 +138,35 @@ export interface ActivityState {
   error: string | null;
 }
 
-const EMPTY: ActivityState = {
-  teams: [],
-  archivedTeams: [],
-  serverTime: 0,
-  fetchedAt: 0,
-  error: null,
-};
-
-let state: ActivityState = EMPTY;
-const listeners = new Set<() => void>();
-
-function publish(next: ActivityState): void {
-  state = next;
-  for (const listener of listeners) listener();
-}
-
-function subscribe(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
-
-/** React subscription over the polled activity state. */
+/**
+ * React subscription over the polled activity state（S7：快照已迁 dva，
+ * 签名与返回类型不变——card/eteamsView/teamsButton 消费方零改动）。
+ *
+ * 优先 useSelector（D19e「组件优先 useSelector」），前提是祖先树里有
+ * react-redux Provider。当前三消费方都不满足：ETeamsView 的 Provider 包在
+ * 自己 JSX 内部（其自身 hook 调用位于 Provider 之外），ETeamsCard /
+ * TeamsButton 根部尚未包 Provider（21.5.3 由各自表面步骤落地）——故回退为
+ * 直连单例 store 的 useSyncExternalStore 订阅。两条路径读同一份 dva state
+ * （同一 store、同一 activity 切片），重渲染粒度一致（切片引用变化才重
+ * 渲染）。Provider 是否在祖先树由表面根决定、组件实例一生不变，hook 调用
+ * 序恒定；待 Provider 补齐后回退分支与本 disable 可一并删除。
+ */
 export function useActivityState(): ActivityState {
+  if (useContext(ReactReduxContext) !== null) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- Provider 是否在祖先树对每个组件实例恒定（见上），调用序稳定；待 21.5.3 Provider 补齐后本 disable 随回退分支一并删除
+    return useSelector((s: RootState) => s.activity);
+  }
+  const store = getApp().store;
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- 同上：本分支只在 Providerless 表面（card/teamsButton/ETeamsView 自身）渲染时触达，实例一生恒定
   return useSyncExternalStore(
-    subscribe,
-    () => state,
-    () => EMPTY,
+    store.subscribe,
+    () => store.getState().activity,
+    () => store.getState().activity,
   );
 }
 
 async function fetchState(): Promise<void> {
+  const { store } = getApp();
   try {
     const res = await fetch(STATE_URL, { cache: 'no-store' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -169,16 +175,24 @@ async function fetchState(): Promise<void> {
       archivedTeams?: ActivityState['archivedTeams'];
       serverTime?: number;
     };
-    publish({
-      teams: body.teams ?? [],
-      archivedTeams: body.archivedTeams ?? [],
-      serverTime: body.serverTime ?? Date.now(),
-      fetchedAt: Date.now(),
-      error: null,
+    store.dispatch({
+      type: 'activity/set',
+      payload: {
+        teams: body.teams ?? [],
+        archivedTeams: body.archivedTeams ?? [],
+        serverTime: body.serverTime ?? Date.now(),
+        fetchedAt: Date.now(),
+        error: null,
+      },
     });
   } catch (error) {
     // Keep the last good snapshot; surface the failure for the panel footer.
-    publish({ ...state, fetchedAt: Date.now(), error: String(error) });
+    // S7：只 dispatch 失败面（fetchedAt/error）——teams 等旧值由 setError
+    // reducer 原样保留（对齐迁移前 publish({ ...state, fetchedAt, error })）。
+    store.dispatch({
+      type: 'activity/setError',
+      payload: { fetchedAt: Date.now(), error: String(error) },
+    });
   }
 }
 
@@ -204,7 +218,8 @@ export function useActivityMonitor(): ActivityState {
       };
       const delay = (): number => {
         if (typeof document !== 'undefined' && document.hidden) return PROBE_MS * 4;
-        return state.teams.length > 0 ? POLL_MS : PROBE_MS;
+        // S7：模块级 state 已删——从 dva store 读活跃团队数，节拍语义不变。
+        return getApp().store.getState().activity.teams.length > 0 ? POLL_MS : PROBE_MS;
       };
       const schedule = (): void => {
         if (timer !== undefined) clearTimeout(timer);
