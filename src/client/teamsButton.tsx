@@ -54,7 +54,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { Provider } from 'react-redux';
-import { Button, writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives';
+import { writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives';
 import { ADD_PEOPLE_TEMPLATE, prefillComposer } from './addPeople';
 import { PHASE_LABELS } from './phaseLabels';
 import { ClientErrorBoundary, recordClientDiag } from './diagnostics';
@@ -70,7 +70,9 @@ import { useActivityMonitor } from './monitor';
 import { getApp } from './store/app';
 import { Avatar } from './avatar';
 import { cn } from './cn';
+import { Button } from './components/ui/button';
 import { Card } from './components/ui/card';
+import { Tabs, TabsList, TabsTrigger } from './components/ui/tabs';
 
 /**
  * Owner share of the input-region slots (`InputZone`): the conversation
@@ -397,21 +399,11 @@ const HINT_CLASS = 'px-2.5 pb-0.5 pt-1.5 text-[11px] leading-normal text-muted-f
  layer-1 与原 T.surface/T.text 同一宿主变量）；边框沿用原 l1 档（shadcn
  --border 桥 l2，任意值直引保持视觉）；阴影逐字保留原 T.shadow。 */
 const POPUP_BORDER_CLASS = 'border-[color:var(--dsw-alias-border-l1,rgba(100,116,139,0.14))]';
-const TAB_HEADER_CLASS = `flex gap-0.5 border-b border-solid bg-card p-1.5 ${POPUP_BORDER_CLASS}`;
 const LIST_CLASS = 'flex max-h-[260px] flex-col gap-0.5 overflow-x-hidden overflow-y-auto p-1.5';
 const FOOTER_CLASS = `flex border-t border-solid p-1.5 ${POPUP_BORDER_CLASS}`;
-const ACTION_CLASS =
-  'flex-1 cursor-pointer rounded-[8px] border border-dashed bg-transparent px-2 py-1.5 text-center text-xs font-medium leading-[18px] text-primary [font-family:inherit]';
-
-/* Tab 按钮（原 S.tabBtn）：active/idle 两态都是完整字面量映射（无拼接）。
-active 的内嵌 1px 描边用 inset shadow 任意值（原 boxShadow 迁移）。 */
-const tabBtnClass = (active: boolean): string =>
-  cn(
-    'flex-1 cursor-pointer rounded-[8px] border-none px-2 py-[5px] text-center text-xs leading-[18px]',
-    active
-      ? 'bg-background font-semibold text-primary shadow-[inset_0_0_0_1px_var(--dsw-alias-border-l1,rgba(100,116,139,0.14))]'
-      : 'bg-transparent font-medium text-[color:var(--dsw-alias-label-secondary,#475569)]',
-  );
+/* docs/23 S23-4：原 TAB_HEADER_CLASS/tabBtnClass（手写 tab 头）迁移 shadcn
+   Tabs 分段控件、原 ACTION_CLASS（虚线新增钮）迁移 shadcn Button outline
+   dashed 档——常量删除，使用位内联。 */
 
 /* 按钮选中面（原 S.faceName/S.teamChip 与 `.eteams-teams-clear` 迁移）：
 清除钮 16×16、默认隐藏、hover 按钮时显形（`group-hover` 搭配触发钮上的
@@ -561,114 +553,139 @@ function TeamsPopup(props: {
         )}
         style={pos ?? undefined}
       >
-        <div className={TAB_HEADER_CLASS}>
-          <button
-            type="button"
-            className={tabBtnClass(tab === 'team')}
-            onClick={() => setTab('team')}
+        {/* docs/23 S23-4：tab 头迁 shadcn Tabs（分段控件；触发器紧凑档 +
+            激活态 DSW 蓝文字签名）；内容区/底栏为 Tabs 根下受控切换的面。 */}
+        <Tabs
+          value={tab}
+          onValueChange={(v) => setTab(v === 'member' ? 'member' : 'team')}
+          className="flex min-h-0 flex-1 flex-col"
+        >
+          <TabsList
+            className={cn(
+              'h-auto w-full justify-stretch gap-0.5 border-b border-solid bg-card p-1.5',
+              POPUP_BORDER_CLASS,
+            )}
           >
-            团队{teams.length > 0 ? ` · ${teams.length}` : ''}
-          </button>
-          <button
-            type="button"
-            className={tabBtnClass(tab === 'member')}
-            onClick={() => setTab('member')}
-          >
-            角色{roster !== null && roster.length > 0 ? ` · ${roster.length}` : ''}
-          </button>
-        </div>
+            <TabsTrigger
+              value="team"
+              className="flex-1 rounded-[8px] px-2 py-[5px] text-xs font-medium leading-[18px] data-[state=active]:font-semibold data-[state=active]:text-primary"
+            >
+              团队{teams.length > 0 ? ` · ${teams.length}` : ''}
+            </TabsTrigger>
+            <TabsTrigger
+              value="member"
+              className="flex-1 rounded-[8px] px-2 py-[5px] text-xs font-medium leading-[18px] data-[state=active]:font-semibold data-[state=active]:text-primary"
+            >
+              角色{roster !== null && roster.length > 0 ? ` · ${roster.length}` : ''}
+            </TabsTrigger>
+          </TabsList>
 
-        <div className={LIST_CLASS}>
-          {tab === 'team' ? (
-            teams.length === 0 ? (
-              <div className={EMPTY_CLASS}>
-                {state.error !== null
-                  ? `状态加载失败：${state.error}`
-                  : '还没有团队——点下方「新增团队」创建。'}
-              </div>
+          <div className={LIST_CLASS}>
+            {tab === 'team' ? (
+              teams.length === 0 ? (
+                <div className={EMPTY_CLASS}>
+                  {state.error !== null
+                    ? `状态加载失败：${state.error}`
+                    : '还没有团队——点下方「新增团队」创建。'}
+                </div>
+              ) : (
+                teams.map((t) => {
+                  const isTeamSelected = selectedTeam?.teamId === t.teamId;
+                  return (
+                    <button
+                      key={t.teamId}
+                      type="button"
+                      className={ROW_CLASS}
+                      data-selected={isTeamSelected ? 'true' : undefined}
+                      onClick={() => onSelectTeam({ teamId: t.teamId, name: t.name })}
+                      // Static title（防闪烁）：切换选中时 title 不变，原生 tooltip
+                      // 不会在指针下重弹。
+                      title={`${t.name} · ${t.goal}`}
+                    >
+                      <span className={ROW_NAME_CLASS}>{t.name}</span>
+                      {isTeamSelected ? (
+                        <span className={ROW_META_CLASS}>已选</span>
+                      ) : (
+                        <span className={ROW_META_CLASS}>
+                          {PHASE_LABELS[t.phase] ?? t.phase} · {t.progress.completed}/
+                          {t.progress.total}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })
+              )
+            ) : roster === null ? (
+              <div className={EMPTY_CLASS}>角色库加载中…</div>
+            ) : roster.length === 0 ? (
+              <div className={EMPTY_CLASS}>角色库为空——点下方「新增角色」创建。</div>
             ) : (
-              teams.map((t) => {
-                const isTeamSelected = selectedTeam?.teamId === t.teamId;
+              roster.map((m) => {
+                const isSelected = selectedMember?.name === m.name;
                 return (
                   <button
-                    key={t.teamId}
+                    key={m.name}
                     type="button"
                     className={ROW_CLASS}
-                    data-selected={isTeamSelected ? 'true' : undefined}
-                    onClick={() => onSelectTeam({ teamId: t.teamId, name: t.name })}
-                    // Static title（防闪烁）：切换选中时 title 不变，原生 tooltip
-                    // 不会在指针下重弹。
-                    title={`${t.name} · ${t.goal}`}
+                    data-selected={isSelected ? 'true' : undefined}
+                    onClick={() => onSelectMember(m)}
+                    // Static title（防闪烁）：title 随选中变化会让原生 tooltip
+                    // 在指针下重弹一次；角色不再展示标签，名字即身份。
+                    title={`${m.name}（点击选中/取消，对话将以该角色输出）`}
                   >
-                    <span className={ROW_NAME_CLASS}>{t.name}</span>
-                    {isTeamSelected ? (
-                      <span className={ROW_META_CLASS}>已选</span>
-                    ) : (
-                      <span className={ROW_META_CLASS}>
-                        {PHASE_LABELS[t.phase] ?? t.phase} · {t.progress.completed}/
-                        {t.progress.total}
-                      </span>
-                    )}
+                    <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={22} />
+                    <span className={ROW_NAME_CLASS}>{m.name}</span>
+                    {isSelected && <span className={ROW_META_CLASS}>已选</span>}
                   </button>
                 );
               })
-            )
-          ) : roster === null ? (
-            <div className={EMPTY_CLASS}>角色库加载中…</div>
-          ) : roster.length === 0 ? (
-            <div className={EMPTY_CLASS}>角色库为空——点下方「新增角色」创建。</div>
-          ) : (
-            roster.map((m) => {
-              const isSelected = selectedMember?.name === m.name;
-              return (
-                <button
-                  key={m.name}
-                  type="button"
-                  className={ROW_CLASS}
-                  data-selected={isSelected ? 'true' : undefined}
-                  onClick={() => onSelectMember(m)}
-                  // Static title（防闪烁）：title 随选中变化会让原生 tooltip
-                  // 在指针下重弹一次；角色不再展示标签，名字即身份。
-                  title={`${m.name}（点击选中/取消，对话将以该角色输出）`}
-                >
-                  <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={22} />
-                  <span className={ROW_NAME_CLASS}>{m.name}</span>
-                  {isSelected && <span className={ROW_META_CLASS}>已选</span>}
-                </button>
-              );
-            })
-          )}
-          {tab === 'member' && rosterError && (
-            <div className={ERR_CLASS}>角色库加载失败（稍后重试）</div>
-          )}
-          {tab === 'member' && props.personaError !== null && props.personaError !== undefined && (
-            <div className={ERR_CLASS}>
-              角色接管失败：{props.personaError}——重启 DeepSeek 后重试。
-            </div>
-          )}
-          {tab === 'member' &&
-            selectedMember !== null &&
-            (props.personaError === null || props.personaError === undefined) && (
+            )}
+            {tab === 'member' && rosterError && (
+              <div className={ERR_CLASS}>角色库加载失败（稍后重试）</div>
+            )}
+            {tab === 'member' &&
+              props.personaError !== null &&
+              props.personaError !== undefined && (
+                <div className={ERR_CLASS}>
+                  角色接管失败：{props.personaError}——重启 DeepSeek 后重试。
+                </div>
+              )}
+            {tab === 'member' &&
+              selectedMember !== null &&
+              (props.personaError === null || props.personaError === undefined) && (
+                <div className={HINT_CLASS}>
+                  对话将以「{selectedMember.name}」的角色输出（再次点击该角色可取消）。
+                </div>
+              )}
+            {tab === 'team' && selectedTeam !== null && (
               <div className={HINT_CLASS}>
-                对话将以「{selectedMember.name}」的角色输出（再次点击该角色可取消）。
+                已选「{selectedTeam.name}」（再次点击该团队可取消）。
               </div>
             )}
-          {tab === 'team' && selectedTeam !== null && (
-            <div className={HINT_CLASS}>已选「{selectedTeam.name}」（再次点击该团队可取消）。</div>
-          )}
-        </div>
+          </div>
 
-        <div className={FOOTER_CLASS}>
-          {tab === 'team' ? (
-            <button type="button" className={ACTION_CLASS} onClick={addTeam}>
-              ＋ 新增团队
-            </button>
-          ) : (
-            <button type="button" className={ACTION_CLASS} onClick={addMember}>
-              ＋ 新增角色
-            </button>
-          )}
-        </div>
+          <div className={FOOTER_CLASS}>
+            {tab === 'team' ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full rounded-[8px] border-dashed text-xs font-medium text-primary"
+                onClick={addTeam}
+              >
+                ＋ 新增团队
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full rounded-[8px] border-dashed text-xs font-medium text-primary"
+                onClick={addMember}
+              >
+                ＋ 新增角色
+              </Button>
+            )}
+          </div>
+        </Tabs>
       </Card>
     </div>
   );

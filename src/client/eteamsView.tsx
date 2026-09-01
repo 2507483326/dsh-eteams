@@ -48,14 +48,7 @@
  *
  * @module dsh-eteams/client/eteamsView
  */
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
 import {
   IconCheckOutline16,
@@ -1072,9 +1065,7 @@ function TeamTab({
                   <Progress
                     className="mb-0 h-1.5"
                     value={
-                      t.progress.total === 0
-                        ? 0
-                        : (t.progress.completed / t.progress.total) * 100
+                      t.progress.total === 0 ? 0 : (t.progress.completed / t.progress.total) * 100
                     }
                   />
                 </div>
@@ -1522,12 +1513,7 @@ function HandbookEditor({
           </Button>
         ) : (
           <>
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={saving}
-              onClick={() => setDraft(null)}
-            >
+            <Button size="sm" variant="ghost" disabled={saving} onClick={() => setDraft(null)}>
               取消
             </Button>
             <Button size="sm" disabled={saving} onClick={save}>
@@ -2066,7 +2052,12 @@ function MembersTab({
                   <IconPlusOutline16 />
                   确认入库
                 </Button>
-                <Button size="sm" variant="secondary" disabled={confirming} onClick={() => void abandon()}>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={confirming}
+                  onClick={() => void abandon()}
+                >
                   放弃
                 </Button>
                 <span className={MUTED_CLASS}>也可以在对话里继续调整，这里会跟着刷新。</span>
@@ -2222,7 +2213,13 @@ function MembersTab({
     return (
       // 版式：详情列不再限宽（用户要求解除固定宽度），面板全宽利用
       <div>
-        <Button type="button" variant="outline" size="sm" className="text-[12px]" onClick={() => setView('list')}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="text-[12px]"
+          onClick={() => setView('list')}
+        >
           ← 返回角色列表
         </Button>
         <Card className={cn(PANEL_CARD_CLASS, 'mt-2 px-[18px] py-4')}>
