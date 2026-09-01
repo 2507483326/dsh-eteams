@@ -14,7 +14,7 @@ export const ETEAMS_TAB_LABEL = '团队';
  * Mark root elements of eteams-owned DOM so the bridge (and future panel
  * code) can exclude its own widgets when hunting for host-rendered chrome.
  */
-export const ETEAMS_DATA_ATTR = 'data-eteams';
+const ETEAMS_DATA_ATTR = 'data-eteams';
 
 /** Selectors whose subtrees must never be treated as the view tab. */
 const EXCLUDED_ANCESTORS = `[${ETEAMS_DATA_ATTR}],[role="menu"],[role="dialog"],[role="listbox"]`;

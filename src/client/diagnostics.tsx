@@ -22,7 +22,7 @@ import { PLUGIN_VERSION_LABEL } from './versionLabel';
 const CLIENT_LOG_URL = '/eteams-api/client-log';
 
 /** One captured client-side event. */
-export interface ClientDiagEntry {
+interface ClientDiagEntry {
   at: number;
   kind: string;
   message: string;
@@ -69,11 +69,6 @@ async function flush(): Promise<void> {
   } catch {
     // Host unreachable (webless profile or shutdown): entries stay local only.
   }
-}
-
-/** Current ring buffer (for the panel's self-diagnostics view). */
-export function clientDiagEntries(): ClientDiagEntry[] {
-  return entries.slice();
 }
 
 /**

@@ -82,7 +82,7 @@ export function enterTeamsPanel(opts: TeamsPanelOptions = {}): void {
  * screen where the host view ring does not render. The root is kept for the
  * page lifetime; closing just renders null.
  */
-export function openTeamsOverlay(): void {
+function openTeamsOverlay(): void {
   if (typeof document === 'undefined') return;
   try {
     if (overlayContainer === null) {

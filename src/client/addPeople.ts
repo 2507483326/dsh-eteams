@@ -11,19 +11,11 @@
 export const ADD_PEOPLE_COMMAND = 'eteam';
 
 /**
- * The model-visible activation prefix (no slash) — the /eteam command
- * handler steers exactly this; plain-text messages with this prefix route
- * identically (docs/19.4).
- */
-export const ADD_PEOPLE_PREFIX = 'eTeam --add-people';
-
-/**
  * Full prefill template with user-visible placeholders (docs/19.4): starts
  * with the registered slash command so the composer command menu/dispatch
  * picks it up.
  */
-export const ADD_PEOPLE_TEMPLATE =
-  `/${ADD_PEOPLE_COMMAND} --add-people 我需要创建一个成员 【成员名称】，它的职责是【职责】。`;
+export const ADD_PEOPLE_TEMPLATE = `/${ADD_PEOPLE_COMMAND} --add-people 我需要创建一个成员 【成员名称】，它的职责是【职责】。`;
 
 /** Outcome of one prefill attempt (docs/19.7.1). */
 export type PrefillOutcome = 'set' | 'copied' | 'aborted';
@@ -78,10 +70,7 @@ export function prefillComposer(
   window.setTimeout(() => {
     if (!composerDraft().startsWith(`/${ADD_PEOPLE_COMMAND} `)) {
       withComposerTextarea((el) => {
-        const setter = Object.getOwnPropertyDescriptor(
-          HTMLTextAreaElement.prototype,
-          'value',
-        )?.set;
+        const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
         if (setter === undefined) return;
         setter.call(el, ADD_PEOPLE_TEMPLATE);
         el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -92,7 +81,7 @@ export function prefillComposer(
 }
 
 /** Best-effort composer access: the last visible textarea is the composer. */
-export function withComposerTextarea(fn: (el: HTMLTextAreaElement) => void): void {
+function withComposerTextarea(fn: (el: HTMLTextAreaElement) => void): void {
   try {
     const visible = Array.from(document.querySelectorAll<HTMLTextAreaElement>('textarea')).filter(
       (el) => el.offsetParent !== null,
@@ -105,7 +94,7 @@ export function withComposerTextarea(fn: (el: HTMLTextAreaElement) => void): voi
 }
 
 /** Best-effort read of the composer draft (override-confirm guard). */
-export function composerDraft(): string {
+function composerDraft(): string {
   let value = '';
   withComposerTextarea((el) => {
     value = el.value;

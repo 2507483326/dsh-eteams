@@ -118,8 +118,3 @@ export function reportFailedMail(
 export function declineMail(task: TaskRecord, member: string, reason: string): string {
   return `【婉拒】${member} 无法接取任务 ${task.id} ${task.subject}：${reason}\n任务已回到就绪池，请改派或调整合同。`;
 }
-
-/** Generic notice body (state changes, plan readiness, suspension…). */
-export function noticeMail(content: string): string {
-  return `【通知】${content}`;
-}

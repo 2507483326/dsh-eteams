@@ -27,6 +27,7 @@
 | 17 | [17 风险与开放问题](17-risks.md) | 已识别风险、缓解措施与待定事项 |
 | 18 | [18 Cordis 运行时契约](18-cordis-contract.md) | 官方 cordis 教程（生命周期/服务/事件/配置）提炼 + 本仓库强制契约（路由命名空间、客户端服务门禁、schema DSL）与事故复盘 |
 | 19 | [19 对话式新增成员与角色构建师](19-role-builder-add-people.md) | 点「新增成员」→ 对话框预填 `eTeam --add-people …` → 预置成员「角色构建师」访谈构建人设并入库（D18） |
+| 20 | [21 客户端 UI 栈升级](21-client-ui-stack.md) | 引入 Tailwind CSS 3.4 + shadcn/ui + dva-core：构建管线、作用域与主题桥、状态拓扑与分步迁移计划（D19） |
 
 ## 决策记录（2026-02 与用户确认）
 
@@ -52,6 +53,7 @@
 | D16 | 成员库 | **工作区级成员库**（2026-08-28 增补）：用户/领队按名 upsert 成员定义（D13 人设框架 + 可选模型路线），存 `.eteams/roster.json`；各团队添加成员时按名引用并**复制**人设进团队（团队副本独立修改，成员库重 upsert 全局升级）；面板「新建团队 / 添加成员」直达（12.3 已实现首切片） |
 | D17 | 角色模板与领队人设 | **引入 agency-agents-zh 五角色**（2026-08-28，holden-cpu/agency-agents-zh，MIT）：成员模板新增 前端开发者 / 后端架构师 / UI 设计师 / 趣味注入师（duty/skills/style 蒸馏，键即中文角色名）；领队人设采用**项目牧羊人**风味（透明直白、带方案上报、分层沟通、风险前置），领队固定纪律段（FR-37/FR-36/D11 等）原样保留 |
 | D18 | 对话式新增成员 | **一键预填 + 角色构建师直调 + 实时构建 + 确认入库**（2026-08-28 增补，详见 [19](19-role-builder-add-people.md)）：面板「新增成员」无表单一键经 `inputActions.setDraft` 预填 `eTeam --add-people 我需要创建一个成员 【成员名称】，它的职责是【职责】。`；用户**在对话中**补全后发送，主会话智能体见前缀**当轮切换角色构建师身份直接处理**（不经领队、不派生子代理——成员库是工作区级能力，领队只在团队中起作用）；构建经 `eteams_build_report` 根工具 + `.eteams/rolebuilder.json`（单活动槽）+ GET 轮询**实时呈现**在面板构建工作台（自动跳转）；完成后进入待确认，用户**修改后点「确认入库」**（POST /rolebuilder/confirm，宿主落库 roster + 状态翻转；对话明确确认为辅路径）——**确认前零落库**；角色构建师人设以成员库预置条目为单一事实源，常驻段 `eteams-role-builder` 注入直调契约，可删除、自愈恢复 |
+| D19 | 客户端 UI 栈升级 | **引入 Tailwind CSS 3.4（v3-lts）+ shadcn/ui（new-york 手动 vendoring）+ dva-core（+ react-redux 8）**（详见 [21](21-client-ui-stack.md)）：单文件 envelope 约束下 Tailwind 走「CLI 预构建 → 字符串内联 → 运行时幂等注入」；`.eteams-ui` 作用域 + preflight 关闭防宿主污染；shadcn token 直接别名宿主 `--dsw-alias-*` 变量（亮暗零 JS 跟随）；dva 单例 app + Provider 包表面根；迁移小步快跑（S0–S15 每步四绿门 + 提交），完成后统一审核（R1）与终验（R3） |
 
 ## 术语速查
 

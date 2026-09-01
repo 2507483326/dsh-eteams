@@ -12,12 +12,20 @@ import type { Store } from 'redux';
 import { recordClientDiag } from '../diagnostics';
 import type { ActivityState } from '../monitor';
 import { models } from './models';
+import type { BuildState } from './models/build';
+import type { RosterState } from './models/roster';
 import type { UiState } from './models/ui';
 
-/** 面板全局 state 拓扑（D19e）：activity/ui 两个 model + dva 内部键。 */
+/**
+ * 面板全局 state 拓扑（D19e）：四个 model + dva 内部键。S15 收口——
+ * roster/build 类型补齐（S10 曾在 eteamsView 以 PanelRootState 局部扩展，
+ * 类型并拢后该别名已删除）。
+ */
 export interface RootState {
   activity: ActivityState;
   ui: UiState;
+  roster: RosterState;
+  build: BuildState;
   '@@dva': unknown;
 }
 

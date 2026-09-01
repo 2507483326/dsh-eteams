@@ -1,9 +1,8 @@
 /**
- * Process-local async mutexes (docs/09.3): per-team serialization and the
- * per-captain one-active-team constraint. Locks are keyed promise chains —
- * no cross-process file locking (single-writer assumption, NFR-03). Tails
- * are retained per key (bounded by the number of teams/captains ever seen
- * in this process); a throwing fn never poisons the chain.
+ * Process-local async mutexes (docs/09.3): per-team serialization. Locks are
+ * keyed promise chains — no cross-process file locking (single-writer
+ * assumption, NFR-03). Tails are retained per key (bounded by the number of
+ * teams ever seen in this process); a throwing fn never poisons the chain.
  *
  * @module dsh-eteams/state/lock
  */
@@ -14,7 +13,7 @@ export class LockMap {
 
   /**
    * Run `fn` while holding the lock for `key`; concurrent callers queue FIFO.
-   * @param key - lock key (`team:<root>:<id>` / `captain:<root>:<sessionId>`).
+   * @param key - lock key (`team:<root>:<id>`).
    * @param fn - the critical section.
    */
   async withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
@@ -48,9 +47,4 @@ export const locks = new LockMap();
 /** Per-team serialization key (docs/09.3). */
 export function teamLockKey(stateRoot: string, teamId: string): string {
   return `team:${stateRoot}:${teamId}`;
-}
-
-/** Per-captain key enforcing one active team per captain session. */
-export function captainLockKey(stateRoot: string, captainSessionId: string): string {
-  return `captain:${stateRoot}:${captainSessionId}`;
 }

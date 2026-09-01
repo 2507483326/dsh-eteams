@@ -9,7 +9,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session';
 import type { ETeamsResolvedConfig } from '../config.js';
 import type { Actor, MemberRecord, TeamState } from '../model/types.js';
 import { locks } from '../state/lock.js';
-import { readTeamSync, teamDir } from '../state/store.js';
+import { teamDir } from '../state/store.js';
 
 /** Minimal logger face (cordis logger satisfies it; verify fakes its own). */
 export interface RuntimeLogger {
@@ -54,9 +54,7 @@ export interface RuntimeContext {
     ): Promise<unknown>;
     interrupt(
       target: SessionId,
-      authority:
-        | { kind: 'user'; parentSessionId: SessionId }
-        | { kind: 'ancestor'; agent: Agent },
+      authority: { kind: 'user'; parentSessionId: SessionId } | { kind: 'ancestor'; agent: Agent },
     ): void;
     /**
      * Runtime-version-gated recycling APIs (docs/20.2.2): present on newer
@@ -68,10 +66,7 @@ export interface RuntimeContext {
     /** Close admission below exact parents and release their descendant forests. */
     drainContinuableDescendants?(parents: readonly Agent[]): Promise<void>;
     /** Enumerate direct session-backed subagents (no Agent loading). */
-    listChildren?(
-      parentSessionId: SessionId,
-      signal?: AbortSignal,
-    ): Promise<SubagentChildEntry[]>;
+    listChildren?(parentSessionId: SessionId, signal?: AbortSignal): Promise<SubagentChildEntry[]>;
     /** Enumerate the complete descendant tree in stable pre-order. */
     listDescendants?(rootSessionId: SessionId, signal?: AbortSignal): Promise<SubagentChildEntry[]>;
   };
@@ -113,15 +108,6 @@ export class ETeamsError extends Error {
   }
 }
 
-/** Parse an AgentTeams-style identity probe of the calling agent. */
-export function agentIdentity(agent: Agent | undefined): { sessionId: string; cwd: string } {
-  if (!agent) throw new ETeamsError('无法识别调用者身份（exec.agent 缺失）');
-  const sessionId = String(agent.id ?? '');
-  if (sessionId === '') throw new ETeamsError('无法识别调用者身份（会话 id 为空）');
-  const cwd = agent.session?.header?.cwd ?? process.cwd();
-  return { sessionId, cwd };
-}
-
 /** Actor record for the captain of one team. */
 export function captainActor(_team?: TeamState): Actor {
   return { kind: 'captain', name: '领队' };
@@ -146,18 +132,12 @@ export function memberActor(member: MemberRecord): Actor {
 
 /** Plugin actor (state-machine-driven messages). */
 export const PLUGIN_ACTOR: Actor = { kind: 'plugin', name: 'dsh-eteams' };
-export const SYSTEM_ACTOR: Actor = { kind: 'system' };
 
 /** Fresh attempt token (url-safe, 24 hex chars). */
 export function generateToken(): string {
   const bytes = new Uint8Array(12);
   globalThis.crypto.getRandomValues(bytes);
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-/** Re-exported for callers that hold a team id only. */
-export function readTeamByIdSync(env: RuntimeEnv, teamId: string): TeamState | undefined {
-  return readTeamSync(stateRootOf(env), teamId);
 }
 
 /** Shared lock registry (re-export so tools/ and verify import one place). */

@@ -11,10 +11,11 @@
 | 模型侧工具 | DSH 工具注册 | `@deepseek-ai/dsh-tools`（`defineTool`）、schemastery 参数 |
 | 成员运行时 | 可续聊子代理 | `@deepseek-ai/dsh-subagent`（`startContinuable` / `followup` / `interrupt`） |
 | 客户端 | React 18 + 宿主 UI 原语 | `@deepseek-ai/dsh-client-*`（runtime / ui-conversation / ui-layout / ui-model-selection / locale / primitives / slots） |
-| 客户端状态同步 | HTTP 轮询 + 外部存储订阅 | 自建 `/plugins/dsh-eteams/*` 路由 + `useSyncExternalStore` |
+| 客户端样式 | Tailwind CSS 3.4（v3-lts）+ shadcn/ui（手动 vendoring），`.eteams-ui` 作用域（见 [3.11](#311) 与 [21](21-client-ui-stack.md)） | `tailwindcss` ~3.4.19、`clsx` + `tailwind-merge` + `class-variance-authority`、vendored `src/client/components/ui/` |
+| 客户端状态 | dva 单例 store + HTTP 轮询 | `dva-core` 2.0.4 + `react-redux` ~8.1.3 + `redux` ~4.2.1（自建 `/plugins/dsh-eteams/*` 路由供轮询） |
 | 持久化 | 本地 JSON 快照 + JSONL 事件日志 | `node:fs/promises`（无外部 DB） |
 | 头像 | vue-color-avatar（MIT）数据移植 + React SVG 渲染器 | vendored 数据 + 自研渲染器 |
-| 构建 | tsc + tsdown；客户端 CSS Modules（lightningcss） | 与参考实现同链 |
+| 构建 | tsc + tsdown；客户端单文件 CJS envelope，Tailwind 预构建 → 字符串内联 → 运行时注入（无独立 CSS 通道，见 [3.11](#311) 与 [21](21-client-ui-stack.md)） | 与参考实现同链 |
 | 测试 | vitest（单测）+ 自建 verify 脚本（离线校验）+ 手工 GUI 清单 | - |
 | 包管理/安装 | pnpm workspace 单包；`dsh plugin --profile desktop add .` | - |
 
@@ -60,7 +61,7 @@
 
 ## 3.5 客户端状态同步：轮询 + 快照路由
 
-**结论**：服务端注册 `/plugins/dsh-eteams/state` 等只读/操作路由；客户端共享一个轮询控制器（活跃团队 1s、无团队探测 5s、空闲休眠），用 `useSyncExternalStore` 订阅稳定快照。
+**结论**：服务端注册 `/plugins/dsh-eteams/state` 等只读/操作路由；客户端共享一个轮询控制器（活跃团队 1s、无团队探测 5s、空闲休眠），fetch 成功后 dispatch 进 dva 单例 store（3.11），组件经 `useSelector` 消费（轮询循环本体仍是模块级引用计数单例，S7 起与 store 解耦）。
 
 **理由**：
 - 磁盘是唯一真相（NFR-01），「读快照」模型让 UI 无需本地状态机副本，刷新/重开即恢复。
@@ -128,3 +129,31 @@
 | 图数据库 / DAG 引擎 | 依赖判断是简单拓扑计算，纯函数即可 |
 | Electron 原生 API | 插件运行在宿主进程，无需直接触达 |
 | 外部头像服务 | 离线与风格受控要求 |
+
+## 3.11 客户端 UI 栈：Tailwind CSS 3.4 + shadcn/ui + dva-core（D19，S0–S15 已落地）
+
+> 完整设计、分步施工与验收记录见 [21 客户端 UI 栈升级](21-client-ui-stack.md)；本节只沉淀选型结论与理由。
+
+**结论**（2026-09，决策记录 D19）：
+
+- **样式**：Tailwind CSS **v3-lts（~3.4.19）**，CLI 预构建（`scripts/buildTailwind.mjs` → `lib/tailwind.gen.css`，gitignored）→ tsdown 虚拟模块字符串内联（id 不以 `.css` 结尾，规避 css-guard）→ 运行时 `ensureEteamsStyles()` 幂等注入 `<style data-dsh-eteams-tw>`。`corePlugins.preflight: false` + `important: '.eteams-ui'` 双向隔离；每个 React 表面根挂 `eteams-ui` 字面量类。
+- **组件**：shadcn/ui **new-york 手动 vendoring** 到 `src/client/components/ui/`（registry JSON 源码拷入、相对导入改 `cn`、`verbatimModuleSyntax` 规整、目录 kebab-case ESLint override）。已落库：button/badge/card/input/textarea/separator/skeleton（S4）、dialog + 自管 portal 容器 + lucide-react（S13，按需）。
+- **状态**：**dva-core 2.0.4 单例 app**（create → models 启动前全量注册 → `start()` 恰一次 → `app._store`）+ `react-redux ~8.1.3` `Provider` 包各表面根；models：activity（轮询快照）/ ui（导航、选择、抽屉）/ roster / build（副作用 takeLatest）。
+
+**理由**：
+
+- Tailwind 锁 v3 而非 v4：v3 产物不含 `@layer`（构建期平铺），字符串注入宿主页无级联层风险；v4 工具类包在 `@layer utilities` 里，宿主任意未分层 CSS 都会压过它。CLI 路线仅需 `tailwindcss` 一个 devDep，与既有虚拟模块手法零冲突。
+- 主题桥用「变量别名直引」：宿主 `--dsw-alias-*` 变量是**完整色值**（非 HSL 通道），shadcn 经典 `hsl(var(--x))` 方案不可用；token 禁 `/alpha` 修饰，半透明走 `color-mix()`（badge hover 实证）。亮暗跟随零 JS。
+- shadcn 手动 vendoring 而非 CLI：本仓 `rootDir=src/client` 无 paths 别名，CLI 依赖标准布局；registry JSON 含完整源码，拷入更直接、可控。
+- dva-core 而非 dva 本体：dva 2.4.1 捆绑 react-router/history（面向完整应用），dva-core 无 react 耦合、model（state/reducers/effects/subscriptions）完整保留。2.0.4 是唯一正式版：无 `app.getStore()`（官方用法 `app._store`）、不随包 `.d.ts`（自写 `dvaCore.d.ts`）、redux-saga 0.16（effects 只用 takeLatest/takeEvery/put/call/select 经典面）。
+- react-redux 锁 8 而非 9：9.x peer 要求 redux ^5，与 dva-core 的 redux 4.x peer 冲突；8.1.3 基于 useSyncExternalStore，React 18 并发无 tearing。redux 显式锁 ~4.2.1 防 pnpm 自动升 5。
+
+**备选（放弃）**：
+
+- *Tailwind v4（CSS-first + @tailwindcss/cli）*：级联层硬伤（见上），文档基线也不同。
+- *shadcn CLI 安装*：标准布局/别名解析不满足，见上。
+- *PostCSS 管线*：仅 PostCSS 路线需要 postcss/autoprefixer，CLI 路线免。
+- *dva 本体 / zustand / jotai / 纯 useReducer*：dva 本体带路由捆绑；轻量 store 方案缺 effects 中枢与 subscription 面，跨表面（card/teamsButton/eteamsView 三处共享轮询快照）迁移成本更高。
+- *react-redux 9*：peer 冲突，见上。
+
+**代价与兜底**：devDeps 全量打进单文件 envelope（每步记录体积，终态见 [21 附录 C](21-client-ui-stack.md)；token 色禁 `/alpha`、动态类名必须完整字面量映射表（content 扫描是正则提取，拼接类名静默缺失）；Radix 浮层 portal 收编进自管 `.eteams-ui-portal` 容器；降级路径（conversationEvents 缺失时 card 降级、webless 跳过、ClientErrorBoundary 包裹）不变。

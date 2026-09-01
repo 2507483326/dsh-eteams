@@ -18,7 +18,7 @@ import { ReactReduxContext, useSelector } from 'react-redux';
 import { getApp, type RootState } from './store/app';
 
 /** Base URL served by the host web surface. */
-export const STATE_URL = '/eteams-api/state';
+const STATE_URL = '/eteams-api/state';
 
 /** Live cadence while teams exist (docs/15.6 DoD: ≤1s reflection). */
 const POLL_MS = 1000;

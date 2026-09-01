@@ -48,8 +48,3 @@ export function memberWelcome(team: TeamState, member: MemberRecord): string {
     '任务详情用 eteams_task_board 查看；任务文档位于 teams 目录下对应任务文件夹。现在等待第一条指派。',
   ].join('\n');
 }
-
-/** Short wake header for followup deliveries (persona digest per D13). */
-export function memberWakeHeader(team: TeamState, member: MemberRecord): string {
-  return `${personaDigest(member.persona, member.name)}\n【团队】${team.name}（${team.phase}）`;
-}

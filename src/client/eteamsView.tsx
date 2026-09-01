@@ -9,9 +9,10 @@
  * 落地注记（沿用 S5 card 试点 / S11 模式）：
  * - D19b：本面板注册在宿主 conversation.view 槽位，宿主视图区没有
  *   `.eteams-ui` 祖先——表面根挂 `className="eteams-ui"` 字面量，工具类
- *   （后代选择器）才能生效；作用域根自身不承工具类样式，面板壳布局仍由
- *   styles.root inline 承载（content 列与余下区块留给 S14，避免加裸包裹层
- *   破坏 h-100% 高度链）。
+ *   （后代选择器）才能生效；作用域根自身不承工具类样式，面板壳布局由
+ *   styles.root inline 承载（S12 时 content 列与余下区块尚未迁移——
+ *   「不加裸包裹层破坏 h-100% 高度链」的顾虑在 S14 落锚点后解除，见
+ *   S14 注记）。
  * - preflight 已关：`border` 只产宽度，显式 `border-solid` 补边框样式；
  *   边框色沿用原 l1 档（S3 桥默认是 l2），任意值直引保持视觉（S11 先例）。
  * - D19c：语义色走 token 类（text-foreground / text-muted-foreground /
@@ -41,7 +42,8 @@
  * （宿主视图区无 .eteams-ui 祖先，内壳 h-full 只能解析到这里；S13 注记的
  * 「裸包裹层」顾虑即指此处，锚点落根后高度链与迁移前逐位等价）。styles /
  * fns / TONE_FG / TONE_BG / PILL_FG 随迁移删除（死代码清理）；PHASE_LABELS
- * 合并至 phaseLabels.ts（本文件 re-export 兼容 teamsButton 既有导入面）。
+ * 合并至 phaseLabels.ts（S15 收尾：teamsButton 直连该模块，本文件 re-export
+ * 已撤）。
  * 残余 inline 仅：进度条宽度（运行时动态）×2 与壳高度锚点 ×1。
  *
  * @module dsh-eteams/client/eteamsView
@@ -101,25 +103,7 @@ import {
   type TeamSnapshot,
 } from './monitor';
 import { getApp, type RootState } from './store/app';
-import type { BuildState } from './store/models/build';
-import type { RosterState } from './store/models/roster';
 import { PHASE_LABELS } from './phaseLabels';
-
-/**
- * S10（docs/21-client-ui-stack.md）：roster/build 两键已随 models/index.ts
- * 注册进单例 store（运行时 state 完整）；RootState 的类型收口在
- * store/app.ts（本步 inScope 之外），这里局部扩展读取面——类型并拢后
- * 本别名即可删除。
- */
-type PanelRootState = RootState & { roster: RosterState; build: BuildState };
-
-/**
- * S14（docs/21-client-ui-stack.md 21.6 死代码清理项）：团队阶段标签合并
- * 单一事实源至 phaseLabels.ts——card.tsx 与本文件的两份常量收敛；常量本体
- * 经上方 import 进入，这里 re-export 保持 teamsButton.tsx 的既有导入面
- * （`from './eteamsView'`）不变（该文件不在本步 inScope）。
- */
-export { PHASE_LABELS };
 
 /** The leader is a member too — default-joined, undeletable (用户定稿模型). */
 const LEADER_NAME = '项目牧羊人';
@@ -171,37 +155,23 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 /**
- * Design tokens — UI-Designer pass (docs/13 13.x): host theme aliases first
- * with safe fallbacks, one source of truth for the whole panel. Light/dark
- * follows the GUI because every color resolves through --dsw-alias-*.
+ * 角色/团队列表注入样式表（ROLE_LIST_CSS）消费的主题 token——S12–S14 迁移
+ * 后 inline 样式消费面已清空，S15 裁剪到注入表实际用到的 7 个键（hover/
+ * focus-within/attr 选择器仍需样式表承载，见 ROLE_LIST_CSS 注记）。
+ * 亮暗跟随 GUI：每个色值都经 --dsw-alias-* 解析。
  */
 const T = {
-  bg: 'var(--dsw-alias-bg-base, #f6f7f9)',
   surface: 'var(--dsw-alias-bg-layer-1, #ffffff)',
-  sunken: 'var(--dsw-alias-bg-layer-2, #edf0f4)',
   border: 'var(--dsw-alias-border-l1, rgba(100,116,139,0.14))',
   border2: 'var(--dsw-alias-border-l2, rgba(100,116,139,0.26))',
-  text: 'var(--dsw-alias-label-primary, #1c2430)',
-  text2: 'var(--dsw-alias-label-secondary, #47546c)',
-  text3: 'var(--dsw-alias-label-tertiary, #808da4)',
   accent: 'var(--dsw-alias-brand-primary, #4b7bec)',
   accentSoft: 'var(--dsw-alias-interactive-bg-active, rgba(75,123,236,0.12))',
-  onAccent: 'var(--dsw-alias-label-primary-foreground, #ffffff)',
-  hover: 'var(--dsw-alias-interactive-bg-hover, rgba(100,116,139,0.08))',
-  ok: 'var(--dsw-alias-state-success-primary, #15803d)',
+  err: 'var(--dsw-alias-state-error-primary, #b91c1c)',
   // ⚠️ 主题的 state-*-secondary 是实心 400 色（amber-400/green-400/red-400），
   // 不是 10% 淡色调——实心底 + 实心 fg 会同色相打架（橙字橙底不可读，用户
   // 实测）。静态色阶的 100 档才是淡底，改用之（static 不随主题翻转）。
-  okBg: 'var(--dsw-static-green-100, #e6faed)',
-  warn: 'var(--dsw-alias-state-warn-primary, #b45309)',
-  warnBg: 'var(--dsw-static-amber-100, #fef5e7)',
-  err: 'var(--dsw-alias-state-error-primary, #b91c1c)',
   errBg: 'var(--dsw-static-red-100, #fee2e2)',
-  info: 'var(--dsw-alias-state-business-primary, #1d4ed8)',
-  infoBg: 'rgba(29,78,216,0.1)',
-  shadow: '0 1px 2px rgba(15,23,42,0.05), 0 6px 18px rgba(15,23,42,0.06)',
-} as const;
-export { T };
+};
 
 /** Semantic tone — every status color flows through these five buckets. */
 type Tone = 'info' | 'ok' | 'warn' | 'err' | 'muted';
@@ -255,8 +225,8 @@ const 字面量插值，运行时动态值一律 inline style——S5/S11 既有
 const BORDER_L1_CLASS = 'border-[color:var(--dsw-alias-border-l1,rgba(100,116,139,0.14))]';
 /** 次级文字：label-secondary 无语义 token（附录 A 未桥接），任意值直引。 */
 const TEXT2_CLASS = 'text-[color:var(--dsw-alias-label-secondary,#47546c)]';
-/** 原 styles.muted（12px / 三级灰 token / overflow-wrap:anywhere），仍被
-后续批次区块使用，先以类常量复刻。 */
+/** 原 styles.muted（12px / 三级灰 token / overflow-wrap:anywhere），
+ * S12–S14 各批次区块共用的类常量。 */
 const MUTED_CLASS = 'text-[12px] leading-[1.55] text-muted-foreground [overflow-wrap:anywhere]';
 /** 原 styles.line（4px 上下距 / 13px / 行高 1.6 / 次级文字）。 */
 const LINE_CLASS = `my-1 text-[13px] leading-[1.6] ${TEXT2_CLASS}`;
@@ -595,7 +565,7 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
   const dialogMember = useSelector((s: RootState) => s.ui.dialogMember);
   // S10：成员库列表迁入 roster model——useSelector 读、refreshRoster 发
   // `roster/fetchRoster`（takeLatest 防叠）。
-  const roster = useSelector((s: PanelRootState) => s.roster.list);
+  const roster = useSelector((s: RootState) => s.roster.list);
   // 成员子代理活动点（docs/20.4 P4）：childId → running/inactive。旧运行时
   // 无 listChildren 时返回空表——面板不渲染点，不误导。
   const [agentActivity, setAgentActivity] = useState<Record<string, string>>({});
@@ -1467,7 +1437,7 @@ function MembersTab({
   // useSelector 读取，轮询照旧由 refreshBuild 发 `build/fetchBuild`；
   // 以 startedAt 为会话键去重自动跳转（用户手动离开后不反复强拉，状态
   // 再迁移才再次跳转）的侧效应搬进下方 useEffect。
-  const build = useSelector((s: PanelRootState) => s.build.session);
+  const build = useSelector((s: RootState) => s.build.session);
   const [justFilled, setJustFilled] = useState(false);
   const [draftEdit, setDraftEdit] = useState<DraftEdit>(EMPTY_EDIT);
   const [confirming, setConfirming] = useState(false);

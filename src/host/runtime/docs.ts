@@ -6,7 +6,7 @@
  *
  * @module dsh-eteams/runtime/docs
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { sanitizeKey, stationProgress, taskSlug } from '../model/taskMachine.js';
 import type { MemberRecord, TaskRecord, TeamState } from '../model/types.js';
@@ -141,20 +141,4 @@ export function renderTeamDocs(
     warn(msg);
   }
   return warnings;
-}
-
-/** Append a member note to notes.md (create-only file, append-only content). */
-export function appendTaskNote(
-  workspace: string,
-  team: TeamState,
-  task: TaskRecord,
-  member: string,
-  text: string,
-): void {
-  const file = join(taskDirAbs(workspace, team, task), 'notes.md');
-  if (!existsSync(file)) return; // notes are optional scratch; missing folder = skip silently
-  const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
-  const current = readFileSync(file, 'utf8');
-  const sep = current.endsWith('\n') ? '' : '\n';
-  writeFileSync(file, `${current}${sep}- ${stamp} ${member}：${text}\n`, 'utf8');
 }

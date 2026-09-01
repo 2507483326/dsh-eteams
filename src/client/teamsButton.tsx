@@ -55,7 +55,7 @@ import {
 import { createPortal } from 'react-dom';
 import { Button, writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives';
 import { ADD_PEOPLE_TEMPLATE, prefillComposer } from './addPeople';
-import { PHASE_LABELS } from './eteamsView';
+import { PHASE_LABELS } from './phaseLabels';
 import { ClientErrorBoundary, recordClientDiag } from './diagnostics';
 import { enterTeamsPanel } from './teamsPanel';
 import {
