@@ -12,6 +12,8 @@
  * - 追加 success / warning / business 三个变体：附录 A 扩展 token 服务既有
  *   Tone 徽标语义（「badge 变体直接消费」），纯色底 + on-saturated 前景
  *   token（与 default 变体同款模式，状态色不随亮暗换文字色）。
+ * - preflight 已关（D19b）：上游基类的 `border` 需配 `border-solid` 才渲染
+ *   边框（R1-F3，UA 默认 border-style:none）。
  *
  * S4 仅落库未接线：体积影响同 button.tsx 头注。
  *
@@ -23,7 +25,7 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '../../cn';
 
 const badgeVariants = cva(
-  'inline-flex items-center rounded-md border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+  'inline-flex items-center rounded-md border border-solid px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
   {
     variants: {
       variant: {

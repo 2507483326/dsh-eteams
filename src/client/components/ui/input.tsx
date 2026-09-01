@@ -6,6 +6,8 @@
  * - `cn` 改相对导入 `../../cn`（D19d）；
  * - 类型按 verbatimModuleSyntax / strict 规整。
  * 上游源码不含 /alpha 修饰（bg-transparent 与 token 无关），无需 color-mix 改写。
+ * - preflight 已关（D19b）：上游 `border border-input` 需配 `border-solid`
+ *   才渲染边框（R1-F3，UA 默认 border-style:none）。
  *
  * S4 仅落库未接线：体积影响同 button.tsx 头注。
  *
@@ -21,7 +23,7 @@ const Input = React.forwardRef<HTMLInputElement, React.ComponentProps<'input'>>(
       <input
         type={type}
         className={cn(
-          'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm',
+          'flex h-9 w-full rounded-md border border-solid border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm',
           className,
         )}
         ref={ref}

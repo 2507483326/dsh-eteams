@@ -16,6 +16,9 @@
  *   容器即作用域根，浮层样式/主题 token 在宿主页内照常生效；
  * - 类型按 verbatimModuleSyntax / strict 规整；"use client" 指令移除
  *   （非 Next.js 环境）。
+ * - preflight 已关（D19b）：上游 `border` 类只产 border-width、UA 默认
+ *   border-style:none 会让边框不渲染——基类显式补 `border-solid`
+ *   （R1-F3，S3 桥只补默认边框色，接线消费面无需再逐处叠类）。
  *
  * 动画类（data-[state=open]:animate-in 等）依赖 tailwindcss-animate 插件
  * （tailwind.config.ts 已挂）；bg-black/80 / z-50 等为 Tailwind 默认色阶
@@ -77,7 +80,7 @@ const DialogContent = React.forwardRef<
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        'fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg',
+        'fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border border-solid bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg',
         className,
       )}
       {...props}
