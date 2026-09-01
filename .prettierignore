@@ -8,6 +8,7 @@ docs/
 
 # Generated lockfile and tool-owned files.
 package-lock.json
+pnpm-lock.yaml
 debug.log
 
 # Bundle patch carries load-bearing comments; keep hand-formatted.

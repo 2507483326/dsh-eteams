@@ -157,6 +157,7 @@
     "@deepseek-ai/dsh-tools": "0.1.0-rc.8",
     "@deepseek-ai/dsh-workspace": "0.1.0-rc.8",
     "@deepseek-ai/schemastery": "^3.18.1",
+    "@babel/runtime": "^7.29.7",
     "@eslint/js": "^10.0.1",
     "@mdxeditor/editor": "^4.2.3",
     "@radix-ui/react-dialog": "^1.1.23",
