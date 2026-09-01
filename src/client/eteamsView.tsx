@@ -23,7 +23,7 @@ import {
   MarkdownText,
   writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives';
-import { Provider } from 'react-redux';
+import { Provider, useDispatch, useSelector } from 'react-redux';
 import { ADD_PEOPLE_TEMPLATE, prefillComposer, type PrefillOutcome } from './addPeople';
 import { Avatar } from './avatar';
 import {
@@ -66,7 +66,7 @@ import {
   type TaskView,
   type TeamSnapshot,
 } from './monitor';
-import { getApp } from './store/app';
+import { getApp, type RootState } from './store/app';
 
 const PHASE_LABELS: Record<string, string> = {
   staged: '草案',
@@ -686,11 +686,34 @@ function MemberDialog({ team, member }: { team: TeamSnapshot; member: MemberView
   );
 }
 
-/** The eteams conversation view entry — the M4.5 activity panel. */
+/**
+ * The eteams conversation view entry — the M4.5 activity panel. 表面根：
+ * Provider 包整个面板（S6/D19e），面板体在 Provider 之内消费 dva store；
+ * ClientErrorBoundary 保持面板级降级路径不变。
+ */
 export function ETeamsView(props: ConvViewProps): ReactNode {
+  return (
+    <Provider store={getApp().store}>
+      <ClientErrorBoundary label="团队面板">
+        <ETeamsViewBody {...props} />
+      </ClientErrorBoundary>
+    </Provider>
+  );
+}
+
+/**
+ * Panel body — mounted inside the Provider (see {@link ETeamsView}).
+ * S8（docs/21-client-ui-stack.md）：面板导航与团队选择迁入 ui model——
+ * tab/activeId 经 useSelector 读取（ui.activeNav / ui.selectedTeamId），变更
+ * 走 useDispatch 发 `ui/setNav` / `ui/setSelectedTeam`（goto 桥 handler 的
+ * 目标状态同样）。抽屉/对话框开关（S9 起）与输入草稿等瞬态仍留 useState。
+ */
+function ETeamsViewBody(props: ConvViewProps): ReactNode {
   const state = useActivityMonitor();
-  const [tab, setTab] = useState<'board' | 'team' | 'roster' | 'tasks' | 'reports'>('board');
-  const [activeId, setActiveId] = useState<string | null>(null);
+  const dispatch = useDispatch();
+  // 变量名沿用迁移前语义：tab=侧栏导航，activeId=当前选中团队。
+  const tab = useSelector((s: RootState) => s.ui.activeNav);
+  const activeId = useSelector((s: RootState) => s.ui.selectedTeamId);
   const [expandedTask, setExpandedTask] = useState<string | null>(null);
   const [dialogMember, setDialogMember] = useState<string | null>(null);
   const [roster, setRoster] = useState<RosterMember[]>([]);
@@ -704,24 +727,25 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
       // 已挂载路径由窗口事件处理；顺带消费 pending 标记，防止标记滞留到
       // 下一次挂载时把用户误拽回创建页（docs/19.16）。
       consumePendingGotoAdd();
-      setTab('roster');
+      dispatch({ type: 'ui/setNav', payload: 'roster' });
       setOpenAddTick((t) => t + 1);
     };
     // 「新增团队」信号：落到团队 tab（新建表单就在那里）。
     const hTeam = (): void => {
       consumePendingGotoAddTeam();
-      setTab('team');
+      dispatch({ type: 'ui/setNav', payload: 'team' });
     };
     // 「成员 tab」信号（按钮成员选中直达，docs/13.8.2）：落成员页，不带新增表单。
     const hRoster = (): void => {
       consumePendingGotoRoster();
-      setTab('roster');
+      dispatch({ type: 'ui/setNav', payload: 'roster' });
     };
     // 选中某个团队（弹层团队行点击）：board 视图随选择联动。
     const hSelect = (event?: Event): void => {
       const id =
         event === undefined ? consumePendingSelectTeam() : (event as CustomEvent<string>).detail;
-      if (typeof id === 'string' && id !== '') setActiveId(id);
+      if (typeof id === 'string' && id !== '')
+        dispatch({ type: 'ui/setSelectedTeam', payload: id });
     };
     window.addEventListener(GOTO_ADD_EVENT, h);
     window.addEventListener(GOTO_ADD_TEAM_EVENT, hTeam);
@@ -739,7 +763,7 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
       window.removeEventListener(GOTO_ROSTER_EVENT, hRoster);
       window.removeEventListener(SELECT_TEAM_EVENT, hSelect);
     };
-  }, []);
+  }, [dispatch]);
 
   const myTeams = state.teams.filter((t) => t.captainSessionId === props.sessionId);
   const pool = myTeams.length > 0 ? myTeams : state.teams;
@@ -796,81 +820,75 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
   }, [props]);
 
   return (
-    <Provider store={getApp().store}>
-      <ClientErrorBoundary label="团队面板">
-        <div style={styles.root} data-eteams="view">
-          {/* 卡片化样式（用户反馈）：角色/团队卡片与删除按钮的 hover 态一次注入，
+    <div style={styles.root} data-eteams="view">
+      {/* 卡片化样式（用户反馈）：角色/团队卡片与删除按钮的 hover 态一次注入，
         面板内与整页团队页共用同一渲染根，注入一次即可。 */}
-          <style>{ROLE_LIST_CSS}</style>
-          <div style={styles.rail}>
-            {tabs.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                style={fns.railBtn(activeTab === t.id)}
-                onClick={() => setTab(t.id)}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
+      <style>{ROLE_LIST_CSS}</style>
+      <div style={styles.rail}>
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            style={fns.railBtn(activeTab === t.id)}
+            onClick={() => dispatch({ type: 'ui/setNav', payload: t.id })}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
 
-          <div style={styles.content}>
-            {/* 顶栏（用户反馈）：团队切换改为「团队」页的卡片栅格，这里只保留
+      <div style={styles.content}>
+        {/* 顶栏（用户反馈）：团队切换改为「团队」页的卡片栅格，这里只保留
           状态加载失败的就地提示；空态兜底在 BoardTab。 */}
-            {state.error !== null && (
-              <div style={{ ...styles.formError, marginBottom: 12 }}>
-                状态加载失败：{state.error}
-              </div>
-            )}
+        {state.error !== null && (
+          <div style={{ ...styles.formError, marginBottom: 12 }}>状态加载失败：{state.error}</div>
+        )}
 
-            {activeTab === 'board' && (
-              <BoardTab team={team} now={now} fetchedAt={state.fetchedAt} error={state.error} />
-            )}
-            {activeTab === 'team' && (
-              <TeamTab
-                sessionId={props.sessionId}
-                pool={pool}
-                team={team}
-                roster={roster}
-                onSelectTeam={(id) => setActiveId(id)}
-                agentActivity={agentActivity}
-                onOpenReports={(name) => {
-                  setDialogMember(name);
-                  setTab('reports');
-                }}
-              />
-            )}
-            {activeTab === 'roster' && (
-              <MembersTab
-                members={roster}
-                pool={pool}
-                team={team}
-                onDeleted={refreshRoster}
-                onPrefillAddPeople={prefillAddPeople}
-                openAddTick={openAddTick}
-              />
-            )}
-            {activeTab === 'tasks' && team !== undefined && (
-              <TasksTab
-                team={team}
-                now={now}
-                expandedTask={expandedTask}
-                setExpandedTask={setExpandedTask}
-              />
-            )}
-            {activeTab === 'reports' && team !== undefined && (
-              <ReportsTab
-                team={team}
-                dialogMember={dialogMember}
-                setDialogMember={setDialogMember}
-                member={dialogMemberView}
-              />
-            )}
-          </div>
-        </div>
-      </ClientErrorBoundary>
-    </Provider>
+        {activeTab === 'board' && (
+          <BoardTab team={team} now={now} fetchedAt={state.fetchedAt} error={state.error} />
+        )}
+        {activeTab === 'team' && (
+          <TeamTab
+            sessionId={props.sessionId}
+            pool={pool}
+            team={team}
+            roster={roster}
+            onSelectTeam={(id) => dispatch({ type: 'ui/setSelectedTeam', payload: id })}
+            agentActivity={agentActivity}
+            onOpenReports={(name) => {
+              setDialogMember(name);
+              dispatch({ type: 'ui/setNav', payload: 'reports' });
+            }}
+          />
+        )}
+        {activeTab === 'roster' && (
+          <MembersTab
+            members={roster}
+            pool={pool}
+            team={team}
+            onDeleted={refreshRoster}
+            onPrefillAddPeople={prefillAddPeople}
+            openAddTick={openAddTick}
+          />
+        )}
+        {activeTab === 'tasks' && team !== undefined && (
+          <TasksTab
+            team={team}
+            now={now}
+            expandedTask={expandedTask}
+            setExpandedTask={setExpandedTask}
+          />
+        )}
+        {activeTab === 'reports' && team !== undefined && (
+          <ReportsTab
+            team={team}
+            dialogMember={dialogMember}
+            setDialogMember={setDialogMember}
+            member={dialogMemberView}
+          />
+        )}
+      </div>
+    </div>
   );
 }
 
