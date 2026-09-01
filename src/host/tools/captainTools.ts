@@ -7,6 +7,7 @@
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import type { ContentBlock } from '@deepseek-ai/dsh-llm';
+import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import type { Context } from '@deepseek-ai/cordis';
 import type { ETeamsResolvedConfig } from '../config.js';
 import { ETeamsError, stateRootOf, type RuntimeContext } from '../runtime/base.js';
@@ -35,18 +36,21 @@ import { listTeams, envForAgent, resolveCaller } from './identity.js';
 import { readBox } from '../runtime/notifier.js';
 import { readRoster, upsertRosterMember } from '../runtime/roster.js';
 import {
+  answerBuildInterview,
+  hasBuildSessionFile,
+  readBuildParentSession,
+  readBuildPresence,
   readBuildSession,
   reportBuildProgress,
   cancelBuildSession,
   type BuildDraft,
 } from '../runtime/roleBuilder.js';
-import { spawnBuildPhase } from '../runtime/builderPhases.js';
+import { spawnBuildPhase, spawnContinueAfterAnswers } from '../runtime/builderPhases.js';
 import { stationProgress } from '../model/taskMachine.js';
 import type { TaskRecord } from '../model/types.js';
 
 /** JSON-schema snippet helpers (literal types required by the spec union). */
-const str = (description: string) => ({ type: 'string' as const, description });
-const strR = (description: string) => ({
+const str = (description: string) => ({ type: 'string' as const, description });const strR = (description: string) => ({
   type: 'string' as const,
   description,
   required: true as const,
@@ -58,6 +62,38 @@ const strArr = (description: string, required = false) => ({
   ...(required ? { required: true as const } : {}),
 });
 const bool = (description: string) => ({ type: 'boolean' as const, description });
+
+/**
+ * 意图访谈发布去重（模块级）：同一份会话更新只 steer 一次——子代理的
+ * 每条播报都会过 build_report，只有「新访谈落地」这一刻需要唤醒主对话。
+ */
+let lastInterviewSteerKey = '';
+
+/** Steer 去重指纹：问题 id + 选项数——重复播报同一份访谈不再重复打扰；
+ * 换了问题集（真·新访谈）才再次弹窗。 */
+function interviewSteerFingerprint(questions: unknown): string {
+  const list = Array.isArray(questions) ? questions : [];
+  return list
+    .map((q) => {
+      const o = q as { id?: unknown; options?: unknown };
+      const id = typeof o.id === 'string' ? o.id : '?';
+      const n = Array.isArray(o.options) ? o.options.length : 0;
+      return `${id}#${n}`;
+    })
+    .join('|');
+}
+
+/** 构建代理发布访谈后，给主对话的唤醒文本（含问题 JSON，主代理转弹选择框）。 */
+function interviewSteerText(step: string, request: string, questions: unknown): string {
+  return [
+    `【eteams 角色构建师】后台构建代理已在「${step}」阶段发布意图访谈（成员需求：${request.slice(0, 80)}）。`,
+    '请立即用 ask_user_question 工具把下列问题逐题弹给用户选择：每问映射为 { id, question, options: [{label, description?}], multi_select: q.multi === true }，选项文案保持原样（含「（推荐）」后缀，推荐项已在首位）。',
+    '用户答完后调用 eteams_interview_answer 工具提交（answers: [{id, choice}]，choice=所选项 label，多选以「、」连接）。不要在聊天文本里复述问题，不要改写选项。',
+    '注意：构建已受理并派发，不要调用 eteams_build_dispatch 或 /eteam，不要重新开构建——你的任务只有弹问与提交答案。',
+    '问题清单 JSON：',
+    JSON.stringify(questions, null, 2),
+  ].join('\n');
+}
 
 const chainParam = () => ({
   type: 'array' as const,
@@ -368,6 +404,19 @@ export function createCaptainTools(
         description:
           '开一个全新构建（docs/19.16）：无条件覆盖现有会话（含待确认/已结束）。仅主对话构建师开启新需求时传 true；后台构建代理与普通步进播报禁止传。',
       },
+      answers: {
+        type: 'array' as const,
+        description:
+          '意图访谈答案（构建代理经 ask_user_question 拿到用户选择后用）：[{id, choice}]，与已发布问题一一对应；宿主写回会话并立即派起草阶段代理。',
+        items: {
+          type: 'object' as const,
+          properties: {
+            id: str('问题唯一 id'),
+            choice: str('所选项文案（多选以「、」连接）'),
+          },
+          additionalProperties: false,
+        },
+      },
     },
     output: {
       schema: {
@@ -394,7 +443,43 @@ export function createCaptainTools(
     },
     execute: async (args, exec) => {
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
-      const session = await reportBuildProgress(stateRootOf(env), {
+      const root = stateRootOf(env);
+      // 构建代理经 ask_user_question 拿到用户答案 → 写回会话并立即派起草
+      // 代理（父会话归属取自 parent-ref；父不在线时留待面板提交兜底）。
+      const inlineAnswers = (Array.isArray(args.answers) ? args.answers : []).filter(
+        (a): a is { id: string; choice: string } => {
+          const o = a as Record<string, unknown>;
+          return typeof o.id === 'string' && o.id !== '' && typeof o.choice === 'string' && o.choice !== '';
+        },
+      );
+      if (inlineAnswers.length > 0) {
+        const answered = await answerBuildInterview(root, inlineAnswers);
+        const parentSessionId = readBuildParentSession(root);
+        const parent =
+          parentSessionId !== null
+            ? (env.ctx as unknown as RuntimeContext).agents?.get(parentSessionId)
+            : undefined;
+        if (parent !== undefined) {
+          spawnContinueAfterAnswers({
+            ctx: env.ctx,
+            config,
+            parent,
+            stateRoot: root,
+            logger: env.ctx.logger,
+          });
+        } else {
+          env.ctx.logger.warn(
+            'eteams: inline interview answers saved but parent agent not live — continue phase deferred to panel submit',
+          );
+        }
+        return {
+          ok: true as const,
+          status: answered.status,
+          step: answered.step,
+          updatedAt: answered.updatedAt,
+        };
+      }
+      const session = await reportBuildProgress(root, {
         ...(args.status !== undefined ? { status: args.status } : {}),
         ...(args.step !== undefined ? { step: args.step } : {}),
         ...(args.stepsDone !== undefined ? { stepsDone: args.stepsDone } : {}),
@@ -406,12 +491,126 @@ export function createCaptainTools(
           : {}),
         ...(args.newBuild === true ? { newBuild: true } : {}),
       });
+      // 意图访谈落地 → 45 秒后仍无答案才唤醒父会话补弹选择框（兜底）：
+      // 首选是构建代理自己的 ask_user_question（确定性弹窗），答案一旦落
+      // 会话（代理弹成功 / 用户面板作答）本兜底自动哑火，绝不双弹窗。
+      if (session.interview !== undefined && session.interview.answers === undefined) {
+        const steerKey = `${session.startedAt}:${interviewSteerFingerprint(session.interview.questions)}`;
+        if (lastInterviewSteerKey !== steerKey) {
+          lastInterviewSteerKey = steerKey;
+          const steerTimer = setTimeout(() => {
+            const latest = readBuildSession(root);
+            if (
+              latest === null ||
+              latest.interview === undefined ||
+              latest.interview.answers !== undefined
+            ) {
+              return; // 答案已落（代理内联/面板）——兜底静默退出。
+            }
+            // 活跃会话定位（用户迭代）：客户端心跳上报「用户正在看的对话」
+            // ——在线且新鲜就优先 steer 到那里；否则退回父会话。心跳只是
+            // 优化信号，缺失/过期/查不到活代理时旧路径完全不受影响。
+            const agents = (env.ctx as unknown as RuntimeContext).agents;
+            const parentSessionId = readBuildParentSession(root);
+            let target = parentSessionId !== null ? agents?.get(parentSessionId) : undefined;
+            const presence = readBuildPresence(root);
+            if (presence !== null && presence.sessionId !== parentSessionId) {
+              const candidate = agents?.get(presence.sessionId);
+              if (candidate !== undefined) target = candidate;
+            }
+            if (target === undefined || target.id === exec.agent?.id) return;
+            try {
+              target.steer(
+                createUserMessage({
+                  content: [
+                    {
+                      type: 'text',
+                      text: interviewSteerText(
+                        latest.step,
+                        latest.request,
+                        latest.interview.questions,
+                      ),
+                    },
+                  ],
+                  source: {
+                    kind: 'plugin',
+                    plugin: 'dsh-eteams',
+                    form: 'notice',
+                    summary: '意图访谈仍待作答——请用选择框补弹',
+                  },
+                }),
+              );
+            } catch (error) {
+              env.ctx.logger.warn(
+                `eteams: interview steer to parent failed: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+              );
+            }
+          }, 45_000);
+          steerTimer.unref?.();
+        }
+      }
       return {
         ok: true as const,
         status: session.status,
         step: session.step,
         updatedAt: session.updatedAt,
       };
+    },
+  });
+
+  const interviewAnswerTool = defineTool({
+    name: 'eteams_interview_answer',
+    description:
+      '提交意图访谈答案（主对话构建师专用，docs/19.16 用户迭代）：用户经 ask_user_question 选择框作答后，把答案写入构建会话并派起草阶段代理。answers 与会话里的问题一一对应（id=问题 id，choice=所选项 label，多选以「、」连接）。',
+    parameters: {
+      answers: {
+        type: 'array' as const,
+        required: true as const,
+        description: '答案列表：[{id: 问题id, choice: 所选项文案}]',
+        items: {
+          type: 'object' as const,
+          properties: {
+            id: str('问题唯一 id'),
+            choice: str('所选项文案（多选以「、」连接）'),
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    output: {
+      schema: {
+        type: 'object' as const,
+        properties: {
+          ok: bool('是否成功'),
+          status: str('会话状态'),
+          step: str('当前步骤'),
+        },
+        additionalProperties: false as const,
+      },
+      render: (_a, v) => text(`访谈答案已提交：${v.status} · ${v.step}`),
+    },
+    execute: async (args, exec) => {
+      const env = envForAgent(config, runtime, exec.agent, exec.signal);
+      if (!exec.agent) throw new ETeamsError('无法识别调用者（exec.agent 缺失）');
+      const answers = (Array.isArray(args.answers) ? args.answers : [])
+        .filter((a): a is { id: string; choice: string } => {
+          const o = a as Record<string, unknown>;
+          return typeof o.id === 'string' && o.id !== '' && typeof o.choice === 'string' && o.choice !== '';
+        })
+        .map((a) => ({ id: a.id, choice: a.choice }));
+      if (answers.length === 0) throw new ETeamsError('answers 不能为空');
+      const session = await answerBuildInterview(stateRootOf(env), answers);
+      // 派起草代理（调用者就是主会话代理——天然的父会话归属）。
+      spawnContinueAfterAnswers({
+        ctx: env.ctx,
+        config,
+        parent: exec.agent,
+        stateRoot: stateRootOf(env),
+        logger: env.ctx.logger,
+      });
+      return { ok: true as const, status: session.status, step: session.step };
     },
   });
 
@@ -446,6 +645,14 @@ export function createCaptainTools(
           ok: true as const,
           spawned: false,
           detail: `已有成员构建在进行（${current.draft?.name || '未命名'} · ${current.step}）——请先在面板完成或放弃它`,
+        };
+      }
+      if (current === null && hasBuildSessionFile(root)) {
+        // 会话文件在但读不出（瞬时 IO 竞态）——按忙处理，宁拒不漏放。
+        return {
+          ok: true as const,
+          spawned: false,
+          detail: '构建状态正在写入，请稍候 1-2 秒重试',
         };
       }
       if (!exec.agent) throw new ETeamsError('无法识别调用者（exec.agent 缺失）');
@@ -1025,6 +1232,7 @@ export function createCaptainTools(
     memberListTool,
     buildReportTool,
     buildDispatchTool,
+    interviewAnswerTool,
     removeMemberTool,
     updateMemberTool,
     createTaskTool,

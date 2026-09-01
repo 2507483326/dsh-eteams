@@ -212,6 +212,8 @@ export interface BuildSession {
   updatedAt: number;
   /** Pending/answered intent interview (docs/19.16). */
   interview?: InterviewState;
+  /** Owning /eteam invocation id — cards match it to their own build. */
+  commandId?: string;
 }
 
 /** Poll the single build-session slot (null when no session exists). */
@@ -228,12 +230,38 @@ export async function resumeBuild(): Promise<void> {
   await requestJson(`${API_BASE}/rolebuilder/resume`, { method: 'POST' });
 }
 
+/**
+ * 活跃会话心跳（用户迭代：兜底弹窗 steer 到用户正在看的对话）：输入栏按钮
+ * 只在当前打开的对话里挂载，定期上报它所在的 sessionId；宿主记 last-writer-
+ * wins，兜底 steer 前读取定位。fire-and-forget——失败静默，心跳断了就退回
+ * 父会话路径。
+ */
+export async function reportPresence(sessionId: string): Promise<void> {
+  await requestJson(`${API_BASE}/presence`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId, ts: Date.now() }),
+  });
+}
+
 /** Submit intent-interview answers — host relays them to the builder child. */
 export async function submitInterview(answers: { id: string; choice: string }[]): Promise<void> {
   await requestJson(`${API_BASE}/rolebuilder/interview`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ answers }),
+  });
+}
+
+/**
+ * Manually restart the builder agent — spawns a fresh one-shot phase child
+ * that re-checks progress and re-publishes the interview if unanswered.
+ */
+export async function restartBuild(): Promise<void> {
+  await requestJson(`${API_BASE}/rolebuilder/restart`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({}),
   });
 }
 

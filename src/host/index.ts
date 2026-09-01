@@ -33,7 +33,12 @@ import { installMemberRuntime } from './runtime/members.js';
 import { installWebSurface, rootForWrites } from './runtime/webui.js';
 import { sessionPersonaSection, sessionIdOfScope } from './runtime/sessionPersona.js';
 import type { RuntimeContext } from './runtime/base.js';
-import { readBuildSession, reportBuildProgress, cancelBuildSession } from './runtime/roleBuilder.js';
+import {
+  hasBuildSessionFile,
+  readBuildSession,
+  reportBuildProgress,
+  cancelBuildSession,
+} from './runtime/roleBuilder.js';
 import { spawnBuildPhase } from './runtime/builderPhases.js';
 import { CAPTAIN_SECTION_SHORT } from './prompts/captain.js';
 import { composeCaptainPersona } from './prompts/persona.js';
@@ -201,99 +206,110 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
             hint: '--add-people 我需要创建一个成员 【成员名称】，它的职责是【职责】。',
             images: false,
           },
-          handler: ({ agent, rawInput }) => {
+          handler: async ({ agent, rawInput, commandId }) => {
             // 门禁 + 一次性阶段派发（docs/19.16）：已有构建进行中则不派发；
             // 否则派发阶段 A 一次性代理（开会话 → 查重 → 发布意图访谈后自然
-            // 结束）——没有任何可续聊的持久子代理被留下。卡片在子代理首次
-            // 播报后出现。派发失败退回 steer 主会话，保证流程永不哑火。
-            void (async () => {
-              let root: string | null = null;
-              try {
-                root = rootForWrites(ctx, config);
-                const current = readBuildSession(root);
-                if (
-                  current !== null &&
-                  (current.status === 'active' || current.status === 'awaiting_confirmation')
-                ) {
-                  agent.steer(
-                    createUserMessage({
-                      content: [
-                        {
-                          type: 'text',
-                          text: `已有成员构建在进行中（${current.draft?.name || '未命名'} · ${current.step}）。请到面板完成或放弃该构建后再发起新的 /eteam。`,
-                        },
-                      ],
-                      source: {
-                        kind: 'plugin',
-                        plugin: 'dsh-eteams',
-                        form: 'notice',
-                        summary: '已有构建进行中——未派发新构建',
-                      },
-                    }),
-                  );
-                  return;
-                }
-              } catch {
-                // 状态读不到时不拦：照常派发（阶段代理的 newBuild 会开新局）。
-              }
-              try {
-                const subagents = (ctx as unknown as RuntimeContext).subagents;
-                if (subagents?.start === undefined) {
-                  throw new Error('subagents 服务不可用');
-                }
-                const stateRoot = root ?? rootForWrites(ctx, config);
-                // 立即受理（docs/19.16 用户迭代）：派发前先把受理会话写上磁盘
-                // ——卡片/新增页首轮轮询即命中、自动跳转立刻发生；request 用
-                // 用户原文，子代理从磁盘读到的就是新需求（不再继承旧会话）。
-                await reportBuildProgress(stateRoot, {
-                  newBuild: true,
-                  step: '收到需求',
-                  stepsDone: ['收到需求'],
-                  request: buildActivationMessage(rawInput),
-                  note: '构建请求已受理——角色构建师启动中',
-                });
-                spawnBuildPhase({
-                  ctx: { subagents },
-                  config,
-                  parent: agent,
-                  stateRoot,
-                  kind: 'start',
-                  logger: log,
-                  onSpawnFailure: () => {
-                    // 派发被拒 → 回滚成 cancelled，别让无子代理的 active 会话
-                    // 卡住下一次 /eteam 的门禁。
-                    void cancelBuildSession(stateRoot, '构建派发失败——请重新发起 /eteam').catch(
-                      () => undefined,
-                    );
-                  },
-                });
-              } catch {
-                // 受理已落盘的场合一并回滚（pre-write 成功但同步段炸了）。
-                if (root !== null) {
-                  void cancelBuildSession(root, '构建派发失败——请重新发起 /eteam').catch(
-                    () => undefined,
-                  );
-                }
+            // 结束）——没有任何可续聊的持久子代理被留下。受理即写盘（卡片
+            // 首轮轮询即命中），commandId 写入会话供对话内卡片按构建归属。
+            // 派发失败退回 steer 主会话，保证流程永不哑火。
+            let root: string | null = null;
+            try {
+              root = rootForWrites(ctx, config);
+              const current = readBuildSession(root);
+              if (
+                current !== null &&
+                (current.status === 'active' || current.status === 'awaiting_confirmation')
+              ) {
                 agent.steer(
                   createUserMessage({
-                    content: [{ type: 'text', text: buildActivationMessage(rawInput) }],
-                    // Plugin-sourced notice: the conversation folds this user-role
-                    // message into a compact context row (not a chat bubble) while
-                    // the model still receives the full activation text (docs/19.9.5).
+                    content: [
+                      {
+                        type: 'text',
+                        text: `已有成员构建在进行中（${current.draft?.name || '未命名'} · ${current.step}）。请到面板完成或放弃该构建后再发起新的 /eteam。`,
+                      },
+                    ],
                     source: {
                       kind: 'plugin',
                       plugin: 'dsh-eteams',
                       form: 'notice',
-                      summary: '成员创建请求已提交——构建卡片与面板实时显示进度',
+                      summary: '已有构建进行中——未派发新构建',
                     },
                   }),
                 );
+                return {
+                  kind: 'success' as const,
+                  text: '已有成员构建在进行中——未派发新构建，详见上方提示。',
+                };
               }
-            })();
-            return {
-              kind: 'success' as const,
-              text: '成员构建已受理——创建卡片与新增页已显示构建状态，意图访谈将在其上出现。',
-            };
+              if (current === null && hasBuildSessionFile(root)) {
+                // 会话文件在但读不出（瞬时 IO 竞态）——按忙处理，宁拒不漏放。
+                return {
+                  kind: 'success' as const,
+                  text: '构建状态正在写入，请稍候 1-2 秒重发 /eteam。',
+                };
+              }
+            } catch {
+              // 状态读不到时不拦：照常派发（阶段代理的 newBuild 会开新局）。
+            }
+            try {
+              const subagents = (ctx as unknown as RuntimeContext).subagents;
+              if (subagents?.start === undefined) {
+                throw new Error('subagents 服务不可用');
+              }
+              const stateRoot = root ?? rootForWrites(ctx, config);
+              // 立即受理（docs/19.16 用户迭代）：派发前先把受理会话写上磁盘
+              // ——卡片/新增页首轮轮询即命中、自动跳转立刻发生；request 用
+              // 用户原文，子代理从磁盘读到的就是新需求（不再继承旧会话）。
+              await reportBuildProgress(stateRoot, {
+                newBuild: true,
+                step: '收到需求',
+                stepsDone: ['收到需求'],
+                request: buildActivationMessage(rawInput),
+                note: '构建请求已受理——角色构建师启动中',
+                ...(commandId !== undefined ? { commandId } : {}),
+              });
+              spawnBuildPhase({
+                ctx: { subagents },
+                config,
+                parent: agent,
+                stateRoot,
+                kind: 'start',
+                logger: log,
+                onSpawnFailure: () => {
+                  // 派发被拒 → 回滚成 cancelled，别让无子代理的 active 会话
+                  // 卡住下一次 /eteam 的门禁。
+                  void cancelBuildSession(stateRoot, '构建派发失败——请重新发起 /eteam').catch(
+                    () => undefined,
+                  );
+                },
+              });
+              return {
+                kind: 'success' as const,
+                text: '成员构建已受理——创建卡片与新增页已显示构建状态，意图访谈将在其上出现。',
+              };
+            } catch {
+              // 受理已落盘的场合一并回滚（pre-write 成功但同步段炸了）。
+              if (root !== null) {
+                void cancelBuildSession(root, '构建派发失败——请重新发起 /eteam').catch(
+                  () => undefined,
+                );
+              }
+              agent.steer(
+                createUserMessage({
+                  content: [{ type: 'text', text: buildActivationMessage(rawInput) }],
+                  // Plugin-sourced notice: the conversation folds this user-role
+                  // message into a compact context row (not a chat bubble) while
+                  // the model still receives the full activation text (docs/19.9.5).
+                  source: {
+                    kind: 'plugin',
+                    plugin: 'dsh-eteams',
+                    form: 'notice',
+                    summary: '成员创建请求已提交——构建卡片与面板实时显示进度',
+                  },
+                }),
+              );
+              return { kind: 'success' as const, text: '成员创建请求已转交主会话处理。' };
+            }
           },
         };
         commandCtx.commands.register(eteamCommand);

@@ -16,6 +16,8 @@ import type { RuntimeContext } from './base.js';
 import type { ETeamsResolvedConfig } from '../config.js';
 import { MEMBER_DENIED_TOOLS } from './members.js';
 import {
+  markPhaseSpawn,
+  phaseSpawnLocked,
   readBuildSession,
   setBuildParentSession,
 } from './roleBuilder.js';
@@ -24,9 +26,9 @@ import {
   ROLE_BUILDER_SPEC_TAIL,
 } from '../prompts/roleBuilder.js';
 
-export type BuildPhaseKind = 'start' | 'continue' | 'resume';
+export type BuildPhaseKind = 'start' | 'continue' | 'resume' | 'restart';
 
-const BUILDER_TOOLS = ['eteams_build_report', 'eteams_member_list', 'eteams_member_save'];
+const BUILDER_TOOLS = ['eteams_build_report', 'eteams_member_list', 'eteams_member_save', 'ask_user_question'];
 
 /** Compose the phase prompt: shared persona discipline + phase instructions. */
 export function buildPhasePrompt(kind: BuildPhaseKind, stateRoot: string): string {
@@ -41,7 +43,9 @@ export function buildPhasePrompt(kind: BuildPhaseKind, stateRoot: string): strin
       ROLE_BUILDER_CHILD_PERSONA,
       '',
       '【本阶段任务】（完成即结束回合，不等待任何后续消息）',
-      '会话已由宿主开启（status=active，request=激活原文）。直接开始：eteams_member_list 查重（重名要向用户点明是更新）→ eteams_build_report(status=active, step=查重成员库, note=查重结果) → 意图访谈：eteams_build_report(status=active, step=意图访谈, interview={questions:[…]}) 一次问全 ≤5 问，每问 2-4 个 options，推荐项放首位加「（推荐）」→ 立即结束回合（用户在面板作答后宿主会派下一阶段代理）。本阶段不起草。禁止传 newBuild（会话已开启，覆写会重置会话身份、让卡片重复跳转）；若播报报「会话已结束/已取消」类错误，立即结束回合。',
+      '会话已由宿主开启（status=active，request=激活原文）。直接开始：eteams_member_list 查重（重名要向用户点明是更新）→ eteams_build_report(status=active, step=查重成员库, note=查重结果) → 意图访谈：eteams_build_report(status=active, step=意图访谈, interview={questions:[…]}) 一次问全 ≤5 问，每问 2-4 个 options，推荐项放首位加「（推荐）」。',
+      '访谈发布后立即用 ask_user_question 把问题原样弹给用户（每问映射 { id, question, header, options:[{label, description?}], multi_select: q.multi===true }，选项文案逐字保留；多选题等它返回）。拿到答案后：eteams_build_report(step=意图访谈, answers=[{id, choice}]，choice=所选项 label，多选以「、」连接）提交后立即结束回合。若 ask_user_question 不可用或报错：不要再尝试，直接结束回合（面板问卷与宿主兜底提醒会接管），不要在聊天文本里复述问题。',
+      '本阶段不起草。禁止传 newBuild（会话已开启，覆写会重置会话身份、让卡片重复跳转）；若播报报「会话已结束/已取消」类错误，立即结束回合。',
       '',
       '【激活原文】',
       session?.request ?? '',
@@ -68,11 +72,23 @@ export function buildPhasePrompt(kind: BuildPhaseKind, stateRoot: string): strin
       transcript,
     ].join('\n');
   }
+  if (kind === 'restart') {
+    return [
+      ROLE_BUILDER_CHILD_PERSONA,
+      '',
+      '【本阶段任务】（完成即结束回合，不等待任何后续消息）',
+      '构建代理被用户手动重启（阶段代理是一次性的：前任已收工，你就是新任）。先 eteams_build_report(status=active, step=重启核查) 同步进度（沿用原步骤与草稿）。然后判断：若意图访谈尚无答案——重新发布访谈（eteams_build_report(status=active, step=意图访谈, interview={questions:[…]})，问题可按已有草稿调整，一次问全 ≤5 问，每问 2-4 个 options），随后立即用 ask_user_question 原样弹给用户（映射与选项保留规则同上），拿到答案后 eteams_build_report(answers=[{id, choice}]) 提交并结束回合；若 ask_user_question 不可用或报错：直接结束回合（面板与宿主兜底会接管）。否则直接续完：起草统一手册 → 深化领域章节 → 完整草稿 + status=awaiting_confirmation + step=完成草稿 → 结束回合。',
+      ROLE_BUILDER_SPEC_TAIL,
+      '',
+      ...snapshot,
+      ...(transcript !== '' ? ['', '【意图访谈逐题作答】', transcript] : []),
+    ].join('\n');
+  }
   return [
     ROLE_BUILDER_CHILD_PERSONA,
     '',
     '【本阶段任务】（完成即结束回合，不等待任何后续消息）',
-    '构建曾被用户放弃，现已恢复。先 eteams_build_report(status=active) 同步恢复进度（沿用原步骤与草稿）。然后判断：若意图访谈尚无答案——重新发布访谈（eteams_build_report(step=意图访谈, interview={questions})，问题按已有草稿调整）并结束回合；否则直接续完：起草统一手册 → 深化领域章节 → 完整草稿 + status=awaiting_confirmation + step=完成草稿 → 结束回合。',
+    '构建曾被用户放弃，现已恢复。先 eteams_build_report(status=active) 同步恢复进度（沿用原步骤与草稿）。然后判断：若意图访谈尚无答案——重新发布访谈（eteams_build_report(step=意图访谈, interview={questions})，问题按已有草稿调整），随后立即用 ask_user_question 原样弹给用户，拿到答案后 eteams_build_report(answers=[{id, choice}]) 提交并结束回合；若 ask_user_question 不可用：直接结束回合。否则直接续完：起草统一手册 → 深化领域章节 → 完整草稿 + status=awaiting_confirmation + step=完成草稿 → 结束回合。',
     ROLE_BUILDER_SPEC_TAIL,
     '',
     ...snapshot,
@@ -110,6 +126,25 @@ export function spawnBuildPhase(args: {
     logger?.warn(`eteams: builder phase ${kind} NOT spawned — subagents service unavailable`);
     onSpawnFailure?.(new Error('subagents 服务不可用'));
     return;
+  }
+  // 派发锁（用户迭代：一次受理只起一个代理）：同一会话 60 秒内同阶段
+  // 二次派发直接拒绝——受理路径竞态/重放时不再并行起第二个子代理。
+  // 注意：拒绝 = 会话健康、由先行者负责，onSpawnFailure 绝不能触发
+  // （否则回滚会把健康的构建取消掉）。
+  if (kind === 'start' || kind === 'restart') {
+    if (phaseSpawnLocked(stateRoot, kind)) {
+      logger?.warn(
+        `eteams: builder phase ${kind} NOT spawned — dispatch lock held for this session (second acceptance refused)`,
+      );
+      return;
+    }
+    void markPhaseSpawn(stateRoot, kind).catch((error) => {
+      logger?.warn(
+        `eteams: phase-spawn lock write failed (spawn proceeds): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    });
   }
   const failMessage = (stage: string, error: unknown): string =>
     `eteams: builder phase ${kind} ${stage} — no card will appear: ${
@@ -152,4 +187,32 @@ export function spawnBuildPhase(args: {
       logger?.warn(failMessage('spawn FAILED', error));
       onSpawnFailure?.(error);
     });
+}
+
+let lastContinueKey = '';
+
+/**
+ * Spawn the drafting phase after interview answers land（面板路由与新
+ * `eteams_interview_answer` 工具的共用出口）：同一轮答案（startedAt +
+ * answeredAt 相同）只派一次——两个入口竞态时第二个直接跳过，避免两个
+ * 起草代理同时写会话。
+ */
+export function spawnContinueAfterAnswers(args: {
+  ctx: { subagents: RuntimeContext['subagents'] };
+  config: ETeamsResolvedConfig;
+  parent: Agent;
+  stateRoot: string;
+  logger?: { warn(message: string): void };
+}): void {
+  const session = readBuildSession(args.stateRoot);
+  const key =
+    session === null
+      ? ''
+      : `${session.startedAt}:${session.interview?.answeredAt ?? 'none'}`;
+  if (key !== '' && key === lastContinueKey) {
+    args.logger?.warn('eteams: continue phase already spawned for this answer round — skipped');
+    return;
+  }
+  if (key !== '') lastContinueKey = key;
+  spawnBuildPhase({ ...args, kind: 'continue' });
 }

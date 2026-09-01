@@ -41,6 +41,7 @@ import { enterTeamsPanel } from './teamsPanel';
 import {
   clearSessionPersona,
   fetchRoster,
+  reportPresence,
   setSessionPersona,
   type RosterMember,
 } from './api';
@@ -104,6 +105,24 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
       setSelectedTeam(loadSelectedTeam(sessionId));
     };
     restore();
+  }, [sessionId]);
+
+  // 活跃会话心跳（用户迭代）：本按钮挂在当前打开对话的输入栏，sessionId
+  // 即「用户正在看的对话」。5 秒一跳（页面隐藏时暂停），宿主兜底弹窗据此
+  // steer 到用户眼前。fire-and-forget，失败静默——心跳只是优化信号。
+  useEffect(() => {
+    if (typeof sessionId !== 'string' || sessionId === '') return;
+    let alive = true;
+    const beat = (): void => {
+      if (!alive || document.hidden) return;
+      void reportPresence(sessionId).catch(() => undefined);
+    };
+    beat();
+    const timer = window.setInterval(beat, 5000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
   }, [sessionId]);
 
   const clearSelection = (): void => {

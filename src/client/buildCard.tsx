@@ -57,8 +57,23 @@ if (typeof document !== 'undefined') {
  * `{ node: commandNode }`; the card renders live build state instead of the
  * generic command summary.
  */
-export function EteamBuildCard(_props: { node?: unknown }): ReactNode {
+export function EteamBuildCard(props: { node?: unknown }): ReactNode {
+  // 构建归属（用户迭代）：命令节点自带本次调用的 commandId，会话里记录
+  // 同一个 id——卡片只跟自己的构建；对不上的历史卡片冻结在「已结束」，
+  // 不再跟着工作区单槽里的新构建状态跑。
+  // myCommandId 由节点数据派生、对一张卡片而言终生不变——用初始化一次
+  // 的 state 固定住，既满足 exhaustive-deps，也语义正确（归属不可变）。
+  const [myCommandId] = useState<string | null>(() =>
+    typeof (props.node as { commandId?: unknown } | undefined)?.commandId === 'string'
+      ? (props.node as { commandId: string }).commandId
+      : null,
+  );
   const [build, setBuild] = useState<BuildSession | null | 'loading'>('loading');
+  // 归属构建最后一次匹配到的快照（state，渲染期可安全读取）：会话槽被
+  // 新构建覆盖后，旧卡片用它冻结出真实的终态（已入库/已放弃），而不是
+  // 无凭据的「已结束」。
+  const [lastMatch, setLastMatch] = useState<BuildSession | null>(null);
+  const [orphaned, setOrphaned] = useState(false);
   // 受理即写盘后首轮轮询即命中；扑空（null）时仍以 800ms 有界重试兜底
   // （宿主重启/磁盘慢的场合），旧历史卡片重试完自然停。
   const nullRetriesRef = useRef(0);
@@ -71,6 +86,19 @@ export function EteamBuildCard(_props: { node?: unknown }): ReactNode {
         .then((s) => {
           if (!alive) return;
           setBuild(s);
+          const owned =
+            s !== null &&
+            s.commandId !== undefined &&
+            myCommandId !== null &&
+            s.commandId === myCommandId;
+          if (owned) {
+            setLastMatch(s);
+            setOrphaned(false);
+          } else if (s !== null && myCommandId !== null) {
+            // 槽里是别人的构建——本卡片归属的构建已被覆盖，冻结终态并停轮询。
+            setOrphaned(true);
+            return;
+          }
           if (
             s !== null &&
             s.status === 'active' &&
@@ -101,17 +129,24 @@ export function EteamBuildCard(_props: { node?: unknown }): ReactNode {
       alive = false;
       if (timer !== undefined) window.clearTimeout(timer);
     };
+    // myCommandId 经 useState 初始化器固定，终生不变——mount-once 轮询语义
+    // 下无重复执行需求。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const status =
-    build === 'loading' || build === null ? null : CARD_STATUS[build.status];
-  const name =
-    build === 'loading' || build === null ? '新成员' : (build.draft?.name ?? '新成员');
-  const avatar = build === 'loading' || build === null ? undefined : build.draft?.avatar;
-  const step = build === 'loading' || build === null ? '' : build.step;
-  const interviewPending =
-    build !== 'loading' && build !== null &&
-    build.interview !== undefined && build.interview.answers === undefined;
+  // 归属判定（渲染期）：本卡片对应的构建会话。
+  // - myCommandId === null：旧版卡片（无节点标识）→ 维持旧行为跟实时槽；
+  // - orphaned：槽里已是别人的构建 → 用最后匹配快照渲染冻结终态。
+  const shown: BuildSession | null | 'loading' =
+    myCommandId !== null && orphaned ? lastMatch : build;
+  const showStatus =
+    shown === 'loading' || shown === null ? null : CARD_STATUS[shown.status];
+  const showName = shown === 'loading' || shown === null ? '新成员' : (shown.draft?.name ?? '新成员');
+  const showAvatar = shown === 'loading' || shown === null ? undefined : shown.draft?.avatar;
+  const showInterviewPending =
+    shown !== 'loading' && shown !== null &&
+    shown.interview !== undefined && shown.interview.answers === undefined;
+  const isOrphan = myCommandId !== null && orphaned;
 
   return (
     <ClientErrorBoundary label="成员创建卡片">
@@ -125,15 +160,16 @@ export function EteamBuildCard(_props: { node?: unknown }): ReactNode {
           display: 'flex',
           alignItems: 'center',
           gap: 10,
-          cursor: 'pointer',
+          cursor: isOrphan ? 'default' : 'pointer',
+          opacity: isOrphan ? 0.72 : 1,
         }}
         onClick={() => {
-          openMemberBuilder();
+          if (!isOrphan) openMemberBuilder();
         }}
         role="button"
-        title="点击打开成员创建页"
+        title={isOrphan ? '本次构建已结束' : '点击打开成员创建页'}
       >
-        <Avatar name={name} seed={avatar?.seed} salt={avatar?.salt} size={34} />
+        <Avatar name={showName} seed={showAvatar?.seed} salt={showAvatar?.salt} size={34} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
             style={{
@@ -145,22 +181,22 @@ export function EteamBuildCard(_props: { node?: unknown }): ReactNode {
               fontSize: 13,
             }}
           >
-            <span>成员创建中 · {name}</span>
-            {status !== null && (
+            <span>{isOrphan ? '成员构建 · 已结束' : `成员创建中 · ${showName}`}</span>
+            {showStatus !== null && (
               <span
                 style={{
                   fontSize: 11,
                   fontWeight: 500,
                   padding: '1px 8px',
                   borderRadius: 999,
-                  color: status.color,
+                  color: showStatus.color,
                   background: 'var(--dsw-alias-bg-layer-2, rgba(100,116,139,0.1))',
                 }}
               >
-                {status.label}
+                {showStatus.label}
               </span>
             )}
-            {interviewPending && (
+            {showInterviewPending && (
               <span
                 style={{
                   fontSize: 11,
@@ -185,10 +221,16 @@ export function EteamBuildCard(_props: { node?: unknown }): ReactNode {
               gap: 6,
             }}
           >
-            {build === 'loading' ? (
+            {isOrphan ? (
+              <span>
+                {shown !== 'loading' && shown !== null && shown.status === 'confirmed'
+                  ? '本次构建已完成入库——新构建请发起 /eteam'
+                  : '本次构建已结束（会话已被新构建取代）'}
+              </span>
+            ) : shown === 'loading' ? (
               <span>连接构建会话…</span>
-            ) : build !== null && (build.status === 'active' || build.status === 'awaiting_confirmation') ? (
-              build.status === 'active' && interviewPending ? (
+            ) : shown !== null && (shown.status === 'active' || shown.status === 'awaiting_confirmation') ? (
+              shown.status === 'active' && showInterviewPending ? (
                 // 访谈未答 = 阶段代理按设计已结束回合，不是卡死——别转圈装忙。
                 <span>✍️ 意图访谈待作答——点开回答后自动续跑</span>
               ) : (
@@ -205,20 +247,20 @@ export function EteamBuildCard(_props: { node?: unknown }): ReactNode {
                     }}
                   />
                   <span>
-                    {build.status === 'active'
-                      ? `角色构建师工作中 · ${step !== '' ? step : '准备中'}`
+                    {shown.status === 'active'
+                      ? `角色构建师工作中 · ${shown.step !== '' ? shown.step : '准备中'}`
                       : '草稿就绪——待你确认入库'}
                   </span>
                 </>
               )
-            ) : build !== null && build.status === 'confirmed' ? (
+            ) : shown !== null && shown.status === 'confirmed' ? (
               <span>构建完成，成员已入库——点击查看详情</span>
             ) : (
               <span>没有进行中的构建会话</span>
             )}
           </div>
         </div>
-        <span style={{ fontSize: 12, opacity: 0.6, flexShrink: 0 }}>打开创建页 →</span>
+        {!isOrphan && <span style={{ fontSize: 12, opacity: 0.6, flexShrink: 0 }}>打开创建页 →</span>}
       </div>
     </ClientErrorBoundary>
   );

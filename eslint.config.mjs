@@ -28,6 +28,8 @@ export default tseslint.config(
       '**/*.cjs',
       // 临时工作目录（文档缓存等，不入库）。
       '.tmp-*/**',
+      // 任务 worktree（git 插件产物，独立检出，不参与主仓 lint）。
+      '.dsh-worktrees/**',
     ],
   },
 

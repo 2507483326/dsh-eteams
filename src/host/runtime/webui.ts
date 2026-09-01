@@ -42,10 +42,12 @@ import {
   confirmBuildSession,
   readBuildParentSession,
   readBuildSession,
+  reportBuildProgress,
   resumeBuildSession,
+  writeBuildPresence,
   type BuildDraft,
 } from './roleBuilder.js';
-import { spawnBuildPhase } from './builderPhases.js';
+import { spawnBuildPhase, spawnContinueAfterAnswers } from './builderPhases.js';
 import { clearSessionPersona, setSessionPersona } from './sessionPersona.js';
 
 
@@ -769,27 +771,96 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
             ) {
               try {
                 const root = rootForWrites(ctx, config);
-                const session = await resumeBuildSession(root);
+                // 父会话在线性前置校验（先于恢复）：不在线就不改状态、诚实
+                // 报错——否则恢复成 active 后没有代理续跑，面板再次假卡死。
                 const parentSessionId = readBuildParentSession(root);
                 const parent =
                   parentSessionId !== null
                     ? (ctx as unknown as RuntimeContext).agents?.get(parentSessionId)
                     : undefined;
-                if (parent !== undefined) {
-                  spawnBuildPhase({
-                    ctx: { subagents: (ctx as unknown as RuntimeContext).subagents },
-                    config,
-                    parent,
-                    stateRoot: root,
-                    kind: 'resume',
-                    logger: (ctx as unknown as RuntimeContext).logger,
-                  });
-                } else {
-                  (ctx as unknown as RuntimeContext).logger.warn(
-                    `eteams: rolebuilder resume — parent session ${parentSessionId ?? '(none)'} is not live, phase not spawned`,
+                if (parent === undefined) {
+                  sendError(
+                    res,
+                    409,
+                    `父会话（${parentSessionId ?? '未知'}）当前不在线——构建未恢复。请先打开发起 /eteam 的对话，再点「继续构建」。`,
                   );
+                  return;
                 }
+                const session = await resumeBuildSession(root);
+                spawnBuildPhase({
+                  ctx: { subagents: (ctx as unknown as RuntimeContext).subagents },
+                  config,
+                  parent,
+                  stateRoot: root,
+                  kind: 'resume',
+                  logger: (ctx as unknown as RuntimeContext).logger,
+                });
                 sendJson(res, 200, { ok: true, status: session.status });
+              } catch (e) {
+                sendError(res, 400, e instanceof Error ? e.message : String(e));
+              }
+              return;
+            }
+            // POST /rolebuilder/restart — 手动重启构建代理（用户迭代）：阶段
+            // 代理是一次性的，「等答案」期间本就没有活着的代理；重启 = 立即
+            // 派一个新代理重新核查进度、按需重新出题。前置校验 + 10s 防抖
+            // （updatedAt 被写走即天然占用），避免与提交答案/重复点击竞态。
+            if (
+              req.method === 'POST' &&
+              segments[0] === 'rolebuilder' &&
+              segments.length === 2 &&
+              segments[1] === 'restart'
+            ) {
+              try {
+                const root = rootForWrites(ctx, config);
+                const current = readBuildSession(root);
+                if (current === null) {
+                  sendError(res, 400, '没有进行中的构建会话');
+                  return;
+                }
+                if (current.status !== 'active') {
+                  sendError(res, 409, `仅进行中的构建可重启（当前：${current.status}）`);
+                  return;
+                }
+                if (current.interview === undefined || current.interview.answers !== undefined) {
+                  sendError(
+                    res,
+                    409,
+                    '当前没有待回答的意图访谈——代理可能正在工作中，请等其收工（草稿就绪/再次出题）后再试',
+                  );
+                  return;
+                }
+                if (Date.now() - current.updatedAt < 10_000) {
+                  sendError(res, 429, '刚有阶段代理更新过会话——请等 10 秒后再重启');
+                  return;
+                }
+                const parentSessionId = readBuildParentSession(root);
+                const parent =
+                  parentSessionId !== null
+                    ? (ctx as unknown as RuntimeContext).agents?.get(parentSessionId)
+                    : undefined;
+                if (parent === undefined) {
+                  sendError(
+                    res,
+                    409,
+                    `父会话（${parentSessionId ?? '未知'}）当前不在线——请先打开发起 /eteam 的对话，再重启。`,
+                  );
+                  return;
+                }
+                await reportBuildProgress(root, {
+                  status: 'active',
+                  step: '重启核查',
+                  note: '已手动重启构建代理——重新核查进度与访谈',
+                });
+                spawnBuildPhase({
+                  ctx: { subagents: (ctx as unknown as RuntimeContext).subagents },
+                  config,
+                  parent,
+                  stateRoot: root,
+                  kind: 'restart',
+                  logger: (ctx as unknown as RuntimeContext).logger,
+                });
+                sendJson(res, 200, { ok: true, status: 'active' });
               } catch (e) {
                 sendError(res, 400, e instanceof Error ? e.message : String(e));
               }
@@ -816,27 +887,52 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                   sendError(res, 400, 'answers 不能为空');
                   return;
                 }
-                const session = await answerBuildInterview(root, answers);
+                // 父会话在线性前置校验（先于落盘）：父不在线时 spawn continue
+                // 必然失败——诚实报错并保留原访谈，而不是存了答案后静默卡死。
                 const parentSessionId = readBuildParentSession(root);
                 const parent =
                   parentSessionId !== null
                     ? (ctx as unknown as RuntimeContext).agents?.get(parentSessionId)
                     : undefined;
-                if (parent !== undefined) {
-                  spawnBuildPhase({
-                    ctx: { subagents: (ctx as unknown as RuntimeContext).subagents },
-                    config,
-                    parent,
-                    stateRoot: root,
-                    kind: 'continue',
-                    logger: (ctx as unknown as RuntimeContext).logger,
-                  });
-                } else {
-                  (ctx as unknown as RuntimeContext).logger.warn(
-                    `eteams: rolebuilder interview continue — parent session ${parentSessionId ?? '(none)'} is not live, phase not spawned`,
+                if (parent === undefined) {
+                  sendError(
+                    res,
+                    409,
+                    `父会话（${parentSessionId ?? '未知'}）当前不在线——答案未保存。请切到发起 /eteam 的对话（打开即可）后重新提交；或先放弃本次构建再重新发起。`,
                   );
+                  return;
                 }
+                const session = await answerBuildInterview(root, answers);
+                // 共用出口（去重）：同一轮答案只派一次起草代理——面板与主
+                // 对话 eteams_interview_answer 两个入口竞态时后者跳过。
+                spawnContinueAfterAnswers({
+                  ctx: { subagents: (ctx as unknown as RuntimeContext).subagents },
+                  config,
+                  parent,
+                  stateRoot: root,
+                  logger: (ctx as unknown as RuntimeContext).logger,
+                });
                 sendJson(res, 200, { ok: true, status: session.status });
+              } catch (e) {
+                sendError(res, 400, e instanceof Error ? e.message : String(e));
+              }
+              return;
+            }
+            // POST /presence — 活跃会话心跳（用户迭代：兜底弹窗 steer 到用户
+            // 正在看的对话）：客户端从活跃对话的输入栏按钮上报 sessionId，
+            // 宿主记 last-writer-wins，兜底 steer 前读取定位。fire-and-forget
+            // 信号——坏了不影响主流程（退回父会话路径）。
+            if (req.method === 'POST' && segments[0] === 'presence' && segments.length === 1) {
+              try {
+                const root = rootForWrites(ctx, config);
+                const body = parseJsonObject(await readBody(req));
+                const sessionId = typeof body.sessionId === 'string' ? body.sessionId : '';
+                if (sessionId === '') {
+                  sendError(res, 400, 'sessionId 不能为空');
+                  return;
+                }
+                await writeBuildPresence(root, sessionId);
+                sendJson(res, 200, { ok: true });
               } catch (e) {
                 sendError(res, 400, e instanceof Error ? e.message : String(e));
               }

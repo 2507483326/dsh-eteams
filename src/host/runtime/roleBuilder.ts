@@ -51,6 +51,18 @@ export interface BuildSession {
   updatedAt: number;
   /** Pending/answered intent interview (docs/19.16). */
   interview?: InterviewState;
+  /**
+   * 归属标识：发起本次构建的 /eteam 命令调用 id（每次构建唯一）。会话
+   * 身份字段——创建时写入，合并永不覆盖（与 startedAt 同语义）。
+   */
+  commandId?: string;
+  /**
+   * 派发锁：本会话已派发的阶段代理（start/restart）与派发时刻。60 秒内
+   * 同阶段二次派发一律拒绝——受理路径（/eteam 处理器 / build_dispatch
+   * 工具）竞态或重放时，不允许再起一个并行子代理。newBuild 新会话即新锁。
+   */
+  phaseSpawn?: 'start' | 'restart';
+  phaseSpawnAt?: number;
 }
 
 interface BuildFile {
@@ -108,13 +120,63 @@ export function readBuildParentSession(stateRoot: string): string | null {
   }
 }
 
-/** Read the session; missing or malformed file yields null. */
+/** Read the session; missing file yields null. Transient read/parse failures
+ * (Windows rename-swap vs concurrent open) are retried before giving up —
+ * a gate that mistakes 「读不准」 for 「没有构建」 would double-accept. */
 export function readBuildSession(stateRoot: string): BuildSession | null {
   const file = roleBuilderFile(stateRoot);
   if (!existsSync(file)) return null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const parsed = JSON.parse(readFileSync(file, 'utf8')) as Partial<BuildFile>;
+      return parsed.session ?? null;
+    } catch {
+      if (attempt < 2 && existsSync(file)) {
+        const dead = Date.now() + 30;
+        while (Date.now() < dead) {
+          /* busy-wait ~30ms then retry */
+        }
+        continue;
+      }
+      return null;
+    }
+  }
+  return null;
+}
+
+/** Whether a session file exists on disk（门禁配套：存在但读不出 = 忙，不是空）。 */
+export function hasBuildSessionFile(stateRoot: string): boolean {
+  return existsSync(roleBuilderFile(stateRoot));
+}
+
+/** 客户端活跃会话心跳落盘（last-writer-wins）：兜底 steer 用它定位「用户
+ * 正在看的对话」。会话槽同目录，随工作区走。 */
+const presenceFile = (stateRoot: string): string => join(stateRoot, 'presence.json');
+
+/** Record the client-reported active conversation id. */
+export async function writeBuildPresence(
+  stateRoot: string,
+  sessionId: string,
+): Promise<void> {
+  await atomicWriteText(presenceFile(stateRoot), JSON.stringify({ sessionId, ts: Date.now() }));
+}
+
+/** Read the last reported active conversation (null when absent/stale/malformed). */
+export function readBuildPresence(
+  stateRoot: string,
+  maxAgeMs = 60_000,
+): { sessionId: string; ts: number } | null {
+  const file = presenceFile(stateRoot);
+  if (!existsSync(file)) return null;
   try {
-    const parsed = JSON.parse(readFileSync(file, 'utf8')) as Partial<BuildFile>;
-    return parsed.session ?? null;
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as {
+      sessionId?: unknown;
+      ts?: unknown;
+    };
+    if (typeof parsed.sessionId !== 'string' || parsed.sessionId === '') return null;
+    const ts = typeof parsed.ts === 'number' ? parsed.ts : 0;
+    if (Date.now() - ts > maxAgeMs) return null;
+    return { sessionId: parsed.sessionId, ts };
   } catch {
     return null;
   }
@@ -140,6 +202,12 @@ export interface BuildReport {
    * cancelled session cannot be resurrected by a late background report.
    */
   newBuild?: boolean;
+  /**
+   * 归属标识（用户迭代：每张卡片只跟自己的构建）：/eteam 命令处理器把
+   * 本次调用的 commandId 写进新会话，对话内卡片按它匹配归属——非本构建
+   * 的历史卡片显示「已结束」而不是跟着新构建的状态跑。
+   */
+  commandId?: string;
 }
 
 /**
@@ -166,6 +234,7 @@ export async function reportBuildProgress(
       request: report.request ?? '',
       draft: ensureDraftAvatar(report.draft ?? null),
       note: report.note ?? '',
+      ...(report.commandId !== undefined ? { commandId: report.commandId } : {}),
       updatedAt: now,
     };
     await writeSession(stateRoot, fresh);
@@ -225,6 +294,43 @@ export async function reportBuildProgress(
   };
   await writeSession(stateRoot, next);
   return next;
+}
+
+/**
+ * Mark that a phase agent (start/restart) was spawned for this session —
+ * the durable dispatch lock. Merge-write keeps every other field intact;
+ * a fresh newBuild session resets the lock (new build = new lock).
+ */
+export async function markPhaseSpawn(
+  stateRoot: string,
+  kind: 'start' | 'restart',
+): Promise<void> {
+  const current = readBuildSession(stateRoot);
+  if (current === null) return;
+  await writeSession(stateRoot, {
+    ...current,
+    phaseSpawn: kind,
+    phaseSpawnAt: Date.now(),
+    updatedAt: current.updatedAt,
+  });
+}
+
+/**
+ * Whether a same-phase spawn is already locked for this session（60 秒窗）。
+ * True = 已有同阶段代理在跑或刚派出，调用方必须放弃本次派发。
+ */
+export function phaseSpawnLocked(
+  stateRoot: string,
+  kind: 'start' | 'restart',
+  windowMs = 60_000,
+): boolean {
+  const session = readBuildSession(stateRoot);
+  if (session === null) return false;
+  return (
+    session.phaseSpawn === kind &&
+    typeof session.phaseSpawnAt === 'number' &&
+    Date.now() - session.phaseSpawnAt < windowMs
+  );
 }
 
 /**

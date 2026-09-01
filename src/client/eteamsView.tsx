@@ -41,6 +41,7 @@ import {
   fetchBuildState,
   fetchRoster,
   removeTeamMember,
+  restartBuild,
   resumeBuild,
   saveRosterMember,
   submitInterview,
@@ -136,11 +137,14 @@ const T = {
   onAccent: 'var(--dsw-alias-label-primary-foreground, #ffffff)',
   hover: 'var(--dsw-alias-interactive-bg-hover, rgba(100,116,139,0.08))',
   ok: 'var(--dsw-alias-state-success-primary, #15803d)',
-  okBg: 'var(--dsw-alias-state-success-secondary, rgba(21,128,61,0.1))',
+  // ⚠️ 主题的 state-*-secondary 是实心 400 色（amber-400/green-400/red-400），
+  // 不是 10% 淡色调——实心底 + 实心 fg 会同色相打架（橙字橙底不可读，用户
+  // 实测）。静态色阶的 100 档才是淡底，改用之（static 不随主题翻转）。
+  okBg: 'var(--dsw-static-green-100, #e6faed)',
   warn: 'var(--dsw-alias-state-warn-primary, #b45309)',
-  warnBg: 'var(--dsw-alias-state-warn-secondary, rgba(180,83,9,0.1))',
+  warnBg: 'var(--dsw-static-amber-100, #fef5e7)',
   err: 'var(--dsw-alias-state-error-primary, #b91c1c)',
-  errBg: 'var(--dsw-alias-state-error-secondary, rgba(185,28,28,0.1))',
+  errBg: 'var(--dsw-static-red-100, #fee2e2)',
   info: 'var(--dsw-alias-state-business-primary, #1d4ed8)',
   infoBg: 'rgba(29,78,216,0.1)',
   shadow: '0 1px 2px rgba(15,23,42,0.05), 0 6px 18px rgba(15,23,42,0.06)',
@@ -162,6 +166,15 @@ const TONE_BG: Record<Tone, string> = {
   warn: T.warnBg,
   err: T.errBg,
   muted: T.sunken,
+};
+
+/** Pill 文字专用的深色档：饱和 primary 在淡底上对比度不足（amber-500 尤甚）。 */
+const PILL_FG: Record<Tone, string> = {
+  info: T.info,
+  ok: '#15803d',
+  warn: '#b45309',
+  err: '#b91c1c',
+  muted: T.text3,
 };
 
 function memberTone(status: string): Tone {
@@ -515,7 +528,9 @@ const fns = {
     fontSize: 11,
     fontWeight: 500,
     width: 'fit-content',
-    color: TONE_FG[tone],
+    // pill 的字要够深才压得住淡底：用 700 级深色（dot/步骤标记仍走
+    // TONE_FG 的饱和 primary，互不影响）。
+    color: PILL_FG[tone],
     background: TONE_BG[tone],
   }),
   dot: (tone: Tone): CSSProperties => ({
@@ -1624,6 +1639,9 @@ function MembersTab({
   // 意图访谈作答（docs/19.16）：后台构建代理把问题写进会话，工作台渲染为
   // 选项问卷；提交后宿主把答案经 followup 发回代理继续构建。
   const [interviewPick, setInterviewPick] = useState<Record<string, string[]>>({});
+  // 提交失败要可见（父会话不在线 / 网络问题），不再静默吞掉——否则用户
+  // 提交后看不到任何反馈，构建看起来像假卡死。
+  const [interviewError, setInterviewError] = useState<string | null>(null);
   const togglePick = (id: string, label: string, multi: boolean): void => {
     setInterviewPick((prev) => {
       const cur = prev[id] ?? [];
@@ -1639,7 +1657,24 @@ function MembersTab({
       .filter((a) => a.choice !== '');
     if (answers.length === 0) return;
     setConfirming(true);
-    await submitInterview(answers).catch(() => undefined);
+    setInterviewError(null);
+    const outcome = await submitInterview(answers).then(
+      () => null,
+      (e: unknown) => (e instanceof Error ? e.message : String(e)),
+    );
+    if (outcome !== null) setInterviewError(outcome);
+    setConfirming(false);
+    refreshBuild();
+  };
+  // 手动重启构建代理（用户迭代）：不答题也能派新代理重新核查/重新出题。
+  const restartBuildAgent = async (): Promise<void> => {
+    setConfirming(true);
+    setInterviewError(null);
+    const outcome = await restartBuild().then(
+      () => null,
+      (e: unknown) => (e instanceof Error ? e.message : String(e)),
+    );
+    if (outcome !== null) setInterviewError(outcome);
     setConfirming(false);
     refreshBuild();
   };
@@ -1751,6 +1786,16 @@ function MembersTab({
                   <span style={fns.pill('info')}>构建中</span>
                 )}
                 <span style={{ flex: 1 }} />
+                {interviewWaiting && (
+                  <Button
+                    size="sm"
+                    disabled={confirming}
+                    onClick={() => void restartBuildAgent()}
+                    title="不答题，直接派一个新代理重新核查进度并按需重新出题"
+                  >
+                    重启代理
+                  </Button>
+                )}
                 {/* 构建中也能放弃（docs/19.16）：作废会话并中断后台构建代理。 */}
                 <Button size="sm" disabled={confirming} onClick={() => void abandon()}>
                   放弃
@@ -1768,7 +1813,27 @@ function MembersTab({
                   }}
                 >
                   <div style={{ fontWeight: 600, fontSize: 13 }}>✍️ 意图访谈——请作答</div>
-                  <div style={styles.muted}>后台构建代理在等你的答案，提交后它继续起草。</div>
+                  <div style={styles.muted}>
+                    阶段代理是一次性的，前任已收工；提交答案会立即派出新代理继续，或点「重启代理」重新出题。
+                  </div>
+                  {(() => {
+                    const qs = build.interview.questions;
+                    const answered = qs.filter((q) => (interviewPick[q.id] ?? []).length > 0).length;
+                    if (answered >= qs.length) return null;
+                    return (
+                      <div
+                        style={{
+                          marginTop: 6,
+                          fontSize: 12,
+                          fontWeight: 600,
+                          color: 'var(--dsw-alias-state-warn-primary, #b45309)',
+                        }}
+                      >
+                        每题至少选一项才能提交——已答 {answered}/{qs.length}
+                        {answered === qs.length - 1 ? '，还差 1 题' : `，还差 ${qs.length - answered} 题`}
+                      </div>
+                    );
+                  })()}
                   {build.interview.questions.map((q) => {
                     const picked = interviewPick[q.id] ?? [];
                     const done = picked.length > 0;
@@ -1779,6 +1844,21 @@ function MembersTab({
                         )}
                         <div style={{ fontSize: 12.5, fontWeight: 600 }}>
                           {q.question}
+                          {q.multi === true && (
+                            <span
+                              style={{
+                                marginLeft: 6,
+                                fontSize: 11,
+                                fontWeight: 500,
+                                padding: '1px 7px',
+                                borderRadius: 999,
+                                color: PILL_FG.info,
+                                background: T.infoBg,
+                              }}
+                            >
+                              可多选
+                            </span>
+                          )}
                           {!done && <span style={{ color: T.accent }}> ·</span>}
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 5 }}>
@@ -1824,10 +1904,27 @@ function MembersTab({
                           (q) => (interviewPick[q.id] ?? []).length === 0,
                         )
                       }
+                      title={
+                        build.interview.questions.some((q) => (interviewPick[q.id] ?? []).length === 0)
+                          ? '每题至少选一项后才能提交'
+                          : undefined
+                      }
                       onClick={() => void submitInterviewAnswers(build.interview?.questions ?? [])}
                     >
                       提交回答
                     </Button>
+                    {interviewError !== null && (
+                      <div
+                        style={{
+                          marginTop: 8,
+                          color: 'var(--dsw-alias-state-err-primary, #b91c1c)',
+                          fontSize: 12,
+                          lineHeight: 1.5,
+                        }}
+                      >
+                        ⚠️ {interviewError}
+                      </div>
+                    )}
                     <span style={styles.muted}>提交后构建代理自动继续。</span>
                   </div>
                 </div>
