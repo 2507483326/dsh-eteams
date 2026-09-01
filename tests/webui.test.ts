@@ -421,6 +421,90 @@ describe('panel write routes (M5 first slice)', () => {
     });
     expect(added.code).toBe(404);
   });
+
+  // ---------- employee id 工号 (docs/21) ----------
+
+  it('allocates sequential ids on roster upsert and keeps them on update', async () => {
+    const { handler, res, post } = await installFake();
+    const first = await post('/eteams-api/roster', { name: 'Alice', role: 'researcher' });
+    const second = await post('/eteams-api/roster', { name: 'Bob', role: 'engineer' });
+    const a1 = (JSON.parse(first.body) as { member: { employeeId?: string } }).member.employeeId;
+    const b1 = (JSON.parse(second.body) as { member: { employeeId?: string } }).member.employeeId;
+    expect(a1).toBe('ET-0001');
+    expect(b1).toBe('ET-0002');
+    // Update keeps the existing 工号.
+    const updated = await post('/eteams-api/roster', { name: 'Alice', role: 'writer' });
+    const a2 = (JSON.parse(updated.body) as { member: { employeeId?: string } }).member.employeeId;
+    expect(a2).toBe('ET-0001');
+    // GET /roster backfills every member (including presets) with a unique id.
+    const seeded = res();
+    await handler({ method: 'GET', url: '/eteams-api/roster' }, seeded);
+    const parsed = JSON.parse(seeded.body) as {
+      members: { name: string; employeeId?: string }[];
+    };
+    const ids = parsed.members.map((m) => m.employeeId);
+    for (const id of ids) expect(id).toMatch(/^ET-\d{4}$/);
+    expect(new Set(ids).size).toBe(ids.length);
+    // The counter kept moving: the next upsert never reuses a backfilled id.
+    const third = await post('/eteams-api/roster', { name: 'Cara', role: 'tester' });
+    const c1 = (JSON.parse(third.body) as { member: { employeeId?: string } }).member.employeeId;
+    expect(ids).not.toContain(c1);
+  });
+
+  it('adopts the roster 工号 when pulling a member into a team', async () => {
+    const { post } = await installFake();
+    const saved = await post('/eteams-api/roster', { name: 'Bob', role: 'engineer' });
+    const rosterId = (JSON.parse(saved.body) as { member: { employeeId?: string } }).member
+      .employeeId;
+    expect(rosterId).toMatch(/^ET-\d{4}$/);
+    const created = await post('/eteams-api/team', { name: '共号团队', sessionId: 'sess-panel' });
+    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
+    const added = await post(`/eteams-api/team/${teamId}/member`, {
+      name: 'Bob',
+      fromRoster: true,
+    });
+    expect(added.code).toBe(200);
+    const member = readTeamFromDisk(teamId).members[0]!;
+    expect(member.employeeId).toBe(rosterId);
+  });
+
+  it('allocates a fresh non-colliding 工号 for direct adds without a roster entry', async () => {
+    const { handler, res, post } = await installFake();
+    const created = await post('/eteams-api/team', { name: '直加团队', sessionId: 'sess-panel' });
+    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
+    const added = await post(`/eteams-api/team/${teamId}/member`, { name: 'Ghost' });
+    expect(added.code).toBe(200);
+    const directId = readTeamFromDisk(teamId).members[0]!.employeeId;
+    expect(directId).toMatch(/^ET-\d{4}$/);
+    // A later roster upsert must draw the next number, not collide with it.
+    await post('/eteams-api/roster', { name: 'Later', role: 'tester' });
+    const seeded = res();
+    await handler({ method: 'GET', url: '/eteams-api/roster' }, seeded);
+    const parsed = JSON.parse(seeded.body) as {
+      members: { name: string; employeeId?: string }[];
+    };
+    const ids = parsed.members.map((m) => m.employeeId);
+    expect(ids).not.toContain(directId);
+  });
+
+  it('projects 工号 through the team snapshot (members and captain)', async () => {
+    const { handler, res, post } = await installFake();
+    await handler({ method: 'GET', url: '/eteams-api/roster' }, res());
+    const created = await post('/eteams-api/team', { name: '快照团队', sessionId: 'sess-panel' });
+    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
+    await post(`/eteams-api/team/${teamId}/member`, { name: '前端开发者', fromRoster: true });
+    const fresh = readTeamFromDisk(teamId);
+    const { teamSnapshot } = await import('../src/host/runtime/webui');
+    const snap = teamSnapshot(fresh, workspace, config);
+    const member = (snap.members as { name: string; employeeId: string | null }[]).find(
+      (m) => m.name === '前端开发者',
+    )!;
+    expect(member.employeeId).toMatch(/^ET-\d{4}$/);
+    const captain = snap.captain as { name: string; employeeId: string };
+    expect(captain.name).toBe('项目牧羊人');
+    expect(captain.employeeId).toMatch(/^ET-\d{4}$/);
+    void handler;
+  });
 });
 
 describe('web surface installation', () => {

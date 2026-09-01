@@ -13,6 +13,8 @@ const API_BASE = '/eteams-api';
 /** One reusable member definition in the workspace roster (D16). */
 export interface RosterMember {
   name: string;
+  /** 工号 (docs/21): host-allocated `ET-0001` style id; stable across teams. */
+  employeeId?: string;
   role: string;
   duty?: string;
   style?: string;
@@ -74,13 +76,16 @@ export async function saveRosterMember(member: NewMemberInput): Promise<void> {
   });
 }
 
-/** Create a staged team bound to the current session (panel flow). */
+/**
+ * Create a staged team bound to the current session (panel flow). Returns
+ * the created teamId so the panel can select the new team immediately.
+ */
 export async function createTeamViaPanel(
   sessionId: string,
   name: string,
   goal?: string,
-): Promise<void> {
-  await requestJson(`${API_BASE}/team`, {
+): Promise<{ teamId: string; name: string }> {
+  const body = (await requestJson(`${API_BASE}/team`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -88,7 +93,11 @@ export async function createTeamViaPanel(
       sessionId,
       ...(goal !== undefined && goal.trim() !== '' ? { goal: goal.trim() } : {}),
     }),
-  });
+  })) as { teamId?: unknown };
+  return {
+    teamId: typeof body.teamId === 'string' ? body.teamId : '',
+    name,
+  };
 }
 
 /** Add a member to a team, adopting a roster entry when fromRoster is set. */

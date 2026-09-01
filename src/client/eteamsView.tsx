@@ -495,6 +495,20 @@ const styles: Record<string, CSSProperties> = {
     marginTop: 1,
   },
   addRow: { display: 'flex', justifyContent: 'flex-end', marginBottom: 10 },
+  /* 工号徽标（docs/21）：等宽小胶囊，弱对比，不与名字抢视觉。 */
+  empChip: {
+    display: 'inline-block',
+    padding: '0 6px',
+    borderRadius: 6,
+    background: T.sunken,
+    color: T.text3,
+    fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace',
+    fontSize: 10.5,
+    fontWeight: 600,
+    letterSpacing: 0.3,
+    lineHeight: '16px',
+    flexShrink: 0,
+  },
 };
 
 /** Parameterized style factories (tone-mapped, token-driven). */
@@ -825,6 +839,7 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
               team={team}
               roster={roster}
               onSelectTeam={(id) => setActiveId(id)}
+              onRosterChanged={refreshRoster}
               agentActivity={agentActivity}
               onOpenReports={(name) => {
                 setDialogMember(name);
@@ -943,13 +958,14 @@ function BoardTab({
   );
 }
 
-/** 团队：创建（仅名称）+ 组建团队（成员栅格 + 从角色列表拉人）。 */
+/** 团队：创建（仅名称）+ 组建团队（成员栅格 + 从角色列表拉人 / 按角色新增）。 */
 function TeamTab({
   sessionId,
   pool,
   team,
   roster,
   onSelectTeam,
+  onRosterChanged,
   agentActivity,
   onOpenReports,
 }: {
@@ -960,6 +976,8 @@ function TeamTab({
   team: TeamSnapshot | undefined;
   roster: RosterMember[];
   onSelectTeam: (teamId: string) => void;
+  /** Roster mutated by this tab (按角色新增先入库) — re-fetch upstream. */
+  onRosterChanged: () => void;
   /** Member subagent activity dots (docs/20.4 P4): childId → running/inactive. */
   agentActivity: Record<string, string>;
   onOpenReports: (name: string) => void;
@@ -968,6 +986,14 @@ function TeamTab({
   const [pick, setPick] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 创建成功提示（docs/21 团队页优化）：显示新团队名并把选择切过去，
+  // 引导下一步「从角色列表拉人」。
+  const [createdName, setCreatedName] = useState<string | null>(null);
+  // 按角色新增成员（docs/21）：内联表单开关。名字不在角色库时先入库
+  // （宿主自动分配工号），再拉进本团队——无预建角色也能直接组队。
+  const [showAdd, setShowAdd] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newRole, setNewRole] = useState('');
   // 面板创建团队绑定当前会话（领队即该会话代理）；浮层/无会话时没有可绑定的
   // 会话，创建按钮禁用并给出指引，而不是提交后吃 400 错误。
   const canCreate = typeof sessionId === 'string' && sessionId !== '';
@@ -976,9 +1002,12 @@ function TeamTab({
     if (busy || !canCreate || name.trim() === '') return;
     setBusy(true);
     setError(null);
+    setCreatedName(null);
     try {
-      await createTeamViaPanel(sessionId, name.trim());
+      const res = await createTeamViaPanel(sessionId, name.trim());
       setName('');
+      setCreatedName(res.name);
+      if (res.teamId !== '') onSelectTeam(res.teamId);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -993,6 +1022,27 @@ function TeamTab({
     try {
       await addTeamMember(team.teamId, { name: pick, fromRoster: true });
       setPick('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const addByRole = async (): Promise<void> => {
+    if (busy || team === undefined || newName.trim() === '' || newRole.trim() === '') return;
+    setBusy(true);
+    setError(null);
+    try {
+      const nm = newName.trim();
+      if (!roster.some((m) => m.name === nm)) {
+        await saveRosterMember({ name: nm, role: newRole.trim() });
+        onRosterChanged();
+      }
+      await addTeamMember(team.teamId, { name: nm, fromRoster: true });
+      setNewName('');
+      setNewRole('');
+      setShowAdd(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1059,6 +1109,9 @@ function TeamTab({
             value={name}
             placeholder="团队名称，如：文档迁移小组"
             onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void create();
+            }}
           />
           <Button
             size="sm"
@@ -1075,6 +1128,14 @@ function TeamTab({
             ? '只需名称即可创建（草案阶段）；目标可在看板中与领队继续完善。'
             : '当前还没有进行中的对话——开始对话后即可在这里创建团队。'}
         </div>
+        {createdName !== null && (
+          <div style={{ ...styles.prefillBanner, marginTop: 8 }}>
+            <span style={{ color: T.ok, fontWeight: 600, fontSize: 12.5 }}>✓</span>
+            <span style={{ ...styles.muted, color: T.text2 }}>
+              团队「{createdName}」已创建（草案阶段）——已为你选中，下方从角色列表拉人组队。
+            </span>
+          </div>
+        )}
         {error !== null && <div style={styles.formError}>{error}</div>}
       </div>
 
@@ -1082,13 +1143,28 @@ function TeamTab({
         <div style={styles.empty}>尚未选择团队。创建团队后在这里从「角色」列表拉人组队。</div>
       ) : (
         <>
+          {team.phase === 'staged' && (
+            <div style={{ ...styles.prefillBanner, marginTop: 0, marginBottom: 12 }}>
+              <span style={{ ...styles.muted, color: T.text2 }}>
+                团队还在草案阶段：在这里拉好班底，然后到对话中与领队确认计划——批准后成员自动启动。
+              </span>
+            </div>
+          )}
           <div style={styles.card}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
               <h3 style={styles.listTitle}>团队成员</h3>
               <span style={styles.listCount}>{team.members.length} 人 · 领队默认在团</span>
             </div>
             {roster.length > 0 && (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+              <div
+                style={{
+                  display: 'flex',
+                  gap: 8,
+                  alignItems: 'center',
+                  marginBottom: 8,
+                  flexWrap: 'wrap',
+                }}
+              >
                 <select
                   style={styles.select}
                   value={pick}
@@ -1101,7 +1177,11 @@ function TeamTab({
                     )
                     .map((m) => (
                       <option key={m.name} value={m.name}>
-                        {m.name}（{m.role}）
+                        {m.name}（{m.role}
+                        {typeof m.employeeId === 'string' && m.employeeId !== ''
+                          ? ` · ${m.employeeId}`
+                          : ''}
+                        ）
                       </option>
                     ))}
                 </select>
@@ -1114,6 +1194,69 @@ function TeamTab({
                 </Button>
               </div>
             )}
+            {/* 按角色新增（docs/21）：不依赖预建角色——名字不在角色库时先入库
+            （宿主自动分配工号），再拉进本团队，一步到位。 */}
+            <div
+              style={{
+                display: 'flex',
+                gap: 8,
+                alignItems: 'center',
+                marginBottom: 10,
+                flexWrap: 'wrap',
+              }}
+            >
+              <Button size="sm" variant="ghost" onClick={() => setShowAdd(!showAdd)}>
+                {showAdd ? '收起新增表单' : '+ 按角色新增成员'}
+              </Button>
+              {showAdd && (
+                <span style={styles.muted}>
+                  新名字会先写入角色库（自动分配工号），再拉进本团队。
+                </span>
+              )}
+            </div>
+            {showAdd && (
+              <div
+                style={{
+                  display: 'flex',
+                  gap: 8,
+                  alignItems: 'center',
+                  marginBottom: 10,
+                  flexWrap: 'wrap',
+                }}
+              >
+                <Input
+                  value={newName}
+                  placeholder="成员名，如：alice"
+                  onChange={(e) => setNewName(e.target.value)}
+                  style={{ width: 170 }}
+                />
+                <Input
+                  value={newRole}
+                  placeholder="角色，如：测试工程师"
+                  onChange={(e) => setNewRole(e.target.value)}
+                  style={{ width: 190 }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void addByRole();
+                  }}
+                />
+                <Button
+                  size="sm"
+                  variant="primary"
+                  icon={<IconPlusOutline16 />}
+                  disabled={busy || newName.trim() === '' || newRole.trim() === ''}
+                  onClick={() => void addByRole()}
+                >
+                  新增并加入
+                </Button>
+              </div>
+            )}
+            {showAdd &&
+              newName.trim() !== '' &&
+              roster.some((m) => m.name === newName.trim()) && (
+                <div style={{ ...styles.muted, marginBottom: 8 }}>
+                  「{newName.trim()}」已在角色库——将以其现有角色与手册加入团队（自动带工号）。
+                </div>
+              )}
             <div style={styles.memberGrid}>
               <LeaderCard captain={team.captain} />
               {team.members.map((m) => (
@@ -1129,7 +1272,7 @@ function TeamTab({
               ))}
               {team.members.length === 0 && (
                 <div style={styles.muted}>
-                  还没有角色——先到「角色」页新增，或从上方角色列表拉人。
+                  还没有成员——从上方角色列表拉人，或用「按角色新增成员」直接建。
                 </div>
               )}
             </div>
@@ -1150,6 +1293,7 @@ function LeaderCard({ captain }: { captain: CaptainView }): ReactNode {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontWeight: 600, fontSize: 13, color: T.text }}>{captain.name}</span>
+            <span style={styles.empChip}>{captain.employeeId}</span>
             <span style={styles.roleChip}>领队</span>
           </div>
           <div style={{ ...styles.muted, marginTop: 1 }}>
@@ -1214,6 +1358,8 @@ function MemberCard({
               />
             )}
             {m.name}
+            {/* 工号（docs/21）：每个成员的身份编号，领队/成员卡一律展示。 */}
+            {m.employeeId !== null && <span style={styles.empChip}>{m.employeeId}</span>}
           </div>
           <div style={{ ...styles.muted, marginTop: 1 }}>
             {m.role} · {m.model}
@@ -2197,7 +2343,14 @@ function MembersTab({
             </div>
             {/* 角色（用户反馈）：不再需要标签——名字即身份，手册即人设。 */}
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 17, fontWeight: 700, color: T.text }}>{detail.name}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 17, fontWeight: 700, color: T.text }}>{detail.name}</span>
+                {typeof detail.employeeId === 'string' && detail.employeeId !== '' && (
+                  <span style={{ ...styles.empChip, fontSize: 11.5, lineHeight: '18px' }}>
+                    工号 {detail.employeeId}
+                  </span>
+                )}
+              </div>
               <div style={{ ...styles.muted, fontSize: 11, marginTop: 2 }}>
                 {isLeader ? '系统保留角色 · 手册只读' : '点击下方「编辑」可修改角色手册'}
               </div>
@@ -2326,14 +2479,18 @@ function MembersTab({
                       >
                         {m.name}
                       </span>
-                      {teamNames.length > 0 && (
-                        <div
-                          className="eteams-role-name"
-                          style={{ ...styles.muted, fontSize: 11, marginTop: 2 }}
-                        >
-                          {teamNames.join('、')}
-                        </div>
-                      )}
+                      {/* 工号（docs/21）：角色卡副行展示，与所属团队并列。 */}
+                      <div
+                        className="eteams-role-name"
+                        style={{ ...styles.muted, fontSize: 11, marginTop: 2 }}
+                      >
+                        {typeof m.employeeId === 'string' && m.employeeId !== ''
+                          ? `${m.employeeId}`
+                          : ''}
+                        {teamNames.length > 0
+                          ? `${typeof m.employeeId === 'string' && m.employeeId !== '' ? ' · ' : ''}${teamNames.join('、')}`
+                          : ''}
+                      </div>
                     </div>
                   </div>
                 );

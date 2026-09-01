@@ -113,6 +113,8 @@ function memberView(team: TeamState, m: MemberRecord) {
   );
   return {
     name: m.name,
+    /** 工号 (docs/21); null for legacy members created before the field. */
+    employeeId: m.employeeId ?? null,
     role: m.role,
     status: m.status as MemberStatus,
     provider: m.modelRoute.provider,
@@ -165,8 +167,13 @@ export function teamSnapshot(
   config: ETeamsResolvedConfig,
 ): Record<string, unknown> {
   // The captain (项目牧羊人) is rendered as the leader card on the 团队 page;
-  // it is not a roster member, so it travels with the snapshot instead.
+  // it is not a roster member, so it travels with the snapshot instead. Its
+  // 工号 comes from the roster leader entry (backfilled on first /roster
+  // read); 'ET-0001' covers workspaces whose roster was never listed yet.
   const captainPersona = composeCaptainPersona(workspacePath, config.stateDir);
+  const rosterLeader = readRoster(joinPath(workspacePath, config.stateDir)).find(
+    (m) => m.name === LEADER_NAME,
+  );
   return {
     teamId: team.id,
     name: team.name,
@@ -184,6 +191,7 @@ export function teamSnapshot(
     },
     captain: {
       name: '项目牧羊人',
+      employeeId: rosterLeader?.employeeId ?? 'ET-0001',
       role: captainPersona.role,
       duty: captainPersona.duty,
       style: captainPersona.style,
@@ -604,6 +612,7 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                     : entry?.personaMd !== undefined
                       ? { personaMd: entry.personaMd }
                       : {}),
+                  ...(entry?.employeeId !== undefined ? { employeeId: entry.employeeId } : {}),
                   ...(entry?.avatar !== undefined ? { avatar: entry.avatar } : {}),
                   ...(body.provider !== undefined && body.model !== undefined
                     ? { provider: str(body.provider), model: str(body.model) }

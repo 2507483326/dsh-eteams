@@ -22,6 +22,12 @@ export interface AvatarPair {
 export interface RosterMember {
   /** Unique key across the workspace roster (trimmed, non-empty). */
   name: string;
+  /**
+   * 工号 (employee id, docs/21): `ET-0001` style, allocated from the
+   * workspace counter on first save and stable afterwards. Optional for
+   * legacy entries; {@link ensureRosterEmployeeIds} backfills them.
+   */
+  employeeId?: string;
   /** Role label (engineer / researcher / …). Free-form, non-empty. */
   role: string;
   /** Persona framework fields (D13) — content is copied on team adoption. */
@@ -44,6 +50,81 @@ export interface RosterMember {
 interface RosterFile {
   schemaVersion: 1;
   members: RosterMember[];
+}
+
+/** Workspace-level 工号 counter file (docs/21): one monotonic sequence. */
+interface EmployeeSeqFile {
+  schemaVersion: 1;
+  seq: number;
+}
+
+/** Absolute 工号 counter path for a state root. */
+function employeeSeqFile(stateRoot: string): string {
+  return join(stateRoot, 'employee-seq.json');
+}
+
+/** Read the persisted 工号 counter; missing or malformed file yields 0. */
+function readEmployeeSeq(stateRoot: string): number {
+  const file = employeeSeqFile(stateRoot);
+  if (!existsSync(file)) return 0;
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as Partial<EmployeeSeqFile>;
+    return typeof parsed.seq === 'number' && Number.isFinite(parsed.seq) && parsed.seq >= 0
+      ? Math.floor(parsed.seq)
+      : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Format a counter value as an 工号: 1 → `ET-0001`. */
+export function formatEmployeeId(n: number): string {
+  return `ET-${String(Math.max(0, Math.floor(n))).padStart(4, '0')}`;
+}
+
+/**
+ * Allocate the next 工号 for a workspace (docs/21): bump the persisted
+ * monotonic counter and return the formatted id (`ET-0001` style). The
+ * counter lives next to roster.json so roster saves, role-builder confirms
+ * and direct team adds all draw from the same sequence — no collisions.
+ */
+export async function allocateEmployeeId(stateRoot: string): Promise<string> {
+  const seq = readEmployeeSeq(stateRoot) + 1;
+  await atomicWriteText(
+    employeeSeqFile(stateRoot),
+    `${JSON.stringify({ schemaVersion: 1, seq } satisfies EmployeeSeqFile, null, 2)}\n`,
+  );
+  return formatEmployeeId(seq);
+}
+
+/**
+ * Backfill 工号 in place on the given member list (docs/21). Returns whether
+ * anything changed so callers can skip the rewrite. Existing 工号s are never
+ * touched; the counter only moves forward.
+ */
+async function ensureEmployeeIdsIn(
+  members: RosterMember[],
+  stateRoot: string,
+): Promise<boolean> {
+  let changed = false;
+  for (const m of members) {
+    if (typeof m.employeeId === 'string' && m.employeeId !== '') continue;
+    m.employeeId = await allocateEmployeeId(stateRoot);
+    changed = true;
+  }
+  return changed;
+}
+
+/**
+ * Backfill 工号 for every roster member missing one (docs/21) and persist
+ * the roster when anything changed. Existing 工号s are never touched.
+ */
+export async function ensureRosterEmployeeIds(stateRoot: string): Promise<boolean> {
+  const members = readRoster(stateRoot);
+  if (!(await ensureEmployeeIdsIn(members, stateRoot))) return false;
+  const file: RosterFile = { schemaVersion: 1, members };
+  await atomicWriteText(rosterFile(stateRoot), `${JSON.stringify(file, null, 2)}\n`);
+  return true;
 }
 
 /** Absolute roster file path for a state root. */
@@ -99,10 +180,19 @@ export async function upsertRosterMember(
   if (name === LEADER_NAME) throw new Error('领队成员为保留名，不可通过 upsert 覆盖');
   const members = readRoster(stateRoot);
   const previous = members.find((m) => m.name === name);
+  // 工号（docs/21）：新建时从工作区计数器分配；更新保留原号。调用方显式
+  // 传入（导入/迁移）时尊重传入值（空串视同未传）。
+  const employeeId =
+    (typeof member.employeeId === 'string' && member.employeeId !== ''
+      ? member.employeeId
+      : undefined) ??
+    previous?.employeeId ??
+    (await allocateEmployeeId(stateRoot));
   const stored: RosterMember = {
     ...member,
     name,
     role,
+    employeeId,
     avatar: member.avatar ??
       previous?.avatar ?? { seed: hashName(name), salt: Math.floor(Math.random() * 1000) },
     updatedAt: Date.now(),
@@ -206,6 +296,9 @@ export async function ensurePresetMembers(stateRoot: string): Promise<void> {
       changed = true;
     }
   }
+  // 工号回填（docs/21）：补齐所有缺号的成员（含旧版入库的非预设成员），
+  // 与本次插入在同一份内存列表上完成后一次写盘。
+  if (await ensureEmployeeIdsIn(members, stateRoot)) changed = true;
   if (!changed) return;
   const file: RosterFile = { schemaVersion: 1, members };
   await atomicWriteText(rosterFile(stateRoot), `${JSON.stringify(file, null, 2)}\n`);
