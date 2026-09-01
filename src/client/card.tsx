@@ -5,12 +5,32 @@
  * from the polled activity snapshots (matching by teamId from the tool
  * result, falling back to the team name).
  *
+ * S5 试点迁移（docs/21-client-ui-stack.md 21.6 / D19d/D19g）：inline style
+ * 全部迁到 Tailwind 类 + shadcn 基础组件（Card/Badge/Button）。管线纪律的
+ * 落地注记（后续表面迁移 S11+ 照此模式）：
+ * - D19b 作用域机制：`important: '.eteams-ui'` 把工具类编译成后代选择器
+ *   （`.eteams-ui .utility`）——作用域根元素自身不承样式，只承载 token 变量
+ *   与 `eteams-ui` 字面量。故表面根是裸 div（挂 `.eteams-ui`），Card 作为
+ *   其后代承载全部样式；Card 根 className 同样带 `eteams-ui` 字面量（对
+ *   content 扫描与 D19b「表面根挂类」双保险）。
+ * - preflight 已关（D19b）：`border` 工具类只产 border-width，border-style
+ *   初始值 none——用标准 `border-solid` 工具类补齐（S3 桥只补了默认色）。
+ * - D19c：token 色禁 /alpha 修饰——待决策徽标的半透明 warning 边框沿用 S4
+ *   badge/button 先例的 color-mix() 任意值；类名一律完整字面量（21.5.1
+ *   content 扫描纪律，禁拼接）。
+ * 行为与降级路径（installCard 的 events 判空、parse 函数群、
+ * activateETeamsTab）与迁移前逐字一致；PHASE_LABELS 保留（S14 与
+ * eteamsView 合并）。
+ *
  * @module dsh-eteams/client/card
  */
 import { type ReactNode } from 'react';
 import type { Context } from '@deepseek-ai/cordis';
 import { Avatar } from './avatar';
 import { activateETeamsTab } from './bridge';
+import { Badge } from './components/ui/badge';
+import { Button } from './components/ui/button';
+import { Card } from './components/ui/card';
 import { ClientErrorBoundary } from './diagnostics';
 import { useActivityState, type TeamSnapshot } from './monitor';
 
@@ -155,93 +175,68 @@ export function ETeamsCard({ node }: { node: { data: unknown } }): ReactNode {
   const team = findTeam(state, data);
   return (
     <ClientErrorBoundary label="团队卡片">
-      <div
-        style={{
-          border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.3))',
-          borderRadius: 12,
-          padding: '12px 16px',
-          margin: '8px 0',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <strong>🐳 {data.teamName}</strong>
-          <span
-            style={{
-              fontSize: 11,
-              padding: '1px 8px',
-              borderRadius: 999,
-              border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.35))',
+      {/* 表面根（D19b）：.eteams-ui 作用域根，工具类经后代选择器作用于子树。 */}
+      <div className="eteams-ui">
+        <Card className="eteams-ui my-2 border-solid px-4 py-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <strong>🐳 {data.teamName}</strong>
+            <Badge
+              variant="outline"
+              className="rounded-full border-solid px-2 py-px text-[11px] font-normal"
+            >
+              {team !== undefined ? (PHASE_LABELS[team.phase] ?? team.phase) : '连接中…'}
+            </Badge>
+            {team !== undefined && team.pendingDecisions.length > 0 && (
+              <Badge
+                variant="outline"
+                className="rounded-full border-solid border-[color:color-mix(in_srgb,var(--warning)_40%,transparent)] px-2 py-px text-[11px] font-normal text-warning"
+              >
+                △ {team.pendingDecisions.length}
+              </Badge>
+            )}
+          </div>
+          {team !== undefined ? (
+            <>
+              <div className="mb-1 mt-2 flex items-center">
+                {team.members.slice(0, 8).map((m) => (
+                  <span key={m.name} className="-mr-1.5" title={`${m.name} · ${m.status}`}>
+                    <Avatar name={m.name} size={26} />
+                  </span>
+                ))}
+                <span className="ml-3 text-xs text-muted-foreground">
+                  {team.members.length} 名成员
+                </span>
+              </div>
+              <div className="h-[5px] overflow-hidden rounded-full bg-border">
+                <div
+                  className="h-full bg-accent"
+                  style={{
+                    width: `${team.progress.total === 0 ? 0 : (team.progress.completed / team.progress.total) * 100}%`,
+                  }}
+                />
+              </div>
+              <div className="my-1.5 text-xs text-muted-foreground">
+                {team.progress.completed}/{team.progress.total} 完成
+                {team.latestEvents.at(-1) !== undefined
+                  ? ` · ${team.latestEvents.at(-1)!.text}`
+                  : ''}
+              </div>
+            </>
+          ) : (
+            <div className="my-1.5 text-xs text-muted-foreground">{data.goal ?? ''}</div>
+          )}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="border-solid"
+            onClick={() => {
+              activateETeamsTab();
             }}
           >
-            {team !== undefined ? (PHASE_LABELS[team.phase] ?? team.phase) : '连接中…'}
-          </span>
-          {team !== undefined && team.pendingDecisions.length > 0 && (
-            <span
-              style={{
-                fontSize: 11,
-                padding: '1px 8px',
-                borderRadius: 999,
-                border: '1px solid #c78a1d66',
-                color: '#c78a1d',
-              }}
-            >
-              △ {team.pendingDecisions.length}
-            </span>
-          )}
-        </div>
-        {team !== undefined ? (
-          <>
-            <div style={{ display: 'flex', alignItems: 'center', margin: '8px 0 4px' }}>
-              {team.members.slice(0, 8).map((m) => (
-                <span key={m.name} style={{ marginRight: -6 }} title={`${m.name} · ${m.status}`}>
-                  <Avatar name={m.name} size={26} />
-                </span>
-              ))}
-              <span style={{ fontSize: 12, opacity: 0.65, marginLeft: 12 }}>
-                {team.members.length} 名成员
-              </span>
-            </div>
-            <div
-              style={{
-                height: 5,
-                borderRadius: 999,
-                background: 'var(--dsw-alias-border-l2, rgba(128,128,128,0.25))',
-                overflow: 'hidden',
-              }}
-            >
-              <div
-                style={{
-                  height: '100%',
-                  width: `${team.progress.total === 0 ? 0 : (team.progress.completed / team.progress.total) * 100}%`,
-                  background: 'var(--dsw-alias-accent, #4b7bec)',
-                }}
-              />
-            </div>
-            <div style={{ fontSize: 12, opacity: 0.65, margin: '6px 0' }}>
-              {team.progress.completed}/{team.progress.total} 完成
-              {team.latestEvents.at(-1) !== undefined ? ` · ${team.latestEvents.at(-1)!.text}` : ''}
-            </div>
-          </>
-        ) : (
-          <div style={{ fontSize: 12, opacity: 0.65, margin: '6px 0' }}>{data.goal ?? ''}</div>
-        )}
-        <button
-          type="button"
-          onClick={() => {
-            activateETeamsTab();
-          }}
-          style={{
-            padding: '3px 12px',
-            fontSize: 12,
-            borderRadius: 8,
-            border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.35))',
-            background: 'none',
-            color: 'inherit',
-            cursor: 'pointer',
-          }}
-        >
-          打开面板
-        </button>
+            打开面板
+          </Button>
+        </Card>
       </div>
     </ClientErrorBoundary>
   );
