@@ -48,7 +48,14 @@
  *
  * @module dsh-eteams/client/eteamsView
  */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
 import {
   Button,
@@ -253,10 +260,31 @@ const PROGRESS_FILL_CLASS =
   'h-full rounded-full bg-[linear-gradient(90deg,var(--dsw-alias-brand-primary,#0ea5e9),var(--dsw-alias-state-business-primary,#1d4ed8))]';
 /** 原 styles.eventRow（7px 上下距 / 13px / 次级文字 / 下边线）。 */
 const EVENT_ROW_CLASS = `border-b border-solid py-[7px] text-[13px] leading-[1.55] ${BORDER_L1_CLASS} ${TEXT2_CLASS}`;
-/** 原 styles.rail（84px 窄栏 / 3px 纵向间距 / 右分隔线 / 上 2 右 12）。 */
+/** 原 styles.rail（窄栏态：84px / 3px 纵向间距 / 右分隔线 / 上 2 右 12）。
+ * docs/22 S22-2：面板宽 ≥720px 时改用官网风格的宽栏 RAIL_WIDE_CLASS，
+ * 窄面板回落本类（84px 窄栏原样保留，窄上下文零回归）。 */
 const RAIL_CLASS = `flex w-[84px] shrink-0 flex-col gap-[3px] border-r border-solid pr-3 pt-0.5 ${BORDER_L1_CLASS}`;
 
-/** 侧栏按钮（原 fns.railBtn）：active/idle 两态都是完整字面量映射（无拼接，
+/** 官网 docs 侧栏风格的宽栏（docs/22 D20c，tailwindcss.cn 实测标记还原）：
+ * 172px（官网 15rem 等比收窄）+ 右分隔线；列表自带连续左细线（官网
+ * `border-l border-slate-100`，这里走主题跟随的 l1 别名）。 */
+const RAIL_WIDE_CLASS = `flex w-[172px] shrink-0 flex-col border-r border-solid pr-4 pt-1 ${BORDER_L1_CLASS}`;
+/** 宽栏分组标题（官网 h5：`mb-3 font-semibold text-slate-900` 的 token 版）。 */
+const RAIL_TITLE_CLASS = 'mb-3 font-semibold text-foreground';
+/** 宽栏导航列表（官网 ul：`space-y-2 border-l` 的 token 版）。 */
+const RAIL_LIST_CLASS = `space-y-2 border-l border-solid ${BORDER_L1_CLASS}`;
+
+/** 宽栏导航链接三态（官网 a 的签名交互，docs/22 22.1.3）：自带 1px 左边线
+ * 压在列表线上（`-ml-px`），常态透明、hover 亮线 + 文字加深、**激活 = sky
+ * 文字 + 同色左线（border-current）+ semibold**；全部完整字面量（21.5.1
+ * content 扫描纪律），色走主题跟随别名（D19c）。 */
+const RAIL_LINK_BASE_CLASS =
+  'block border-0 border-l border-solid bg-transparent py-[3px] pl-4 -ml-px text-left text-[13px] leading-6 [font-family:inherit] transition-colors';
+const RAIL_LINK_IDLE_CLASS =
+  'border-transparent text-[color:var(--dsw-alias-label-secondary,#334155)] hover:border-[color:var(--dsw-alias-label-tertiary,#94a3b8)] hover:text-foreground';
+const RAIL_LINK_ACTIVE_CLASS = 'border-current font-semibold text-primary';
+
+/** 侧栏按钮（窄栏态，原 fns.railBtn）：active/idle 两态都是完整字面量映射（无拼接，
 teamsButton tabBtnClass 同款）；active 底=交互激活、字=brand 主色 token。 */
 const railBtnClass = (active: boolean): string =>
   cn(
@@ -265,6 +293,19 @@ const railBtnClass = (active: boolean): string =>
       ? 'bg-[color:var(--dsw-alias-interactive-bg-active,rgba(14,165,233,0.12))] font-semibold text-primary'
       : 'bg-transparent font-medium text-[color:var(--dsw-alias-label-secondary,#47546c)]',
   );
+
+/** 宽栏导航链接类名（官网三态查表；同 railBtnClass 的映射表口径）。 */
+const railLinkClass = (active: boolean): string =>
+  cn(
+    RAIL_LINK_BASE_CLASS,
+    active ? RAIL_LINK_ACTIVE_CLASS : RAIL_LINK_IDLE_CLASS,
+    'cursor-pointer',
+  );
+
+/** 宽栏阈值（docs/22 S22-2）：面板作用域根宽 ≥ 此值用官网风格宽栏，
+ * 否则回落 84px 窄栏。宿主 conversation.view 视图区与整页团队页宽度差异大，
+ * Tailwind v3 无容器查询（v4 才内置），以作用域根实测为准。 */
+const RAIL_WIDE_MIN_WIDTH = 720;
 
 /* —— S13 迁移新增的类名常量（成员/任务两区块；完整字面量，同 S12 纪律）—— */
 
@@ -571,6 +612,26 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
   const [agentActivity, setAgentActivity] = useState<Record<string, string>>({});
   // 创建卡片/弹层跳转信号（docs/19.9.5）：递增计数驱动 MembersTab 打开新增页。
   const [openAddTick, setOpenAddTick] = useState(0);
+  // docs/22 S22-2：面板作用域根宽 ≥ RAIL_WIDE_MIN_WIDTH 用官网风格宽栏，
+  // 否则回落 84px 窄栏。Tailwind v3 无容器查询，以作用域根实测为准；
+  // useLayoutEffect 首帧前同步测量避免闪栏，ResizeObserver 跟随布局变化，
+  // 仅在阈值两侧翻转时 setState（不重渲染 spam）。观察器缺失（老内核）恒宽栏。
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [railWide, setRailWide] = useState(true);
+  useLayoutEffect(() => {
+    const el = rootRef.current;
+    if (el === null || typeof ResizeObserver === 'undefined') return;
+    const measure = (width: number): void => {
+      const next = width >= RAIL_WIDE_MIN_WIDTH;
+      setRailWide((prev) => (prev === next ? prev : next));
+    };
+    const ro = new ResizeObserver((entries) => {
+      measure(entries[0]?.contentRect.width ?? el.clientWidth);
+    });
+    ro.observe(el);
+    measure(el.clientWidth);
+    return () => ro.disconnect();
+  }, []);
   useEffect(() => {
     const h = (): void => {
       // 已挂载路径由窗口事件处理；顺带消费 pending 标记，防止标记滞留到
@@ -674,23 +735,43 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
   // 是高度链锚点 height:100%（内壳 h-full 只能解析到作用域根，见文件头 S14
   // 注记），其余壳样式全部工具类化。
   return (
-    <div className="eteams-ui" style={{ height: '100%' }} data-eteams="view">
+    <div className="eteams-ui" style={{ height: '100%' }} data-eteams="view" ref={rootRef}>
       {/* 卡片化样式（用户反馈）：角色/团队卡片与删除按钮的 hover 态一次注入，
         面板内与整页团队页共用同一渲染根，注入一次即可。 */}
       <style>{ROLE_LIST_CSS}</style>
       <div className={SHELL_CLASS}>
-        <div className={RAIL_CLASS}>
-          {tabs.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              className={railBtnClass(activeTab === t.id)}
-              onClick={() => dispatch({ type: 'ui/setNav', payload: t.id })}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+        {railWide ? (
+          /* docs/22 S22-2 宽栏：官网 docs 侧栏签名——分组标题 + 连续左细线
+            列表 + 链接自带左边线三态（激活 = sky 文字 + 同色左线 + semibold）。 */
+          <div className={RAIL_WIDE_CLASS}>
+            <h5 className={RAIL_TITLE_CLASS}>团队面板</h5>
+            <div className={RAIL_LIST_CLASS}>
+              {tabs.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  className={railLinkClass(activeTab === t.id)}
+                  onClick={() => dispatch({ type: 'ui/setNav', payload: t.id })}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className={RAIL_CLASS}>
+            {tabs.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                className={railBtnClass(activeTab === t.id)}
+                onClick={() => dispatch({ type: 'ui/setNav', payload: t.id })}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className={CONTENT_CLASS}>
           {/* 顶栏（用户反馈）：团队切换改为「团队」页的卡片栅格，这里只保留
