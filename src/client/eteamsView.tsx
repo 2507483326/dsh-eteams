@@ -10,8 +10,8 @@
  * - D19b：本面板注册在宿主 conversation.view 槽位，宿主视图区没有
  *   `.eteams-ui` 祖先——表面根挂 `className="eteams-ui"` 字面量，工具类
  *   （后代选择器）才能生效；作用域根自身不承工具类样式，面板壳布局仍由
- *   styles.root inline 承载（content 列与余下区块留给 S13/S14，避免加裸
- *   包裹层破坏 h-100% 高度链）。
+ *   styles.root inline 承载（content 列与余下区块留给 S14，避免加裸包裹层
+ *   破坏 h-100% 高度链）。
  * - preflight 已关：`border` 只产宽度，显式 `border-solid` 补边框样式；
  *   边框色沿用原 l1 档（S3 桥默认是 l2），任意值直引保持视觉（S11 先例）。
  * - D19c：语义色走 token 类（text-foreground / text-muted-foreground /
@@ -21,6 +21,17 @@
  *   进度条宽度（inline style，S14 清点口径，S5 card 先例）。
  * - 状态徽标：Tone→完整字面量类映射表 TONE_CLASS（禁模板字符串拼类名，
  *   21.5.1 content 扫描纪律），阶段徽标以 outline Badge 呈现（S5 card 先例）。
+ *
+ * S13 样式迁移批次二（docs/21-client-ui-stack.md 21.6 / D19b/D19g）：成员
+ * （团队成员栅格 LeaderCard/MemberCard、汇报成员选择与成员汇报时间线）与
+ * 任务（TasksTab/TaskStations）两区块的 inline style 迁 Tailwind 类；任务
+ * 详情抽屉升级为 shadcn Dialog（本步 vendoring components/ui/dialog.tsx，
+ * 并新增自管 portal 容器 components/ui/portal.ts——Radix 默认 portal 到
+ * body 会逃出 `.eteams-ui` 作用域，改挂 body 下 `eteams-ui-portal eteams-ui`
+ * 容器）。开合状态不变：expandedTask 仍走 ui model（ui/setDrawerTask），
+ * 抽屉仅展开时挂载（track 拉取随挂载触发，同迁移前）、关闭发 null。执行槽
+ * 站点 ✔/●/◌ 结构原样保留，仅类名替换。团队卡片栅格/新建团队/角色库/构建
+ * 工作台等余下区块与面板壳（styles.root/content）仍留 S14。
  *
  * @module dsh-eteams/client/eteamsView
  */
@@ -60,6 +71,13 @@ import { cn } from './cn';
 import { ClientErrorBoundary } from './diagnostics';
 import { Badge } from './components/ui/badge';
 import { Card } from './components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from './components/ui/dialog';
 import { MdEditor } from './mdEditor';
 import {
   addTeamMember,
@@ -212,7 +230,7 @@ const PILL_FG: Record<Tone, string> = {
  * S12：Tone→工具类映射表（完整字面量，content 扫描可检出——禁 `tone-${x}`
  * 拼接，21.5.1 纪律）。语义色走 token 类（D19c；success/warning/business
  * 为附录 A 扩展 token，muted 走中性 token muted-foreground）。
- * S13/S14 的徽标迁移沿用此表。
+ * S13 的状态徽标（pillClass/dotClass）沿用此表语义，S14 余下区块同。
  */
 const TONE_CLASS: Record<Tone, string> = {
   info: 'text-business',
@@ -270,15 +288,7 @@ const styles: Record<string, CSSProperties> = {
     paddingRight: 2,
   },
   /* topbar style removed with the page-header redesign (用户反馈：去顶栏) */
-  select: {
-    padding: '5px 10px',
-    borderRadius: 8,
-    border: `1px solid ${T.border2}`,
-    background: T.surface,
-    color: T.text,
-    fontSize: 12,
-    fontWeight: 500,
-  },
+  /* select 样式已随 S13 成员/任务迁移删除（SELECT_CLASS）。 */
   /* title style removed with the topbar 团队 span (用户反馈：去顶栏标题) */
   card: {
     border: `1px solid ${T.border}`,
@@ -305,20 +315,8 @@ const styles: Record<string, CSSProperties> = {
     overflow: 'hidden',
     margin: '10px 0 6px',
   },
-  memberGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))',
-    gap: 12,
-  },
-  memberCard: {
-    border: `1px solid ${T.border}`,
-    borderRadius: 12,
-    padding: 12,
-    background: T.surface,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 8,
-  },
+  /* memberGrid/memberCard 样式已随 S13 成员迁移删除（MEMBER_GRID_CLASS /
+  MEMBER_CARD_CLASS）。 */
   /* memberRow removed with the row-list layout (用户反馈：列表改卡片) */
   /* 卡片化（用户反馈）：角色列表与团队列表的卡片栅格。 */
   cardGrid: {
@@ -404,12 +402,10 @@ const styles: Record<string, CSSProperties> = {
     color: T.text3,
     paddingTop: 1,
   },
-  taskRow: {
-    padding: '10px 8px',
-    borderBottom: `1px solid ${T.border}`,
-    borderRadius: 8,
-    cursor: 'pointer',
-  },
+  /* taskRow/station 样式已随 S13 任务迁移删除（TASK_ROW_CLASS；站点行内类
+  见 TaskStations）。 */
+  /* drawer/attempt 样式已随 S13 迁移删除（DRAWER_CLASS / ATTEMPT_CLASS；
+  任务抽屉升级为 shadcn Dialog）。 */
   chip: {
     display: 'inline-block',
     padding: '1px 7px',
@@ -419,21 +415,8 @@ const styles: Record<string, CSSProperties> = {
     background: T.sunken,
     color: T.text2,
   },
-  station: { fontSize: 12, color: T.text3, marginRight: 6 },
-  drawer: {
-    background: T.sunken,
-    border: `1px solid ${T.border}`,
-    borderRadius: 10,
-    padding: '12px 14px',
-    margin: '8px 0 14px',
-  },
-  attempt: {
-    borderLeft: `2px solid ${T.border2}`,
-    padding: '2px 0 2px 12px',
-    margin: '10px 0',
-  },
-  /* 看板空态已改 EMPTY_CLASS（S12）；本条仍被 团队/角色/任务 空态使用，
-  S13/S14 迁移后删除。 */
+  /* 看板/任务空态已改 EMPTY_CLASS（S12/S13）；本条仍被 团队/角色 空态使用，
+  S14 迁移后删除。 */
   empty: {
     textAlign: 'center',
     padding: '36px 20px',
@@ -453,15 +436,7 @@ const styles: Record<string, CSSProperties> = {
     fontWeight: 500,
   },
   /* banner/eventRow 样式已随 S12 看板迁移删除（BANNER_CLASS / EVENT_ROW_CLASS）。 */
-  dialogItem: {
-    padding: '7px 10px',
-    borderRadius: 8,
-    margin: '4px 0',
-    fontSize: 12.5,
-    background: T.surface,
-    border: `1px solid ${T.border}`,
-    color: T.text2,
-  },
+  /* dialogItem 样式已随 S13 汇报时间线迁移删除（DIALOG_ITEM_CLASS）。 */
   formRow: { display: 'flex', flexDirection: 'column', gap: 5, marginBottom: 10 },
   formLabel: { fontSize: 11, fontWeight: 600, color: T.text3, letterSpacing: 0.3 },
   textarea: {
@@ -538,13 +513,15 @@ const styles: Record<string, CSSProperties> = {
 /** Parameterized style factories (tone-mapped, token-driven). */
 const fns = {
   /* railBtn 已随 S12 侧栏迁移删除（railBtnClass）。progressFill 仍被 团队页
-  进度条使用（S13 迁移后删除；看板进度条已改 PROGRESS_FILL_CLASS）。 */
+  进度条使用（S14 迁移后删除；看板进度条已改 PROGRESS_FILL_CLASS）。 */
   progressFill: (pct: number): CSSProperties => ({
     height: '100%',
     width: `${pct}%`,
     background: `linear-gradient(90deg, ${T.accent}, ${T.info})`,
     borderRadius: 999,
   }),
+  /* pill 仍被 S14 的构建工作台区块使用；S13 成员/任务已改 pillClass。
+  dot 已随 S13 成员/任务迁移删除（dotClass）。 */
   pill: (tone: Tone): CSSProperties => ({
     display: 'inline-flex',
     alignItems: 'center',
@@ -558,14 +535,6 @@ const fns = {
     // TONE_FG 的饱和 primary，互不影响）。
     color: PILL_FG[tone],
     background: TONE_BG[tone],
-  }),
-  dot: (tone: Tone): CSSProperties => ({
-    display: 'inline-block',
-    width: 6,
-    height: 6,
-    borderRadius: '50%',
-    background: TONE_FG[tone],
-    flexShrink: 0,
   }),
 };
 
@@ -617,17 +586,81 @@ const railBtnClass = (active: boolean): string =>
       : 'bg-transparent font-medium text-[color:var(--dsw-alias-label-secondary,#47546c)]',
   );
 
+/* —— S13 迁移新增的类名常量（成员/任务两区块；完整字面量，同 S12 纪律）—— */
+
+/** 原 styles.select（面板下拉）：成员拉人选择与汇报成员选择共用。 */
+const SELECT_CLASS =
+  'rounded-[8px] border border-solid bg-background px-2.5 py-[5px] text-[12px] font-medium text-foreground';
+/** 原 styles.formRow / styles.formLabel（表单行）：汇报页先用，S14 表单复用。 */
+const FORM_ROW_CLASS = 'mb-2.5 flex flex-col gap-[5px]';
+const FORM_LABEL_CLASS = 'text-[11px] font-semibold tracking-[0.3px] text-muted-foreground';
+/** 原 styles.listTitle / styles.listCount（列表页头）：S14 的团队/角色列表头复用。 */
+const LIST_TITLE_CLASS = 'm-0 min-w-0 flex-1 text-[14px] font-bold text-foreground';
+const LIST_COUNT_CLASS = 'text-[12px] text-muted-foreground';
+/** 原 styles.memberGrid（成员卡片栅格，最小 230px 自适应列）。 */
+const MEMBER_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(230px,1fr))] gap-3';
+/** 原 styles.memberCard（成员卡片：l1 边框 / 12px 圆角 / 8px 纵向间距）。 */
+const MEMBER_CARD_CLASS = `flex flex-col gap-2 rounded-xl border border-solid bg-background p-3 ${BORDER_L1_CLASS}`;
+/** 原 styles.roleChip（品牌淡底小徽标）：S14 团队卡片「当前」复用。 */
+const ROLE_CHIP_CLASS =
+  'inline-block rounded-full bg-[color:var(--dsw-alias-interactive-bg-active,rgba(75,123,236,0.12))] px-[9px] py-px text-[11px] font-semibold text-primary';
+/** 原 styles.btn（描边小按钮）：移出团队在调用点叠 text-destructive。 */
+const BTN_CLASS = `cursor-pointer rounded-[8px] border border-solid bg-background px-3 py-[5px] text-[12px] font-medium ${TEXT2_CLASS}`;
+/** 原 styles.drawer（sunken 抽屉面板）：任务抽屉已升级为 Dialog，现仅成员
+汇报时间线使用。 */
+const DRAWER_CLASS = `mt-2 mb-3.5 rounded-[10px] border border-solid bg-[color:var(--dsw-alias-bg-layer-2,#edf0f4)] px-3.5 py-3 ${BORDER_L1_CLASS}`;
+/** 原 styles.dialogItem（汇报时间线条目）。 */
+const DIALOG_ITEM_CLASS = `my-1 rounded-[8px] border border-solid bg-background px-2.5 py-[7px] text-[12.5px] ${BORDER_L1_CLASS} ${TEXT2_CLASS}`;
+/** 原 styles.taskRow（任务行：l1 下边线 / 8px 圆角 / 指针）。 */
+const TASK_ROW_CLASS = `cursor-pointer rounded-[8px] border-b border-solid px-2 py-2.5 ${BORDER_L1_CLASS}`;
+/** 原 styles.chip（依赖小芯片）：S14 角色详情的所属团队芯片复用。 */
+const CHIP_CLASS = `mr-1 mb-0.5 inline-block rounded-[6px] bg-[color:var(--dsw-alias-bg-layer-2,#edf0f4)] px-[7px] py-px text-[11px] ${TEXT2_CLASS}`;
+/** 原 styles.attempt（执行线路尝试条目：l2 左描边；--border 桥即 l2 档）。 */
+const ATTEMPT_CLASS = 'my-2.5 border-l-2 border-solid border-border py-0.5 pl-3';
+/** 任务详情 Dialog 的调用面覆盖：限宽收高可滚动 + 面板文字基准（portal
+容器挂在 body 下，不继承 styles.root 的 13px/前景色，这里显式补齐；
+max-w-xl 压过上游 max-w-lg，rounded-xl 与上游 sm:rounded-lg 同为 12px）。 */
+const DRAWER_DIALOG_CLASS =
+  'max-h-[70vh] max-w-xl overflow-y-auto rounded-xl text-[13px] leading-[1.55] text-foreground';
+
+/** 原 fns.pill 的类名版（S13 成员/任务区块；S14 的构建工作台仍用 fns.pill）。
+Pill 文字沿用 PILL_FG 的 700 级深色档——ok/warn/err 是刻意硬编码的深色
+（state-*-primary 饱和档压不住淡底），不走 token；底色沿用 TONE_BG
+（static-*-100 淡底任意值直引，info 为同值 rgba 直引）。 */
+const PILL_BASE_CLASS =
+  'inline-flex w-fit items-center gap-[5px] rounded-full px-[9px] py-px text-[11px] font-medium';
+const PILL_TONE_CLASS: Record<Tone, string> = {
+  info: 'bg-[color:rgba(29,78,216,0.1)] text-business',
+  ok: 'bg-[color:var(--dsw-static-green-100,#e6faed)] text-[#15803d]',
+  warn: 'bg-[color:var(--dsw-static-amber-100,#fef5e7)] text-[#b45309]',
+  err: 'bg-[color:var(--dsw-static-red-100,#fee2e2)] text-[#b91c1c]',
+  muted: 'bg-[color:var(--dsw-alias-bg-layer-2,#edf0f4)] text-muted-foreground',
+};
+/** 原 fns.dot 的类名版（完整字面量映射）：dot 走饱和 primary token（与
+PILL_FG 的深档文字互不影响，S12 既有口径）。 */
+const DOT_BASE_CLASS = 'inline-block h-1.5 w-1.5 shrink-0 rounded-full';
+const DOT_TONE_CLASS: Record<Tone, string> = {
+  info: 'bg-business',
+  ok: 'bg-success',
+  warn: 'bg-warning',
+  err: 'bg-destructive',
+  muted: 'bg-muted-foreground',
+};
+const pillClass = (tone: Tone): string => cn(PILL_BASE_CLASS, PILL_TONE_CLASS[tone]);
+const dotClass = (tone: Tone): string => cn(DOT_BASE_CLASS, DOT_TONE_CLASS[tone]);
+
+/** S13：执行链站点行——✔/●/◌ 结构原样保留，仅样式改 Tailwind 类。 */
 function TaskStations({ task }: { task: TaskView }): ReactNode {
   if (task.chainLength === 0) return null;
   return (
-    <div style={{ marginTop: 3 }}>
+    <div className="mt-[3px]">
       {task.chain.map((s, i) => (
-        <span key={i} style={styles.station}>
+        <span key={i} className="mr-1.5 text-[12px] text-muted-foreground">
           {s.stationStatus === 'done' ? '✔' : s.stationStatus === 'current' ? '●' : '◌'} {s.member}
           {i < task.chain.length - 1 ? ' →' : ''}
         </span>
       ))}
-      <span style={styles.muted}>
+      <span className={MUTED_CLASS}>
         {' '}
         站点 {Math.min(task.chainCursor + 1, task.chainLength)}/{task.chainLength}
       </span>
@@ -635,14 +668,23 @@ function TaskStations({ task }: { task: TaskView }): ReactNode {
   );
 }
 
+/**
+ * S13：任务详情抽屉 → shadcn Dialog。开合状态仍走 ui model：expandedTask
+ * === task.taskId 时由 TasksTab 挂载本组件（track 拉取随挂载触发，与迁移前
+ * 一致），挂载即 open；Esc/遮罩/关闭钮统一走 onOpenChange → onClose，由
+ * 调用点 dispatch ui/setDrawerTask(null) 收起（S9 的显式 null 语义）。
+ * 内容结构原样保留（产出 + 尝试时间线），仅样式改 Tailwind 类。
+ */
 function TaskDrawer({
   team,
   task,
   now,
+  onClose,
 }: {
   team: TeamSnapshot;
   task: TaskView;
   now: number;
+  onClose: () => void;
 }): ReactNode {
   const [track, setTrack] = useState<{
     attempts?: {
@@ -673,35 +715,53 @@ function TaskDrawer({
     };
   }, [team.teamId, team.version, task.taskId]);
   return (
-    <div style={styles.drawer}>
-      {task.outcome !== null && <div style={styles.line}>产出：{task.outcome}</div>}
-      {(track?.attempts ?? [])
-        .slice()
-        .reverse()
-        .map((a) => (
-          <div key={a.id} style={styles.attempt}>
-            <div style={styles.line}>
-              <strong>{a.id}</strong> · {a.kind} · {a.member} ·{' '}
-              {STATUS_LABELS[a.status] ?? a.status}
-              <span style={styles.muted}>
-                {' '}
-                {a.claimedAt ? relativeTime(a.claimedAt, now) : ''}
-                {a.endedAt ? `–${relativeTime(a.endedAt, now)}` : ''}
-              </span>
-            </div>
-            {(a.progress ?? []).map((p, i) => (
-              <div key={i} style={{ ...styles.line, ...styles.muted }}>
-                {relativeTime(p.at, now)} {p.text}
+    <Dialog
+      open
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+    >
+      <DialogContent className={DRAWER_DIALOG_CLASS}>
+        <DialogHeader className="space-y-1 text-left">
+          <DialogTitle className="text-[13px] leading-[1.5]">
+            {task.taskId} · {task.subject}
+          </DialogTitle>
+          <DialogDescription className={MUTED_CLASS}>
+            {STATUS_LABELS[task.status] ?? task.status}
+            {task.assignee !== null ? ` · ${task.assignee}` : ''}
+          </DialogDescription>
+        </DialogHeader>
+        {task.outcome !== null && <div className={LINE_CLASS}>产出：{task.outcome}</div>}
+        {(track?.attempts ?? [])
+          .slice()
+          .reverse()
+          .map((a) => (
+            <div key={a.id} className={ATTEMPT_CLASS}>
+              <div className={LINE_CLASS}>
+                <strong>{a.id}</strong> · {a.kind} · {a.member} ·{' '}
+                {STATUS_LABELS[a.status] ?? a.status}
+                <span className={MUTED_CLASS}>
+                  {' '}
+                  {a.claimedAt ? relativeTime(a.claimedAt, now) : ''}
+                  {a.endedAt ? `–${relativeTime(a.endedAt, now)}` : ''}
+                </span>
               </div>
-            ))}
-            {a.error !== undefined && (
-              <div style={{ ...styles.line, color: T.err }}>✘ {a.error}</div>
-            )}
-            {a.result?.output !== undefined && <div style={styles.muted}>✔ {a.result.output}</div>}
-          </div>
-        ))}
-      {track === null && <div style={styles.muted}>执行线路加载中…</div>}
-    </div>
+              {(a.progress ?? []).map((p, i) => (
+                <div key={i} className={cn(MUTED_CLASS, 'my-1 leading-[1.6]')}>
+                  {relativeTime(p.at, now)} {p.text}
+                </div>
+              ))}
+              {a.error !== undefined && (
+                <div className="my-1 text-[13px] leading-[1.6] text-destructive">✘ {a.error}</div>
+              )}
+              {a.result?.output !== undefined && (
+                <div className={MUTED_CLASS}>✔ {a.result.output}</div>
+              )}
+            </div>
+          ))}
+        {track === null && <div className={MUTED_CLASS}>执行线路加载中…</div>}
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -733,15 +793,15 @@ function MemberDialog({ team, member }: { team: TeamSnapshot; member: MemberView
     progress: '进度',
   };
   return (
-    <div style={styles.drawer}>
-      <div style={{ ...styles.sectionTitle, fontSize: 12, color: T.text2 }}>
+    <div className={DRAWER_CLASS}>
+      <div className={cn(SECTION_TITLE_CLASS, 'text-[12px]', TEXT2_CLASS)}>
         汇报记录 · {member.name}
-        <span style={styles.muted}>（只读；直发消息在 M5 开放）</span>
+        <span className={MUTED_CLASS}>（只读；直发消息在 M5 开放）</span>
       </div>
-      {items.length === 0 && <div style={styles.muted}>暂无消息记录</div>}
+      {items.length === 0 && <div className={MUTED_CLASS}>暂无消息记录</div>}
       {items.map((it, i) => (
-        <div key={i} style={styles.dialogItem}>
-          <span style={{ ...styles.muted, color: T.text3 }}>
+        <div key={i} className={DIALOG_ITEM_CLASS}>
+          <span className={MUTED_CLASS}>
             [{kindLabel[it.kind] ?? it.kind}] {it.from ?? ''} ·{' '}
           </span>
           {it.text.length > 160 ? `${it.text.slice(0, 160)}…` : it.text}
@@ -1203,15 +1263,18 @@ function TeamTab({
         <div style={styles.empty}>尚未选择团队。创建团队后在这里从「角色」列表拉人组队。</div>
       ) : (
         <>
-          <div style={styles.card}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-              <h3 style={styles.listTitle}>团队成员</h3>
-              <span style={styles.listCount}>{team.members.length} 人 · 领队默认在团</span>
+          {/* 团队成员卡（S13）：容器换 shadcn Card（PANEL_CARD_CLASS 覆盖层，
+          S12 先例）；拉人选择与成员栅格 Tailwind 化。上方的团队卡片栅格与
+          新建团队卡留 S14（styles.card 内联不变）。 */}
+          <Card className={PANEL_CARD_CLASS}>
+            <div className="mb-2.5 flex items-center gap-2">
+              <h3 className={LIST_TITLE_CLASS}>团队成员</h3>
+              <span className={LIST_COUNT_CLASS}>{team.members.length} 人 · 领队默认在团</span>
             </div>
             {roster.length > 0 && (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+              <div className="mb-2.5 flex items-center gap-2">
                 <select
-                  style={styles.select}
+                  className={SELECT_CLASS}
                   value={pick}
                   onChange={(e) => setPick(e.target.value)}
                 >
@@ -1235,7 +1298,7 @@ function TeamTab({
                 </Button>
               </div>
             )}
-            <div style={styles.memberGrid}>
+            <div className={MEMBER_GRID_CLASS}>
               <LeaderCard captain={team.captain} />
               {team.members.map((m) => (
                 <MemberCard
@@ -1249,42 +1312,42 @@ function TeamTab({
                 />
               ))}
               {team.members.length === 0 && (
-                <div style={styles.muted}>
+                <div className={MUTED_CLASS}>
                   还没有角色——先到「角色」页新增，或从上方角色列表拉人。
                 </div>
               )}
             </div>
-          </div>
+          </Card>
         </>
       )}
     </div>
   );
 }
 
-/** The 领队（项目牧羊人）leader card — expands into its Markdown 手册. */
+/** The 领队（项目牧羊人）leader card — expands into its Markdown 手册. S13 Tailwind 化。 */
 function LeaderCard({ captain }: { captain: CaptainView }): ReactNode {
   const [open, setOpen] = useState(false);
   return (
-    <div style={{ ...styles.memberCard, gridColumn: '1 / -1' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+    <div className={cn(MEMBER_CARD_CLASS, 'col-span-full')}>
+      <div className="flex items-center gap-2.5">
         <Avatar name={captain.name} seed={captain.avatar.seed} salt={captain.avatar.salt} />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontWeight: 600, fontSize: 13, color: T.text }}>{captain.name}</span>
-            <span style={styles.roleChip}>领队</span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-[13px] font-semibold text-foreground">{captain.name}</span>
+            <span className={ROLE_CHIP_CLASS}>领队</span>
           </div>
-          <div style={{ ...styles.muted, marginTop: 1 }}>
+          <div className={cn(MUTED_CLASS, 'mt-px')}>
             {captain.role} · 不接任务：负责拆解、指派与调度
           </div>
         </div>
         {captain.personaMd !== null && (
-          <button type="button" style={styles.btn} onClick={() => setOpen(!open)}>
+          <button type="button" className={BTN_CLASS} onClick={() => setOpen(!open)}>
             {open ? '收起手册' : '查看手册'}
           </button>
         )}
       </div>
       {open && captain.personaMd !== null && (
-        <div style={{ marginTop: 10, borderTop: `1px solid ${T.border}`, paddingTop: 10 }}>
+        <div className={cn('mt-2.5 border-t border-solid pt-2.5', BORDER_L1_CLASS)}>
           <MarkdownText text={captain.personaMd} />
         </div>
       )}
@@ -1292,7 +1355,7 @@ function LeaderCard({ captain }: { captain: CaptainView }): ReactNode {
   );
 }
 
-/** One team-member card: seeded avatar + status pill + 移出团队（领队不可移出）. */
+/** One team-member card: seeded avatar + status pill + 移出团队（领队不可移出）. S13 Tailwind 化。 */
 function MemberCard({
   member: m,
   activity,
@@ -1307,55 +1370,43 @@ function MemberCard({
 }): ReactNode {
   const tone = memberTone(m.status);
   return (
-    <div style={styles.memberCard}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+    <div className={MEMBER_CARD_CLASS}>
+      <div className="flex items-center gap-2.5">
         <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} />
-        <div style={{ minWidth: 0 }}>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              fontWeight: 600,
-              fontSize: 13,
-              color: T.text,
-            }}
-          >
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5 text-[13px] font-semibold text-foreground">
             {activity !== undefined && (
               <span
                 title={activity === 'running' ? '子代理运行中' : '子代理已完结'}
-                style={{
-                  width: 7,
-                  height: 7,
-                  borderRadius: '50%',
-                  flexShrink: 0,
-                  background: activity === 'running' ? T.ok : T.text3,
-                  boxShadow: activity === 'running' ? `0 0 0 3px ${T.okBg}` : 'none',
-                }}
+                className={
+                  activity === 'running'
+                    ? 'h-[7px] w-[7px] shrink-0 rounded-full bg-success shadow-[0_0_0_3px_var(--dsw-static-green-100,#e6faed)]'
+                    : 'h-[7px] w-[7px] shrink-0 rounded-full bg-muted-foreground'
+                }
               />
             )}
             {m.name}
           </div>
-          <div style={{ ...styles.muted, marginTop: 1 }}>
+          <div className={cn(MUTED_CLASS, 'mt-px')}>
             {m.role} · {m.model}
           </div>
         </div>
       </div>
-      <div style={fns.pill(tone)}>
-        <span style={fns.dot(tone)} />
+      <div className={pillClass(tone)}>
+        <span className={dotClass(tone)} />
         {STATUS_LABELS[m.status] ?? m.status}
-        {m.currentTaskId !== null && <span style={{ fontWeight: 400 }}>· {m.currentTaskId}</span>}
+        {m.currentTaskId !== null && <span className="font-normal">· {m.currentTaskId}</span>}
       </div>
-      <div style={{ display: 'flex', gap: 6 }}>
+      <div className="flex gap-1.5">
         {onOpenReports !== undefined && (
-          <button type="button" style={styles.btn} onClick={() => onOpenReports(m.name)}>
+          <button type="button" className={BTN_CLASS} onClick={() => onOpenReports(m.name)}>
             汇报记录
           </button>
         )}
         {onRemove !== undefined && (
           <button
             type="button"
-            style={{ ...styles.btn, color: T.err }}
+            className={cn(BTN_CLASS, 'text-destructive')}
             onClick={() => onRemove(m.name)}
           >
             移出团队
@@ -2545,7 +2596,9 @@ function MembersTab({
   );
 }
 
-/** 任务：按状态分组的任务清单（原「任务」）。 */
+/** 任务：按状态分组的任务清单（原「任务」）。S13 Tailwind 化：分组头 pill、
+任务行、依赖芯片与空态全迁 Tailwind 类；详情抽屉为 shadcn Dialog（见
+TaskDrawer），开合仍走 ui model 的 setExpandedTask。 */
 function TasksTab({
   team,
   now,
@@ -2563,22 +2616,22 @@ function TasksTab({
         const rows = team.tasks.filter((t) => group.statuses.includes(t.status));
         if (rows.length === 0) return null;
         return (
-          <div key={group.id} style={{ marginBottom: 14 }}>
-            <div style={{ ...styles.sectionTitle, marginBottom: 4 }}>
-              <span style={fns.pill(group.tone)}>
-                <span style={fns.dot(group.tone)} />
+          <div key={group.id} className="mb-3.5">
+            <div className={cn(SECTION_TITLE_CLASS, 'mb-1')}>
+              <span className={pillClass(group.tone)}>
+                <span className={dotClass(group.tone)} />
                 {group.label} · {rows.length}
               </span>
             </div>
             {rows.map((t) => (
               <div key={t.taskId}>
                 <div
-                  style={styles.taskRow}
+                  className={TASK_ROW_CLASS}
                   onClick={() => setExpandedTask(expandedTask === t.taskId ? null : t.taskId)}
                 >
                   <div>
                     <strong>{t.taskId}</strong> {t.subject}
-                    <span style={styles.muted}>
+                    <span className={MUTED_CLASS}>
                       {' '}
                       {STATUS_LABELS[t.status] ?? t.status}
                       {t.retryCount > 0 ? ` · ⟳${t.retryCount}` : ''}
@@ -2587,29 +2640,36 @@ function TasksTab({
                   </div>
                   <TaskStations task={t} />
                   {t.dependencies.length > 0 && (
-                    <div style={{ marginTop: 3 }}>
+                    <div className="mt-[3px]">
                       {t.dependencies.map((d) => (
-                        <span key={d} style={styles.chip}>
+                        <span key={d} className={CHIP_CLASS}>
                           依赖 {d}
                         </span>
                       ))}
                     </div>
                   )}
                 </div>
-                {expandedTask === t.taskId && <TaskDrawer team={team} task={t} now={now} />}
+                {expandedTask === t.taskId && (
+                  <TaskDrawer
+                    team={team}
+                    task={t}
+                    now={now}
+                    onClose={() => setExpandedTask(null)}
+                  />
+                )}
               </div>
             ))}
           </div>
         );
       })}
       {team.tasks.length === 0 && (
-        <div style={styles.empty}>还没有任务。计划批准后任务会出现在这里。</div>
+        <div className={EMPTY_CLASS}>还没有任务。计划批准后任务会出现在这里。</div>
       )}
     </div>
   );
 }
 
-/** 汇报：成员选择 + 汇报时间线（原「对话」，D15 只读）。 */
+/** 汇报：成员选择 + 汇报时间线（原「对话」，D15 只读）。S13 Tailwind 化。 */
 function ReportsTab({
   team,
   dialogMember,
@@ -2623,10 +2683,10 @@ function ReportsTab({
 }): ReactNode {
   return (
     <div>
-      <div style={styles.formRow}>
-        <span style={styles.formLabel}>选择成员</span>
+      <div className={FORM_ROW_CLASS}>
+        <span className={FORM_LABEL_CLASS}>选择成员</span>
         <select
-          style={styles.select}
+          className={SELECT_CLASS}
           value={dialogMember ?? ''}
           onChange={(e) => setDialogMember(e.target.value === '' ? null : e.target.value)}
         >
@@ -2639,7 +2699,7 @@ function ReportsTab({
         </select>
       </div>
       {member === null ? (
-        <div style={styles.muted}>选择一个成员查看对话时间线。</div>
+        <div className={MUTED_CLASS}>选择一个成员查看对话时间线。</div>
       ) : (
         <MemberDialog team={team} member={member} />
       )}
