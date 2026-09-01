@@ -58,8 +58,6 @@ import {
 } from 'react';
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
 import {
-  Button,
-  Input,
   IconCheckOutline16,
   IconPlusOutline16,
   IconSparkle16,
@@ -83,7 +81,9 @@ import {
 import { cn } from './cn';
 import { ClientErrorBoundary } from './diagnostics';
 import { EteamsBackdrop } from './eteamsBackdrop';
+import { Alert } from './components/ui/alert';
 import { Badge } from './components/ui/badge';
+import { Button } from './components/ui/button';
 import { Card } from './components/ui/card';
 import {
   Dialog,
@@ -92,6 +92,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from './components/ui/dialog';
+import { Input } from './components/ui/input';
+import { Progress } from './components/ui/progress';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from './components/ui/select';
 import { MdEditor } from './mdEditor';
 import {
   addTeamMember,
@@ -247,23 +256,14 @@ const SECTION_TITLE_CLASS =
 /** 原 styles.empty（虚线框空态）；边框色吃 S3 桥默认（--border 即原 l2 档）。 */
 const EMPTY_CLASS =
   'rounded-xl border border-dashed px-5 py-9 text-center leading-[1.55] text-muted-foreground';
-/** 原 styles.banner：warn 语义色走 token 类，淡底是 static-amber-100
-（无 token，任意值直引，D19c）。 */
-const BANNER_CLASS =
-  'mb-3 rounded-xl border border-solid border-warning bg-[color:var(--dsw-static-amber-100,#fef5e7)] px-3.5 py-2.5 text-[13px] leading-[1.55] text-foreground';
+/* docs/23 S23-3：原 styles.banner（BANNER_CLASS）迁移 shadcn Alert warning
+   变体（amber 淡底以 className 覆盖保留），使用位内联；原
+   PROGRESS_TRACK/FILL_CLASS 迁移 shadcn Progress（transform 技法，轨道
+   bg-secondary 即原 layer-2 档），一并删除手写常量。 */
 /** 面板卡片（原 styles.card → shadcn Card 的覆盖层）：底色回 layer-1 档
 （Card 默认 bg-card 是 layer-2）、l1 边框、原阴影；px-4 py-3.5 = 14px 16px。
 eteams-ui 字面量随 Card 根（S5 试点双保险）。 */
 const PANEL_CARD_CLASS = `eteams-ui mb-3 min-w-0 border border-solid bg-background px-4 py-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.03)] ${BORDER_L1_CLASS}`;
-/** 原 styles.progressTrack（6px 高 / sunken 淡底 / 999 圆角 / 上 10 下 6；
- * docs/23 D21d 兜底换官网 slate-100）。 */
-const PROGRESS_TRACK_CLASS =
-  'mt-2.5 mb-1.5 h-1.5 overflow-hidden rounded-full bg-[color:var(--dsw-alias-bg-layer-2,#f1f5f9)]';
-/** 原 fns.progressFill 的静态面（docs/23 D21a：渐变两端同桥 DSW 蓝——宿主内
- * info-fill 与 business-primary 同值即纯色档，对齐官网纯色进度条观感）；
- * 宽度百分比是运行时动态值，保留 inline style（S14 清点口径，S5 card 先例）。 */
-const PROGRESS_FILL_CLASS =
-  'h-full rounded-full bg-[linear-gradient(90deg,var(--dsw-alias-button-info-fill,#4176e6),var(--dsw-alias-state-business-primary,#4176e6))]';
 /** 原 styles.eventRow（7px 上下距 / 13px / 次级文字 / 下边线）。 */
 const EVENT_ROW_CLASS = `border-b border-solid py-[7px] text-[13px] leading-[1.55] ${BORDER_L1_CLASS} ${TEXT2_CLASS}`;
 /** 原 styles.rail（窄栏态：84px / 3px 纵向间距 / 右分隔线 / 上 2 右 12）。
@@ -316,14 +316,18 @@ const RAIL_WIDE_MIN_WIDTH = 720;
 
 /* —— S13 迁移新增的类名常量（成员/任务两区块；完整字面量，同 S12 纪律）—— */
 
-/** 原 styles.select（面板下拉）：成员拉人选择与汇报成员选择共用。 */
-const SELECT_CLASS =
-  'rounded-[8px] border border-solid bg-background px-2.5 py-[5px] text-[12px] font-medium text-foreground';
+/* docs/23 S23-3：原 styles.select（SELECT_CLASS）迁移 shadcn Select（触发器
+   对齐官网输入框签名：rounded-md + ring 边 + shadow-sm），空选项位以哨兵值
+   承载（Radix SelectItem 禁空串 value）；原 styles.btn（BTN_CLASS）迁移
+   shadcn Button outline/sm。手写常量删除，使用位内联。 */
+/** shadcn Select 空选项哨兵（Radix SelectItem value 禁空串；映射回 ''/null）。 */
+const SELECT_NONE = '__none__';
 /** 原 styles.formRow / styles.formLabel（表单行）：汇报页先用，S14 表单复用。 */
 const FORM_ROW_CLASS = 'mb-2.5 flex flex-col gap-[5px]';
 const FORM_LABEL_CLASS = 'text-[11px] font-semibold tracking-[0.3px] text-muted-foreground';
-/** 原 styles.listTitle / styles.listCount（列表页头）：S14 的团队/角色列表头复用。 */
-const LIST_TITLE_CLASS = 'm-0 min-w-0 flex-1 text-[14px] font-bold text-foreground';
+/** 原 styles.listTitle / styles.listCount（列表页头）：S14 的团队/角色列表头复用；
+ * docs/23 S23-3 补官网 h2 签名 tracking-tight（22.1.4）。 */
+const LIST_TITLE_CLASS = 'm-0 min-w-0 flex-1 text-[14px] font-bold tracking-tight text-foreground';
 const LIST_COUNT_CLASS = 'text-[12px] text-muted-foreground';
 /** 原 styles.memberGrid（成员卡片栅格，最小 230px 自适应列）。 */
 const MEMBER_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(230px,1fr))] gap-3';
@@ -333,8 +337,6 @@ const MEMBER_CARD_CLASS = `flex flex-col gap-2 rounded-xl border border-solid bg
  * docs/23 D21b 底色改品牌淡底 token。 */
 const ROLE_CHIP_CLASS =
   'inline-block rounded-full bg-business-tint px-[9px] py-px text-[11px] font-semibold text-primary';
-/** 原 styles.btn（描边小按钮）：移出团队在调用点叠 text-destructive。 */
-const BTN_CLASS = `cursor-pointer rounded-[8px] border border-solid bg-background px-3 py-[5px] text-[12px] font-medium ${TEXT2_CLASS}`;
 /** 原 styles.drawer（sunken 抽屉面板）：任务抽屉已升级为 Dialog，现仅成员
 汇报时间线使用。 */
 const DRAWER_CLASS = `mt-2 mb-3.5 rounded-[10px] border border-solid bg-[color:var(--dsw-alias-bg-layer-2,#f1f5f9)] px-3.5 py-3 ${BORDER_L1_CLASS}`;
@@ -378,6 +380,37 @@ const DOT_TONE_CLASS: Record<Tone, string> = {
 const pillClass = (tone: Tone): string => cn(PILL_BASE_CLASS, PILL_TONE_CLASS[tone]);
 const dotClass = (tone: Tone): string => cn(DOT_BASE_CLASS, DOT_TONE_CLASS[tone]);
 
+/** 状态徽标（docs/23 S23-3）：shadcn Badge 承底座（边框/过渡/焦点环），
+ * 本仓 pill 视觉口径（rounded-full / 11px / medium / 内嵌状态点）以
+ * className 覆盖层保留——tone 底色表（PILL_TONE_CLASS）经 tailwind-merge
+ * 压过 Badge 变体底色。 */
+function Pill({ tone, children }: { tone: Tone; children: ReactNode }): ReactNode {
+  return (
+    <Badge variant="secondary" className={pillClass(tone)}>
+      {children}
+    </Badge>
+  );
+}
+
+/** 表单/列表错误提示（docs/23 S23-3）：shadcn Alert destructive 的紧凑档
+ * （原 styles.formError 的 12px + 上 4 下 8 边距口径）。 */
+function FormErrorNote({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}): ReactNode {
+  return (
+    <Alert
+      variant="destructive"
+      className={cn('mt-1 mb-2 rounded-[8px] px-3 py-2 text-[12px] leading-[1.55]', className)}
+    >
+      {children}
+    </Alert>
+  );
+}
+
 /* —— S14 迁移新增的类名常量（面板壳/团队卡片栅格/构建工作台/角色库收尾；
 完整字面量，同 S12/S13 纪律；置于 S12/S13 段之后——模板串插值在模块初始化
 时求值，须晚于所引用的 BORDER_L1_CLASS/TEXT2_CLASS 等常量）—— */
@@ -389,8 +422,8 @@ const SHELL_CLASS =
   'relative box-border flex h-full gap-4 overflow-hidden px-[18px] py-3.5 text-[13px] leading-[1.55] text-foreground font-sans';
 /** 原 styles.content：内容列（纵滚/横截 + 2px 右距，用户反馈注记原样保留）。 */
 const CONTENT_CLASS = 'min-w-0 flex-1 overflow-x-hidden overflow-y-auto pr-0.5';
-/** 原 styles.formError：语义色走 destructive token（与 state-error 同源，D19c）。 */
-const FORM_ERROR_CLASS = 'mb-2 mt-1 text-[12px] text-destructive';
+/* docs/23 S23-3：原 styles.formError（FORM_ERROR_CLASS）迁移 FormErrorNote
+   （shadcn Alert destructive 紧凑档，见上方组件），常量删除。 */
 /** 原 styles.cardGrid（团队/角色卡片栅格，最小 210px 自适应列）。 */
 const CARD_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(210px,1fr))] gap-3';
 /** 原 styles.phasePill（团队卡片阶段徽标：淡底弱化档）。 */
@@ -409,12 +442,12 @@ const DETAIL_ROW_CLASS = `flex gap-2.5 border-b border-solid py-[7px] text-[12px
 const DETAIL_LABEL_CLASS = 'w-16 shrink-0 pt-px text-[11px] font-semibold text-muted-foreground';
 /** 原 styles.cmdChip（预填命令芯片：等宽字体 + l1 边框 + 次级文字）。 */
 const CMD_CHIP_CLASS = `mt-2 break-all rounded-[8px] border border-solid bg-[color:var(--dsw-alias-bg-layer-2,#f1f5f9)] px-[11px] py-[9px] text-[12px] leading-[1.7] font-mono ${BORDER_L1_CLASS} ${TEXT2_CLASS}`;
-/** 原 styles.buildStep / stepRow / stepNum / prefillBanner（构建工作台）。 */
+/** 原 styles.buildStep / stepRow / stepNum（构建工作台）；原 prefillBanner
+ * docs/23 S23-3 迁移 shadcn Alert（default 变体 + 品牌淡底覆盖），常量删除。 */
 const BUILD_STEP_CLASS = 'flex items-center gap-2 py-[3px] text-[12.5px]';
 const STEP_ROW_CLASS = `mt-2 flex items-start gap-2 text-[12.5px] leading-[1.55] ${TEXT2_CLASS}`;
 const STEP_NUM_CLASS =
   'mt-px inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-business-tint text-[11px] font-semibold text-primary';
-const PREFILL_BANNER_CLASS = `mt-2.5 flex items-start gap-2 rounded-[10px] border border-solid bg-business-tint px-3 py-2.5 ${BORDER_L1_CLASS}`;
 
 /** S13：执行链站点行——✔/●/◌ 结构原样保留，仅样式改 Tailwind 类。 */
 function TaskStations({ task }: { task: TaskView }): ReactNode {
@@ -793,7 +826,7 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
           {/* 顶栏（用户反馈）：团队切换改为「团队」页的卡片栅格，这里只保留
             状态加载失败的就地提示；空态兜底在 BoardTab。 */}
           {state.error !== null && (
-            <div className={cn(FORM_ERROR_CLASS, 'mb-3')}>状态加载失败：{state.error}</div>
+            <FormErrorNote className="mb-3">状态加载失败：{state.error}</FormErrorNote>
           )}
 
           {activeTab === 'board' && (
@@ -880,23 +913,28 @@ function BoardTab({
   return (
     <div>
       {team.pendingDecisions.length > 0 && (
-        <div className={BANNER_CLASS}>
+        /* docs/23 S23-3：原 BANNER_CLASS → shadcn Alert warning 变体（amber
+           淡底 + foreground 正文以 className 覆盖保留，圆角/字号同原口径）。 */
+        <Alert
+          variant="warning"
+          className="mb-3 rounded-xl bg-[color:var(--dsw-static-amber-100,#fef5e7)] px-3.5 py-2.5 text-[13px] leading-[1.55] text-foreground"
+        >
           △ {team.pendingDecisions.length} 项待决策：
           {team.pendingDecisions.map((d) => `${d.taskId}（${d.error.slice(0, 40)}）`).join('；')} ——
           到对话里让领队处理，或等待 M5 的代答操作。
-        </div>
+        </Alert>
       )}
       <Card className={PANEL_CARD_CLASS}>
         <div className={SECTION_TITLE_CLASS}>目标</div>
         <div className="text-sm font-semibold leading-[1.5] text-foreground">{team.goal}</div>
-        <div className={PROGRESS_TRACK_CLASS}>
-          <div
-            className={PROGRESS_FILL_CLASS}
-            style={{
-              width: `${team.progress.total === 0 ? 0 : (team.progress.completed / team.progress.total) * 100}%`,
-            }}
-          />
-        </div>
+        {/* docs/23 S23-3：进度条迁 shadcn Progress（h-1.5=原 6px 轨高；
+            transform 技法指示器，bg-primary 即 D21a DSW 蓝）。 */}
+        <Progress
+          className="mt-2.5 mb-1.5 h-1.5"
+          value={
+            team.progress.total === 0 ? 0 : (team.progress.completed / team.progress.total) * 100
+          }
+        />
         <div className={MUTED_CLASS}>
           {team.progress.completed}/{team.progress.total} 完成 · {team.progress.active} 执行中 ·{' '}
           {team.members.length} 成员 ·{' '}
@@ -1031,18 +1069,14 @@ function TeamTab({
                       {t.progress.completed}/{t.progress.total} 任务 · {t.members.length} 成员
                     </span>
                   </div>
-                  <div className={cn(PROGRESS_TRACK_CLASS, 'mb-0')}>
-                    <div
-                      className={PROGRESS_FILL_CLASS}
-                      style={{
-                        width: `${
-                          t.progress.total === 0
-                            ? 0
-                            : (t.progress.completed / t.progress.total) * 100
-                        }%`,
-                      }}
-                    />
-                  </div>
+                  <Progress
+                    className="mb-0 h-1.5"
+                    value={
+                      t.progress.total === 0
+                        ? 0
+                        : (t.progress.completed / t.progress.total) * 100
+                    }
+                  />
                 </div>
               );
             })}
@@ -1062,11 +1096,10 @@ function TeamTab({
           />
           <Button
             size="sm"
-            variant="primary"
-            icon={<IconPlusOutline16 />}
             disabled={busy || !canCreate || name.trim() === ''}
             onClick={() => void create()}
           >
+            <IconPlusOutline16 />
             创建
           </Button>
         </div>
@@ -1075,7 +1108,7 @@ function TeamTab({
             ? '只需名称即可创建（草案阶段）；目标可在看板中与领队继续完善。'
             : '当前还没有进行中的对话——开始对话后即可在这里创建团队。'}
         </div>
-        {error !== null && <div className={FORM_ERROR_CLASS}>{error}</div>}
+        {error !== null && <FormErrorNote>{error}</FormErrorNote>}
       </Card>
 
       {team === undefined ? (
@@ -1092,24 +1125,34 @@ function TeamTab({
             </div>
             {roster.length > 0 && (
               <div className="mb-2.5 flex items-center gap-2">
-                <select
-                  className={SELECT_CLASS}
-                  value={pick}
-                  onChange={(e) => setPick(e.target.value)}
+                {/* docs/23 S23-3：原生 select 迁 shadcn Select（触发器=官网
+                    输入框签名；空选项以哨兵值承载，映射回 ''）。 */}
+                <Select
+                  value={pick === '' ? SELECT_NONE : pick}
+                  onValueChange={(v) => setPick(v === SELECT_NONE ? '' : v)}
                 >
-                  <option value="">— 从角色列表选择 —</option>
-                  {roster
-                    .filter(
-                      (m) => m.name !== LEADER_NAME && !team.members.some((t) => t.name === m.name),
-                    )
-                    .map((m) => (
-                      <option key={m.name} value={m.name}>
-                        {m.name}（{m.role}）
-                      </option>
-                    ))}
-                </select>
+                  <SelectTrigger className="h-[30px] w-full max-w-[280px] px-2.5 text-[12px] font-medium">
+                    <SelectValue placeholder="— 从角色列表选择 —" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={SELECT_NONE} className="text-[12px]">
+                      — 从角色列表选择 —
+                    </SelectItem>
+                    {roster
+                      .filter(
+                        (m) =>
+                          m.name !== LEADER_NAME && !team.members.some((t) => t.name === m.name),
+                      )
+                      .map((m) => (
+                        <SelectItem key={m.name} value={m.name} className="text-[12px]">
+                          {m.name}（{m.role}）
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
                 <Button
                   size="sm"
+                  variant="secondary"
                   disabled={busy || pick === ''}
                   onClick={() => void addFromRoster()}
                 >
@@ -1160,9 +1203,15 @@ function LeaderCard({ captain }: { captain: CaptainView }): ReactNode {
           </div>
         </div>
         {captain.personaMd !== null && (
-          <button type="button" className={BTN_CLASS} onClick={() => setOpen(!open)}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="text-[12px]"
+            onClick={() => setOpen(!open)}
+          >
             {open ? '收起手册' : '查看手册'}
-          </button>
+          </Button>
         )}
       </div>
       {open && captain.personaMd !== null && (
@@ -1211,25 +1260,33 @@ function MemberCard({
           </div>
         </div>
       </div>
-      <div className={pillClass(tone)}>
+      <Pill tone={tone}>
         <span className={dotClass(tone)} />
         {STATUS_LABELS[m.status] ?? m.status}
         {m.currentTaskId !== null && <span className="font-normal">· {m.currentTaskId}</span>}
-      </div>
+      </Pill>
       <div className="flex gap-1.5">
         {onOpenReports !== undefined && (
-          <button type="button" className={BTN_CLASS} onClick={() => onOpenReports(m.name)}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="text-[12px]"
+            onClick={() => onOpenReports(m.name)}
+          >
             汇报记录
-          </button>
+          </Button>
         )}
         {onRemove !== undefined && (
-          <button
+          <Button
             type="button"
-            className={cn(BTN_CLASS, 'text-destructive')}
+            variant="outline"
+            size="sm"
+            className="text-[12px] text-destructive hover:text-destructive"
             onClick={() => onRemove(m.name)}
           >
             移出团队
-          </button>
+          </Button>
         )}
       </div>
     </div>
@@ -1465,10 +1522,15 @@ function HandbookEditor({
           </Button>
         ) : (
           <>
-            <Button size="sm" variant="ghost" disabled={saving} onClick={() => setDraft(null)}>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={saving}
+              onClick={() => setDraft(null)}
+            >
               取消
             </Button>
-            <Button size="sm" variant="primary" disabled={saving} onClick={save}>
+            <Button size="sm" disabled={saving} onClick={save}>
               保存
             </Button>
           </>
@@ -1482,7 +1544,7 @@ function HandbookEditor({
       ) : (
         <>
           <MdEditor value={draft} onChange={setDraft} minHeight={220} />
-          {error !== null && <div className={FORM_ERROR_CLASS}>保存失败：{error}</div>}
+          {error !== null && <FormErrorNote>保存失败：{error}</FormErrorNote>}
         </>
       )}
     </Card>
@@ -1765,11 +1827,12 @@ function MembersTab({
     return (
       <div className="min-w-0 overflow-x-hidden">
         <style>{'@keyframes eteams-spin{to{transform:rotate(360deg)}}'}</style>
-        <Button size="sm" onClick={() => setView('list')}>
+        <Button size="sm" variant="secondary" onClick={() => setView('list')}>
           ← 返回角色列表
         </Button>
         <Button
           size="sm"
+          variant="secondary"
           className="ml-1.5"
           onClick={() => activateConversationTab()}
           title="切到会话的对话视图，看命令卡片与进度行"
@@ -1810,9 +1873,9 @@ function MembersTab({
                   )}
                 </div>
                 {interviewWaiting ? (
-                  <span className={pillClass('warn')}>等你作答</span>
+                  <Pill tone="warn">等你作答</Pill>
                 ) : (
-                  <span className={pillClass('info')}>构建中</span>
+                  <Pill tone="info">构建中</Pill>
                 )}
                 <span className="flex-1" />
                 {interviewWaiting && (
@@ -1901,7 +1964,6 @@ function MembersTab({
                   <div className="mt-2.5 flex items-center gap-2">
                     <Button
                       size="sm"
-                      variant="primary"
                       disabled={
                         confirming ||
                         build.interview.questions.some(
@@ -1969,7 +2031,7 @@ function MembersTab({
                 )}
                 草稿已就绪——可直接修改，确认后入库
               </div>
-              {formError !== null && <div className={FORM_ERROR_CLASS}>{formError}</div>}
+              {formError !== null && <FormErrorNote>{formError}</FormErrorNote>}
               <div className={cn(FORM_ROW_CLASS, 'mt-2')}>
                 <span className={FORM_LABEL_CLASS}>角色名</span>
                 <Input
@@ -1996,16 +2058,15 @@ function MembersTab({
               <div className="mt-2 flex items-center gap-2">
                 <Button
                   size="sm"
-                  variant="primary"
-                  icon={<IconPlusOutline16 />}
                   disabled={
                     confirming || draftEdit.name.trim() === '' || draftEdit.role.trim() === ''
                   }
                   onClick={() => void confirmDraft()}
                 >
+                  <IconPlusOutline16 />
                   确认入库
                 </Button>
-                <Button size="sm" disabled={confirming} onClick={() => void abandon()}>
+                <Button size="sm" variant="secondary" disabled={confirming} onClick={() => void abandon()}>
                   放弃
                 </Button>
                 <span className={MUTED_CLASS}>也可以在对话里继续调整，这里会跟着刷新。</span>
@@ -2019,7 +2080,7 @@ function MembersTab({
                   <IconCheckOutline16 />
                 </span>
                 <div className={cn(LINE_CLASS, 'my-0 font-semibold')}>已入库</div>
-                <span className={pillClass('ok')}>角色列表已更新</span>
+                <Pill tone="ok">角色列表已更新</Pill>
               </div>
               <div className="mt-2 flex items-center gap-2.5">
                 <Avatar name={confirmedDraft.name} size={40} />
@@ -2059,16 +2120,11 @@ function MembersTab({
             <Card className={PANEL_CARD_CLASS}>
               <div className="flex items-center gap-2">
                 <div className={cn(LINE_CLASS, 'my-0 font-semibold')}>已放弃本次构建</div>
-                <span className={pillClass('muted')}>已中断</span>
+                <Pill tone="muted">已中断</Pill>
               </div>
               {build.note !== '' && <div className={MUTED_CLASS}>{build.note}</div>}
               <div className="mt-2 flex items-center gap-2">
-                <Button
-                  size="sm"
-                  variant="primary"
-                  disabled={confirming}
-                  onClick={() => void resume()}
-                >
+                <Button size="sm" disabled={confirming} onClick={() => void resume()}>
                   继续构建
                 </Button>
                 <span className={MUTED_CLASS}>上下文已保存——从中断处接着跑，不用从头再来。</span>
@@ -2082,15 +2138,17 @@ function MembersTab({
                   <IconSparkle16 />
                 </span>
                 <div className={cn(LINE_CLASS, 'font-semibold')}>新增角色 · 角色构建师</div>
-                <span className={pillClass('info')}>对话式构建</span>
+                <Pill tone="info">对话式构建</Pill>
               </div>
               {justFilled ? (
                 <div>
-                  <div className={PREFILL_BANNER_CLASS}>
+                  {/* docs/23 S23-3：原 PREFILL_BANNER_CLASS → shadcn Alert
+                      （default 变体 + 品牌淡底覆盖，官网 ring 风格边框）。 */}
+                  <Alert className="mt-2.5 flex items-start gap-2 rounded-[10px] bg-business-tint px-3 py-2.5">
                     <span className="text-[12.5px] font-semibold text-business">
                       ✓ 已填充到对话输入框
                     </span>
-                  </div>
+                  </Alert>
                   <CommandChip text={ADD_PEOPLE_TEMPLATE} />
                   {PREFILL_STEPS.map((s, i) => (
                     <div key={s} className={STEP_ROW_CLASS}>
@@ -2136,11 +2194,10 @@ function MembersTab({
                   <div className="mt-2 flex items-center gap-2">
                     <Button
                       size="sm"
-                      variant="primary"
-                      icon={<IconPlusOutline16 />}
                       disabled={name.trim() === '' || role.trim() === ''}
                       onClick={copyCommand}
                     >
+                      <IconPlusOutline16 />
                       复制对话命令
                     </Button>
                     <span className={MUTED_CLASS}>
@@ -2165,9 +2222,9 @@ function MembersTab({
     return (
       // 版式：详情列不再限宽（用户要求解除固定宽度），面板全宽利用
       <div>
-        <button type="button" className={BTN_CLASS} onClick={() => setView('list')}>
+        <Button type="button" variant="outline" size="sm" className="text-[12px]" onClick={() => setView('list')}>
           ← 返回角色列表
-        </button>
+        </Button>
         <Card className={cn(PANEL_CARD_CLASS, 'mt-2 px-[18px] py-4')}>
           <div className="flex items-center gap-3.5">
             {/* 头像描边环（视觉升级）：品牌淡底档（D21b token），柔和不抢戏。 */}
@@ -2217,7 +2274,6 @@ function MembersTab({
             // 构建把旧草稿顶掉（docs/19.16）。
             <Button
               size="sm"
-              variant="primary"
               onClick={() => {
                 setView('add');
               }}
@@ -2227,8 +2283,6 @@ function MembersTab({
           ) : (
             <Button
               size="sm"
-              variant="primary"
-              icon={<IconPlusOutline16 />}
               onClick={() => {
                 // 一键预填（D18-1）：命令进输入框 → 跳到构建工作台；不可用时
                 // 退化为复制，提示去对话粘贴。
@@ -2242,11 +2296,12 @@ function MembersTab({
                 }
               }}
             >
+              <IconPlusOutline16 />
               新增角色
             </Button>
           )}
         </div>
-        {listError !== null && <div className={FORM_ERROR_CLASS}>{listError}</div>}
+        {listError !== null && <FormErrorNote>{listError}</FormErrorNote>}
         {members.length === 0 ? (
           <div className={EMPTY_CLASS}>
             还没有角色。点「新增角色」，在对话里补全信息，角色构建师会帮你构建人设。
@@ -2361,10 +2416,10 @@ function TasksTab({
         return (
           <div key={group.id} className="mb-3.5">
             <div className={cn(SECTION_TITLE_CLASS, 'mb-1')}>
-              <span className={pillClass(group.tone)}>
+              <Pill tone={group.tone}>
                 <span className={dotClass(group.tone)} />
                 {group.label} · {rows.length}
-              </span>
+              </Pill>
             </div>
             {rows.map((t) => (
               <div key={t.taskId}>
@@ -2428,18 +2483,25 @@ function ReportsTab({
     <div>
       <div className={FORM_ROW_CLASS}>
         <span className={FORM_LABEL_CLASS}>选择成员</span>
-        <select
-          className={SELECT_CLASS}
-          value={dialogMember ?? ''}
-          onChange={(e) => setDialogMember(e.target.value === '' ? null : e.target.value)}
+        {/* docs/23 S23-3：原生 select 迁 shadcn Select（哨兵值映射回 null）。 */}
+        <Select
+          value={dialogMember ?? SELECT_NONE}
+          onValueChange={(v) => setDialogMember(v === SELECT_NONE ? null : v)}
         >
-          <option value="">— 选择 —</option>
-          {team.members.map((m) => (
-            <option key={m.name} value={m.name}>
-              {m.name}（{m.role}）
-            </option>
-          ))}
-        </select>
+          <SelectTrigger className="h-[30px] w-full max-w-[280px] px-2.5 text-[12px] font-medium">
+            <SelectValue placeholder="— 选择 —" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={SELECT_NONE} className="text-[12px]">
+              — 选择 —
+            </SelectItem>
+            {team.members.map((m) => (
+              <SelectItem key={m.name} value={m.name} className="text-[12px]">
+                {m.name}（{m.role}）
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
       {member === null ? (
         <div className={MUTED_CLASS}>选择一个成员查看对话时间线。</div>
