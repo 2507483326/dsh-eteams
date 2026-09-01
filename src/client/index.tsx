@@ -17,6 +17,10 @@
  *    tool events via the optional `conversationEvents` service (absent
  *    service degrades to tab+button only).
  *
+ * apply() 最先幂等注入 Tailwind 产物样式（`<style data-dsh-eteams-tw>`，
+ * tailwind.ts / docs/21 D19a）：先于 diagnostics 与一切槽位注册，保证任何
+ * 表面首帧挂载时工具类已在 head。
+ *
  * Every surface is individually try/catch-guarded and render-isolated
  * (ClientErrorBoundary), and all client-side errors funnel into the
  * diagnostics channel (console + host `client.log`) so renderer problems
@@ -31,6 +35,7 @@ import { ETEAMS_TAB_LABEL, ETEAMS_VIEW_ID } from './bridge';
 import { installClientDiagnostics, recordClientDiag } from './diagnostics';
 import { ETeamsView } from './eteamsView';
 import { installHeroTeamsButton } from './heroTeamsButton';
+import { ensureEteamsStyles } from './tailwind';
 import { enterTeamsPanel } from './teamsPanel';
 import { TeamsButton } from './teamsButton';
 
@@ -56,6 +61,12 @@ function guard(step: string, run: () => void): void {
  * @param ctx - client root context (cordis).
  */
 export function apply(ctx: Context): void {
+  // 最先注入 Tailwind 产物样式（D19a / 21.5.2）：先于 diagnostics 与一切
+  // 槽位注册，让任何表面首帧挂载时工具类已在 head。guard 包裹：注入失败
+  // 只记录不致命——表面退化为无 Tailwind 样式，注册路径完全不受影响
+  // （recordClientDiag 自含，先于 installClientDiagnostics 调用也能落日志）。
+  guard('tailwind-styles', () => ensureEteamsStyles());
+
   installClientDiagnostics();
 
   guard('conversation.view', () =>
