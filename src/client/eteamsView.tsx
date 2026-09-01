@@ -82,6 +82,7 @@ import {
 } from './bridge';
 import { cn } from './cn';
 import { ClientErrorBoundary } from './diagnostics';
+import { EteamsBackdrop } from './eteamsBackdrop';
 import { Badge } from './components/ui/badge';
 import { Card } from './components/ui/card';
 import {
@@ -378,7 +379,7 @@ const dotClass = (tone: Tone): string => cn(DOT_BASE_CLASS, DOT_TONE_CLASS[tone]
 （`.eteams-ui .utility` 后代选择器机制），壳布局迁进这层内壳；height 锚点
 仍留作用域根 inline（宿主视图区无 .eteams-ui 祖先，见文件头 S14 注记）。 */
 const SHELL_CLASS =
-  'box-border flex h-full gap-4 overflow-hidden px-[18px] py-3.5 text-[13px] leading-[1.55] text-foreground font-sans';
+  'relative box-border flex h-full gap-4 overflow-hidden px-[18px] py-3.5 text-[13px] leading-[1.55] text-foreground font-sans';
 /** 原 styles.content：内容列（纵滚/横截 + 2px 右距，用户反馈注记原样保留）。 */
 const CONTENT_CLASS = 'min-w-0 flex-1 overflow-x-hidden overflow-y-auto pr-0.5';
 /** 原 styles.formError：语义色走 destructive token（与 state-error 同源，D19c）。 */
@@ -735,7 +736,15 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
   // 是高度链锚点 height:100%（内壳 h-full 只能解析到作用域根，见文件头 S14
   // 注记），其余壳样式全部工具类化。
   return (
-    <div className="eteams-ui" style={{ height: '100%' }} data-eteams="view" ref={rootRef}>
+    <div
+      className="eteams-ui"
+      style={{ height: '100%', position: 'relative' }}
+      data-eteams="view"
+      ref={rootRef}
+    >
+      {/* 背景板（docs/22 S22-4）：absolute inset-0 打底，纯装饰零交互；壳
+        relative 盖上（两个定位元素按 DOM 序 painting），内容永远可读。 */}
+      <EteamsBackdrop />
       {/* 卡片化样式（用户反馈）：角色/团队卡片与删除按钮的 hover 态一次注入，
         面板内与整页团队页共用同一渲染根，注入一次即可。 */}
       <style>{ROLE_LIST_CSS}</style>
