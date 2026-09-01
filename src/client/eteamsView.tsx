@@ -3,6 +3,25 @@
  * 任务/汇报, members-first flow (D16), team creation by name only.
  * Renders over host theme variables so light/dark follows the GUI.
  *
+ * S12 样式迁移批次一（docs/21-client-ui-stack.md 21.6 / D19b/D19c/D19g）：
+ * 侧栏导航、看板（横幅/目标/进度）与最近动态（事件流）三个区块的 inline
+ * style 迁 Tailwind 类，卡片容器换 shadcn Card、阶段徽标换 shadcn Badge。
+ * 落地注记（沿用 S5 card 试点 / S11 模式）：
+ * - D19b：本面板注册在宿主 conversation.view 槽位，宿主视图区没有
+ *   `.eteams-ui` 祖先——表面根挂 `className="eteams-ui"` 字面量，工具类
+ *   （后代选择器）才能生效；作用域根自身不承工具类样式，面板壳布局仍由
+ *   styles.root inline 承载（content 列与余下区块留给 S13/S14，避免加裸
+ *   包裹层破坏 h-100% 高度链）。
+ * - preflight 已关：`border` 只产宽度，显式 `border-solid` 补边框样式；
+ *   边框色沿用原 l1 档（S3 桥默认是 l2），任意值直引保持视觉（S11 先例）。
+ * - D19c：语义色走 token 类（text-foreground / text-muted-foreground /
+ *   text-primary / text-success / text-warning / text-destructive /
+ *   text-business）；无 token 桥接的宿主变量（label-secondary、bg-layer-2、
+ *   static-amber-100 等）任意值直引；token 色禁 /alpha。运行时动态值只留
+ *   进度条宽度（inline style，S14 清点口径，S5 card 先例）。
+ * - 状态徽标：Tone→完整字面量类映射表 TONE_CLASS（禁模板字符串拼类名，
+ *   21.5.1 content 扫描纪律），阶段徽标以 outline Badge 呈现（S5 card 先例）。
+ *
  * @module dsh-eteams/client/eteamsView
  */
 import {
@@ -37,7 +56,10 @@ import {
   GOTO_ROSTER_EVENT,
   SELECT_TEAM_EVENT,
 } from './bridge';
+import { cn } from './cn';
 import { ClientErrorBoundary } from './diagnostics';
+import { Badge } from './components/ui/badge';
+import { Card } from './components/ui/card';
 import { MdEditor } from './mdEditor';
 import {
   addTeamMember,
@@ -186,6 +208,34 @@ const PILL_FG: Record<Tone, string> = {
   muted: T.text3,
 };
 
+/**
+ * S12：Tone→工具类映射表（完整字面量，content 扫描可检出——禁 `tone-${x}`
+ * 拼接，21.5.1 纪律）。语义色走 token 类（D19c；success/warning/business
+ * 为附录 A 扩展 token，muted 走中性 token muted-foreground）。
+ * S13/S14 的徽标迁移沿用此表。
+ */
+const TONE_CLASS: Record<Tone, string> = {
+  info: 'text-business',
+  ok: 'text-success',
+  warn: 'text-warning',
+  err: 'text-destructive',
+  muted: 'text-muted-foreground',
+};
+
+/**
+ * 团队阶段→Tone（对齐 STATUS_GROUPS 既有语义：running 对齐「执行中」→info、
+ * paused 对齐「已挂起」→warn、completed 对齐「已完成」→ok；staged 的计划
+ * 待批准对齐「待决策」→warn；halted 对齐失败→err；archived 中性→muted）。
+ */
+const PHASE_TONES: Record<string, Tone> = {
+  staged: 'warn',
+  running: 'info',
+  paused: 'warn',
+  halted: 'err',
+  completed: 'ok',
+  archived: 'muted',
+};
+
 function memberTone(status: string): Tone {
   if (status === 'working' || status === 'busy') return 'info';
   if (status === 'ready' || status === 'idle' || status === 'done') return 'ok';
@@ -209,16 +259,7 @@ const styles: Record<string, CSSProperties> = {
     到宿主页面/整页团队页；滚动只发生在 content 列内。 */
     overflow: 'hidden',
   },
-  rail: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 3,
-    width: 84,
-    flexShrink: 0,
-    borderRight: `1px solid ${T.border}`,
-    paddingRight: 12,
-    paddingTop: 2,
-  },
+  /* rail 样式已随 S12 侧栏迁移删除（RAIL_CLASS）。 */
   content: {
     flex: 1,
     minWidth: 0,
@@ -391,6 +432,8 @@ const styles: Record<string, CSSProperties> = {
     padding: '2px 0 2px 12px',
     margin: '10px 0',
   },
+  /* 看板空态已改 EMPTY_CLASS（S12）；本条仍被 团队/角色/任务 空态使用，
+  S13/S14 迁移后删除。 */
   empty: {
     textAlign: 'center',
     padding: '36px 20px',
@@ -409,21 +452,7 @@ const styles: Record<string, CSSProperties> = {
     cursor: 'pointer',
     fontWeight: 500,
   },
-  banner: {
-    border: `1px solid ${T.warn}`,
-    background: T.warnBg,
-    borderRadius: 12,
-    padding: '10px 14px',
-    marginBottom: 12,
-    fontSize: 13,
-    color: T.text,
-  },
-  eventRow: {
-    padding: '7px 0',
-    borderBottom: `1px solid ${T.border}`,
-    fontSize: 13,
-    color: T.text2,
-  },
+  /* banner/eventRow 样式已随 S12 看板迁移删除（BANNER_CLASS / EVENT_ROW_CLASS）。 */
   dialogItem: {
     padding: '7px 10px',
     borderRadius: 8,
@@ -508,20 +537,8 @@ const styles: Record<string, CSSProperties> = {
 
 /** Parameterized style factories (tone-mapped, token-driven). */
 const fns = {
-  railBtn: (active: boolean): CSSProperties => ({
-    display: 'block',
-    width: '100%',
-    padding: '7px 10px',
-    fontSize: 12,
-    textAlign: 'left',
-    cursor: 'pointer',
-    border: 'none',
-    borderRadius: 8,
-    background: active ? T.accentSoft : 'transparent',
-    color: active ? T.accent : T.text2,
-    fontWeight: active ? 600 : 500,
-    letterSpacing: 0.2,
-  }),
+  /* railBtn 已随 S12 侧栏迁移删除（railBtnClass）。progressFill 仍被 团队页
+  进度条使用（S13 迁移后删除；看板进度条已改 PROGRESS_FILL_CLASS）。 */
   progressFill: (pct: number): CSSProperties => ({
     height: '100%',
     width: `${pct}%`,
@@ -551,6 +568,54 @@ const fns = {
     flexShrink: 0,
   }),
 };
+
+/* —— S12 迁移后的类名常量（Tailwind 工具类，完整字面量；模板串组合仅限
+const 字面量插值，运行时动态值一律 inline style——S5/S11 既有口径）—— */
+
+/** 边框沿用原 l1 档（shadcn --border 桥的是 l2，任意值直引保持视觉；S11 先例）。 */
+const BORDER_L1_CLASS = 'border-[color:var(--dsw-alias-border-l1,rgba(100,116,139,0.14))]';
+/** 次级文字：label-secondary 无语义 token（附录 A 未桥接），任意值直引。 */
+const TEXT2_CLASS = 'text-[color:var(--dsw-alias-label-secondary,#47546c)]';
+/** 原 styles.muted（12px / 三级灰 token / overflow-wrap:anywhere），仍被
+后续批次区块使用，先以类常量复刻。 */
+const MUTED_CLASS = 'text-[12px] leading-[1.55] text-muted-foreground [overflow-wrap:anywhere]';
+/** 原 styles.line（4px 上下距 / 13px / 行高 1.6 / 次级文字）。 */
+const LINE_CLASS = `my-1 text-[13px] leading-[1.6] ${TEXT2_CLASS}`;
+/** 原 styles.sectionTitle（11px/600/三级灰 token/字距 0.5px，下距 8px）。 */
+const SECTION_TITLE_CLASS =
+  'mb-2 text-[11px] font-semibold leading-[1.55] tracking-[0.5px] text-muted-foreground';
+/** 原 styles.empty（虚线框空态）；边框色吃 S3 桥默认（--border 即原 l2 档）。 */
+const EMPTY_CLASS =
+  'rounded-xl border border-dashed px-5 py-9 text-center leading-[1.55] text-muted-foreground';
+/** 原 styles.banner：warn 语义色走 token 类，淡底是 static-amber-100
+（无 token，任意值直引，D19c）。 */
+const BANNER_CLASS =
+  'mb-3 rounded-xl border border-solid border-warning bg-[color:var(--dsw-static-amber-100,#fef5e7)] px-3.5 py-2.5 text-[13px] leading-[1.55] text-foreground';
+/** 面板卡片（原 styles.card → shadcn Card 的覆盖层）：底色回 layer-1 档
+（Card 默认 bg-card 是 layer-2）、l1 边框、原阴影；px-4 py-3.5 = 14px 16px。
+eteams-ui 字面量随 Card 根（S5 试点双保险）。 */
+const PANEL_CARD_CLASS = `eteams-ui mb-3 min-w-0 border border-solid bg-background px-4 py-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.03)] ${BORDER_L1_CLASS}`;
+/** 原 styles.progressTrack（6px 高 / sunken 淡底 / 999 圆角 / 上 10 下 6）。 */
+const PROGRESS_TRACK_CLASS =
+  'mt-2.5 mb-1.5 h-1.5 overflow-hidden rounded-full bg-[color:var(--dsw-alias-bg-layer-2,#edf0f4)]';
+/** 原 fns.progressFill 的静态面：accent→info 渐变（任意值完整字面量）；
+宽度百分比是运行时动态值，保留 inline style（S14 清点口径，S5 card 先例）。 */
+const PROGRESS_FILL_CLASS =
+  'h-full rounded-full bg-[linear-gradient(90deg,var(--dsw-alias-brand-primary,#4b7bec),var(--dsw-alias-state-business-primary,#1d4ed8))]';
+/** 原 styles.eventRow（7px 上下距 / 13px / 次级文字 / 下边线）。 */
+const EVENT_ROW_CLASS = `border-b border-solid py-[7px] text-[13px] leading-[1.55] ${BORDER_L1_CLASS} ${TEXT2_CLASS}`;
+/** 原 styles.rail（84px 窄栏 / 3px 纵向间距 / 右分隔线 / 上 2 右 12）。 */
+const RAIL_CLASS = `flex w-[84px] shrink-0 flex-col gap-[3px] border-r border-solid pr-3 pt-0.5 ${BORDER_L1_CLASS}`;
+
+/** 侧栏按钮（原 fns.railBtn）：active/idle 两态都是完整字面量映射（无拼接，
+teamsButton tabBtnClass 同款）；active 底=交互激活、字=brand 主色 token。 */
+const railBtnClass = (active: boolean): string =>
+  cn(
+    'block w-full cursor-pointer rounded-[8px] border-none px-2.5 py-[7px] text-left text-xs leading-[1.55] [letter-spacing:0.2px]',
+    active
+      ? 'bg-[color:var(--dsw-alias-interactive-bg-active,rgba(75,123,236,0.12))] font-semibold text-primary'
+      : 'bg-transparent font-medium text-[color:var(--dsw-alias-label-secondary,#47546c)]',
+  );
 
 function TaskStations({ task }: { task: TaskView }): ReactNode {
   if (task.chainLength === 0) return null;
@@ -825,17 +890,21 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
     return prefillComposer(actions);
   }, [props]);
 
+  // 表面根（D19b/S12）：宿主 conversation.view 槽位渲染本面板，视图区没有
+  // .eteams-ui 祖先——作用域类字面量必须挂在本元素上，工具类（后代选择器）
+  // 才能生效；作用域根自身不承工具类样式，布局仍由 styles.root inline 承载
+  // （面板壳与 content 列留给 S13/S14，避免加裸包裹层破坏 h-100% 高度链）。
   return (
-    <div style={styles.root} data-eteams="view">
+    <div className="eteams-ui" style={styles.root} data-eteams="view">
       {/* 卡片化样式（用户反馈）：角色/团队卡片与删除按钮的 hover 态一次注入，
         面板内与整页团队页共用同一渲染根，注入一次即可。 */}
       <style>{ROLE_LIST_CSS}</style>
-      <div style={styles.rail}>
+      <div className={RAIL_CLASS}>
         {tabs.map((t) => (
           <button
             key={t.id}
             type="button"
-            style={fns.railBtn(activeTab === t.id)}
+            className={railBtnClass(activeTab === t.id)}
             onClick={() => dispatch({ type: 'ui/setNav', payload: t.id })}
           >
             {t.label}
@@ -898,7 +967,12 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
   );
 }
 
-/** 看板：目标、进度与最近动态（原「概览」）。 */
+/**
+ * 看板：目标、进度与最近动态（原「概览」）。S12 迁移面：横幅/两张卡片/
+ * 空态/事件行全部 Tailwind 化；卡片容器用 shadcn Card（底色/边框/阴影按原
+ * styles.card 覆盖，见 PANEL_CARD_CLASS）；阶段徽标升级为 shadcn Badge +
+ * TONE_CLASS 查表（S5 card 先例的 outline 小 pill 档）。
+ */
 function BoardTab({
   team,
   now,
@@ -912,67 +986,78 @@ function BoardTab({
 }): ReactNode {
   if (team === undefined) {
     return (
-      <div style={styles.empty}>
+      <div className={EMPTY_CLASS}>
         <p>还没有团队。</p>
-        <p style={styles.line}>
+        <p className={LINE_CLASS}>
           推荐流程：先到「角色」页新增角色，再到「团队」页创建团队并把角色拉进去。
         </p>
-        <p style={styles.line}>
+        <p className={LINE_CLASS}>
           也可以在对话中说「用 AgentTeams 做某事」或 <code>/agent-teams</code>
           ，领队会先问询、再拆解计划等你批准。
         </p>
-        <p style={styles.muted}>{error !== null ? `状态加载失败：${error}` : '尚未创建团队'}</p>
+        <p className={MUTED_CLASS}>{error !== null ? `状态加载失败：${error}` : '尚未创建团队'}</p>
       </div>
     );
   }
   return (
     <div>
       {team.pendingDecisions.length > 0 && (
-        <div style={styles.banner}>
+        <div className={BANNER_CLASS}>
           △ {team.pendingDecisions.length} 项待决策：
           {team.pendingDecisions.map((d) => `${d.taskId}（${d.error.slice(0, 40)}）`).join('；')} ——
           到对话里让领队处理，或等待 M5 的代答操作。
         </div>
       )}
-      <div style={styles.card}>
-        <div style={styles.sectionTitle}>目标</div>
-        <div style={{ fontSize: 14, fontWeight: 600, color: T.text, lineHeight: 1.5 }}>
-          {team.goal}
-        </div>
-        <div style={{ ...styles.progressTrack }}>
+      <Card className={PANEL_CARD_CLASS}>
+        <div className={SECTION_TITLE_CLASS}>目标</div>
+        <div className="text-sm font-semibold leading-[1.5] text-foreground">{team.goal}</div>
+        <div className={PROGRESS_TRACK_CLASS}>
           <div
-            style={fns.progressFill(
-              team.progress.total === 0 ? 0 : (team.progress.completed / team.progress.total) * 100,
-            )}
+            className={PROGRESS_FILL_CLASS}
+            style={{
+              width: `${team.progress.total === 0 ? 0 : (team.progress.completed / team.progress.total) * 100}%`,
+            }}
           />
         </div>
-        <div style={styles.muted}>
+        <div className={MUTED_CLASS}>
           {team.progress.completed}/{team.progress.total} 完成 · {team.progress.active} 执行中 ·{' '}
-          {team.members.length} 成员 · {PHASE_LABELS[team.phase] ?? team.phase}
+          {team.members.length} 成员 ·{' '}
+          {/* 阶段徽标（S12）：原为 muted 行内文本，按「状态徽标用 shadcn」
+          施工面升级为 outline Badge + TONE_CLASS 查表；tone 对齐 STATUS_GROUPS
+          既有语义（PHASE_TONES）。 */}
+          <Badge
+            variant="outline"
+            className={cn(
+              'rounded-full border-solid px-2 py-px text-[11px] font-normal',
+              TONE_CLASS[PHASE_TONES[team.phase] ?? 'muted'],
+            )}
+          >
+            {PHASE_LABELS[team.phase] ?? team.phase}
+          </Badge>
           {team.planReviewState !== null && team.phase === 'staged'
             ? ` · 计划${team.planReviewState === 'awaiting_review' ? '待批准' : team.planReviewState}`
             : ''}
         </div>
-        {team.workDir !== null && <div style={styles.muted}>任务文档：{team.workDir}/</div>}
-      </div>
-      <div style={styles.card}>
-        <div style={styles.sectionTitle}>最近动态</div>
+        {team.workDir !== null && <div className={MUTED_CLASS}>任务文档：{team.workDir}/</div>}
+      </Card>
+      <Card className={PANEL_CARD_CLASS}>
+        <div className={SECTION_TITLE_CLASS}>最近动态</div>
         {team.latestEvents
           .slice(-8)
           .reverse()
           .map((e) => (
-            <div key={e.seq} style={styles.eventRow}>
-              <span style={styles.muted}>
+            <div key={e.seq} className={EVENT_ROW_CLASS}>
+              <span className={MUTED_CLASS}>
                 {relativeTime(e.at, now)} · {e.actor}
               </span>{' '}
               {e.text}
             </div>
           ))}
-        {team.latestEvents.length === 0 && <div style={styles.muted}>暂无事件</div>}
-        <div style={styles.muted}>
+        {team.latestEvents.length === 0 && <div className={MUTED_CLASS}>暂无事件</div>}
+        <div className={MUTED_CLASS}>
           数据更新于 {fetchedAt === 0 ? '—' : relativeTime(fetchedAt, now)}
         </div>
-      </div>
+      </Card>
     </div>
   );
 }
