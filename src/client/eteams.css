@@ -43,7 +43,12 @@
     --secondary-foreground: var(--dsw-alias-label-primary, #1f2328);
     --muted: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.12));
     --muted-foreground: var(--dsw-alias-label-tertiary, #6b7280);
-    --accent: var(--dsw-alias-accent, var(--dsw-alias-brand-primary, #4b7bec));
+    /* R1-F5：宿主包无 --dsw-alias-accent（对照已装 dsh-client-ui-theme
+       主题表核实，亮/暗两块均无）——原首跳是死映射，恒落到 brand-primary
+       兜底。shadcn accent 语义 = hover 浅高亮底，改映射宿主真实存在的
+       interactive 档淡底（宿主自身 hover-accent 同款变量，亮暗双值齐备），
+       字面兜底与 --secondary/--muted 同档中性色。 */
+    --accent: var(--dsw-alias-interactive-bg-hover-accent, rgba(128, 128, 128, 0.12));
     --accent-foreground: var(--dsw-alias-label-primary, #1f2328);
     --destructive: var(--dsw-alias-state-error-primary, #d64545);
     /* 附录 A 之外的微调：shadcn destructive 变体（button 等，S4 起）需要

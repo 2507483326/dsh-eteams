@@ -32,8 +32,8 @@
 
 - 宿主把主题 token 写在 `body.style`（`--dsw-alias-*` 变量族），**亮暗切换自动跟随，无需 JS**。
 - 宿主暗色标记：`body[data-ds-dark-theme]`（dsh-client-ui-layout ThemePresenter）。
-- 客户端已消费的宿主变量全集（映射表输入）：
-  `--dsw-alias-accent`、`-bg-base`、`-bg-layer-1/2`、`-border-l1/l2`、`-brand-primary`、`-button-primary-hover`、`-interactive-bg-active/hover`、`-label-primary(-foreground)/secondary/tertiary`、`-state-{business,error,err,success,warn}-primary`、`--dsw-static-{amber,green,red}-100`、`--dsw-font-markdown-base-*`，以及原始色阶 `--slate-1..12`、`--blue-3..11`、`--red-10`。
+- 客户端已消费的宿主变量全集（映射表输入；R1-F5 核对：`--dsw-alias-accent` 与 `-state-err-primary` 在宿主包中不存在（历史写法恒走字面兜底），已从本清单剔除）：
+  `-bg-base`、`-bg-layer-1/2`、`-border-l1/l2`、`-brand-primary`、`-button-primary-hover`、`-interactive-bg-active/hover`、`-interactive-bg-hover-accent`（R1-F5 增补：`--accent` 的新映射档）、`-label-primary(-foreground)/secondary/tertiary`、`-state-{business,error,success,warn}-primary`、`--dsw-static-{amber,green,red}-100`、`--dsw-font-markdown-base-*`，以及原始色阶 `--slate-1..12`、`--blue-3..11`、`--red-10`。
 - **注意**：这些宿主变量是**完整色值**（代码里的兜底写法是 `rgba(...)` 字面量），不是 HSL 通道 → shadcn 经典 v3 的 `hsl(var(--x))` 通道方案不可用，采用「变量别名直引」（D19c）。
 
 ### 21.2.3 状态与轮询（dva 迁移的第一目标）
@@ -199,7 +199,7 @@ Provider：`ETeamsView`、`TeamsButton`、`ETeamsCard`、`EteamBuildCard`、`tea
 
 ## 附录 A：shadcn token ↔ 宿主变量映射表（S15 终态回写；S3 落地于 `src/client/eteams.css`）
 
-> 与初版相比的微调：新增 `--destructive-foreground`（S4，button/badge 的 destructive 变体需要 on-色文本，宿主无专用别名，与 `--primary-foreground` 同源）；`--accent`/`--business` 兜底实现为嵌套 `var()`（别名缺失时再落到下一层兜底，非纯字面）。
+> 与初版相比的微调：新增 `--destructive-foreground`（S4，button/badge 的 destructive 变体需要 on-色文本，宿主无专用别名，与 `--primary-foreground` 同源）；`--accent`/`--business` 兜底实现为嵌套 `var()`（别名缺失时再落到下一层兜底，非纯字面）。**R1-F5 修正 `--accent`**：宿主包无 `--dsw-alias-accent`（原首跳为死映射，恒落 brand-primary，outline/ghost hover 呈实心品牌蓝），改映射宿主真实存在的 interactive 档淡底 `--dsw-alias-interactive-bg-hover-accent`（shadcn accent 的浅高亮语义，亮暗双值齐备）；需要实心品牌色的消费面（card 进度条）随改 `bg-primary`——视觉不变（`--accent` 原本就恒等于 brand-primary）。
 
 | shadcn token | 宿主变量 | 兜底 |
 |---|---|---|
@@ -215,7 +215,7 @@ Provider：`ETeamsView`、`TeamsButton`、`ETeamsCard`、`EteamBuildCard`、`tea
 | --secondary-foreground | --dsw-alias-label-primary | #1f2328 |
 | --muted | --dsw-alias-interactive-bg-hover | rgba(128,128,128,0.12) |
 | --muted-foreground | --dsw-alias-label-tertiary | #6b7280 |
-| --accent | --dsw-alias-accent | 嵌套 var(--dsw-alias-brand-primary, #4b7bec) |
+| --accent（R1-F5 修正） | --dsw-alias-interactive-bg-hover-accent | rgba(128,128,128,0.12) |
 | --accent-foreground | --dsw-alias-label-primary | #1f2328 |
 | --destructive | --dsw-alias-state-error-primary | #d64545 |
 | --destructive-foreground（S4 增补） | --dsw-alias-label-primary-foreground | #ffffff |
