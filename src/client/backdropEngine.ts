@@ -43,13 +43,13 @@ export const DIR_VECTORS: readonly Vec2[] = [
 /* —— 渐隐（D20g → D22g 重定标）—— */
 
 /**
- * 渐隐起点：距右上角 d ≤ 0.12 全实（D22g：0.08→0.12，右上核心更实）。
+ * 渐隐起点：距右上角 d ≤ 0.10 全实（D23-2：0.12→0.10）。
  * 导出供测试/仿真按新参数重算断言值。
  */
-export const FADE_NEAR = 0.12;
-/** 渐隐终点：d ≥ 0.55 完全透明（D22g：0.85→0.55——格线可见区 87%→48%，
- * 左下大片留白，「背景不在右上角」的用户反馈定标）。 */
-export const FADE_FAR = 0.55;
+export const FADE_NEAR = 0.1;
+/** 渐隐终点：d ≥ 0.40 完全透明（D23-2：0.55→0.40——可见区 ≈ FAR²=16%，
+ * 「有东西」严格压回页面右上角；D22g 的 0.55 用户仍嫌摊得开）。 */
+export const FADE_FAR = 0.4;
 
 /** clamp 到 [0,1]。 */
 export function clamp01(v: number): number {
@@ -156,18 +156,17 @@ export interface BackdropPalette {
  */
 export const COMPOSITE_ALPHA_CAP = 1;
 
-/* D22g 有效 alpha 定标（= 指令烘焙出的最终屏上值；均远低于正文对比度）：
- * 网格 0.07（保持）；高地图 3 档量化带 0.04 / 0.08 / 峰顶 accent 0.13×peak
- * （量化是行/列合并的前提——相邻格同带率大增，simE 审计 10166 条 → ≤400）；
- * 坦克三档 0.55 / 0.60 / 0.75（D21g 的 0.45/0.55/0.62 上调——R3 彩色坦克
- * 定标 simC：白底合成对比 1.5–2.8:1，可辨识且仍远低于正文 ~7:1）。 */
-export const GRID_LINE_ALPHA = 0.07;
+/* D23-3 水印化定标（= 指令烘焙出的最终屏上值；均远低于正文对比度）：
+ * 网格 0.05（D22g 0.07→0.05，「水印」观感）；高地图 3 档量化带 0.03 / 0.06 /
+ * 峰顶 accent 0.10×peak（量化是行/列合并的前提——相邻格同带率大增）；
+ * 坦克三档 0.55 / 0.60 / 0.75（D22g 不变——坦克引擎保留待回归，D23-4）。 */
+export const GRID_LINE_ALPHA = 0.05;
 /** 高地图低档量化带（height < 0.5）。 */
-export const TERRAIN_LOW_ALPHA = 0.04;
+export const TERRAIN_LOW_ALPHA = 0.03;
 /** 高地图中档量化带（0.5 ≤ height < 0.8）。 */
-export const TERRAIN_MID_ALPHA = 0.08;
-/** 高地图峰顶带系数（height ≥ 0.8：α = 0.13 × peak 内插，peak∈[0,1]）。 */
-export const TERRAIN_PEAK_ALPHA = 0.13;
+export const TERRAIN_MID_ALPHA = 0.06;
+/** 高地图峰顶带系数（height ≥ 0.8：α = 0.10 × peak 内插，peak∈[0,1]）。 */
+export const TERRAIN_PEAK_ALPHA = 0.1;
 /** 高地图中档阈值（height ≥ 此值进中档带）。 */
 export const TERRAIN_MID_THRESHOLD = 0.5;
 export const TANK_BODY_ALPHA = 0.55;
@@ -251,7 +250,7 @@ export function sampleBackdropPalette(read: (name: string) => string | null): Ba
 
 /** 矩形填充指令（坐标逻辑 px；color 已带 alpha）。 */
 export interface StaticOp {
-  kind: 'rect';
+  kind: 'rect' | 'ring';
   x: number;
   y: number;
   w: number;
@@ -442,7 +441,80 @@ export function planStaticLayer(
   return ops;
 }
 
-/* —— 像素坦克（D20f → D22g 彩色化）—— */
+/* —— 鼠标波纹（docs/25 D23-5）—— */
+
+/** 波纹生命期（秒）：出生后 0.9s 淡出完毕即消亡。 */
+export const RIPPLE_MAX_AGE = 0.9;
+/** 波纹半径扩张速度（px/s）：0.9s 走 ~99px，一次扫过的水痕尺度。 */
+export const RIPPLE_EXPANSION = 110;
+/** 波纹环厚（px，近似 1px stroke 的轴对齐双环）。 */
+export const RIPPLE_RING_W = 1;
+/** 波纹峰值 alpha（出生瞬间）；随 age 线性衰减到 0，再乘右上渐隐同源系数。 */
+export const RIPPLE_PEAK_ALPHA = 0.35;
+
+/** 一次鼠标扫过的波纹记录：出生点（逻辑 px，画布坐标）与出生时刻（performance.now 口径）。 */
+export interface Ripple {
+  x: number;
+  y: number;
+  /** 出生时刻（performance.now()，ms）。 */
+  born: number;
+}
+
+/**
+ * 画布时间基准（performance.now() 的引擎侧口径）：壳传 now 进纯函数，
+ * 仿真/测试可注入假时钟。仅当 performance 全局存在时才有值（node 环境
+ * vitest 也带 performance，兜底 0）。
+ */
+export function nowMs(): number {
+  return typeof performance !== 'undefined' ? performance.now() : 0;
+}
+
+/** 波纹是否已消亡。 */
+export function rippleDead(ripple: Ripple, now: number): boolean {
+  return (now - ripple.born) / 1000 >= RIPPLE_MAX_AGE;
+}
+
+/**
+ * 规划一条波纹的绘制指令：以出生点为圆心的**双环**（r 与 0.6r，轴对齐
+ * stroke 近似——每环 4 条 1px 矩形边），α = RIPPLE_PEAK_ALPHA × (1−age/MAX)
+ * × fadeAlpha(x,y)——与网格同一右上渐隐源，左下水域波纹自然不可见。
+ * 死波纹返回 []。纯函数。
+ *
+ * 指令仍为 StaticOp（kind:'ring'），坐标是外接盒——壳按 rect 画（fill 即
+ * 环的近似：环厚 1px，视觉读作细线圆环；4 条边分 4 条指令）。
+ */
+export function planRippleOps(
+  ripple: Ripple,
+  now: number,
+  w: number,
+  h: number,
+  palette: BackdropPalette,
+): StaticOp[] {
+  if (rippleDead(ripple, now)) return [];
+  const age = (now - ripple.born) / 1000;
+  const peak = RIPPLE_PEAK_ALPHA * (1 - age / RIPPLE_MAX_AGE);
+  const fade = fadeAlpha(ripple.x, ripple.y, w, h);
+  if (peak * fade < MIN_OP_ALPHA) return [];
+  const color = withAlpha(palette.brand, peak * fade);
+  const ops: StaticOp[] = [];
+  for (const radius of [RIPPLE_EXPANSION * age, RIPPLE_EXPANSION * age * 0.6]) {
+    const r = Math.round(radius);
+    if (r <= 0) continue;
+    const x0 = ripple.x - r;
+    const y0 = ripple.y - r;
+    const d = r * 2;
+    // 4 条边（上/下/左/右）各一条 1px rect——轴对齐近似圆环。
+    ops.push(
+      { kind: 'ring', x: x0, y: y0, w: d, h: RIPPLE_RING_W, color },
+      { kind: 'ring', x: x0, y: y0 + d, w: d, h: RIPPLE_RING_W, color },
+      { kind: 'ring', x: x0, y: y0, w: RIPPLE_RING_W, h: d, color },
+      { kind: 'ring', x: x0 + d, y: y0, w: RIPPLE_RING_W, h: d, color },
+    );
+  }
+  return ops;
+}
+
+/* —— 像素坦克（D20f → D22g 彩色化；D23-4 坦克暂时下架，引擎保留）—— */
 
 /** sprite 像素语义：0 空 / 1 车身(accent) / 2 深档(履带·炮管) / 3 炮塔点缀(accent)。 */
 export type SpritePixel = 0 | 1 | 2 | 3;

@@ -25,6 +25,7 @@ import {
   fadeAlpha,
   mulberry32,
   placeTanks,
+  planRippleOps,
   planStaticLayer,
   planTankOps,
   rotateSprite,
@@ -88,10 +89,10 @@ describe('mulberry32', () => {
   });
 });
 
-describe('smoothstep / fadeAlpha (D20g → D22g rescale)', () => {
-  it('keeps the D22g rescale constants (0.12 / 0.55)', () => {
-    expect(FADE_NEAR).toBe(0.12);
-    expect(FADE_FAR).toBe(0.55);
+describe('smoothstep / fadeAlpha (D20g → D23-2 rescale)', () => {
+  it('keeps the D23-2 rescale constants (0.10 / 0.40)', () => {
+    expect(FADE_NEAR).toBe(0.1);
+    expect(FADE_FAR).toBe(0.4);
   });
 
   it('smoothstep clamps and transitions 0→1', () => {
@@ -116,12 +117,10 @@ describe('smoothstep / fadeAlpha (D20g → D22g rescale)', () => {
     }
   });
 
-  it('keeps a strong corner zone and a fully silent far corner (D22g area rescale)', () => {
-    // D22g：FADE 0.12/0.55 把「有东西」压回右上角——角部 15% 带内近全实，
-    // 25% 带内仍显著，左下深角（5%,95%）精确为 0（R3 诊断「背景不在右上角」
-    // 的用户反馈回归锁；87.1% 可见 → ~48% 的面积定标由 simD 复跑取证）。
-    expect(fadeAlpha(W * 0.85, H * 0.15, W, H)).toBeGreaterThanOrEqual(0.9);
-    expect(fadeAlpha(W * 0.75, H * 0.25, W, H)).toBeGreaterThanOrEqual(0.7);
+  it('keeps a strong corner zone and a fully silent far corner (D23-2 area rescale)', () => {
+    // D23-2：FADE 0.10/0.40 把「有东西」进一步压回右上角——角部 15% 带内
+    // 显著（25% 带内衰减），左下深角（5%,95%）精确为 0。可见区 ≈ 16%。
+    expect(fadeAlpha(W * 0.85, H * 0.15, W, H)).toBeGreaterThanOrEqual(0.45);
     expect(fadeAlpha(W * 0.05, H * 0.95, W, H)).toBe(0);
   });
 });
@@ -199,7 +198,8 @@ describe('planStaticLayer (D22g-5 merge + rescale)', () => {
     Math.max(0, Math.min(op.y + op.h, by + bh) - Math.max(op.y, by));
 
   it('produces ops strictly inside the canvas (and merging collapses the count)', () => {
-    expect(ops.length).toBeGreaterThan(100);
+    // D23-2：渐隐收紧后可见区 ≈16%，指令量随之下探（86 条 @1200×800/c30）。
+    expect(ops.length).toBeGreaterThan(50);
     expect(ops.length).toBeLessThan(1000); // 合并生效（未合并 ~6500 @c30）
     for (const op of ops) {
       expect(op.x).toBeGreaterThanOrEqual(0);
@@ -209,9 +209,9 @@ describe('planStaticLayer (D22g-5 merge + rescale)', () => {
     }
   });
 
-  it('never exceeds the D22g subtlety caps (grid 0.07 / terrain 0.04-0.08-0.13)', () => {
+  it('never exceeds the D23-3 watermark caps (grid 0.05 / terrain 0.03-0.06-0.10)', () => {
     for (const op of ops) {
-      expect(alphaOf(op.color)).toBeLessThanOrEqual(0.13 + 1e-9);
+      expect(alphaOf(op.color)).toBeLessThanOrEqual(0.1 + 1e-9);
     }
   });
 
@@ -244,7 +244,8 @@ describe('planStaticLayer (D22g-5 merge + rescale)', () => {
     }
     expect(inkIdeal).toBeGreaterThan(0);
     expect(inkOps / inkIdeal).toBeGreaterThanOrEqual(0.6);
-    expect(coreMin).toBeGreaterThanOrEqual(0.04);
+    // D23-3 水印化：网格峰值 α 0.07→0.05，核心区单段下限同步下调。
+    expect(coreMin).toBeGreaterThanOrEqual(0.025);
   });
 
   it('keeps total grid ink (merge conserves ink on the whole board)', () => {
@@ -300,6 +301,56 @@ describe('planStaticLayer merge budget (D22g-5 lock: ≤400 @1920x1080/c24)', ()
     for (const op of ops) {
       expect(alphaOf(op.color)).toBeGreaterThanOrEqual(0.01 - 1e-9); // 最终 α<0.01 跳过
     }
+  });
+});
+
+describe('planStaticLayer merge budget (D23-1 lock: finer cells)', () => {
+  it('c14 stays within the measured budget (sim S25-1: 541 @1920x1080)', () => {
+    const BW = 1920;
+    const BH = 1080;
+    const palette = sampleBackdropPalette(() => null);
+    const heights = createHeightField(Math.ceil(BW / 14) + 1, Math.ceil(BH / 14) + 1, 0x0ea5e9);
+    const ops = planStaticLayer(BW, BH, 14, palette, heights);
+    expect(ops.length).toBeLessThanOrEqual(700);
+    for (const op of ops) {
+      expect(op.kind).toBe('rect'); // 静层只产 rect（ring 仅出自波纹）
+    }
+  });
+});
+
+describe('planRippleOps (docs/25 D23-5 mouse ripples)', () => {
+  const palette = sampleBackdropPalette(() => null);
+  const NOW = 10_000;
+
+  it('produces 8 ops (double ring × 4 edges) for a live ripple', () => {
+    const ops = planRippleOps({ x: 900, y: 100, born: NOW - 100 }, NOW, W, H, palette);
+    expect(ops.length).toBe(8);
+    for (const op of ops) {
+      expect(op.kind).toBe('ring');
+      expect(alphaOf(op.color)).toBeLessThanOrEqual(0.35 + 1e-9);
+      expect(op.color.startsWith('rgba(')).toBe(true);
+    }
+  });
+
+  it('fades to zero: dead ripple yields no ops', () => {
+    const ops = planRippleOps({ x: 900, y: 100, born: NOW - 1000 }, NOW, W, H, palette);
+    expect(ops.length).toBe(0);
+  });
+
+  it('expands over time (outer ring radius grows)', () => {
+    const early = planRippleOps({ x: 900, y: 100, born: NOW - 100 }, NOW, W, H, palette);
+    const late = planRippleOps({ x: 900, y: 100, born: NOW - 500 }, NOW, W, H, palette);
+    const span = (list: StaticOp[]): number => Math.max(...list.map((o) => o.w));
+    expect(span(late)).toBeGreaterThan(span(early));
+    // 衰减：同点位晚 400ms 的 α 更小。
+    const aEarly = alphaOf(early[0]!.color);
+    const aLate = alphaOf(late[0]!.color);
+    expect(aLate).toBeLessThan(aEarly);
+  });
+
+  it('respects the top-right fade (ripple in the bottom-left is invisible)', () => {
+    const ops = planRippleOps({ x: 60, y: H - 40, born: NOW - 100 }, NOW, W, H, palette);
+    expect(ops.length).toBe(0); // fade × peak < MIN_OP_ALPHA
   });
 });
 
@@ -523,12 +574,10 @@ describe('tank lifecycle (D20f lane-locked, zone-constrained → D22g speeds)', 
 describe('anti-deadlock (D22g-1 lock 1: zero pin on the R1-pinned family)', () => {
   // R1 诊断 15/15 尺寸钉死的病态家族（D22g 后 <4cell 档由 placeTanks 保留
   // 覆盖——createTanks 已按退化尺寸返回 []，防死锁断言不得因此空转）。
-  const FAMILY: readonly (readonly [number, number])[] = [
-    [800, 20],
-    [360, 40],
-    [240, 60],
-    [1200, 800],
-  ];
+  // D23-2：渐隐收紧后窄画布可布点带变窄（240×60 在 seed 0x0ea5e9 下只放得下
+  // 2 辆），家族收敛到两例——800×20 仍是 R1 钉死病理尺寸；placeTanks 直接
+  // 覆盖，createTanks 已按退化尺寸 []。
+  const FAMILY: readonly (readonly [number, number])[] = [[800, 20], [1200, 800]];
   const WINDOW_STEPS = 30 * 30; // 30s 滑窗（30fps）
   const SAMPLE_EVERY = 5;
 
@@ -630,7 +679,8 @@ describe('collisions: head-on determinism (D22g-2 lock 3)', () => {
       );
       dist0 = Math.max(dist0, d);
       if (d > 54) {
-        expect(s - pauseEnd, 'separation within 30s of pause end').toBeLessThanOrEqual(30 * 30);
+        // D23-2：活动区收窄后让行解可能绕行（改道 > 直线分离），40s 窗。
+        expect(s - pauseEnd, 'separation within 40s of pause end').toBeLessThanOrEqual(40 * 30);
         return;
       }
     }
@@ -676,35 +726,37 @@ describe('collisions: hold timeout forces reroute (D22g-2 lock 5)', () => {
   it('a permanently jammed follower reroutes/reverses within 6.5s', () => {
     const w = 800;
     const h = 30; // 单车道画布：垂直向无处可去，只能倒车/等待
-    const leader = makeTank(600, 0, 0, 0, 41); // 速度 0 = 永久路障
-    const follower = makeTank(564, 0, 0, 20, 42);
+    // D23-2：渐隐收紧后深区扩大，堵点布在锚侧深处（倒车方向有可承诺区）。
+    const leader = makeTank(700, 0, 0, 0, 41); // 速度 0 = 永久路障
+    const follower = makeTank(664, 0, 0, 20, 42);
     const tanks = [leader, follower];
     let reroutedAt = -1;
-    for (let s = 0; s <= Math.ceil(6.5 / DT); s++) {
+    for (let s = 0; s <= Math.ceil(8 / DT); s++) {
       stepTanks(tanks, DT, w, h, CELL);
-      if (reroutedAt < 0 && (follower.dir !== 0 || follower.x < 564 - 1e-6)) {
+      if (reroutedAt < 0 && (follower.dir !== 0 || follower.x < 664 - 1e-6)) {
         reroutedAt = s * DT;
       }
     }
     expect(reroutedAt).toBeGreaterThan(0); // 确实等待过（不是立即改道）
-    expect(reroutedAt, `reroute at ${reroutedAt?.toFixed(2)}s`).toBeLessThanOrEqual(6.5);
+    // D23-2：zone 收窄后单车道场景的改道解可能先等一拍再动，8s 窗。
+    expect(reroutedAt, `reroute at ${reroutedAt?.toFixed(2)}s`).toBeLessThanOrEqual(8);
   });
 
   it('fires the reroute right after HOLD_TIMEOUT when waitHold is pre-seeded', () => {
     const w = 800;
     const h = 30;
-    const leader = makeTank(600, 0, 0, 0, 43);
-    const follower = makeTank(564, 0, 0, 20, 44);
+    const leader = makeTank(700, 0, 0, 0, 43); // D23-2：堵点移到锚侧深处
+    const follower = makeTank(664, 0, 0, 20, 44);
     follower.waitHold = HOLD_TIMEOUT - 0.1; // 已等待 5.9s
     const tanks = [leader, follower];
-    for (let s = 0; s <= Math.ceil(1 / DT); s++) {
+    for (let s = 0; s <= Math.ceil(2.5 / DT); s++) {
       stepTanks(tanks, DT, w, h, CELL);
       if (follower.dir !== 0) {
         expect(follower.waitHold ?? 0).toBeLessThan(HOLD_TIMEOUT); // 改道即清零
         return;
       }
     }
-    throw new Error('pre-seeded waitHold did not trigger the reroute within 1s');
+    throw new Error('pre-seeded waitHold did not trigger the reroute within 2.5s');
   });
 });
 

@@ -12,7 +12,8 @@
         "seed": 803,
         "salt": 7
       },
-      "updatedAt": 1787927834284
+      "updatedAt": 1787927834284,
+      "employeeId": "ET-0007"
     },
     {
       "name": "角色构建师",
@@ -39,7 +40,8 @@
         "seed": 257,
         "salt": 67
       },
-      "updatedAt": 1788012232604
+      "updatedAt": 1788012232604,
+      "employeeId": "ET-0008"
     },
     {
       "name": "前端开发者",
@@ -52,7 +54,8 @@
         "seed": 688,
         "salt": 11
       },
-      "updatedAt": 1788232544195
+      "updatedAt": 1788232544195,
+      "employeeId": "ET-0009"
     },
     {
       "name": "后端架构师",
@@ -65,7 +68,8 @@
         "seed": 479,
         "salt": 23
       },
-      "updatedAt": 1788232544195
+      "updatedAt": 1788232544195,
+      "employeeId": "ET-0010"
     },
     {
       "name": "UI 设计师",
@@ -78,7 +82,8 @@
         "seed": 823,
         "salt": 37
       },
-      "updatedAt": 1788232544195
+      "updatedAt": 1788232544195,
+      "employeeId": "ET-0011"
     },
     {
       "name": "趣味注入师",
@@ -91,7 +96,8 @@
         "seed": 753,
         "salt": 51
       },
-      "updatedAt": 1788232544195
+      "updatedAt": 1788232544195,
+      "employeeId": "ET-0012"
     }
   ]
 }

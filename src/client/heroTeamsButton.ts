@@ -42,11 +42,12 @@ const BUTTON_FLAG = 'hero-button';
 const STYLE_ID = 'eteams-hero-button-style';
 
 /** Chip styling mirrors the host preset chip (`.cubgiG_seat`), token-driven
- * (docs/23 D21a/d：focus 环 DSW 蓝源、文字兜底官网 slate-900 档). */
+ * (docs/25 D23-6 缩档：用户反馈「团队按钮太大」——h 24px / 12px 字 / 8px
+ * 横距；focus 环随 --ring 官网 sky，兜底字色官网 slate-900 档). */
 const HERO_BUTTON_CSS = `
-.eteams-hero-btn{max-width:min(100%,240px);min-height:28px;color:var(--dsw-alias-label-primary,#0f172a);white-space:nowrap;cursor:pointer;background:transparent;border:none;border-radius:16px;align-items:center;gap:4px;padding:0 10px;font-size:13px;font-weight:500;line-height:20px;display:inline-flex;font-family:inherit;overflow:hidden}
-.eteams-hero-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(100,116,139,0.08))}
-.eteams-hero-btn:focus-visible{outline:2px solid var(--dsw-alias-button-info-fill,#4176e6);outline-offset:1px}
+.eteams-hero-btn{max-width:min(100%,200px);min-height:24px;color:var(--foreground,#0f172a);white-space:nowrap;cursor:pointer;background:transparent;border:none;border-radius:14px;align-items:center;gap:4px;padding:0 8px;font-size:12px;font-weight:500;line-height:18px;display:inline-flex;font-family:inherit;overflow:hidden}
+.eteams-hero-btn:hover{background:var(--muted,rgba(100,116,139,0.08))}
+.eteams-hero-btn:focus-visible{outline:2px solid var(--ring,#0ea5e9);outline-offset:1px}
 `;
 
 let installed = false;

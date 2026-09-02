@@ -231,10 +231,14 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
           {/* 选中高亮（原 POPUP_CSS `.eteams-teams-btn[data-selected]` 迁移）：
         `group` 供 hover 显隐的清除钮用；交互激活底色无语义 token → 任意值
         直引（D19c），文字用 brand 主色 token。 */}
+          {/* D25-6：触发钮镜像宿主 preset chip 观感（胶囊/无边框/13px，同
+              heroTeamsButton 的 chip 口径）——R4 用户反馈「太大 + 边框突兀」
+              根因即 UA button 边框未压（ghost 变体已补 border-none）+ h-8
+              偏大。选中态沿用品牌淡底。`group` 供 hover 显隐的清除钮用。 */}
           <Button
             variant="ghost"
             size="sm"
-            className="group data-[selected=true]:bg-business-tint data-[selected=true]:text-primary"
+            className="group h-7 rounded-full border-none px-2.5 text-[13px] leading-[18px] font-medium normal-case tracking-normal data-[selected=true]:bg-business-tint data-[selected=true]:text-primary"
             data-selected={selectedMember !== null || selectedTeam !== null ? 'true' : undefined}
             aria-label="团队"
             aria-haspopup="dialog"
@@ -401,7 +405,9 @@ const HINT_CLASS = 'px-2.5 pb-0.5 pt-1.5 text-xs leading-normal text-muted-foreg
 /* 弹层卡体（原 S.card）：bg/background、文字色走语义 token；边框 S24-2 收敛
    语义 token --border（官网 slate-200/slate-800）；阴影逐字保留原 T.shadow。 */
 const POPUP_BORDER_CLASS = 'border-[color:var(--border)]';
-const LIST_CLASS = 'flex max-h-[260px] flex-col gap-0.5 overflow-x-hidden overflow-y-auto p-1.5';
+const LIST_CLASS = 'flex max-h-[260px] flex-col gap-0.5 overflow-x-hidden overflow-y-auto p-1.5 pt-2';
+/* D25：tab 头自身不再画分割线（早前 border-b 与 footer border-t 形成重复），
+   列表与 tab 头之间由 tab 下划线自然收边，仅 footer 保留一条 border-t。 */
 const FOOTER_CLASS = `flex border-t border-solid p-1.5 ${POPUP_BORDER_CLASS}`;
 /* docs/23 S23-4：原 TAB_HEADER_CLASS/tabBtnClass（手写 tab 头）迁移 shadcn
    Tabs 分段控件、原 ACTION_CLASS（虚线新增钮）迁移 shadcn Button outline
@@ -555,29 +561,24 @@ function TeamsPopup(props: {
         )}
         style={pos ?? undefined}
       >
-        {/* docs/23 S23-4：tab 头迁 shadcn Tabs（分段控件；触发器紧凑档 +
-            激活态品牌字签名——--primary 官网化为 sky）；内容区/底栏为 Tabs
-            根下受控切换的面。 */}
+        {/* docs/25 D23-7（D25 修订）：tab 头 = 官网 docs 下划线签名——两等半
+            （flex-1 居中）、单条分割线（列表自带 border-b，tab 头不再重复）、
+            降高（pt-2/pb-2）。激活 = sky 文字 + 同色下划线 + semibold。 */}
         <Tabs
           value={tab}
           onValueChange={(v) => setTab(v === 'member' ? 'member' : 'team')}
           className="flex min-h-0 flex-1 flex-col"
         >
-          <TabsList
-            className={cn(
-              'h-auto w-full justify-stretch gap-0.5 border-b border-solid bg-card p-1.5',
-              POPUP_BORDER_CLASS,
-            )}
-          >
+          <TabsList className="h-auto w-full justify-start gap-0 rounded-none border-0 bg-transparent p-0">
             <TabsTrigger
               value="team"
-              className="flex-1 rounded-[8px] px-2 py-[5px] text-xs font-medium leading-[18px] data-[state=active]:font-semibold data-[state=active]:text-primary"
+              className="-mb-px flex-1 rounded-none border-0 border-b-2 border-solid border-transparent bg-transparent px-0 pb-2 pt-2.5 text-sm leading-6 font-medium shadow-none ring-offset-0 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:font-semibold data-[state=active]:text-primary data-[state=active]:shadow-none hover:text-foreground"
             >
               团队{teams.length > 0 ? ` · ${teams.length}` : ''}
             </TabsTrigger>
             <TabsTrigger
               value="member"
-              className="flex-1 rounded-[8px] px-2 py-[5px] text-xs font-medium leading-[18px] data-[state=active]:font-semibold data-[state=active]:text-primary"
+              className="-mb-px flex-1 rounded-none border-0 border-b-2 border-solid border-transparent bg-transparent px-0 pb-2 pt-2.5 text-sm leading-6 font-medium shadow-none ring-offset-0 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:font-semibold data-[state=active]:text-primary data-[state=active]:shadow-none hover:text-foreground"
             >
               角色{roster !== null && roster.length > 0 ? ` · ${roster.length}` : ''}
             </TabsTrigger>
