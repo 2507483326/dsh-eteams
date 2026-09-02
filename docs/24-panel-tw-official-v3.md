@@ -94,3 +94,23 @@
 | 翻案后 amber 亮底存在感弱（1.5:1） | 备选 amber-600 #d97706；验收后可按亮暗切 500/600 档 |
 | `document.hidden` Electron 语义 | 看门狗自愈兜底；若用户环境复现静止，宿主侧 backgroundThrottling:false（环境项，记入验收单） |
 | 新类名 purge 缺失 | 全部完整字面量（映射表模式）；gen.css 抽查新类（24.3 S24-2 验收项） |
+
+## 24.5 施工记录（定稿）
+
+| 步骤 | commit | 内容 | 体积（lib/client.js） |
+| --- | --- | --- | --- |
+| 基线 | a41ef71（HEAD@起） | 四绿门基线全绿（typecheck/lint/test 126 例/build）；本文档入库 | 4,168,727 B |
+| S24-1 | aa7c6b3 | 令牌官网 v3 接管（token 字面值化 + body[data-ds-dark-theme] 暗色块 + 面板专用 token 五枚）+ @fontsource-variable Inter/Fira Code latin base64 构建期前置（gen.css 34.7KB→148.1KB，+110.8KB 预算内）+ mini-preflight（:where/:not 特异性 (0,1,0) 纪律、.eteams-mdx 整树豁免） | 4,279,565 B* |
+| S24-2 | d8da13b | 视图表面官网化：14px/leading-6 基线、五页签 20px bold tracking-tight 页头、208px 侧栏 + Quick search 筛选框、pill 降噪（中性档+彩 dot）、emoji 清零 + lucide 深层导入 ×5、ROLE_LIST_CSS 去 DSW 蓝硬编码、遮罩/事件流/时间线/teamsPanel 官网化 | 4,313,417 B* |
+| S24-3 | 1d895f3 | 背景板 R3：防死锁交点语义重构（sim worstStill 958s→1.3–2.3s，15/15 尺寸零钉死）、stepTanks 车道占用仲裁（跟车/对头/交点/zone 四规则）、三色坦克（amber/rose/emerald + alpha 0.55/0.60/0.75）、FADE 0.12/0.55 + CELL 自适应 24/20 + TANK_PIXEL=3 解耦 + 高地图 3 档量化带、静层指令合并（6517→342 条 @1920×1080/c24，19×）、壳自愈（MO 短路+防抖、rAF 重排、1s 看门狗 + isContextLost replan）；测试 26→40 例（新增 9 锁） | 4,310,344 B |
+| S24-4 | （本次） | 预览页重生成（R3 引擎 IIFE 35.8KB + S24 gen.css + 官网 token 亮暗台 + body[data-ds-dark-theme] 真实暗色机制 + cellFor 同构接线）；浏览器取证：亮色（右上细腻格+渐隐留白+三色坦克行进）、暗色（slate-900 底 + sky-400 + 坦克变亮）、侧栏筛选（「任」→1 项、清空恢复 5 项）全过；终跑四绿门（140 例） | 见总验收 |
+
+\* S24-1/S24-2 的体积为中间态实测（build 于 S24-3 后统一终跑），S24-3 行为终态。
+
+**验证证据汇总（S24-4 终验）**：
+- 四绿门：typecheck ✓ / eslint ✓ / vitest 140 passed（15 files）/ build + SMOKE OK（envelope exports apply/inject）。
+- sim 复跑（`.tmp-tw-docs/sim/smoke-r3.mjs`）：全部 15 尺寸 × 3 seed——退化面板（h<4cell）返回 []（不再生成坦克，正确）；非退化面板 worstStill ≤2.3s（修复前 958s 钉死）；全部坦克全程 inZone；ops 预算 342（1920×1080/c24）≤400 锁。
+- 浏览器目检（localhost:8791/preview.html）：①右上角细腻格子 + 高地图色斑 + 峰顶 sky，左下大片留白（FADE 0.55 收敛）；②三色像素坦克（amber/rose/emerald 可辨，3px/像素）沿网格线行进、连续两帧位移可见；③暗色切换：全面板（含嵌套卡片）slate-900 底 + sky-400 强调 + 坦克/网格变亮——`body[data-ds-dark-theme]` 机制与宿主一致；④侧栏 Quick search 筛选实时生效。
+- 已知环境项：若 GUI 实装后仍见坦克静止，按 24.4 风险表核查宿主 webContents `backgroundThrottling`（壳内看门狗已兜底大多数场景）。
+
+**给用户的验收入口**：浏览器打开 `C:\eTeam\.tmp-tw-docs\preview\preview.html`（或 `dsh plugin --profile desktop add C:\eTeam` 后在 DSH 实装内验收）。右上角按钮：切暗色 / 坦克数 0–3。
