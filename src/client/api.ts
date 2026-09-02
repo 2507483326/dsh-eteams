@@ -100,15 +100,56 @@ export async function createTeamViaPanel(
   };
 }
 
-/** Add a member to a team, adopting a roster entry when fromRoster is set. */
+/**
+ * Add a member to a team, adopting a roster entry. `sourceName` copies a
+ * roster role under a different name（同一角色可重复加入，名册默认值照抄）；
+ * `employeeId` 显式指定工号（缺省沿用角色库同号，再缺省由 host 分配）。
+ */
 export async function addTeamMember(
   teamId: string,
-  payload: { name: string; fromRoster: true },
+  payload: { name: string; sourceName?: string; employeeId?: string },
 ): Promise<void> {
   await requestJson(`${API_BASE}/team/${encodeURIComponent(teamId)}/member`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      name: payload.name,
+      fromRoster: true,
+      ...(payload.sourceName !== undefined && payload.sourceName !== payload.name
+        ? { sourceName: payload.sourceName }
+        : {}),
+      ...(payload.employeeId !== undefined && payload.employeeId.trim() !== ''
+        ? { employeeId: payload.employeeId.trim() }
+        : {}),
+    }),
+  });
+}
+
+/**
+ * Set one member's model route（成员卡右侧模型选择）：model 为空 = 重置为
+ * 继承领队路线。运行中的成员在下次启动时生效（staged 成员启动即生效）。
+ */
+export async function setMemberModel(
+  teamId: string,
+  name: string,
+  model: { provider?: string; model?: string; reasoningEffort?: string },
+): Promise<void> {
+  await requestJson(
+    `${API_BASE}/team/${encodeURIComponent(teamId)}/member/${encodeURIComponent(name)}/model`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(model),
+    },
+  );
+}
+
+/** Move the leader out of / back into the team's member roster. */
+export async function setTeamLeaderRemoved(teamId: string, removed: boolean): Promise<void> {
+  await requestJson(`${API_BASE}/team/${encodeURIComponent(teamId)}/leader/${removed ? 'remove' : 'restore'}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({}),
   });
 }
 

@@ -516,6 +516,100 @@ describe('panel write routes (M5 first slice)', () => {
     expect(captain.employeeId).toMatch(/^ET-\d{4}$/);
     void handler;
   });
+
+  it('accepts an explicit 工号 and a sourceName copy (same role twice)', async () => {
+    const { post } = await installFake();
+    await post('/eteams-api/roster', { name: '文档织娘', role: '文档工程师' });
+    const created = await post('/eteams-api/team', { name: '同角多人', sessionId: 'sess-panel' });
+    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
+
+    // First copy: an explicit 工号 (dialog input) wins over the roster id.
+    const first = await post(`/eteams-api/team/${teamId}/member`, {
+      name: '文档织娘',
+      fromRoster: true,
+      employeeId: 'ET-9001',
+    });
+    expect(first.code).toBe(200);
+    const m1 = readTeamFromDisk(teamId).members.find((m) => m.name === '文档织娘')!;
+    expect(m1.employeeId).toBe('ET-9001');
+
+    // Second copy under a suffixed name: sourceName points at the roster
+    // entry so role/persona defaults copy through; blank 工号 → host allocates.
+    const second = await post(`/eteams-api/team/${teamId}/member`, {
+      name: '文档织娘-2',
+      sourceName: '文档织娘',
+      fromRoster: true,
+    });
+    expect(second.code).toBe(200);
+    const m2 = readTeamFromDisk(teamId).members.find((m) => m.name === '文档织娘-2')!;
+    expect(m2.role).toBe('文档工程师');
+    expect(m2.employeeId).toMatch(/^ET-\d{4}$/);
+    expect(m2.employeeId).not.toBe('ET-9001');
+  });
+
+  it('sets and resets a member model route via POST /team/:id/member/:name/model', async () => {
+    const { post } = await installFake();
+    await post('/eteams-api/roster', { name: 'Nova', role: 'engineer' });
+    const created = await post('/eteams-api/team', { name: '模型团队', sessionId: 'sess-panel' });
+    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
+    await post(`/eteams-api/team/${teamId}/member`, { name: 'Nova', fromRoster: true });
+
+    const set = await post(`/eteams-api/team/${teamId}/member/Nova/model`, {
+      provider: 'deepseek',
+      model: 'deepseek-reasoner',
+      reasoningEffort: 'high',
+    });
+    expect(set.code).toBe(200);
+    const overridden = readTeamFromDisk(teamId).members[0]!.modelRoute;
+    expect(overridden).toMatchObject({
+      provider: 'deepseek',
+      model: 'deepseek-reasoner',
+      reasoningEffort: 'high',
+      source: 'override',
+    });
+
+    // Empty body = 跟随领队 — resets the route to inherited.
+    const reset = await post(`/eteams-api/team/${teamId}/member/Nova/model`, {});
+    expect(reset.code).toBe(200);
+    const inherited = readTeamFromDisk(teamId).members[0]!.modelRoute;
+    expect(inherited.source).toBe('inherited');
+    expect(inherited.model).toBe('inherit');
+  });
+
+  it('toggles the leader in/out via POST /team/:id/leader/:action', async () => {
+    const { post } = await installFake();
+    const created = await post('/eteams-api/team', { name: '领队移除', sessionId: 'sess-panel' });
+    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
+    expect(readTeamFromDisk(teamId).leaderRemoved).toBeUndefined();
+
+    const remove = await post(`/eteams-api/team/${teamId}/leader/remove`, {});
+    expect(remove.code).toBe(200);
+    expect(readTeamFromDisk(teamId).leaderRemoved).toBe(true);
+
+    // Idempotent repeat keeps the flag.
+    await post(`/eteams-api/team/${teamId}/leader/remove`, {});
+    expect(readTeamFromDisk(teamId).leaderRemoved).toBe(true);
+
+    const restore = await post(`/eteams-api/team/${teamId}/leader/restore`, {});
+    expect(restore.code).toBe(200);
+    expect(readTeamFromDisk(teamId).leaderRemoved).toBe(false);
+  });
+
+  it('exposes maxMembers and leaderRemoved through GET /state', async () => {
+    const { handler, res, post } = await installFake();
+    const created = await post('/eteams-api/team', { name: '状态团队', sessionId: 'sess-panel' });
+    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
+    await post(`/eteams-api/team/${teamId}/leader/remove`, {});
+    const r = res();
+    await handler({ method: 'GET', url: '/eteams-api/state' }, r);
+    expect(r.code).toBe(200);
+    const body = JSON.parse(r.body) as {
+      maxMembers: number;
+      teams: { teamId: string; leaderRemoved: boolean }[];
+    };
+    expect(body.maxMembers).toBe(10);
+    expect(body.teams.find((t) => t.teamId === teamId)!.leaderRemoved).toBe(true);
+  });
 });
 
 describe('web surface installation', () => {

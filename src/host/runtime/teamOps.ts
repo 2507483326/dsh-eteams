@@ -330,6 +330,77 @@ export async function updateMember(
   });
 }
 
+/**
+ * Set one member's model route (user iteration 2026-09: per-member model
+ * select on the member card). Empty provider/model resets to inherited;
+ * otherwise stores an override - staged members adopt it at spawn, running
+ * members on their next respawn.
+ */
+export async function setMemberModel(
+  env: RuntimeEnv,
+  captain: Agent,
+  params: {
+    teamId?: string;
+    name: string;
+    provider?: string;
+    model?: string;
+    reasoningEffort?: string;
+  },
+): Promise<TeamState> {
+  const team = params.teamId
+    ? await requireTeamById(env, captain, params.teamId)
+    : await requireCaptainTeam(env, captain);
+  return withTeam(env, team.id, async (fresh, root) => {
+    const member = requireMember(fresh, params.name);
+    const route: ModelRouteSnapshot =
+      params.provider !== undefined &&
+      params.provider !== '' &&
+      params.model !== undefined &&
+      params.model !== ''
+        ? {
+            provider: params.provider,
+            model: params.model,
+            ...(params.reasoningEffort !== undefined && params.reasoningEffort !== ''
+              ? { reasoningEffort: params.reasoningEffort } : {}),
+            source: 'override',
+          }
+        : { provider: 'inherit', model: 'inherit', source: 'inherited' };
+    member.modelRoute = route;
+    await recordEvent(root, fresh.id, captainActor(fresh), 'member.updated', {
+      payload: { name: params.name, route },
+    });
+    await writeTeam(root, fresh);
+    renderTeamDocs(env.workspace, fresh, (msg) => env.ctx.logger.warn(msg));
+    return fresh;
+  });
+}
+
+/**
+ * Move the leader (Project Shepherd) out of / back into the team's member
+ * roster (user iteration 2026-09: the leader is deletable). The captain
+ * session itself is untouched - this flag only controls whether the leader
+ * card joins the member grid; re-add via the panel's add-member flow.
+ */
+export async function setLeaderRemoved(
+  env: RuntimeEnv,
+  captain: Agent,
+  params: { teamId?: string; removed: boolean },
+): Promise<TeamState> {
+  const team = params.teamId
+    ? await requireTeamById(env, captain, params.teamId)
+    : await requireCaptainTeam(env, captain);
+  return withTeam(env, team.id, async (fresh, root) => {
+    if (fresh.leaderRemoved === params.removed) return fresh;
+    fresh.leaderRemoved = params.removed;
+    await recordEvent(root, fresh.id, captainActor(fresh), 'leader.' + (params.removed ? 'removed' : 'restored'), {
+      payload: {},
+    });
+    await writeTeam(root, fresh);
+    renderTeamDocs(env.workspace, fresh, (msg) => env.ctx.logger.warn(msg));
+    return fresh;
+  });
+}
+
 /** Remove a member: staged drop, or revoke work + interrupt when running. */
 export async function removeMember(
   env: RuntimeEnv,

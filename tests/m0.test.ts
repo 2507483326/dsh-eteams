@@ -8,7 +8,7 @@ describe('config resolution', () => {
     expect(resolveConfig(undefined)).toEqual({
       stateDir: '.eteams',
       workRoot: 'teams',
-      maxMembers: 8,
+      maxMembers: 10,
       maxRetries: 3,
       memberProvider: 'spawn',
     });

@@ -15,7 +15,7 @@ export interface ETeamsResolvedConfig {
   stateDir: string;
   /** Workspace-relative root for per-team working directories (default `teams`). */
   workRoot: string;
-  /** Hard cap on members per team (default 8). */
+  /** Hard cap on members per team (default 10). */
   maxMembers: number;
   /** Same-member auto-retry budget before a task fails hard (default 3, D6). */
   maxRetries: number;
@@ -28,7 +28,7 @@ export const ETeamsConfig = z
   .object({
     stateDir: z.string().default('.eteams'),
     workRoot: z.string().default('teams'),
-    maxMembers: z.number().default(8),
+    maxMembers: z.number().default(10),
     maxRetries: z.number().default(3),
     memberProvider: z.string().default('spawn'),
   })
@@ -41,7 +41,7 @@ export function resolveConfig(
   return {
     stateDir: raw?.stateDir ?? '.eteams',
     workRoot: raw?.workRoot ?? 'teams',
-    maxMembers: raw?.maxMembers ?? 8,
+    maxMembers: raw?.maxMembers ?? 10,
     maxRetries: raw?.maxRetries ?? 3,
     memberProvider: raw?.memberProvider ?? 'spawn',
   };

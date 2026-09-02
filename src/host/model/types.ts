@@ -215,6 +215,12 @@ export interface TeamState {
   captainSessionId: string;
   phase: TeamPhase;
   planReviewState?: PlanReviewState;
+  /**
+   * 领队是否已被移出该团队（用户迭代 2026-09：领队可删除）。领队即面板会话
+   * 代理本身（captainSessionId 恒在，运行时不变），此标记只表达「团队成员
+   * 名册里是否展示/保留领队」——移除后可经 /leader/restore 加回。
+   */
+  leaderRemoved?: boolean;
   createdAt: number;
   updatedAt: number;
   version: number;

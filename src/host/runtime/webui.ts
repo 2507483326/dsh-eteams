@@ -35,7 +35,13 @@ import {
   removeRosterMember,
   upsertRosterMember,
 } from './roster.js';
-import { addMember, createTeam, removeMember } from './teamOps.js';
+import {
+  addMember,
+  createTeam,
+  removeMember,
+  setLeaderRemoved,
+  setMemberModel,
+} from './teamOps.js';
 import {
   answerBuildInterview,
   cancelBuildSession,
@@ -182,6 +188,7 @@ export function teamSnapshot(
     planReviewState: team.planReviewState ?? null,
     captainSessionId: team.captainSessionId,
     version: team.version,
+    leaderRemoved: team.leaderRemoved === true,
     workDir: team.phase === 'staged' ? null : teamWorkDirRel(team),
     progress: {
       completed: team.tasks.filter((t) => t.status === 'completed').length,
@@ -239,6 +246,10 @@ export function summarizeEvent(e: EventRecord): string {
       return `成员「${String(p.name ?? '')}」加入`;
     case 'member.removed':
       return `成员「${String(p.name ?? '')}」移除`;
+    case 'leader.removed':
+      return '领队已移出团队';
+    case 'leader.restored':
+      return '领队回到团队';
     case 'task.created':
       return `新建任务 ${task}`;
     case 'task.assigned':
@@ -571,7 +582,9 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               }
               const { team, workspacePath } = located;
               const root = joinPath(workspacePath, config.stateDir);
-              const entry = findRosterMember(root, name);
+              // sourceName: add a copy of a roster role under a new name
+              // (user iteration 2026-09: multiple same roles per team).
+              const entry = findRosterMember(root, str(body.sourceName, '') || name);
               if (body.fromRoster === true && !entry) {
                 sendError(res, 404, `成员库中没有「${name}」`);
                 return;
@@ -612,7 +625,11 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                     : entry?.personaMd !== undefined
                       ? { personaMd: entry.personaMd }
                       : {}),
-                  ...(entry?.employeeId !== undefined ? { employeeId: entry.employeeId } : {}),
+                  ...(str(body.employeeId, '') !== ''
+                    ? { employeeId: str(body.employeeId) }
+                    : entry?.employeeId !== undefined
+                      ? { employeeId: entry.employeeId }
+                      : {}),
                   ...(entry?.avatar !== undefined ? { avatar: entry.avatar } : {}),
                   ...(body.provider !== undefined && body.model !== undefined
                     ? { provider: str(body.provider), model: str(body.model) }
@@ -684,6 +701,68 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                 return;
               }
               sendJson(res, 200, { ok: true, removed: segments[3] });
+              return;
+            }
+            // POST /team/<id>/member/<name>/model - set the member's model
+            // route (user iteration 2026-09: model select on the member
+            // card). Empty body resets to inherited.
+            if (
+              req.method === 'POST' &&
+              segments[0] === 'team' &&
+              segments.length === 5 &&
+              segments[2] === 'member' &&
+              segments[4] === 'model'
+            ) {
+              const body = parseJsonObject(await readBody(req));
+              const located = locateTeam(ctx, config, segments[1]!);
+              if (!located) {
+                sendError(res, 404, '团队 ' + segments[1] + ' 不存在');
+                return;
+              }
+              const { team, workspacePath } = located;
+              try {
+                await setMemberModel(envFor(ctx, config, workspacePath), agentFor(team.captainSessionId), {
+                  teamId: team.id,
+                  name: decodeURIComponent(segments[3]!),
+                  ...(str(body.provider, '') !== '' ? { provider: str(body.provider) } : {}),
+                  ...(str(body.model, '') !== '' ? { model: str(body.model) } : {}),
+                  ...(str(body.reasoningEffort, '') !== ''
+                    ? { reasoningEffort: str(body.reasoningEffort) }
+                    : {}),
+                });
+              } catch (e) {
+                sendError(res, 400, e instanceof Error ? e.message : String(e));
+                return;
+              }
+              sendJson(res, 200, { ok: true });
+              return;
+            }
+            // POST /team/<id>/leader/<remove|restore> - move the leader out
+            // of / back into the team member roster (user iteration 2026-09:
+            // the leader is deletable and re-addable).
+            if (
+              req.method === 'POST' &&
+              segments[0] === 'team' &&
+              segments.length === 4 &&
+              segments[2] === 'leader' &&
+              (segments[3] === 'remove' || segments[3] === 'restore')
+            ) {
+              const located = locateTeam(ctx, config, segments[1]!);
+              if (!located) {
+                sendError(res, 404, '团队 ' + segments[1] + ' 不存在');
+                return;
+              }
+              const { team, workspacePath } = located;
+              try {
+                await setLeaderRemoved(envFor(ctx, config, workspacePath), agentFor(team.captainSessionId), {
+                  teamId: team.id,
+                  removed: segments[3] === 'remove',
+                });
+              } catch (e) {
+                sendError(res, 400, e instanceof Error ? e.message : String(e));
+                return;
+              }
+              sendJson(res, 200, { ok: true });
               return;
             }
             // ---------- role-builder build session (docs/19.6, D18) ----------
@@ -961,6 +1040,7 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               sendJson(res, 200, {
                 teams: await collectTeams(ctx, config),
                 archivedTeams: collectArchivedTeams(ctx, config),
+                maxMembers: config.maxMembers,
                 serverTime: Date.now(),
               });
               return;

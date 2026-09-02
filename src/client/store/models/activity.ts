@@ -16,6 +16,8 @@ const EMPTY: ActivityState = {
   serverTime: 0,
   fetchedAt: 0,
   error: null,
+  // 每队成员上限（用户迭代 2026-09）：缺省 10，/state 首包即覆盖。
+  maxMembers: 10,
 };
 
 export const activityModel: DvaModel<ActivityState> = {

@@ -114,6 +114,8 @@ export interface TeamSnapshot {
   version: number;
   workDir: string | null;
   progress: { completed: number; total: number; cancelled: number; active: number };
+  /** 领队已移出团队（用户迭代 2026-09：领队可删除、可经添加成员弹窗加回）。 */
+  leaderRemoved: boolean;
   captain: CaptainView;
   members: MemberView[];
   tasks: TaskView[];
@@ -138,6 +140,8 @@ export interface ActivityState {
     workDir: string | null;
   }[];
   serverTime: number;
+  /** 每队成员上限（host maxMembers 配置，用户迭代 2026-09：每队最多 10 人）。 */
+  maxMembers: number;
   fetchedAt: number;
   error: string | null;
 }
@@ -166,6 +170,7 @@ async function fetchState(): Promise<void> {
     const body = (await res.json()) as {
       teams?: TeamSnapshot[];
       archivedTeams?: ActivityState['archivedTeams'];
+      maxMembers?: number;
       serverTime?: number;
     };
     store.dispatch({
@@ -173,6 +178,7 @@ async function fetchState(): Promise<void> {
       payload: {
         teams: body.teams ?? [],
         archivedTeams: body.archivedTeams ?? [],
+        maxMembers: typeof body.maxMembers === 'number' && body.maxMembers > 0 ? body.maxMembers : 10,
         serverTime: body.serverTime ?? Date.now(),
         fetchedAt: Date.now(),
         error: null,

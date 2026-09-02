@@ -61,10 +61,12 @@ import {
 // rolldown 拖全量图标进 envelope，深层 .mjs 路径只进用到的图标；类型垫片见
 // components/ui/lucide-icon.d.ts）。D22f：emoji 清零的替换位。
 import ArrowLeft from 'lucide-react/dist/esm/icons/arrow-left.mjs';
+import Check from 'lucide-react/dist/esm/icons/check.mjs';
 import MessageSquare from 'lucide-react/dist/esm/icons/message-square.mjs';
 import PenLine from 'lucide-react/dist/esm/icons/pen-line.mjs';
 import Plus from 'lucide-react/dist/esm/icons/plus.mjs';
 import Search from 'lucide-react/dist/esm/icons/search.mjs';
+import X from 'lucide-react/dist/esm/icons/x.mjs';
 import { Provider, useDispatch, useSelector } from 'react-redux';
 import { ADD_PEOPLE_TEMPLATE, prefillComposer, type PrefillOutcome } from './addPeople';
 import { Avatar } from './avatar';
@@ -108,6 +110,8 @@ import {
   createTeamViaPanel,
   fetchAgentActivity,
   removeTeamMember,
+  setMemberModel,
+  setTeamLeaderRemoved,
   type BuildDraft,
   type InterviewQuestion,
   type RosterMember,
@@ -936,6 +940,7 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
               team={team}
               roster={roster}
               createTick={openCreateTick}
+              memberCap={state.maxMembers}
               onSelectTeam={(id) => dispatch({ type: 'ui/setSelectedTeam', payload: id })}
               agentActivity={agentActivity}
               onOpenReports={(name) => {
@@ -1092,6 +1097,7 @@ function TeamTab({
   team,
   roster,
   createTick,
+  memberCap,
   onSelectTeam,
   agentActivity,
   onOpenReports,
@@ -1104,13 +1110,14 @@ function TeamTab({
   roster: RosterMember[];
   /** 新增团队弹窗跳转信号（递增计数）：>0 且未消费时打开创建弹窗（openAddTick 同款）。 */
   createTick: number;
+  /** 每队成员上限（host /state maxMembers）：添加成员弹窗的购物车配额。 */
+  memberCap: number;
   onSelectTeam: (teamId: string) => void;
   /** Member subagent activity dots (docs/20.4 P4): childId → running/inactive. */
   agentActivity: Record<string, string>;
   onOpenReports: (name: string) => void;
 }): ReactNode {
   const [name, setName] = useState('');
-  const [pick, setPick] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // 列表/详情两级视图（用户迭代 2026-09）：null=列表（长条卡片），非 null=
@@ -1118,6 +1125,11 @@ function TeamTab({
   const [detailId, setDetailId] = useState<string | null>(null);
   // 创建弹窗开合（组件内瞬态）：由 createTick 信号打开，关闭清信号痕迹。
   const [createOpen, setCreateOpen] = useState(false);
+  // 添加成员弹窗（用户迭代 2026-09：Ele.me 点餐式）开合；详情态成员操作
+  // （模型选择/移出/领队移除）的错误就地提示，不再静默吞掉。
+  const [addOpen, setAddOpen] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [modelSavingName, setModelSavingName] = useState<string | null>(null);
   const lastCreateTickRef = useRef(0);
   useEffect(() => {
     if (createTick > 0 && createTick !== lastCreateTickRef.current) {
@@ -1149,21 +1161,40 @@ function TeamTab({
     }
   };
 
-  const addFromRoster = async (): Promise<void> => {
-    if (busy || detailTeam === null || pick === '') return;
-    setBusy(true);
-    setError(null);
-    try {
-      await addTeamMember(detailTeam.teamId, { name: pick, fromRoster: true });
-      setPick('');
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
+  const detailTeam = detailId === null ? null : (pool.find((t) => t.teamId === detailId) ?? null);
+
+  // 详情态成员操作（用户迭代 2026-09）：失败统一落到 detailError 就地展示。
+  const memberOpError = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+  const changeModel = (memberName: string, model: string): void => {
+    if (detailTeam === null) return;
+    setDetailError(null);
+    setModelSavingName(memberName);
+    // inherit = 跟随领队（清 override）；其余按 DeepSeek 官方模型下发。
+    void setMemberModel(
+      detailTeam.teamId,
+      memberName,
+      model === 'inherit' ? {} : { provider: 'deepseek', model },
+    )
+      .catch((e) => setDetailError(memberOpError(e)))
+      .finally(() => setModelSavingName(null));
   };
 
-  const detailTeam = detailId === null ? null : (pool.find((t) => t.teamId === detailId) ?? null);
+  const removeMember = (memberName: string): void => {
+    if (detailTeam === null) return;
+    setDetailError(null);
+    void removeTeamMember(detailTeam.teamId, memberName).catch((e) =>
+      setDetailError(memberOpError(e)),
+    );
+  };
+
+  const removeLeader = (): void => {
+    if (detailTeam === null) return;
+    setDetailError(null);
+    void setTeamLeaderRemoved(detailTeam.teamId, true).catch((e) =>
+      setDetailError(memberOpError(e)),
+    );
+  };
 
   return (
     <div>
@@ -1320,7 +1351,7 @@ function TeamTab({
               size="sm"
               onClick={() => {
                 setDetailId(null);
-                setPick('');
+                setDetailError(null);
               }}
             >
               <ArrowLeft className="h-3.5 w-3.5" />
@@ -1336,80 +1367,77 @@ function TeamTab({
           </div>
 
           {/* 团队成员卡（S13/S14）：容器 shadcn Card（PANEL_CARD_CLASS 覆盖层，
-          S12 先例）；拉人选择与成员栅格 Tailwind 化。 */}
+          S12 先例）；拉人下拉已移除（用户迭代 2026-09），改为右上「添加成员」
+          按钮点开点餐式弹窗。 */}
           <Card className={cn(PANEL_CARD_CLASS, 'mt-2')}>
             <div className="mb-2.5 flex items-center gap-2">
               <h3 className={LIST_TITLE_CLASS}>团队成员</h3>
               <span className={LIST_COUNT_CLASS}>
-                {detailTeam.members.length} 人 · 领队默认在团
+                {detailTeam.members.length}/{memberCap} 人 ·{' '}
+                {detailTeam.leaderRemoved ? '领队已移除' : '领队默认在团'}
               </span>
+              <span className="flex-1" />
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => {
+                  setDetailError(null);
+                  setAddOpen(true);
+                }}
+              >
+                <Plus className="h-3.5 w-3.5" />
+                添加成员
+              </Button>
             </div>
-            {roster.length > 0 && (
-              <div className="mb-2.5 flex items-center gap-2">
-                {/* docs/23 S23-3：原生 select 迁 shadcn Select（触发器=官网
-                    输入框签名；空选项以哨兵值承载，映射回 ''）。 */}
-                <Select
-                  value={pick === '' ? SELECT_NONE : pick}
-                  onValueChange={(v) => setPick(v === SELECT_NONE ? '' : v)}
-                >
-                  <SelectTrigger className="h-[30px] w-full max-w-[280px] px-2.5 text-[12px] font-medium">
-                    <SelectValue placeholder="— 从角色列表选择 —" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={SELECT_NONE} className="text-[12px]">
-                      — 从角色列表选择 —
-                    </SelectItem>
-                    {roster
-                      .filter(
-                        (m) =>
-                          m.name !== LEADER_NAME &&
-                          !detailTeam.members.some((t) => t.name === m.name),
-                      )
-                      .map((m) => (
-                        <SelectItem key={m.name} value={m.name} className="text-[12px]">
-                          {m.name}（{m.role}）
-                        </SelectItem>
-                      ))}
-                  </SelectContent>
-                </Select>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  disabled={busy || pick === ''}
-                  onClick={() => void addFromRoster()}
-                >
-                  拉进团队
-                </Button>
-              </div>
+            {detailError !== null && (
+              <FormErrorNote className="mb-2.5">{detailError}</FormErrorNote>
             )}
             <div className={MEMBER_GRID_CLASS}>
-              <LeaderCard captain={detailTeam.captain} />
+              {!detailTeam.leaderRemoved && (
+                <LeaderCard captain={detailTeam.captain} onRemove={removeLeader} />
+              )}
               {detailTeam.members.map((m) => (
                 <MemberCard
                   key={m.name}
                   member={m}
                   activity={m.childId !== null ? agentActivity[m.childId] : undefined}
                   onOpenReports={onOpenReports}
-                  onRemove={(memberName) => {
-                    void removeTeamMember(detailTeam.teamId, memberName).catch(() => undefined);
-                  }}
+                  onRemove={removeMember}
+                  onModelChange={changeModel}
+                  modelSaving={modelSavingName === m.name}
                 />
               ))}
               {detailTeam.members.length === 0 && (
                 <div className={MUTED_CLASS}>
-                  还没有角色——先到「角色」页新增，或从上方角色列表拉人。
+                  还没有成员——点右上角「添加成员」，像点餐一样把角色加进团队。
                 </div>
               )}
             </div>
           </Card>
+
+          {/* 添加成员弹窗（用户迭代 2026-09）：Ele.me 点餐式角色加团。 */}
+          <AddMembersDialog
+            open={addOpen}
+            onOpenChange={setAddOpen}
+            team={detailTeam}
+            roster={roster}
+            memberCap={memberCap}
+          />
         </>
       )}
     </div>
   );
 }
 
-/** The 领队（项目牧羊人）leader card — expands into its Markdown 手册. S13 Tailwind 化。 */
-function LeaderCard({ captain }: { captain: CaptainView }): ReactNode {
+/** The 领队（项目牧羊人）leader card — expands into its Markdown 手册. S13 Tailwind 化。
+ * 用户迭代 2026-09：领队可被移出团队（可经添加成员弹窗加回），onRemove 挂移除钮。 */
+function LeaderCard({
+  captain,
+  onRemove,
+}: {
+  captain: CaptainView;
+  onRemove?: () => void;
+}): ReactNode {
   const [open, setOpen] = useState(false);
   return (
     <div className={cn(MEMBER_CARD_CLASS, 'col-span-full')}>
@@ -1429,6 +1457,17 @@ function LeaderCard({ captain }: { captain: CaptainView }): ReactNode {
             {open ? '收起手册' : '查看手册'}
           </Button>
         )}
+        {onRemove !== undefined && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="text-destructive hover:text-destructive"
+            onClick={onRemove}
+          >
+            移出团队
+          </Button>
+        )}
       </div>
       {open && captain.personaMd !== null && (
         <div className={cn('mt-2.5 border-t border-solid pt-2.5', BORDER_L1_CLASS)}>
@@ -1439,25 +1478,41 @@ function LeaderCard({ captain }: { captain: CaptainView }): ReactNode {
   );
 }
 
-/** One team-member card: seeded avatar + status pill + 移出团队（领队不可移出）. S13 Tailwind 化。 */
+/** 成员模型选项（用户迭代 2026-09）：inherit=跟随领队（默认路线）；切换只改
+ * member.modelRoute——staged 成员启动即生效，运行中的成员下次启动生效。 */
+const MODEL_OPTIONS: { value: string; label: string }[] = [
+  { value: 'inherit', label: '跟随领队' },
+  { value: 'deepseek-chat', label: 'DeepSeek Chat' },
+  { value: 'deepseek-reasoner', label: 'DeepSeek Reasoner' },
+];
+
+/** One team-member card: seeded avatar + status pill + 工号 + 右侧模型选择 +
+ * 移出团队（用户迭代 2026-09：工号/模型/删除）。 */
 function MemberCard({
   member: m,
   activity,
   onOpenReports,
   onRemove,
+  onModelChange,
+  modelSaving,
 }: {
   member: MemberView;
   /** Subagent activity (docs/20.4 P4): 'running' | 'inactive' | undefined. */
   activity?: string;
   onOpenReports?: (name: string) => void;
   onRemove?: (name: string) => void;
+  /** 模型选择（右侧下拉）：'inherit' = 跟随领队路线。 */
+  onModelChange?: (memberName: string, model: string) => void;
+  /** 该成员的模型路由保存中（Select 短暂禁用防连点）。 */
+  modelSaving?: boolean;
 }): ReactNode {
   const tone = memberTone(m.status);
+  const routeValue = m.provider === 'inherit' || m.model === 'inherit' ? 'inherit' : m.model;
   return (
     <div className={MEMBER_CARD_CLASS}>
       <div className="flex items-center gap-2.5">
         <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} />
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
             {activity !== undefined && (
               <span
@@ -1475,9 +1530,31 @@ function MemberCard({
             {m.name}
           </div>
           <div className={cn(MUTED_CLASS, 'mt-px')}>
-            {m.role} · {m.model}
+            {m.employeeId !== null ? `${m.employeeId} · ` : ''}
+            {m.role}
           </div>
         </div>
+        {onModelChange !== undefined && (
+          <Select
+            value={routeValue}
+            disabled={modelSaving === true}
+            onValueChange={(v) => onModelChange !== undefined && onModelChange(m.name, v)}
+          >
+            <SelectTrigger
+              className="h-7 w-[118px] shrink-0 px-2 text-xs font-medium"
+              title="选择成员运行的模型（运行中的成员下次启动时生效）"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {MODEL_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value} className="text-xs">
+                  {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
       </div>
       <Pill tone={tone}>
         {STATUS_LABELS[m.status] ?? m.status}
@@ -1502,6 +1579,277 @@ function MemberCard({
         )}
       </div>
     </div>
+  );
+}
+
+/** 添加成员弹窗购物车项：角色名 + 已点份数。 */
+interface CartItem {
+  /** Roster role name（领队不进购物车——单独走恢复开关）。 */
+  name: string;
+  qty: number;
+}
+
+/**
+ * 添加成员弹窗（用户迭代 2026-09）：Ele.me 点餐式——角色瓦片点一下加一份，
+ * 再点续加（同角色可多人，第二份起自动 -2/-3 后缀并照抄角色库默认值）；
+ * 购物车逐份列出，每份可填工号（首份预填角色库工号，留空由 host 分配）。
+ * 一队最多 memberCap 人；领队被移出时菜单首位出现「领队」tile，勾选即恢复
+ * （不走购物车、不占成员名额）。下单 = 逐个 POST，遇到错误停在原地，
+ * 已加成功的成员保留在团队里。
+ */
+function AddMembersDialog({
+  open,
+  onOpenChange,
+  team,
+  roster,
+  memberCap,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  team: TeamSnapshot;
+  roster: RosterMember[];
+  memberCap: number;
+}): ReactNode {
+  const [cart, setCart] = useState<CartItem[]>([]);
+  // 工号输入（键 = `${roleName}#${copy}`，copy 从 1 起；未填 = host 自动分配）。
+  const [employeeIds, setEmployeeIds] = useState<Record<string, string>>({});
+  const [leaderPicked, setLeaderPicked] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
+
+  // 成员名额余量：上限只数成员记录（领队不是成员记录，恢复不占名额）。
+  const remaining = Math.max(0, memberCap - team.members.length);
+  const total = cart.reduce((n, c) => n + c.qty, 0);
+  const menu = roster.filter((m) => m.name !== LEADER_NAME && m.name !== ROLE_BUILDER_NAME);
+
+  const qtyOf = (roleName: string): number => cart.find((c) => c.name === roleName)?.qty ?? 0;
+
+  /** 第 copy 份的成员名：队里已有 E 个同名时叫 base（E+copy=1）或 base-N。 */
+  const copyName = (roleName: string, copy: number): string => {
+    const occ = team.members.filter((m) => m.name === roleName).length + copy;
+    return occ === 1 ? roleName : `${roleName}-${occ}`;
+  };
+
+  const addItem = (roleName: string): void => {
+    setError(null);
+    setHint(null);
+    if (total >= remaining) {
+      setHint(remaining === 0 ? '成员名额已满' : `最多还能添加 ${remaining - total} 人`);
+      return;
+    }
+    const wasNew = qtyOf(roleName) === 0;
+    // 去重必须在 updater 内判定：同拍连点（快速双击）时外层 qtyOf 是旧值。
+    setCart((prev) =>
+      prev.some((c) => c.name === roleName)
+        ? prev.map((c) => (c.name === roleName ? { ...c, qty: c.qty + 1 } : c))
+        : [...prev, { name: roleName, qty: 1 }],
+    );
+    // 首份工号预填角色库同号；后续份数留空由 host 分配新号。
+    if (wasNew) {
+      const eid = roster.find((m) => m.name === roleName)?.employeeId ?? '';
+      if (eid !== '') setEmployeeIds((prev) => ({ ...prev, [`${roleName}#1`]: eid }));
+    }
+  };
+
+  const removeOne = (roleName: string): void => {
+    setCart((prev) =>
+      prev
+        .map((c) => (c.name === roleName ? { ...c, qty: c.qty - 1 } : c))
+        .filter((c) => c.qty > 0),
+    );
+  };
+
+  const close = (next: boolean): void => {
+    onOpenChange(next);
+    if (!next) {
+      setCart([]);
+      setEmployeeIds({});
+      setLeaderPicked(false);
+      setError(null);
+      setHint(null);
+    }
+  };
+
+  const confirmAdd = async (): Promise<void> => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (leaderPicked) await setTeamLeaderRemoved(team.teamId, false);
+      for (const item of cart) {
+        for (let copy = 1; copy <= item.qty; copy++) {
+          const memberName = copyName(item.name, copy);
+          const eid = employeeIds[`${item.name}#${copy}`]?.trim() ?? '';
+          await addTeamMember(team.teamId, {
+            name: memberName,
+            ...(memberName !== item.name ? { sourceName: item.name } : {}),
+            ...(eid !== '' ? { employeeId: eid } : {}),
+          });
+        }
+      }
+      close(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      // 已加成功的保留；清空购物车避免重名二次报错。
+      setCart([]);
+      setEmployeeIds({});
+      setLeaderPicked(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const tileClass = (active: boolean): string =>
+    cn(
+      'flex items-center gap-2.5 rounded-xl border border-solid bg-background px-2.5 py-2 text-left transition-colors hover:border-primary',
+      active ? 'border-primary' : BORDER_L1_CLASS,
+    );
+
+  return (
+    <Dialog open={open} onOpenChange={close}>
+      <DialogContent className="max-w-md">
+        <DialogHeader className="space-y-1 text-left">
+          <DialogTitle>添加成员</DialogTitle>
+          <DialogDescription className={MUTED_CLASS}>
+            像点餐一样把角色点进团队：同一角色可以点多份（自动加 -2、-3 后缀），每份可填工号。
+          </DialogDescription>
+        </DialogHeader>
+
+        {/* 菜单：角色瓦片栅格（点按加份，已点显示 ×N 角标）。 */}
+        <div className="max-h-[236px] overflow-y-auto pr-0.5">
+          <div className="grid grid-cols-2 gap-2">
+            {team.leaderRemoved && (
+              <button
+                type="button"
+                className={tileClass(leaderPicked)}
+                onClick={() => {
+                  setLeaderPicked(!leaderPicked);
+                  setError(null);
+                }}
+              >
+                <Avatar
+                  name={team.captain.name}
+                  seed={team.captain.avatar.seed}
+                  salt={team.captain.avatar.salt}
+                  size={32}
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-semibold text-foreground">
+                    {team.captain.name}
+                  </span>
+                  <span className={cn(MUTED_CLASS, 'block truncate text-xs')}>
+                    {leaderPicked ? '已勾选·点按取消' : '领队·点按加回'}
+                  </span>
+                </span>
+                {leaderPicked && <Check className="h-4 w-4 shrink-0 text-primary" />}
+              </button>
+            )}
+            {menu.map((m) => {
+              const qty = qtyOf(m.name);
+              const full = !cart.some((c) => c.name === m.name) && total >= remaining;
+              return (
+                <button
+                  key={m.name}
+                  type="button"
+                  disabled={full}
+                  className={cn(tileClass(qty > 0), full && 'opacity-50')}
+                  onClick={() => addItem(m.name)}
+                >
+                  <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={32} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold text-foreground">
+                      {m.name}
+                    </span>
+                    <span className={cn(MUTED_CLASS, 'block truncate text-xs')}>
+                      {m.role}
+                      {m.employeeId !== undefined && m.employeeId !== '' ? ` · ${m.employeeId}` : ''}
+                    </span>
+                  </span>
+                  {qty > 0 ? (
+                    <span className="inline-flex h-5 min-w-[20px] shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
+                      ×{qty}
+                    </span>
+                  ) : (
+                    <Plus className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+          {menu.length === 0 && !team.leaderRemoved && (
+            <div className={cn(MUTED_CLASS, 'py-4 text-center text-xs')}>
+              角色库还没有可选角色——先到「角色」页新增。
+            </div>
+          )}
+        </div>
+
+        {/* 购物车：逐份列出（自动后缀名 + 工号输入 + 移除）。 */}
+        {cart.length > 0 && (
+          <div className={cn('rounded-lg border border-solid bg-muted/40 p-2.5', BORDER_L1_CLASS)}>
+            <div className="mb-1.5 text-xs font-semibold text-muted-foreground">已点成员</div>
+            <div className="flex flex-col gap-1.5">
+              {cart.map((item) =>
+                Array.from({ length: item.qty }, (_, idx) => {
+                  const key = `${item.name}#${idx + 1}`;
+                  return (
+                    <div key={key} className="flex items-center gap-1.5">
+                      <span className="min-w-0 flex-1 truncate text-sm text-foreground">
+                        {copyName(item.name, idx + 1)}
+                      </span>
+                      <Input
+                        value={employeeIds[key] ?? ''}
+                        placeholder="工号（留空自动分配）"
+                        className="h-7 w-[150px] px-2 text-xs"
+                        onChange={(e) =>
+                          setEmployeeIds((prev) => ({ ...prev, [key]: e.target.value }))
+                        }
+                      />
+                      <button
+                        type="button"
+                        title="移除这一份"
+                        className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                        onClick={() => removeOne(item.name)}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  );
+                }),
+              )}
+            </div>
+          </div>
+        )}
+
+        {hint !== null && <div className={cn(MUTED_CLASS, 'text-xs')}>{hint}</div>}
+        {error !== null && <FormErrorNote>{error}</FormErrorNote>}
+
+        <div className="flex items-center justify-between gap-2">
+          <span className={LIST_COUNT_CLASS}>
+            已选 {total + (leaderPicked ? 1 : 0)} 人 · 还可加 {Math.max(0, remaining - total)} 人
+          </span>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() => close(false)}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={busy || (total === 0 && !leaderPicked)}
+              onClick={() => void confirmAdd()}
+            >
+              添加成员
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
