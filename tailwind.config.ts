@@ -14,16 +14,22 @@ import tailwindcssAnimate from 'tailwindcss-animate';
  *   `className="eteams-ui"` 字面量，否则 content 扫描不到该选择器、purge
  *   会清空产物。
  * - theme.extend.colors（S3，附录 A）：shadcn 语义 token 全部映射
- *   `var(--token)`（token 定义在 src/client/eteams.css 的 @layer base，
- *   别名宿主 --dsw-alias-* 变量）。宿主变量是完整色值，不用 hsl(var())
+ *   `var(--token)`（token 定义在 src/client/eteams.css 的 @layer base）。
+ *   token 值为完整色值，不用 hsl(var())
  *   通道形式；token 色禁用 /alpha 修饰（需要半透明走专用 token/color-mix）。
  *   success/warning/business 为扩展 token，服务 Tone 徽标语义。
+ *   值口径（docs/24 D22a，翻案 D21a/D21d）：token 值为 tailwindcss.cn v3
+ *   官网字面值（slate 灰阶 + sky 强调），不再桥接宿主 --dsw-alias-*；暗色经
+ *   祖先选择器 body[data-ds-dark-theme] .eteams-ui 切官网暗色（eteams.css
+ *   内双块同名定义）。**刻意不配置 darkMode**：暗色不走 dark: 变体（D22a
+ *   不变式），工具类层无需感知暗色。
  * - borderRadius 按 shadcn v3 惯例从 --radius 衍生（--radius: 0.75rem，
  *   对齐 card.tsx 现行 12px）。
  * - plugins 先只挂 tailwindcss-animate（v3 侧 shadcn 动画类标准件）。
- * - fontFamily（docs/22 D20b）：font-sans/font-mono 消费 eteams.css 的
- *   --eteams-font-sans/-mono 字体栈令牌（官网 Inter var / Fira Code VF +
- *   系统兜底；不打包字体文件）。
+ * - fontFamily（docs/22 D20b / docs/24 D22b 翻案打包决策）：font-sans/
+ *   font-mono 消费 eteams.css 的 --eteams-font-sans/-mono 字体栈令牌——
+ *   'Inter Variable' / 'Fira Code Variable'（@fontsource-variable latin
+ *   woff2 由 buildTailwind.mjs base64 打包进 gen.css）打头，系统兜底栈在后。
  */
 const config: Config = {
   content: ['src/client/**/*.{ts,tsx}'],
@@ -80,7 +86,7 @@ const config: Config = {
         },
         business: {
           DEFAULT: 'var(--business)',
-          // docs/23 D21b：品牌淡底对（business-tertiary），chips/选中底用。
+          // 品牌淡底对（docs/24 D22a：官网 sky 淡底），chips/选中底用。
           tint: 'var(--business-tint)',
         },
       },

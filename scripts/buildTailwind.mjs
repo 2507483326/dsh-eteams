@@ -1,5 +1,7 @@
 /**
  * Tailwind 构建步（docs/21-client-ui-stack.md D19a）：tailwind CLI 生成 lib/tailwind.gen.css。
+ * CLI 产出后追加字体前置步（docs/24 D22b）：fontsource variable 的 latin woff2
+ * base64 成 @font-face 写回产物文件头（台账打印字节数）。
  *
  * pnpm build 串步位置：tsc(client) 之后、tsdown 之前——tsdown 的
  * tailwindCssInline 虚拟模块在打包时把该产物以字符串内联进单文件 CJS envelope。
@@ -13,7 +15,7 @@
  * 合产物存在性自校验，杜绝「spawn 成功但什么都没干」的假绿。
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
@@ -51,6 +53,60 @@ function resolveNodeBinary() {
     `[buildTailwind] 找不到可用的 node 可执行文件（候选：${candidates.join('、')}）。请确认 node 已安装且在 PATH 上。`,
   );
   process.exit(1);
+}
+
+/*
+ * 字体打包（docs/24 D22b，翻案 D20b「不打包字体」）：fontsource variable 包的
+ * latin 子集 woff2 → base64 → @font-face 块前置进 gen.css。客户端打成单文件
+ * envelope、无独立 CSS 通道，字体文件必须内联；体积台账预算 ≤ +260KB。
+ * latin 子集足够（官网同款行为：CJK 落系统字体）；@font-face 字段以
+ * fontsource 官方 index.css 为准（unicode-range 原样保留 latin 档，区间外
+ * 字符立即回落字体栈，不白等）；font-display 按合同取 block——data URI 无
+ * 网络往返，swap/block 差异只剩解码瞬间，block 防回退字闪替。
+ */
+const FONT_EMBEDS = [
+  {
+    file: 'node_modules/@fontsource-variable/inter/files/inter-latin-wght-normal.woff2',
+    family: 'Inter Variable',
+    weight: '100 900',
+    unicodeRange:
+      'U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD',
+  },
+  {
+    file: 'node_modules/@fontsource-variable/fira-code/files/fira-code-latin-wght-normal.woff2',
+    family: 'Fira Code Variable',
+    weight: '300 700',
+    unicodeRange:
+      'U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD',
+  },
+];
+
+/** 读 latin woff2 → 拼 @font-face 块（字段顺序照 fontsource index.css）。 */
+function buildFontFaceCss() {
+  const blocks = [];
+  for (const font of FONT_EMBEDS) {
+    let woff2;
+    try {
+      woff2 = readFileSync(repoRoot + font.file);
+    } catch {
+      console.error(
+        `[buildTailwind] 字体文件缺失：${font.file}（@fontsource-variable devDeps 未安装？）`,
+      );
+      process.exit(1);
+    }
+    console.log(`[buildTailwind] 字体 ${font.family}：${woff2.length} B（latin woff2，base64 前）`);
+    blocks.push(
+      `@font-face {\n` +
+        `  font-family: '${font.family}';\n` +
+        `  font-style: normal;\n` +
+        `  font-display: block;\n` +
+        `  font-weight: ${font.weight};\n` +
+        `  src: url(data:font/woff2;base64,${woff2.toString('base64')}) format('woff2-variations');\n` +
+        `  unicode-range: ${font.unicodeRange};\n` +
+        `}`,
+    );
+  }
+  return blocks.join('\n') + '\n';
 }
 
 let cliPath;
@@ -97,3 +153,12 @@ if (!existsSync(repoRoot + outputFile)) {
   );
   process.exit(1);
 }
+
+// 字体前置（D22b）：CLI 产出后读 latin woff2 → base64 @font-face 写回文件头。
+// 直接覆写产物（产物本身 gitignore，@font-face 无需再过 CLI/tailwind 处理）。
+const generatedCss = readFileSync(repoRoot + outputFile, 'utf8');
+const fontFaceCss = buildFontFaceCss();
+writeFileSync(repoRoot + outputFile, fontFaceCss + generatedCss);
+console.log(
+  `[buildTailwind] ${outputFile}：${Buffer.byteLength(generatedCss)} B → ${Buffer.byteLength(fontFaceCss + generatedCss)} B（前置字体 base64）`,
+);

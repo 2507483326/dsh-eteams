@@ -5,6 +5,7 @@
  *   pnpm build
  *     → node scripts/buildTailwind.mjs    tailwind CLI：本文件 + tailwind.config.ts
  *                                         → lib/tailwind.gen.css（--minify，gitignore）
+ *                                         → 字体 @font-face base64 前置（D22b）
  *     → tsdown tailwindCssInline 虚拟模块  产物以字符串内联进单文件 CJS envelope
  *                                         （虚拟 id 不以 .css 结尾，规避 css-guard）
  *     → 运行时 src/client/tailwind.ts     ensureEteamsStyles() 幂等注入
@@ -13,20 +14,23 @@
  * 作用域（D19b）：corePlugins.preflight=false（全局 reset 绝不进宿主 DOM）；
  * important='.eteams-ui'（工具类形如 `.eteams-ui .flex`，双向隔离）。
  *
- * S3 令牌桥（D19c + 附录 A）：@layer base 手写 shadcn 语义 token，全部限定
- * .eteams-ui 作用域、不用 @apply。右值一律 `var(--dsw-alias-…, 字面兜底)`——
- * 宿主变量是完整色值（亮暗跟随零 JS），禁用 /alpha 修饰；有别名可用的 token
- * 绝不写成纯字面色。
+ * 令牌（docs/24 D22a，三期用户指令「完全按照官网」——D21a 的 DSW 蓝、D21d 的
+ * 中性色偏差被翻案）：@layer base 手写 shadcn 语义 token，全部限定 .eteams-ui
+ * 作用域、不用 @apply；变量名与消费方（tailwind.config.ts theme.extend.colors
+ * 的 var(--token)）不变，只换值。值 = tailwindcss.cn v3 官网字面值（24.1.1
+ * 实抓取证：slate 灰阶结构/文字 + sky-500/sky-400 唯一强调），**不再首跳宿主
+ * --dsw-alias-***——宿主 neutral-bluish 暖灰 / DSW 蓝与官网色板色相不符，官网
+ * 观感必须由本文件全权保证。暗色经祖先选择器 body[data-ds-dark-theme]
+ * .eteams-ui 切官网暗色（宿主暗色时 body 带该属性，先例 mdEditor.tsx
+ * useHostDark），不引入 dark: 变体。
  *
- * docs/22 D20a：字面兜底值整族换成 tailwindcss.cn（v3 官网）色板——
- * sky-500 主色 / slate 系中性阶（浅色基准；暗色仍由宿主别名驱动）；
- * D20b：--eteams-font-sans/-mono 字体栈令牌（官网 sans=Inter var、
- * mono=Fira Code VF；不打包字体文件，未装即落系统兜底，docs/22 22.1.2）。
- * docs/23 D21a/b（二期，用户指令「DSW 蓝 可以复用」）：宿主实测
- * --dsw-alias-brand-primary 为近黑（#0f1115）非蓝——accent 全族改桥
- * --dsw-alias-button-info-fill（DSW/DeepSeek 蓝：亮 #4176e6 / 暗 #679efe，
- * 宿主主按钮同源、亮暗自动）；品牌淡底改桥 state-business-tertiary
- * （--business-tint）；sky 兜底字面量随之换 DSW 蓝族；中性 slate 兜底不变。
+ * 字体（docs/24 D22b，翻案 D20b「不打包字体」）：@fontsource-variable 的
+ * Inter / Fira Code latin woff2 由 scripts/buildTailwind.mjs 构建期 base64 成
+ * @font-face 前置进产物（族名 'Inter Variable' / 'Fira Code Variable'，见下方
+ * 字体栈）；CJK 仍落系统字体（官网同款行为）。
+ *
+ * mini-preflight（docs/24 D22c）：preflight 关闭的 UA 默认代价在本文件内做
+ * 作用域代偿（盒模型/边框/间距复位），见下方标注块。
  */
 @tailwind base;
 @tailwind components;
@@ -34,67 +38,166 @@
 
 @layer base {
   /*
-   * shadcn 语义 token ↔ 宿主变量桥（docs/21 附录 A，S3；docs/22 D20a 色板兜底）。
-   * 挂在 .eteams-ui 上，由 tailwind.config.ts theme.extend.colors 以
-   * var(--token) 消费；宿主变量缺省时落到官网色板字面兜底（浅色基准）。
+   * shadcn 语义 token（D22a 官网化）：值 = 官网字面值，由 tailwind.config.ts
+   * theme.extend.colors 以 var(--token) 消费。浅色为默认块，暗色见下方
+   * body[data-ds-dark-theme] 块（同名单只覆写值）。
    */
   .eteams-ui {
-    /* 字体栈令牌（D20b）：官网 Inter var / Fira Code VF + 系统兜底，
-       中文补 PingFang SC / Microsoft YaHei 档（宿主未装 Inter 时 CJK 不劣化）。 */
-    --eteams-font-sans: 'Inter var', 'Inter', ui-sans-serif, system-ui, -apple-system,
-      'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'PingFang SC',
-      'Microsoft YaHei', sans-serif;
-    --eteams-font-mono: 'Fira Code VF', 'Fira Code', ui-monospace, SFMono-Regular, Menlo,
+    /* 字体栈令牌（D22b）：打包可变字体族名打头（@font-face 由
+       buildTailwind.mjs 生成），其后保留原系统兜底栈；CJK 补 PingFang SC /
+       Microsoft YaHei 档（未覆盖字形不劣化）。 */
+    --eteams-font-sans:
+      'Inter Variable', 'Inter var', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI',
+      Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    --eteams-font-mono:
+      'Fira Code Variable', 'Fira Code VF', 'Fira Code', ui-monospace, SFMono-Regular, Menlo,
       Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
 
-    /* 背景 / 前景（官网：白底 + slate-900 标题文字） */
-    --background: var(--dsw-alias-bg-layer-1, #ffffff);
-    --foreground: var(--dsw-alias-label-primary, #0f172a);
-    --card: var(--dsw-alias-bg-layer-2, #ffffff);
-    --card-foreground: var(--dsw-alias-label-primary, #0f172a);
-    --popover: var(--dsw-alias-bg-layer-2, #ffffff);
-    --popover-foreground: var(--dsw-alias-label-primary, #0f172a);
-    /* 主色 / 次级 / 弱化 / 强调（docs/23 D21a：DSW 蓝——宿主 button-info-fill
-       同源，亮 #4176e6/暗 #679efe 自动切换；中性淡底 slate-100） */
-    --primary: var(--dsw-alias-button-info-fill, #4176e6);
-    --primary-foreground: var(--dsw-alias-label-primary-foreground, #ffffff);
-    --secondary: var(--dsw-alias-interactive-bg-hover, #f1f5f9);
-    --secondary-foreground: var(--dsw-alias-label-primary, #0f172a);
-    --muted: var(--dsw-alias-interactive-bg-hover, #f1f5f9);
-    --muted-foreground: var(--dsw-alias-label-tertiary, #64748b);
-    /* R1-F5：宿主包无 --dsw-alias-accent（对照已装 dsh-client-ui-theme
-       主题表核实，亮/暗两块均无）——原首跳是死映射，恒落到 brand-primary
-       兜底。shadcn accent 语义 = hover 浅高亮底，改映射宿主真实存在的
-       interactive 档淡底（宿主自身 hover-accent 同款变量，亮暗双值齐备），
-       字面兜底与 --secondary/--muted 同档中性色。 */
-    --accent: var(--dsw-alias-interactive-bg-hover-accent, #f1f5f9);
-    --accent-foreground: var(--dsw-alias-label-primary, #0f172a);
-    --destructive: var(--dsw-alias-state-error-primary, #dc2626);
-    /* 附录 A 之外的微调：shadcn destructive 变体（button 等，S4 起）需要
-       on-destructive 文本色；宿主无专用别名，复用 label-primary-foreground
-       （与 --primary-foreground 同源），字面兜底 #ffffff。 */
-    --destructive-foreground: var(--dsw-alias-label-primary-foreground, #ffffff);
-    /* 边框 / 输入 / 焦点环（官网侧栏细线：slate-200 档；docs/23 D21a：焦点环
-       随 accent 改桥 DSW 蓝 button-info-fill） */
-    --border: var(--dsw-alias-border-l2, #e2e8f0);
-    --input: var(--dsw-alias-border-l2, #e2e8f0);
-    --ring: var(--dsw-alias-button-info-fill, #4176e6);
+    /* 背景 / 前景（官网：白底 + slate-900 标题文字；card/popover 与底同色） */
+    --background: #ffffff;
+    --foreground: #0f172a;
+    --card: #ffffff;
+    --card-foreground: #0f172a;
+    --popover: #ffffff;
+    --popover-foreground: #0f172a;
+    /* 主色（官网唯一强调 sky-500）/ 次级 / 弱化 / 强调（中性淡底 = slate-100） */
+    --primary: #0ea5e9;
+    --primary-foreground: #ffffff;
+    --secondary: #f1f5f9;
+    --secondary-foreground: #0f172a;
+    --muted: #f1f5f9;
+    --muted-foreground: #64748b; /* slate-500：官网正文/弱化文字档 */
+    --accent: #f1f5f9;
+    --accent-foreground: #0f172a;
+    /* destructive 语义必需而官网无对应物（D22a 定档 red-600） */
+    --destructive: #dc2626;
+    --destructive-foreground: #ffffff;
+    /* 边框 / 输入 / 焦点环（官网侧栏细线 = slate-200；焦点环随主色 sky-500） */
+    --border: #e2e8f0;
+    --input: #e2e8f0;
+    --ring: #0ea5e9;
     /* 圆角：直定 0.75rem（=12px，对齐 card.tsx 现行值），shadcn 惯例由
        tailwind.config.ts 的 borderRadius lg/md/sm 从 --radius 衍生 */
     --radius: 0.75rem;
-    /* 扩展 token（超出 shadcn 标准集，服务既有 Tone 徽标语义；兜底取
-       Tailwind green-600 / amber-600 档，浅底可读性优先） */
-    --success: var(--dsw-alias-state-success-primary, #16a34a);
-    --warning: var(--dsw-alias-state-warn-primary, #d97706);
-    --business: var(--dsw-alias-state-business-primary, var(--primary));
-    /* docs/23 D21b：品牌淡底对（chips/选中底语义源）——宿主 business-tertiary
-       亮 deepseek-100 #e4edfd / 暗 deepseek-800 #34415b；兜底 DSW 蓝 12% 调。
-       tailwind.config.ts business.tint 消费为 bg/border-business-tint 工具类。 */
-    --business-tint: var(--dsw-alias-state-business-tertiary, rgba(65, 118, 230, 0.12));
+    /* 扩展 token（超出 shadcn 标准集，服务既有 Tone 徽标语义；D22a：
+       success/warning 保留语义色 → green-600/amber-600） */
+    --success: #16a34a;
+    --warning: #d97706;
+    /* 品牌色对（--business 原桥 DSW 蓝，D21a 翻案后与主色同源 sky；
+       --business-tint 品牌淡底，tailwind.config.ts business.tint 消费为
+       bg/border-business-tint 工具类） */
+    --business: #0ea5e9;
+    --business-tint: rgba(14, 165, 233, 0.1);
+
+    /* 面板专用 token（D22g-⑦）：背景板引擎采样源（getComputedStyle 直读，
+       字面值即兜底值）与徽标降噪消费方，亮暗两块同名定义。 */
+    --eteams-backdrop-label: #475569; /* slate-600：格线/地形/履带采样 */
+    --eteams-backdrop-accent: #0ea5e9; /* sky-500：品牌要素采样 */
+    --eteams-pill-bg: rgba(100, 116, 139, 0.08); /* slate-500 8%：中性 pill 底 */
+    --eteams-pill-ink: #475569;
+    --eteams-brand-ink: #0284c7; /* sky-600：品牌文字 */
+
+    /* 官网 html 级字体签名（24.1.1：Inter var + cv02/03/04/11 + antialiased）
+       落到面板作用域根，随继承覆盖全子树（mdxeditor 内亦生效，特性对
+       Fira Code 的 cv 档无害）。 */
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /*
+   * 暗色 token 块（D22a）：宿主暗色时 body 带 data-ds-dark-theme（DSH
+   * ThemePresenter 写在 body 上，mdEditor useHostDark 同源），祖先选择器
+   * 整树切换官网暗色（slate-900 底 / slate-800 面 / sky-400 强调）。只覆写
+   * 自定义属性：字体签名等元素声明沿用浅色块；不配置 tailwind darkMode、
+   * 不用 dark: 变体（D22a 不变式）。portal 根（body 下 eteams-ui-portal）
+   * 同为 body 后代，一并覆盖。
+   */
+  body[data-ds-dark-theme] .eteams-ui {
+    --background: #0f172a;
+    --foreground: #e2e8f0;
+    --card: #1e293b;
+    --card-foreground: #e2e8f0;
+    --popover: #1e293b;
+    --popover-foreground: #e2e8f0;
+    --primary: #38bdf8;
+    --primary-foreground: #0f172a;
+    --secondary: #1e293b;
+    --secondary-foreground: #e2e8f0;
+    --muted: #1e293b;
+    --muted-foreground: #94a3b8;
+    --accent: #1e293b;
+    --accent-foreground: #e2e8f0;
+    --destructive: #f87171;
+    --destructive-foreground: #0f172a;
+    --border: #1e293b;
+    --input: #1e293b;
+    --ring: #38bdf8;
+    --success: #4ade80;
+    --warning: #fbbf24;
+    --business: #38bdf8;
+    --business-tint: rgba(56, 189, 248, 0.16);
+
+    --eteams-backdrop-label: #94a3b8; /* slate-400 */
+    --eteams-backdrop-accent: #38bdf8; /* sky-400 */
+    --eteams-pill-bg: rgba(148, 163, 184, 0.12);
+    --eteams-pill-ink: #cbd5e1;
+    --eteams-brand-ink: #38bdf8;
+  }
+
+  /*
+   * mini-preflight（D22c）：preflight:false 的作用域代偿——UA 默认盒模型
+   * （content-box）/边框/间距不受工具类体系掌控，shadcn 组件与官网化表面按
+   * preflight 假设书写，需要这层基线。全部限定 .eteams-ui 子树，绝不溢出
+   * 宿主 DOM。
+   *
+   * 特异性纪律（关键）：Tailwind v3 产物**压平 @layer**（产物 grep 无
+   * @layer，base 在前 utilities 在后、全部无 layer）——「base 输给 utilities、
+   * 输给宿主无 layer 样式」不再由 cascade layers 保证，只能靠特异性 + 源序：
+   * ①作用域类一律进 :where()/:not(:where())（贡献 0），使本块选择器
+   *   恒为 (0,1,0)——严格低于宿主组件声明（如 .markdown p = (0,1,1)，宿主
+   *   样式先注入，平局也归它）与面板工具类（.eteams-ui .mb-3 = (0,2,0)），
+   *   仅高于 UA 默认（作者样式必胜 UA）；②本块必须排在 utilities 之前
+   *   （@layer base 位置天然如此），平局时让位工具类。
+   *
+   * 豁免 .eteams-mdx（mdxeditor 编辑器根，含 dark-theme 组合类）子树：
+   * 实测其 dist/style.css 未声明内容区标题/段落边距、列表标记与缩进、
+   * thematic break 的 UA 内嵌边框——WYSIWYG 正文排版正依赖这些 UA 默认，
+   * 复位会掏空编辑器排版（标题段落贴死、列表失去圆点与缩进、hr 消失），
+   * 故整树排除（:not 复杂选择器 Electron/Chromium 88+ 支持）。其弹层经
+   * overlayContainer portal 到编辑器外层（不在 .eteams-mdx 内）不受豁免，
+   * 但弹层样式在编辑器挂载时后注入（平局归它）且边框/边距显式声明，无
+   * UA 依赖。
+   *
+   * 刻意不含 ul/ol 复位（margin/padding/list-style）：面板内列表只来自两个
+   * markdown 表面——mdxeditor（已豁免）与宿主 MarkdownText（其
+   * `.markdown :where(ul,ol)` 为 (0,1,0)，与任何作用域复位同特异性平局、
+   * 且 list-style 根本未声明，标记全靠 UA；CSS Modules 哈希根类本文件无法
+   * 寻址）——任何 ul/ol 复位都会掏空只读 markdown 的列表缩进/标记。本仓库
+   * 自有源码零 <ul>/<ol>（侧栏「列表」是 div+button），复位无收益；后续
+   * 表面需要时用 list-none 等工具类显式表达。
+   */
+  .eteams-ui,
+  .eteams-ui :not(:where(.eteams-mdx, .eteams-mdx *)),
+  .eteams-ui :not(:where(.eteams-mdx, .eteams-mdx *))::before,
+  .eteams-ui :not(:where(.eteams-mdx, .eteams-mdx *))::after {
+    box-sizing: border-box;
+    border-width: 0;
+    border-style: solid;
+    border-color: var(--border);
+  }
+  .eteams-ui :where(h1, h2, h3, h4, h5, h6, p):not(:where(.eteams-mdx, .eteams-mdx *)) {
+    margin: 0;
+  }
+  .eteams-ui :where(img, svg):not(:where(.eteams-mdx, .eteams-mdx *)) {
+    display: block;
+    vertical-align: middle;
   }
 
   /* shadcn 脚手架「* { @apply border-border }」的手动作用域版（D19c：限定
-     .eteams-ui 子树、不用 @apply），默认边框色绝不溢出宿主 DOM。 */
+     .eteams-ui 子树、不用 @apply），默认边框色绝不溢出宿主 DOM。mini-reset
+     的 border-color 与其同值；此条继续覆盖 .eteams-mdx 豁免区，保持其现状
+     （mdxeditor 自声明的边框色位于无 layer 样式，总是更优先）。 */
   .eteams-ui,
   .eteams-ui * {
     border-color: var(--border);
