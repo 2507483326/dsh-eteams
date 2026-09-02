@@ -41,6 +41,8 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Provider } from 'react-redux';
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
+// lucide 深层图标导入（dialog.tsx 先例：深层 .mjs 只进用到的图标）。
+import ArrowLeft from 'lucide-react/dist/esm/icons/arrow-left.mjs';
 import { activateETeamsTab, stageTeamSignals, teamsTabVisible } from './bridge';
 import { Button } from './components/ui/button';
 import { ClientErrorBoundary, recordClientDiag } from './diagnostics';
@@ -182,12 +184,17 @@ function TeamsOverlay({ onClose }: { onClose: () => void }): ReactNode {
           aria-modal="true"
           aria-label="团队"
           data-eteams="overlay-page"
-          className="fixed z-[1000] flex flex-col bg-[color:var(--dsw-alias-bg-base,#f6f7f9)] text-foreground"
+          /* S24-2（D22f）：整页底改语义 token --background（官网 v3 值：亮
+            白 / 暗 slate-900，不再直引 bg-base 别名）。 */
+          className="fixed z-[1000] flex flex-col bg-background text-foreground"
           style={{ left: pane.left, top: pane.top, width: pane.width, height: pane.height }}
         >
-          {/* 顶栏（用户反馈）：去掉「团队」标题与提示文案，只留右侧返回。 */}
-          <header className="flex h-11 flex-none items-center justify-end gap-2.5 border-b border-solid border-[color:var(--dsw-alias-border-l1,rgba(100,116,139,0.14))] px-4">
-            <Button type="button" variant="outline" size="sm" onClick={onClose}>
+          {/* 官网顶栏（S24-2）：--border 细线 + 白底条；左标题（官网条内
+            14px semibold 签名）+ 右 ghost 返回钮（lucide ArrowLeft）。 */}
+          <header className="flex h-11 flex-none items-center justify-between gap-2.5 border-b border-solid border-[color:var(--border)] bg-background px-4">
+            <span className="text-sm font-semibold text-foreground">团队</span>
+            <Button type="button" variant="ghost" size="sm" className="text-sm" onClick={onClose}>
+              <ArrowLeft className="h-3.5 w-3.5" />
               返回
             </Button>
           </header>

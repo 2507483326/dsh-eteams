@@ -55,6 +55,8 @@ import {
 import { createPortal } from 'react-dom';
 import { Provider } from 'react-redux';
 import { writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives';
+// lucide 深层图标导入（dialog.tsx 先例：深层 .mjs 只进用到的图标）。
+import Plus from 'lucide-react/dist/esm/icons/plus.mjs';
 import { ADD_PEOPLE_TEMPLATE, prefillComposer } from './addPeople';
 import { PHASE_LABELS } from './phaseLabels';
 import { ClientErrorBoundary, recordClientDiag } from './diagnostics';
@@ -382,23 +384,23 @@ function forgetSelectedTeam(sessionId: string | undefined): void {
 :hover，Tailwind 变体可以——样式表随之删除）：
 - 行默认透明底：`<button>` 带 UA 背景，必须显式压住（原样式表同款理由）；
 - hover 底 = 交互悬停（--muted 桥即 interactive-bg-hover，同一宿主变量）；
-- 选中底 = 品牌淡底（docs/23 D21b：business-tertiary 淡底对，token
-  bg-business-tint；与 hover 同特异性时按产物源序 data-[selected] 靠后
+- 选中底 = 品牌淡底 + 品牌字（S24-2 D22e 品牌档：bg-business-tint +
+  brand-ink token；与 hover 同特异性时按产物源序 data-[selected] 靠后
   取胜，等同原样式表的规则先后）；
-- preflight 已关：UA 字体/背景的显式覆盖逐项保留（text-[13px]、
-  [font-family:inherit]、bg-transparent），视觉与迁移前一致。 */
+- preflight 已关：UA 字体/背景的显式覆盖逐项保留（[font-family:inherit]、
+  bg-transparent），视觉与迁移前一致；字号档对齐 S24-2（13px→14px 正文、
+  11px→12px meta）。 */
 const ROW_CLASS =
-  'flex w-full cursor-pointer items-center gap-2 rounded-[8px] border-none bg-transparent px-[9px] py-[7px] text-left text-[13px] text-foreground [font-family:inherit] hover:bg-muted data-[selected=true]:bg-business-tint';
+  'flex w-full cursor-pointer items-center gap-2 rounded-[8px] border-none bg-transparent px-[9px] py-[7px] text-left text-sm text-foreground [font-family:inherit] hover:bg-muted data-[selected=true]:bg-business-tint data-[selected=true]:text-[color:var(--eteams-brand-ink)]';
 const ROW_NAME_CLASS = 'min-w-0 truncate font-medium';
-const ROW_META_CLASS = 'ml-auto shrink-0 text-[11px] text-muted-foreground';
+const ROW_META_CLASS = 'ml-auto shrink-0 text-xs text-muted-foreground';
 const EMPTY_CLASS = 'px-2.5 py-3.5 text-center text-xs text-muted-foreground';
-const ERR_CLASS = 'px-2.5 pb-2 pt-1 text-[11px] text-destructive';
-const HINT_CLASS = 'px-2.5 pb-0.5 pt-1.5 text-[11px] leading-normal text-muted-foreground';
+const ERR_CLASS = 'px-2.5 pb-2 pt-1 text-xs text-destructive';
+const HINT_CLASS = 'px-2.5 pb-0.5 pt-1.5 text-xs leading-normal text-muted-foreground';
 
-/* 弹层卡体（原 S.card）：bg/background、文字色走语义 token（label-primary/
- layer-1 与原 T.surface/T.text 同一宿主变量）；边框沿用原 l1 档（shadcn
- --border 桥 l2，任意值直引保持视觉）；阴影逐字保留原 T.shadow。 */
-const POPUP_BORDER_CLASS = 'border-[color:var(--dsw-alias-border-l1,rgba(100,116,139,0.14))]';
+/* 弹层卡体（原 S.card）：bg/background、文字色走语义 token；边框 S24-2 收敛
+   语义 token --border（官网 slate-200/slate-800）；阴影逐字保留原 T.shadow。 */
+const POPUP_BORDER_CLASS = 'border-[color:var(--border)]';
 const LIST_CLASS = 'flex max-h-[260px] flex-col gap-0.5 overflow-x-hidden overflow-y-auto p-1.5';
 const FOOTER_CLASS = `flex border-t border-solid p-1.5 ${POPUP_BORDER_CLASS}`;
 /* docs/23 S23-4：原 TAB_HEADER_CLASS/tabBtnClass（手写 tab 头）迁移 shadcn
@@ -413,9 +415,9 @@ const FOOTER_CLASS = `flex border-t border-solid p-1.5 ${POPUP_BORDER_CLASS}`;
 const FACE_ROW_CLASS = 'inline-flex items-center gap-1.5';
 const FACE_NAME_CLASS = 'max-w-[120px] truncate font-medium';
 const TEAM_CHIP_CLASS =
-  'inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] border border-solid bg-background text-[11px] font-semibold text-primary';
+  'inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] border border-solid bg-background text-xs font-semibold text-primary';
 const CLEAR_BUTTON_CLASS =
-  'inline-flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded-full border-none bg-transparent p-0 text-[13px] leading-none text-muted-foreground opacity-0 [transition:opacity_120ms] group-hover:opacity-100 hover:bg-muted hover:text-foreground';
+  'inline-flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded-full border-none bg-transparent p-0 text-sm leading-none text-muted-foreground opacity-0 [transition:opacity_120ms] group-hover:opacity-100 hover:bg-muted hover:text-foreground';
 
 /**
  * The popup card, portaled to `<body>` (the composer card would crop an
@@ -546,7 +548,7 @@ function TeamsPopup(props: {
         aria-label="团队与角色"
         data-eteams="popup"
         className={cn(
-          'eteams-ui fixed z-[1000] box-border flex w-[280px] flex-col overflow-hidden border-solid bg-background text-[13px] shadow-[0_1px_2px_rgba(15,23,42,0.05),0_6px_18px_rgba(15,23,42,0.06)]',
+          'eteams-ui fixed z-[1000] box-border flex w-[280px] flex-col overflow-hidden border-solid bg-background text-sm shadow-[0_1px_2px_rgba(15,23,42,0.05),0_6px_18px_rgba(15,23,42,0.06)]',
           POPUP_BORDER_CLASS,
           // 首次测量前面板不可见（原 inline visibility:hidden 迁移）。
           pos === null ? 'invisible' : null,
@@ -554,7 +556,8 @@ function TeamsPopup(props: {
         style={pos ?? undefined}
       >
         {/* docs/23 S23-4：tab 头迁 shadcn Tabs（分段控件；触发器紧凑档 +
-            激活态 DSW 蓝文字签名）；内容区/底栏为 Tabs 根下受控切换的面。 */}
+            激活态品牌字签名——--primary 官网化为 sky）；内容区/底栏为 Tabs
+            根下受控切换的面。 */}
         <Tabs
           value={tab}
           onValueChange={(v) => setTab(v === 'member' ? 'member' : 'team')}
@@ -672,7 +675,8 @@ function TeamsPopup(props: {
                 className="w-full rounded-[8px] border-dashed text-xs font-medium text-primary"
                 onClick={addTeam}
               >
-                ＋ 新增团队
+                <Plus className="h-3.5 w-3.5" />
+                新增团队
               </Button>
             ) : (
               <Button
@@ -681,7 +685,8 @@ function TeamsPopup(props: {
                 className="w-full rounded-[8px] border-dashed text-xs font-medium text-primary"
                 onClick={addMember}
               >
-                ＋ 新增角色
+                <Plus className="h-3.5 w-3.5" />
+                新增角色
               </Button>
             )}
           </div>

@@ -54,3 +54,57 @@ declare module 'lucide-react/dist/esm/icons/chevron-up.mjs' {
   >;
   export default ChevronUp;
 }
+
+// docs/24 S24-2（D22f emoji 清零 + 官网图标化）增补五枚：Search（侧栏筛选框）、
+// Plus（「新增」钮前缀）、ArrowLeft（返回钮）、MessageSquare（对话页入口）、
+// PenLine（意图访谈语义）。消费方：eteamsView / teamsPanel / teamsButton /
+// buildCard。同款深层导入纪律（一个图标只进一个模块）。
+declare module 'lucide-react/dist/esm/icons/search.mjs' {
+  import type { ForwardRefExoticComponent, RefAttributes } from 'react';
+  import type { LucideProps } from 'lucide-react';
+
+  const Search: ForwardRefExoticComponent<
+    Omit<LucideProps, 'ref'> & RefAttributes<SVGSVGElement>
+  >;
+  export default Search;
+}
+
+declare module 'lucide-react/dist/esm/icons/plus.mjs' {
+  import type { ForwardRefExoticComponent, RefAttributes } from 'react';
+  import type { LucideProps } from 'lucide-react';
+
+  const Plus: ForwardRefExoticComponent<
+    Omit<LucideProps, 'ref'> & RefAttributes<SVGSVGElement>
+  >;
+  export default Plus;
+}
+
+declare module 'lucide-react/dist/esm/icons/arrow-left.mjs' {
+  import type { ForwardRefExoticComponent, RefAttributes } from 'react';
+  import type { LucideProps } from 'lucide-react';
+
+  const ArrowLeft: ForwardRefExoticComponent<
+    Omit<LucideProps, 'ref'> & RefAttributes<SVGSVGElement>
+  >;
+  export default ArrowLeft;
+}
+
+declare module 'lucide-react/dist/esm/icons/message-square.mjs' {
+  import type { ForwardRefExoticComponent, RefAttributes } from 'react';
+  import type { LucideProps } from 'lucide-react';
+
+  const MessageSquare: ForwardRefExoticComponent<
+    Omit<LucideProps, 'ref'> & RefAttributes<SVGSVGElement>
+  >;
+  export default MessageSquare;
+}
+
+declare module 'lucide-react/dist/esm/icons/pen-line.mjs' {
+  import type { ForwardRefExoticComponent, RefAttributes } from 'react';
+  import type { LucideProps } from 'lucide-react';
+
+  const PenLine: ForwardRefExoticComponent<
+    Omit<LucideProps, 'ref'> & RefAttributes<SVGSVGElement>
+  >;
+  export default PenLine;
+}

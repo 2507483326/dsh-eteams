@@ -190,19 +190,23 @@ function ETeamsCardBody({ node }: { node: { data: unknown } }): ReactNode {
     <div className="eteams-ui">
       <Card className="eteams-ui my-2 border-solid px-4 py-3">
         <div className="flex flex-wrap items-center gap-2">
-          <strong>🐳 {data.teamName}</strong>
+          {/* S24-2（D22f）：标题 emoji 清零——官网标题纯文字；14px bold → 官网
+              小标题签名 text-sm semibold tracking-tight。 */}
+          <strong className="text-sm font-semibold tracking-tight text-foreground">
+            {data.teamName}
+          </strong>
           <Badge
             variant="outline"
-            className="rounded-full border-solid px-2 py-px text-[11px] font-normal"
+            className="rounded-full border-solid px-2 py-px text-xs font-normal"
           >
             {team !== undefined ? (PHASE_LABELS[team.phase] ?? team.phase) : '连接中…'}
           </Badge>
           {team !== undefined && team.pendingDecisions.length > 0 && (
             <Badge
               variant="outline"
-              className="rounded-full border-solid border-[color:color-mix(in_srgb,var(--warning)_40%,transparent)] px-2 py-px text-[11px] font-normal text-warning"
+              className="rounded-full border-solid border-[color:color-mix(in_srgb,var(--warning)_40%,transparent)] px-2 py-px text-xs font-normal text-warning"
             >
-              △ {team.pendingDecisions.length}
+              {team.pendingDecisions.length} 项待决策
             </Badge>
           )}
         </div>

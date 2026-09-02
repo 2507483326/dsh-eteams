@@ -57,6 +57,14 @@ import {
   MarkdownText,
   writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives';
+// lucide 深层图标导入（dialog.tsx 先例：主入口 icons 命名空间再导出会让
+// rolldown 拖全量图标进 envelope，深层 .mjs 路径只进用到的图标；类型垫片见
+// components/ui/lucide-icon.d.ts）。D22f：emoji 清零的替换位。
+import ArrowLeft from 'lucide-react/dist/esm/icons/arrow-left.mjs';
+import MessageSquare from 'lucide-react/dist/esm/icons/message-square.mjs';
+import PenLine from 'lucide-react/dist/esm/icons/pen-line.mjs';
+import Plus from 'lucide-react/dist/esm/icons/plus.mjs';
+import Search from 'lucide-react/dist/esm/icons/search.mjs';
 import { Provider, useDispatch, useSelector } from 'react-redux';
 import { ADD_PEOPLE_TEMPLATE, prefillComposer, type PrefillOutcome } from './addPeople';
 import { Avatar } from './avatar';
@@ -166,24 +174,14 @@ const STATUS_LABELS: Record<string, string> = {
 
 /**
  * 角色/团队列表注入样式表（ROLE_LIST_CSS）消费的主题 token——S12–S14 迁移
- * 后 inline 样式消费面已清空，S15 裁剪到注入表实际用到的 7 个键（hover/
- * focus-within/attr 选择器仍需样式表承载，见 ROLE_LIST_CSS 注记）。
- * 亮暗跟随 GUI：每个色值都经 --dsw-alias-* 解析。
+ * 后 inline 样式消费面已清空；hover/focus-within/attr 选择器与下面的原生
+ * details/summary 样式仍需样式表承载（D22f：展开指示的 [open]/::before 规则
+ * 无法用工具类表达，同注入这里）。
+ * D22a 官网 v3 色板接管：原先经 --dsw-alias-*（DSW 蓝家族）的取值全部改
+ * 消费 .eteams-ui 作用域内的语义 token（亮/暗由 eteams.css 统一定值），
+ * 浅暗两态都不刺眼；半透明一律 color-mix()（token 色禁 /alpha 的替代路径，
+ * button.tsx 先例）。
  */
-const T = {
-  surface: 'var(--dsw-alias-bg-layer-1, #ffffff)',
-  border: 'var(--dsw-alias-border-l1, rgba(100,116,139,0.14))',
-  border2: 'var(--dsw-alias-border-l2, rgba(100,116,139,0.26))',
-  // docs/23 D21a/b：accent 全族换 DSW 蓝源（brand-primary 宿主实测近黑），
-  // 品牌淡底换 business-tertiary 淡底对。
-  accent: 'var(--dsw-alias-button-info-fill, #4176e6)',
-  accentSoft: 'var(--dsw-alias-state-business-tertiary, rgba(65,118,230,0.12))',
-  err: 'var(--dsw-alias-state-error-primary, #b91c1c)',
-  // ⚠️ 主题的 state-*-secondary 是实心 400 色（amber-400/green-400/red-400），
-  // 不是 10% 淡色调——实心底 + 实心 fg 会同色相打架（橙字橙底不可读，用户
-  // 实测）。静态色阶的 100 档才是淡底，改用之（static 不随主题翻转）。
-  errBg: 'var(--dsw-static-red-100, #fee2e2)',
-};
 
 /** Semantic tone — every status color flows through these five buckets. */
 type Tone = 'info' | 'ok' | 'warn' | 'err' | 'muted';
@@ -233,65 +231,75 @@ fns.progressFill → PROGRESS_FILL_CLASS + 宽度百分比 inline（S5 card 先�
 /* —— S12 迁移后的类名常量（Tailwind 工具类，完整字面量；模板串组合仅限
 const 字面量插值，运行时动态值一律 inline style——S5/S11 既有口径）—— */
 
-/** 边框沿用原 l1 档（shadcn --border 桥的是 l2，任意值直引保持视觉；S11 先例）。 */
-const BORDER_L1_CLASS = 'border-[color:var(--dsw-alias-border-l1,rgba(100,116,139,0.14))]';
-/** 次级文字：label-secondary 无语义 token（附录 A 未桥接），任意值直引
- * （docs/23 D21d：兜底换官网 slate-600 #475569）。 */
-const TEXT2_CLASS = 'text-[color:var(--dsw-alias-label-secondary,#475569)]';
-/** 原 styles.muted（12px / 三级灰 token / overflow-wrap:anywhere），
+/** 边框统一走语义 token --border（D22a 官网 v3：亮 slate-200 #e2e8f0 /
+ * 暗 slate-800 #1e293b，token 值已官网化）——原 l1 别名半透明灰（比官网
+ * 细线还淡、暗色发灰）的任意值直引全部收敛到这条。 */
+const BORDER_L1_CLASS = 'border-[color:var(--border)]';
+/** 次级文字：D22d 官网正文灰阶语义——正文次级 = muted-foreground（官网
+ * slate-500 #64748b），原 label-secondary 别名任意值直引收敛到语义 token。 */
+const TEXT2_CLASS = 'text-muted-foreground';
+/** 原 styles.muted（meta/弱化档：12px/20 官网小字尺度 / overflow-wrap:anywhere），
  * S12–S14 各批次区块共用的类常量。 */
-const MUTED_CLASS = 'text-[12px] leading-[1.55] text-muted-foreground [overflow-wrap:anywhere]';
-/** 原 styles.line（4px 上下距 / 13px / 行高 1.6 / 次级文字）。 */
-const LINE_CLASS = `my-1 text-[13px] leading-[1.6] ${TEXT2_CLASS}`;
-/** 原 styles.sectionTitle（11px/600/三级灰 token/字距 0.5px，下距 8px）。 */
-const SECTION_TITLE_CLASS =
-  'mb-2 text-[11px] font-semibold leading-[1.55] tracking-[0.5px] text-muted-foreground';
+const MUTED_CLASS = 'text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]';
+/** 原 styles.line（正文次级行：官网 prose-sm 14px/24）。 */
+const LINE_CLASS = `my-1 text-sm leading-6 ${TEXT2_CLASS}`;
+/** 原 styles.sectionTitle（卡/区块标题：D22d 官网 h3 档 16px semibold +
+ * tracking-tight，去原 11px 的反向加宽 tracking）。 */
+const SECTION_TITLE_CLASS = 'mb-2 text-base font-semibold leading-6 tracking-tight text-foreground';
 /** 原 styles.empty（虚线框空态）；边框色吃 S3 桥默认（--border 即原 l2 档）。 */
 const EMPTY_CLASS =
-  'rounded-xl border border-dashed px-5 py-9 text-center leading-[1.55] text-muted-foreground';
+  'rounded-xl border border-dashed px-5 py-9 text-center text-sm leading-6 text-muted-foreground';
 /* docs/23 S23-3：原 styles.banner（BANNER_CLASS）迁移 shadcn Alert warning
    变体（amber 淡底以 className 覆盖保留），使用位内联；原
    PROGRESS_TRACK/FILL_CLASS 迁移 shadcn Progress（transform 技法，轨道
    bg-secondary 即原 layer-2 档），一并删除手写常量。 */
 /** 面板卡片（原 styles.card → shadcn Card 的覆盖层）：底色回 layer-1 档
-（Card 默认 bg-card 是 layer-2）、l1 边框、原阴影；px-4 py-3.5 = 14px 16px。
+（Card 默认 bg-card 是 layer-2）、--border 边框、官网 shadow-sm 阴影档
+（D22f：0.03→0.05）；px-4 py-4 = 卡内呼吸感提到 16px（行密度不变）。
 eteams-ui 字面量随 Card 根（S5 试点双保险）。 */
-const PANEL_CARD_CLASS = `eteams-ui mb-3 min-w-0 border border-solid bg-background px-4 py-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.03)] ${BORDER_L1_CLASS}`;
-/** 原 styles.eventRow（7px 上下距 / 13px / 次级文字 / 下边线）。 */
-const EVENT_ROW_CLASS = `border-b border-solid py-[7px] text-[13px] leading-[1.55] ${BORDER_L1_CLASS} ${TEXT2_CLASS}`;
+const PANEL_CARD_CLASS = `eteams-ui mb-3 min-w-0 border border-solid bg-background px-4 py-4 shadow-[0_1px_2px_rgba(15,23,42,0.05)] ${BORDER_L1_CLASS}`;
+/** 原 styles.eventRow（D22f：去满宽下边线的表格观感，改留白分组——行
+ * py-1.5 + 列表容器 space-y-1；正文 14px/24，meta 12px muted 见使用位）。 */
+const EVENT_ROW_CLASS = 'py-1.5 text-sm leading-6 text-foreground';
 /** 原 styles.rail（窄栏态：84px / 3px 纵向间距 / 右分隔线 / 上 2 右 12）。
  * docs/22 S22-2：面板宽 ≥720px 时改用官网风格的宽栏 RAIL_WIDE_CLASS，
  * 窄面板回落本类（84px 窄栏原样保留，窄上下文零回归）。 */
 const RAIL_CLASS = `flex w-[84px] shrink-0 flex-col gap-[3px] border-r border-solid pr-3 pt-0.5 ${BORDER_L1_CLASS}`;
 
 /** 官网 docs 侧栏风格的宽栏（docs/22 D20c，tailwindcss.cn 实测标记还原）：
- * 172px（官网 15rem 等比收窄）+ 右分隔线；列表自带连续左细线（官网
- * `border-l border-slate-100`，这里走主题跟随的 l1 别名）。 */
-const RAIL_WIDE_CLASS = `flex w-[172px] shrink-0 flex-col border-r border-solid pr-4 pt-1 ${BORDER_L1_CLASS}`;
-/** 宽栏分组标题（官网 h5：`mb-3 font-semibold text-slate-900` 的 token 版）。 */
-const RAIL_TITLE_CLASS = 'mb-3 font-semibold text-foreground';
+ * 208px（官网 15rem 等比收窄的 S24-2 加宽档）+ 右分隔线；列表自带连续左
+ * 细线（官网 `border-l border-slate-100`，token 化走 --border）。 */
+const RAIL_WIDE_CLASS = `flex w-[208px] shrink-0 flex-col border-r border-solid pr-4 pt-1 ${BORDER_L1_CLASS}`;
+/** 宽栏分组标题（官网 h5：`text-sm mb-3 font-semibold text-slate-900` 的
+ * token 版——D22d 侧栏全档 14px/24）。 */
+const RAIL_TITLE_CLASS = 'mb-3 text-sm font-semibold leading-6 text-foreground';
 /** 宽栏导航列表（官网 ul：`space-y-2 border-l` 的 token 版）。 */
 const RAIL_LIST_CLASS = `space-y-2 border-l border-solid ${BORDER_L1_CLASS}`;
 
 /** 宽栏导航链接三态（官网 a 的签名交互，docs/22 22.1.3）：自带 1px 左边线
  * 压在列表线上（`-ml-px`），常态透明、hover 亮线 + 文字加深、**激活 = sky
  * 文字 + 同色左线（border-current）+ semibold**；全部完整字面量（21.5.1
- * content 扫描纪律），色走主题跟随别名（D19c）。 */
+ * content 扫描纪律）。
+ * D22f 官网字面量方案：hover 线取官网原味 `border-slate-400`（中灰在浅暗
+ * 两态底上都可见）；hover 文字官方是加深到 slate-900，但 slate-900 字面量
+ * 在暗色面板（slate-900 底）会隐形——文字加深走 token hover:text-foreground
+ * （亮=官网同效，暗=slate-200 随主题翻档）。 */
 const RAIL_LINK_BASE_CLASS =
-  'block border-0 border-l border-solid bg-transparent py-[3px] pl-4 -ml-px text-left text-[13px] leading-6 [font-family:inherit] transition-colors';
+  'block border-0 border-l border-solid bg-transparent py-[3px] pl-4 -ml-px text-left text-sm leading-6 [font-family:inherit] transition-colors';
 const RAIL_LINK_IDLE_CLASS =
-  'border-transparent text-[color:var(--dsw-alias-label-secondary,#334155)] hover:border-[color:var(--dsw-alias-label-tertiary,#94a3b8)] hover:text-foreground';
+  'border-transparent text-muted-foreground hover:border-slate-400 hover:text-foreground';
 const RAIL_LINK_ACTIVE_CLASS = 'border-current font-semibold text-primary';
 
 /** 侧栏按钮（窄栏态，原 fns.railBtn）：active/idle 两态都是完整字面量映射（无拼接，
 teamsButton tabBtnClass 同款）；docs/23 D21b：active 底改品牌淡底 token
-（business-tertiary 淡底对）、字=brand 主色 token（D21a 后即 DSW 蓝）。 */
+（business-tint 淡底对）、字=brand 主色 token；S24-2 补非激活钮 hover 态
+（官网侧栏 hover 底语义，token --muted）。 */
 const railBtnClass = (active: boolean): string =>
   cn(
     'block w-full cursor-pointer rounded-[8px] border-none px-2.5 py-[7px] text-left text-xs leading-[1.55] [letter-spacing:0.2px]',
     active
       ? 'bg-business-tint font-semibold text-primary'
-      : 'bg-transparent font-medium text-[color:var(--dsw-alias-label-secondary,#475569)]',
+      : 'bg-transparent font-medium text-muted-foreground hover:bg-muted',
   );
 
 /** 宽栏导航链接类名（官网三态查表；同 railBtnClass 的映射表口径）。 */
@@ -317,51 +325,60 @@ const RAIL_WIDE_MIN_WIDTH = 720;
 const SELECT_NONE = '__none__';
 /** 原 styles.formRow / styles.formLabel（表单行）：汇报页先用，S14 表单复用。 */
 const FORM_ROW_CLASS = 'mb-2.5 flex flex-col gap-[5px]';
-const FORM_LABEL_CLASS = 'text-[11px] font-semibold tracking-[0.3px] text-muted-foreground';
+const FORM_LABEL_CLASS = 'text-xs font-semibold text-muted-foreground';
 /** 原 styles.listTitle / styles.listCount（列表页头）：S14 的团队/角色列表头复用；
- * docs/23 S23-3 补官网 h2 签名 tracking-tight（22.1.4）。 */
-const LIST_TITLE_CLASS = 'm-0 min-w-0 flex-1 text-[14px] font-bold tracking-tight text-foreground';
-const LIST_COUNT_CLASS = 'text-[12px] text-muted-foreground';
+ * D22d 官网 h3 档 16px semibold + tracking-tight（S23-3 已引入 tracking-tight）。 */
+const LIST_TITLE_CLASS =
+  'm-0 min-w-0 flex-1 text-base font-semibold tracking-tight text-foreground';
+const LIST_COUNT_CLASS = 'text-xs text-muted-foreground';
 /** 原 styles.memberGrid（成员卡片栅格，最小 230px 自适应列）。 */
 const MEMBER_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(230px,1fr))] gap-3';
-/** 原 styles.memberCard（成员卡片：l1 边框 / 12px 圆角 / 8px 纵向间距）。 */
-const MEMBER_CARD_CLASS = `flex flex-col gap-2 rounded-xl border border-solid bg-background p-3 ${BORDER_L1_CLASS}`;
-/** 原 styles.roleChip（品牌淡底小徽标）：S14 团队卡片「当前」复用；
- * docs/23 D21b 底色改品牌淡底 token。 */
+/** 原 styles.memberCard（成员卡片：--border 边框 / 12px 圆角 / 官网 shadow-sm
+ * 阴影档 / p-4 卡内呼吸感，D22f）。 */
+const MEMBER_CARD_CLASS = `flex flex-col gap-2 rounded-xl border border-solid bg-background p-4 shadow-[0_1px_2px_rgba(15,23,42,0.05)] ${BORDER_L1_CLASS}`;
+/** 原 styles.roleChip（品牌档圆 pill）：S14 团队卡片「当前」复用；D22e 官网
+ * pill 口径（rounded-full / 12px / medium）+ 品牌淡底 token + brand-ink 字。 */
 const ROLE_CHIP_CLASS =
-  'inline-block rounded-full bg-business-tint px-[9px] py-px text-[11px] font-semibold text-primary';
+  'inline-flex w-fit items-center rounded-full bg-business-tint px-2.5 py-0.5 text-xs font-medium text-[color:var(--eteams-brand-ink)]';
 /** 原 styles.drawer（sunken 抽屉面板）：任务抽屉已升级为 Dialog，现仅成员
-汇报时间线使用。 */
-const DRAWER_CLASS = `mt-2 mb-3.5 rounded-[10px] border border-solid bg-[color:var(--dsw-alias-bg-layer-2,#f1f5f9)] px-3.5 py-3 ${BORDER_L1_CLASS}`;
-/** 原 styles.dialogItem（汇报时间线条目）。 */
-const DIALOG_ITEM_CLASS = `my-1 rounded-[8px] border border-solid bg-background px-2.5 py-[7px] text-[12.5px] ${BORDER_L1_CLASS} ${TEXT2_CLASS}`;
+ * 汇报时间线使用。D22f：去双层灰底嵌套——容器改白底 + 左细线时间线签名。 */
+const DRAWER_CLASS = `mt-2 mb-3.5 border-l-2 border-solid border-[color:var(--border)] pl-3`;
+/** 原 styles.dialogItem（汇报时间线条目）：D22f 去灰底小卡，改普通段落
+ * （正文 14px foreground；12px meta 前缀语义留在使用位的 MUTED_CLASS）。 */
+const DIALOG_ITEM_CLASS = 'my-1 text-sm leading-6 text-foreground';
 /** 原 styles.taskRow（任务行：l1 下边线 / 8px 圆角 / 指针）。 */
 const TASK_ROW_CLASS = `cursor-pointer rounded-[8px] border-b border-solid px-2 py-2.5 ${BORDER_L1_CLASS}`;
-/** 原 styles.chip（依赖小芯片）：S14 角色详情的所属团队芯片复用。 */
-const CHIP_CLASS = `mr-1 mb-0.5 inline-block rounded-[6px] bg-[color:var(--dsw-alias-bg-layer-2,#f1f5f9)] px-[7px] py-px text-[11px] ${TEXT2_CLASS}`;
-/** 原 styles.attempt（执行线路尝试条目：l2 左描边；--border 桥即 l2 档）。 */
+/** 原 styles.chip（依赖小芯片）：S14 角色详情的所属团队芯片复用；底色收敛
+ * 语义 token --muted（与原 layer-2 档同值源）。 */
+const CHIP_CLASS = `mr-1 mb-0.5 inline-block rounded-md bg-muted px-2 py-px text-xs text-muted-foreground`;
+/** 原 styles.attempt（执行线路尝试条目：--border 左描边）。 */
 const ATTEMPT_CLASS = 'my-2.5 border-l-2 border-solid border-border py-0.5 pl-3';
 /** 任务详情 Dialog 的调用面覆盖：限宽收高可滚动 + 面板文字基准（portal
-容器挂在 body 下，不继承 styles.root 的 13px/前景色，这里显式补齐；
-max-w-xl 压过上游 max-w-lg，rounded-xl 与上游 sm:rounded-lg 同为 12px）。 */
+ * 容器挂在 body 下，不继承 SHELL 的 14px/前景色，这里显式补齐——D22d 官网
+ * prose-sm 档 text-sm leading-6；max-w-xl 压过上游 max-w-lg，rounded-xl 与
+ * 上游 sm:rounded-lg 同为 12px）。 */
 const DRAWER_DIALOG_CLASS =
-  'max-h-[70vh] max-w-xl overflow-y-auto rounded-xl text-[13px] leading-[1.55] text-foreground';
+  'max-h-[70vh] max-w-xl overflow-y-auto rounded-xl text-sm leading-6 text-foreground';
 
-/** 原 fns.pill 的类名版（S13 引入，S14 起全面板统一）。Pill 文字沿用原
-PILL_FG 的 700 级深色档——ok/warn/err 是刻意硬编码的深色（state-*-primary
-饱和档压不住淡底），不走 token；底色沿用原 TONE_BG（static-*-100 淡底任意
-值直引，info 为同值 rgba 直引）。 */
+/** D22e 官网式圆 pill 底座：中性半透明底 + 12px medium 字；状态彩底全撤
+ * （五档 tone 只进 6px dot，见 DOT_TONE_CLASS）——底/字统一中性 token
+ * （--eteams-pill-bg/--eteams-pill-ink，亮暗由 eteams.css 定值）。 */
 const PILL_BASE_CLASS =
-  'inline-flex w-fit items-center gap-[5px] rounded-full px-[9px] py-px text-[11px] font-medium';
+  'inline-flex w-fit items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium';
+const PILL_NEUTRAL_CLASS = 'bg-[color:var(--eteams-pill-bg)] text-[color:var(--eteams-pill-ink)]';
+/** PILL_TONE_CLASS（D22e 降噪后）：tone 不再改变 pill 面——五档统一中性
+ * pill，tone 语义全部由内嵌彩色 dot 承载（映射表结构保留：Pill 组件按
+ * tone 查底 + 查 dot，两组常量拼接完整字面量）。 */
 const PILL_TONE_CLASS: Record<Tone, string> = {
-  info: 'bg-business-tint text-business',
-  ok: 'bg-[color:var(--dsw-static-green-100,#e6faed)] text-[#15803d]',
-  warn: 'bg-[color:var(--dsw-static-amber-100,#fef5e7)] text-[#b45309]',
-  err: 'bg-[color:var(--dsw-static-red-100,#fee2e2)] text-[#b91c1c]',
-  muted: 'bg-[color:var(--dsw-alias-bg-layer-2,#f1f5f9)] text-muted-foreground',
+  info: PILL_NEUTRAL_CLASS,
+  ok: PILL_NEUTRAL_CLASS,
+  warn: PILL_NEUTRAL_CLASS,
+  err: PILL_NEUTRAL_CLASS,
+  muted: PILL_NEUTRAL_CLASS,
 };
-/** 原 fns.dot 的类名版（完整字面量映射）：dot 走饱和 primary token（与
-PILL_FG 的深档文字互不影响，S12 既有口径）。 */
+/** 原 fns.dot 的类名版（完整字面量映射）：D22e 后 dot 是状态色的唯一载体
+ * ——执行中 business/sky、成功 success 绿、警告 warning amber、错误
+ * destructive 红、muted 中性灰（token 值已官网化：sky/绿600/amber600/红600）。 */
 const DOT_BASE_CLASS = 'inline-block h-1.5 w-1.5 shrink-0 rounded-full';
 const DOT_TONE_CLASS: Record<Tone, string> = {
   info: 'bg-business',
@@ -374,19 +391,21 @@ const pillClass = (tone: Tone): string => cn(PILL_BASE_CLASS, PILL_TONE_CLASS[to
 const dotClass = (tone: Tone): string => cn(DOT_BASE_CLASS, DOT_TONE_CLASS[tone]);
 
 /** 状态徽标（docs/23 S23-3）：shadcn Badge 承底座（边框/过渡/焦点环），
- * 本仓 pill 视觉口径（rounded-full / 11px / medium / 内嵌状态点）以
+ * 本仓 pill 视觉口径（官网圆 pill / 12px / medium / 内嵌状态点）以
  * className 覆盖层保留——tone 底色表（PILL_TONE_CLASS）经 tailwind-merge
- * 压过 Badge 变体底色。 */
+ * 压过 Badge 变体底色。D22e：dot 由组件统一内嵌（中性 pill + 彩点签名），
+ * 调用位不再自插 dot span。 */
 function Pill({ tone, children }: { tone: Tone; children: ReactNode }): ReactNode {
   return (
     <Badge variant="secondary" className={pillClass(tone)}>
+      <span className={dotClass(tone)} />
       {children}
     </Badge>
   );
 }
 
 /** 表单/列表错误提示（docs/23 S23-3）：shadcn Alert destructive 的紧凑档
- * （原 styles.formError 的 12px + 上 4 下 8 边距口径）。 */
+ * （原 styles.formError 的 12px/20 + 上 4 下 8 边距口径）。 */
 function FormErrorNote({
   children,
   className,
@@ -397,7 +416,7 @@ function FormErrorNote({
   return (
     <Alert
       variant="destructive"
-      className={cn('mt-1 mb-2 rounded-[8px] px-3 py-2 text-[12px] leading-[1.55]', className)}
+      className={cn('mt-1 mb-2 rounded-md px-3 py-2 text-xs leading-5', className)}
     >
       {children}
     </Alert>
@@ -410,46 +429,84 @@ function FormErrorNote({
 
 /** 面板壳（原 styles.root 的布局面）：作用域根（.eteams-ui）自身不承工具类
 （`.eteams-ui .utility` 后代选择器机制），壳布局迁进这层内壳；height 锚点
-仍留作用域根 inline（宿主视图区无 .eteams-ui 祖先，见文件头 S14 注记）。 */
+仍留作用域根 inline（宿主视图区无 .eteams-ui 祖先，见文件头 S14 注记）。
+D22d 排版基线：官网侧栏/prose-sm 尺度 14px/24（原 13px/1.55 钉死档）。 */
 const SHELL_CLASS =
-  'relative box-border flex h-full gap-4 overflow-hidden px-[18px] py-3.5 text-[13px] leading-[1.55] text-foreground font-sans';
+  'relative box-border flex h-full gap-4 overflow-hidden px-[18px] py-3.5 text-sm leading-6 text-foreground font-sans';
 /** 原 styles.content：内容列（纵滚/横截 + 2px 右距，用户反馈注记原样保留）。 */
 const CONTENT_CLASS = 'min-w-0 flex-1 overflow-x-hidden overflow-y-auto pr-0.5';
 /* docs/23 S23-3：原 styles.formError（FORM_ERROR_CLASS）迁移 FormErrorNote
    （shadcn Alert destructive 紧凑档，见上方组件），常量删除。 */
 /** 原 styles.cardGrid（团队/角色卡片栅格，最小 210px 自适应列）。 */
 const CARD_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(210px,1fr))] gap-3';
-/** 原 styles.phasePill（团队卡片阶段徽标：淡底弱化档）。 */
+/** 原 styles.phasePill（团队卡片阶段徽标：D22e 中性圆 pill + 彩色 6px dot
+ * ——dot 由使用位按 PHASE_TONES 插入，状态彩底全撤）。 */
 const PHASE_PILL_CLASS =
-  'shrink-0 whitespace-nowrap rounded-full bg-[color:var(--dsw-alias-bg-layer-2,#f1f5f9)] px-2 py-px text-[11px] font-medium text-[color:var(--dsw-alias-label-secondary,#475569)]';
-/** 原 styles.teamCard（底色/边框/悬停仍由 .eteams-team-card 样式表接管）。 */
-const TEAM_CARD_CLASS = 'min-w-0 cursor-pointer rounded-xl p-3.5';
-/** 原 styles.roleCard（同上：底色/边框/悬停由 .eteams-role-row 样式表接管）。 */
+  'inline-flex w-fit shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-[color:var(--eteams-pill-bg)] px-2.5 py-0.5 text-xs font-medium text-[color:var(--eteams-pill-ink)]';
+/** 原 styles.teamCard（底色/边框/悬停仍由 .eteams-team-card 样式表接管）；
+ * p-4 = D22f 卡内呼吸感。 */
+const TEAM_CARD_CLASS = 'min-w-0 cursor-pointer rounded-xl p-4';
+/** 原 styles.roleCard（同上：底色/边框/悬停由 .eteams-role-row 样式表接管）；
+ * p-4 = D22f 卡内呼吸感。 */
 const ROLE_CARD_CLASS =
-  'relative flex min-w-0 cursor-pointer flex-col items-start gap-2.5 rounded-xl p-3.5 text-left text-foreground';
-/** 原 styles.pagePill（分页计数 pill）。 */
+  'relative flex min-w-0 cursor-pointer flex-col items-start gap-2.5 rounded-xl p-4 text-left text-foreground';
+/** 原 styles.pagePill（分页计数 pill：D22e 中性 pill 口径 12px/20）。 */
 const PAGE_PILL_CLASS =
-  'whitespace-nowrap rounded-full bg-[color:var(--dsw-alias-bg-layer-2,#f1f5f9)] px-2.5 py-0.5 text-[11px] text-[color:var(--dsw-alias-label-secondary,#475569)]';
-/** 原 styles.detailRow / detailLabel（构建中草稿预览行；l1 下边线任意值直引）。 */
-const DETAIL_ROW_CLASS = `flex gap-2.5 border-b border-solid py-[7px] text-[12px] leading-[1.55] ${BORDER_L1_CLASS}`;
-const DETAIL_LABEL_CLASS = 'w-16 shrink-0 pt-px text-[11px] font-semibold text-muted-foreground';
-/** 原 styles.cmdChip（预填命令芯片：等宽字体 + l1 边框 + 次级文字）。 */
-const CMD_CHIP_CLASS = `mt-2 break-all rounded-[8px] border border-solid bg-[color:var(--dsw-alias-bg-layer-2,#f1f5f9)] px-[11px] py-[9px] text-[12px] leading-[1.7] font-mono ${BORDER_L1_CLASS} ${TEXT2_CLASS}`;
+  'inline-flex w-fit items-center whitespace-nowrap rounded-full bg-[color:var(--eteams-pill-bg)] px-2.5 py-0.5 text-xs text-[color:var(--eteams-pill-ink)]';
+/** 原 styles.detailRow / detailLabel（构建中草稿预览行；--border 下边线；
+ * D22d 数据行 14px/24）。 */
+const DETAIL_ROW_CLASS = `flex gap-2.5 border-b border-solid py-2 text-sm leading-6 ${BORDER_L1_CLASS}`;
+const DETAIL_LABEL_CLASS = 'w-16 shrink-0 pt-px text-xs font-semibold text-muted-foreground';
+/** 原 styles.cmdChip（预填命令芯片：等宽字体 + --border 边框 + --muted 底；
+ * D22d mono 芯片 13px 档）。 */
+const CMD_CHIP_CLASS = `mt-2 break-all rounded-md border border-solid bg-muted px-3 py-2.5 text-[13px] leading-[1.7] font-mono text-muted-foreground ${BORDER_L1_CLASS}`;
 /** 原 styles.buildStep / stepRow / stepNum（构建工作台）；原 prefillBanner
- * docs/23 S23-3 迁移 shadcn Alert（default 变体 + 品牌淡底覆盖），常量删除。 */
-const BUILD_STEP_CLASS = 'flex items-center gap-2 py-[3px] text-[12.5px]';
-const STEP_ROW_CLASS = `mt-2 flex items-start gap-2 text-[12.5px] leading-[1.55] ${TEXT2_CLASS}`;
+ * docs/23 S23-3 迁移 shadcn Alert（default 变体 + 品牌淡底覆盖），常量删除。
+ * D22d：步骤行 14px/24、序号圆牌 12px。 */
+const BUILD_STEP_CLASS = 'flex items-center gap-2 py-0.5 text-sm leading-6';
+const STEP_ROW_CLASS = `mt-2 flex items-start gap-2 text-sm leading-6 ${TEXT2_CLASS}`;
 const STEP_NUM_CLASS =
-  'mt-px inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-business-tint text-[11px] font-semibold text-primary';
+  'mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-business-tint text-xs font-semibold text-[color:var(--eteams-brand-ink)]';
 
-/** S13：执行链站点行——✔/●/◌ 结构原样保留，仅样式改 Tailwind 类。 */
+/** D22f 执行链/构建步骤字形三态调色（✔●◌ 字符保留=产品语义，只换色）：
+ * done=已完成弱化灰、current=进行中品牌蓝（token 官网化为 sky）、
+ * pending=未到站中性字（pill 字色 token）。完整字面量查表（21.5.1）。 */
+const GLYPH_TONE_CLASS: Record<string, string> = {
+  done: 'text-muted-foreground',
+  current: 'text-primary',
+  pending: 'text-[color:var(--eteams-pill-ink)]',
+};
+
+/** 页签标题（S24-2 新增，官网 h2 签名）：五 tab 内容区顶部的页头行——
+ * 20px bold tracking-tight + mb-4；右侧动作位（看板页放「＋ 新增团队」
+ * 主按钮）。标题字即 tab 名，不发明副标题。 */
+function PageHeader({ label, children }: { label: string; children?: ReactNode }): ReactNode {
+  return (
+    <div className="mb-4 flex items-center gap-3">
+      <h2 className="m-0 text-xl font-bold tracking-tight text-foreground">{label}</h2>
+      {children !== undefined && <span className="flex-1" />}
+      {children}
+    </div>
+  );
+}
+
+/** S13：执行链站点行——✔/●/◌ 结构原样保留，仅样式改 Tailwind 类。D22f：
+ * 字形三态调色查表（GLYPH_TONE_CLASS），站点名/meta 走 12px/20 小字档。 */
 function TaskStations({ task }: { task: TaskView }): ReactNode {
   if (task.chainLength === 0) return null;
   return (
     <div className="mt-[3px]">
       {task.chain.map((s, i) => (
-        <span key={i} className="mr-1.5 text-[12px] text-muted-foreground">
-          {s.stationStatus === 'done' ? '✔' : s.stationStatus === 'current' ? '●' : '◌'} {s.member}
+        <span key={i} className="mr-1.5 text-xs leading-5 text-muted-foreground">
+          <span
+            className={cn(
+              GLYPH_TONE_CLASS[s.stationStatus] ?? GLYPH_TONE_CLASS.pending,
+              'font-semibold',
+            )}
+          >
+            {s.stationStatus === 'done' ? '✔' : s.stationStatus === 'current' ? '●' : '◌'}
+          </span>{' '}
+          {s.member}
           {i < task.chain.length - 1 ? ' →' : ''}
         </span>
       ))}
@@ -516,7 +573,7 @@ function TaskDrawer({
     >
       <DialogContent className={DRAWER_DIALOG_CLASS}>
         <DialogHeader className="space-y-1 text-left">
-          <DialogTitle className="text-[13px] leading-[1.5]">
+          <DialogTitle>
             {task.taskId} · {task.subject}
           </DialogTitle>
           <DialogDescription className={MUTED_CLASS}>
@@ -540,12 +597,12 @@ function TaskDrawer({
                 </span>
               </div>
               {(a.progress ?? []).map((p, i) => (
-                <div key={i} className={cn(MUTED_CLASS, 'my-1 leading-[1.6]')}>
+                <div key={i} className={cn(MUTED_CLASS, 'my-1')}>
                   {relativeTime(p.at, now)} {p.text}
                 </div>
               ))}
               {a.error !== undefined && (
-                <div className="my-1 text-[13px] leading-[1.6] text-destructive">✘ {a.error}</div>
+                <div className="my-1 text-sm leading-6 text-destructive">✘ {a.error}</div>
               )}
               {a.result?.output !== undefined && (
                 <div className={MUTED_CLASS}>✔ {a.result.output}</div>
@@ -587,9 +644,11 @@ function MemberDialog({ team, member }: { team: TeamSnapshot; member: MemberView
   };
   return (
     <div className={DRAWER_CLASS}>
-      <div className={cn(SECTION_TITLE_CLASS, 'text-[12px]', TEXT2_CLASS)}>
+      <div className="mb-2 flex items-baseline gap-2 text-sm font-semibold text-foreground">
         汇报记录 · {member.name}
-        <span className={MUTED_CLASS}>（只读；直发消息在 M5 开放）</span>
+        <span className="text-xs font-normal text-muted-foreground">
+          （只读；直发消息在 M5 开放）
+        </span>
       </div>
       {items.length === 0 && <div className={MUTED_CLASS}>暂无消息记录</div>}
       {items.map((it, i) => (
@@ -646,6 +705,9 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
   const [agentActivity, setAgentActivity] = useState<Record<string, string>>({});
   // 创建卡片/弹层跳转信号（docs/19.9.5）：递增计数驱动 MembersTab 打开新增页。
   const [openAddTick, setOpenAddTick] = useState(0);
+  // 宽栏侧栏筛选框（S24-2 官网 Quick search 签名）：对五个页签名做大小写
+  // 不敏感子串过滤，空串全显；纯前端视觉态，不触碰导航数据。
+  const [railQuery, setRailQuery] = useState('');
   // docs/22 S22-2：面板作用域根宽 ≥ RAIL_WIDE_MIN_WIDTH 用官网风格宽栏，
   // 否则回落 84px 窄栏。Tailwind v3 无容器查询，以作用域根实测为准；
   // useLayoutEffect 首帧前同步测量避免闪栏，ResizeObserver 跟随布局变化，
@@ -722,6 +784,10 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
     { id: 'reports', label: '汇报' },
   ];
   const activeTab = tabs.some((t) => t.id === tab) ? tab : 'board';
+  // 侧栏筛选（S24-2）：大小写不敏感子串匹配页签名；空串全显。
+  const railFilter = railQuery.trim().toLowerCase();
+  const visibleTabs =
+    railFilter === '' ? tabs : tabs.filter((t) => t.label.toLowerCase().includes(railFilter));
   // Dialog target resolved defensively: a vanished member must not crash render.
   const dialogMemberView =
     dialogMember === null || team === undefined
@@ -783,12 +849,26 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
       <style>{ROLE_LIST_CSS}</style>
       <div className={SHELL_CLASS}>
         {railWide ? (
-          /* docs/22 S22-2 宽栏：官网 docs 侧栏签名——分组标题 + 连续左细线
-            列表 + 链接自带左边线三态（激活 = sky 文字 + 同色左线 + semibold）。 */
+          /* docs/22 S22-2 宽栏：官网 docs 侧栏签名——搜索框 + 分组标题 + 连续
+            左细线列表 + 链接自带左边线三态（激活 = sky 文字 + 同色左线 +
+            semibold）。 */
           <div className={RAIL_WIDE_CLASS}>
+            {/* 官网 Quick search 签名（S24-2）：ring 代替边框、shadow-sm；
+              环色走 --eteams-pill-bg——官网的 ring-slate-900/10 字面量在暗色
+              底上是黑环，pill 底 token 亮=浅灰/暗=深灰两侧都成立。 */}
+            <div className="relative mb-3">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <input
+                type="text"
+                value={railQuery}
+                placeholder="筛选"
+                onChange={(e) => setRailQuery(e.target.value)}
+                className="h-9 w-full rounded-md border-0 bg-transparent pl-8 pr-3 text-sm leading-6 text-foreground shadow-sm outline-none [font-family:inherit] ring-1 ring-[color:var(--eteams-pill-bg)] placeholder:text-muted-foreground focus:ring-2 focus:ring-sky-500/60"
+              />
+            </div>
             <h5 className={RAIL_TITLE_CLASS}>团队面板</h5>
             <div className={RAIL_LIST_CLASS}>
-              {tabs.map((t) => (
+              {visibleTabs.map((t) => (
                 <button
                   key={t.id}
                   type="button"
@@ -816,6 +896,25 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
         )}
 
         <div className={CONTENT_CLASS}>
+          {/* 页签标题（S24-2，官网 h2 签名）：每 tab 内容区顶部一行页头，
+            看板页头右侧带「＋ 新增团队」主按钮（跳团队页的创建表单——与
+            GOTO_ADD_TEAM 信号的落点一致）。 */}
+          {activeTab === 'board' && (
+            <PageHeader label="看板">
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => dispatch({ type: 'ui/setNav', payload: 'team' })}
+              >
+                <Plus className="h-3.5 w-3.5" />
+                新增团队
+              </Button>
+            </PageHeader>
+          )}
+          {activeTab === 'team' && <PageHeader label="团队" />}
+          {activeTab === 'roster' && <PageHeader label="角色" />}
+          {activeTab === 'tasks' && <PageHeader label="任务" />}
+          {activeTab === 'reports' && <PageHeader label="汇报" />}
           {/* 顶栏（用户反馈）：团队切换改为「团队」页的卡片栅格，这里只保留
             状态加载失败的就地提示；空态兜底在 BoardTab。 */}
           {state.error !== null && (
@@ -907,19 +1006,20 @@ function BoardTab({
     <div>
       {team.pendingDecisions.length > 0 && (
         /* docs/23 S23-3：原 BANNER_CLASS → shadcn Alert warning 变体（amber
-           淡底 + foreground 正文以 className 覆盖保留，圆角/字号同原口径）。 */
+           淡底 + foreground 正文以 className 覆盖保留）。D22f：去三角字符
+           前缀、官网呼吸感 px-4 py-3、正文随基线 14px。 */
         <Alert
           variant="warning"
-          className="mb-3 rounded-xl bg-[color:var(--dsw-static-amber-100,#fef5e7)] px-3.5 py-2.5 text-[13px] leading-[1.55] text-foreground"
+          className="mb-3 rounded-xl bg-[color:var(--dsw-static-amber-100,#fef5e7)] px-4 py-3 text-sm leading-6 text-foreground"
         >
-          △ {team.pendingDecisions.length} 项待决策：
+          {team.pendingDecisions.length} 项待决策：
           {team.pendingDecisions.map((d) => `${d.taskId}（${d.error.slice(0, 40)}）`).join('；')} ——
           到对话里让领队处理，或等待 M5 的代答操作。
         </Alert>
       )}
       <Card className={PANEL_CARD_CLASS}>
         <div className={SECTION_TITLE_CLASS}>目标</div>
-        <div className="text-sm font-semibold leading-[1.5] text-foreground">{team.goal}</div>
+        <div className="text-sm font-semibold leading-6 text-foreground">{team.goal}</div>
         {/* docs/23 S23-3：进度条迁 shadcn Progress（h-1.5=原 6px 轨高；
             transform 技法指示器，bg-primary 即 D21a DSW 蓝）。 */}
         <Progress
@@ -933,11 +1033,11 @@ function BoardTab({
           {team.members.length} 成员 ·{' '}
           {/* 阶段徽标（S12）：原为 muted 行内文本，按「状态徽标用 shadcn」
           施工面升级为 outline Badge + TONE_CLASS 查表；tone 对齐 STATUS_GROUPS
-          既有语义（PHASE_TONES）。 */}
+          既有语义（PHASE_TONES）。D22d：12px 小字档（11px 档消灭）。 */}
           <Badge
             variant="outline"
             className={cn(
-              'rounded-full border-solid px-2 py-px text-[11px] font-normal',
+              'rounded-full border-solid px-2 py-px text-xs font-normal',
               TONE_CLASS[PHASE_TONES[team.phase] ?? 'muted'],
             )}
           >
@@ -951,18 +1051,21 @@ function BoardTab({
       </Card>
       <Card className={PANEL_CARD_CLASS}>
         <div className={SECTION_TITLE_CLASS}>最近动态</div>
-        {team.latestEvents
-          .slice(-8)
-          .reverse()
-          .map((e) => (
-            <div key={e.seq} className={EVENT_ROW_CLASS}>
-              <span className={MUTED_CLASS}>
-                {relativeTime(e.at, now)} · {e.actor}
-              </span>{' '}
-              {e.text}
-            </div>
-          ))}
-        {team.latestEvents.length === 0 && <div className={MUTED_CLASS}>暂无事件</div>}
+        {/* D22f：事件流去满宽下边线，改留白分组（列表 space-y-1 + 行 py-1.5）。 */}
+        <div className="space-y-1">
+          {team.latestEvents
+            .slice(-8)
+            .reverse()
+            .map((e) => (
+              <div key={e.seq} className={EVENT_ROW_CLASS}>
+                <span className={MUTED_CLASS}>
+                  {relativeTime(e.at, now)} · {e.actor}
+                </span>{' '}
+                {e.text}
+              </div>
+            ))}
+          {team.latestEvents.length === 0 && <div className={MUTED_CLASS}>暂无事件</div>}
+        </div>
         <div className={MUTED_CLASS}>
           数据更新于 {fetchedAt === 0 ? '—' : relativeTime(fetchedAt, now)}
         </div>
@@ -1051,13 +1154,17 @@ function TeamTab({
                   onClick={() => onSelectTeam(t.teamId)}
                 >
                   <div className="flex items-center gap-2">
-                    <span className="eteams-team-name flex-1 text-[13px] font-semibold text-foreground">
+                    <span className="eteams-team-name flex-1 text-sm font-semibold text-foreground">
                       {t.name}
                     </span>
                     {active && <span className={ROLE_CHIP_CLASS}>当前</span>}
                   </div>
                   <div className="mt-1.5 flex items-center gap-1.5">
-                    <span className={PHASE_PILL_CLASS}>{PHASE_LABELS[t.phase] ?? t.phase}</span>
+                    <span className={PHASE_PILL_CLASS}>
+                      {/* D22e：状态彩底全撤——阶段语义由彩色 6px dot 承载。 */}
+                      <span className={dotClass(PHASE_TONES[t.phase] ?? 'muted')} />
+                      {PHASE_LABELS[t.phase] ?? t.phase}
+                    </span>
                     <span className={LIST_COUNT_CLASS}>
                       {t.progress.completed}/{t.progress.total} 任务 · {t.members.length} 成员
                     </span>
@@ -1186,7 +1293,7 @@ function LeaderCard({ captain }: { captain: CaptainView }): ReactNode {
         <Avatar name={captain.name} seed={captain.avatar.seed} salt={captain.avatar.salt} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="text-[13px] font-semibold text-foreground">{captain.name}</span>
+            <span className="text-sm font-semibold text-foreground">{captain.name}</span>
             <span className={ROLE_CHIP_CLASS}>领队</span>
           </div>
           <div className={cn(MUTED_CLASS, 'mt-px')}>
@@ -1194,13 +1301,7 @@ function LeaderCard({ captain }: { captain: CaptainView }): ReactNode {
           </div>
         </div>
         {captain.personaMd !== null && (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="text-[12px]"
-            onClick={() => setOpen(!open)}
-          >
+          <Button type="button" variant="outline" size="sm" onClick={() => setOpen(!open)}>
             {open ? '收起手册' : '查看手册'}
           </Button>
         )}
@@ -1233,13 +1334,16 @@ function MemberCard({
       <div className="flex items-center gap-2.5">
         <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} />
         <div className="min-w-0">
-          <div className="flex items-center gap-1.5 text-[13px] font-semibold text-foreground">
+          <div className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
             {activity !== undefined && (
               <span
                 title={activity === 'running' ? '子代理运行中' : '子代理已完结'}
                 className={
                   activity === 'running'
-                    ? 'h-[7px] w-[7px] shrink-0 rounded-full bg-success shadow-[0_0_0_3px_var(--dsw-static-green-100,#e6faed)]'
+                    ? // 状态点光晕（D22f）：green-100 死字面量改 color-mix
+                      // success 淡环（token 半透明替代路径，button.tsx 先例，
+                      // 亮暗自适应）。
+                      'h-[7px] w-[7px] shrink-0 rounded-full bg-success shadow-[0_0_0_3px_color-mix(in_srgb,var(--success)_15%,transparent)]'
                     : 'h-[7px] w-[7px] shrink-0 rounded-full bg-muted-foreground'
                 }
               />
@@ -1252,19 +1356,12 @@ function MemberCard({
         </div>
       </div>
       <Pill tone={tone}>
-        <span className={dotClass(tone)} />
         {STATUS_LABELS[m.status] ?? m.status}
         {m.currentTaskId !== null && <span className="font-normal">· {m.currentTaskId}</span>}
       </Pill>
       <div className="flex gap-1.5">
         {onOpenReports !== undefined && (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="text-[12px]"
-            onClick={() => onOpenReports(m.name)}
-          >
+          <Button type="button" variant="outline" size="sm" onClick={() => onOpenReports(m.name)}>
             汇报记录
           </Button>
         )}
@@ -1273,7 +1370,7 @@ function MemberCard({
             type="button"
             variant="outline"
             size="sm"
-            className="text-[12px] text-destructive hover:text-destructive"
+            className="text-destructive hover:text-destructive"
             onClick={() => onRemove(m.name)}
           >
             移出团队
@@ -1372,7 +1469,8 @@ function DraftPreview({ draft }: { draft: BuildDraft }): ReactNode {
       {rows.map(([label, value]) => (
         <div key={label} className={DETAIL_ROW_CLASS}>
           <span className={DETAIL_LABEL_CLASS}>{label}</span>
-          <span className={cn(MUTED_CLASS, value.trim() !== '' && TEXT2_CLASS)}>
+          {/* D22d：正文主 = foreground（有值）/ meta = muted（空占位）。 */}
+          <span className={cn(MUTED_CLASS, value.trim() !== '' && 'text-foreground')}>
             {value.trim() !== '' ? value : '…'}
           </span>
         </div>
@@ -1427,16 +1525,23 @@ function handbookSeed(member: RosterMember): string {
  * 教训），统一走这里；token 直接从主题插值，fallback 已内建。
  */
 const ROLE_LIST_CSS = `
-.eteams-role-row{background:${T.surface};border:1px solid ${T.border};box-shadow:0 1px 2px rgba(15,23,42,0.04);transition:background .15s ease,border-color .15s ease,box-shadow .15s ease,transform .15s ease}
-.eteams-role-row:hover{border-color:rgba(65,118,230,0.45);box-shadow:0 6px 16px rgba(15,23,42,0.09);transform:translateY(-1px)}
-.eteams-team-card{background:${T.surface};border:1px solid ${T.border};box-shadow:0 1px 2px rgba(15,23,42,0.04);transition:background .15s ease,border-color .15s ease,box-shadow .15s ease,transform .15s ease}
-.eteams-team-card:hover{border-color:rgba(65,118,230,0.45);box-shadow:0 6px 16px rgba(15,23,42,0.09);transform:translateY(-1px)}
-.eteams-team-card[data-active="true"]{border-color:${T.accent};background:${T.accentSoft};box-shadow:0 2px 10px rgba(65,118,230,0.14)}
-.eteams-role-del{padding:3px 10px;font-size:11px;border-radius:7px;border:1px solid ${T.border2};background:${T.surface};color:${T.err};cursor:pointer;flex-shrink:0;font-family:inherit;line-height:16px;opacity:0;transition:opacity .15s ease,border-color .15s ease,background .15s ease}
+.eteams-role-row{background:var(--background);border:1px solid var(--border);box-shadow:0 1px 2px rgba(15,23,42,0.05);transition:background .15s ease,border-color .15s ease,box-shadow .15s ease}
+.eteams-role-row:hover{border-color:color-mix(in srgb,var(--foreground) 18%,transparent);background:var(--muted)}
+.eteams-team-card{background:var(--background);border:1px solid var(--border);box-shadow:0 1px 2px rgba(15,23,42,0.05);transition:background .15s ease,border-color .15s ease,box-shadow .15s ease}
+.eteams-team-card:hover{border-color:color-mix(in srgb,var(--foreground) 18%,transparent);background:var(--muted)}
+.eteams-team-card[data-active="true"]{border-color:color-mix(in srgb,var(--primary) 50%,transparent);background:var(--business-tint);box-shadow:0 0 0 1px color-mix(in srgb,var(--primary) 20%,transparent)}
+.eteams-role-del{padding:3px 10px;font-size:12px;border-radius:6px;border:1px solid var(--border);background:var(--background);color:var(--destructive);cursor:pointer;flex-shrink:0;font-family:inherit;line-height:18px;opacity:0;transition:opacity .15s ease,border-color .15s ease,background .15s ease}
 .eteams-role-row:hover .eteams-role-del,.eteams-role-row:focus-within .eteams-role-del{opacity:1}
-.eteams-role-del:hover{border-color:${T.err};background:${T.errBg}}
+.eteams-role-del:hover{border-color:var(--destructive);background:color-mix(in srgb,var(--destructive) 6%,transparent)}
 .eteams-role-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .eteams-team-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 原生 details/summary（构建工作台 ×2，功能性不动）官网化：去 marker +
+   「▸」展开指示随 open 旋转；必须带 .eteams-ui 前缀——style 标签按文档流
+   注入但 CSS 本身是全局的，无前缀会漏进宿主页面。 */
+.eteams-ui details>summary{cursor:pointer;user-select:none;list-style:none}
+.eteams-ui details>summary::-webkit-details-marker{display:none}
+.eteams-ui details>summary::before{content:'▸';display:inline-block;margin-right:6px;color:var(--muted-foreground);transition:transform .15s ease}
+.eteams-ui details[open]>summary::before{transform:rotate(90deg)}
 `;
 
 function HandbookEditor({
@@ -1813,24 +1918,27 @@ function MembersTab({
     return (
       <div className="min-w-0 overflow-x-hidden">
         <style>{'@keyframes eteams-spin{to{transform:rotate(360deg)}}'}</style>
-        <Button size="sm" variant="secondary" onClick={() => setView('list')}>
-          ← 返回角色列表
-        </Button>
-        <Button
-          size="sm"
-          variant="secondary"
-          className="ml-1.5"
-          onClick={() => activateConversationTab()}
-          title="切到会话的对话视图，看命令卡片与进度行"
-        >
-          💬 对话页看进度
-        </Button>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Button size="sm" variant="secondary" onClick={() => setView('list')}>
+            <ArrowLeft className="h-3.5 w-3.5" />
+            返回角色列表
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => activateConversationTab()}
+            title="切到会话的对话视图，看命令卡片与进度行"
+          >
+            <MessageSquare className="h-3.5 w-3.5 text-muted-foreground" />
+            对话页看进度
+          </Button>
+        </div>
         <Card className={cn(PANEL_CARD_CLASS, 'mt-2')}>
           {build !== null && build.status === 'active' && (
             <div>
               <div className="flex items-center gap-2">
                 {interviewWaiting ? (
-                  <span className="text-[16px] leading-none">✍️</span>
+                  <PenLine className="h-4 w-4 shrink-0 text-primary" />
                 ) : build.draft?.avatar !== undefined ? (
                   <Avatar
                     name={build.draft.name}
@@ -1883,7 +1991,10 @@ function MembersTab({
                 // 意图访谈问卷（docs/19.16）：后台代理的问题在这里作答，
                 // 提交后宿主把答案发回代理继续构建。
                 <div className="mb-1 mt-2.5 rounded-[10px] border border-solid border-primary px-3 py-2.5">
-                  <div className="text-[13px] font-semibold">✍️ 意图访谈——请作答</div>
+                  <div className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+                    <PenLine className="h-4 w-4 text-primary" />
+                    意图访谈——请作答
+                  </div>
                   <div className={MUTED_CLASS}>
                     阶段代理是一次性的，前任已收工；提交答案会立即派出新代理继续，或点「重启代理」重新出题。
                   </div>
@@ -1894,7 +2005,7 @@ function MembersTab({
                     ).length;
                     if (answered >= qs.length) return null;
                     return (
-                      <div className="mt-1.5 text-[12px] font-semibold text-warning">
+                      <div className="mt-1.5 text-xs font-semibold text-warning">
                         每题至少选一项才能提交——已答 {answered}/{qs.length}
                         {answered === qs.length - 1
                           ? '，还差 1 题'
@@ -1910,10 +2021,10 @@ function MembersTab({
                         {q.header !== undefined && q.header !== '' && (
                           <div className={MUTED_CLASS}>{q.header}</div>
                         )}
-                        <div className="text-[12.5px] font-semibold">
+                        <div className="text-sm font-semibold leading-6 text-foreground">
                           {q.question}
                           {q.multi === true && (
-                            <span className="ml-1.5 rounded-full bg-business-tint px-[7px] py-px text-[11px] font-medium text-business">
+                            <span className="ml-1.5 inline-flex w-fit items-center rounded-full bg-business-tint px-2 py-0.5 align-middle text-xs font-medium text-[color:var(--eteams-brand-ink)]">
                               可多选
                             </span>
                           )}
@@ -1928,7 +2039,7 @@ function MembersTab({
                                 type="button"
                                 onClick={() => togglePick(q.id, o.label, q.multi === true)}
                                 className={cn(
-                                  'cursor-pointer rounded-[8px] border border-solid px-[9px] py-[5px] text-left text-[12px] leading-[1.5] text-inherit',
+                                  'cursor-pointer rounded-md border border-solid px-2.5 py-1.5 text-left text-sm leading-6 text-inherit',
                                   active
                                     ? 'border-primary bg-business-tint'
                                     : `bg-transparent ${BORDER_L1_CLASS}`,
@@ -1971,7 +2082,7 @@ function MembersTab({
                     遗留写法，恒走字面兜底、暗色无法随主题翻档）——错误色统一走
                     destructive token（与 FORM_ERROR_CLASS 等错误面同源）。 */}
                     {interviewError !== null && (
-                      <div className="mt-2 text-[12px] leading-[1.5] text-destructive">
+                      <div className="mt-2 text-xs leading-5 text-destructive">
                         ⚠️ {interviewError}
                       </div>
                     )}
@@ -1983,13 +2094,15 @@ function MembersTab({
                 {BUILD_STEPS.map((s) => {
                   const done = build.stepsDone.includes(s);
                   const current = !done && build.step === s;
-                  const tone: Tone = done ? 'ok' : current ? 'info' : 'muted';
+                  const glyphState = done ? 'done' : current ? 'current' : 'pending';
                   return (
                     <div key={s} className={BUILD_STEP_CLASS}>
-                      <span className={cn(TONE_CLASS[tone], 'font-semibold')}>
+                      <span className={cn(GLYPH_TONE_CLASS[glyphState], 'font-semibold')}>
                         {done ? '✔' : current ? '●' : '◌'}
                       </span>
-                      <span className={done || current ? TEXT2_CLASS : 'text-muted-foreground'}>
+                      <span
+                        className={done || current ? 'text-foreground' : 'text-muted-foreground'}
+                      >
                         {s}
                       </span>
                       {current && <span className={MUTED_CLASS}>进行中…</span>}
@@ -2076,9 +2189,7 @@ function MembersTab({
               <div className="mt-2 flex items-center gap-2.5">
                 <Avatar name={confirmedDraft.name} size={40} />
                 <div>
-                  <div className="text-[14px] font-semibold text-foreground">
-                    {confirmedDraft.name}
-                  </div>
+                  <div className="text-sm font-semibold text-foreground">{confirmedDraft.name}</div>
                   <div className={MUTED_CLASS}>
                     {confirmedDraft.role} · 已加入角色列表，到「团队」页拉进团队即可使用。
                   </div>
@@ -2134,9 +2245,10 @@ function MembersTab({
               {justFilled ? (
                 <div>
                   {/* docs/23 S23-3：原 PREFILL_BANNER_CLASS → shadcn Alert
-                      （default 变体 + 品牌淡底覆盖，官网 ring 风格边框）。 */}
-                  <Alert className="mt-2.5 flex items-start gap-2 rounded-[10px] bg-business-tint px-3 py-2.5">
-                    <span className="text-[12.5px] font-semibold text-business">
+                      （default 变体 + 品牌淡底覆盖）；D22e 品牌档字色改
+                      brand-ink token、D22f 官网呼吸感 px-4 py-3 + 14px。 */}
+                  <Alert className="mt-2.5 flex items-start gap-2 rounded-[10px] bg-business-tint px-4 py-3">
+                    <span className="text-sm font-semibold text-[color:var(--eteams-brand-ink)]">
                       ✓ 已填充到对话输入框
                     </span>
                   </Alert>
@@ -2147,7 +2259,7 @@ function MembersTab({
                       <span>{s}</span>
                     </div>
                   ))}
-                  <div className={cn(MUTED_CLASS, 'mt-2.5 text-[11.5px]')}>
+                  <div className={cn(MUTED_CLASS, 'mt-2.5')}>
                     提示：已模拟「键入 /eteam +
                     空格」完成命令认领（claimed）——补全两个【】占位符后直接回车即可；编辑正文时命令高亮收起属正常行为。
                   </div>
@@ -2158,7 +2270,7 @@ function MembersTab({
                 </div>
               )}
               <details>
-                <summary className={cn('mt-2.5 cursor-pointer', MUTED_CLASS)}>
+                <summary className="mt-2.5 -mx-2 cursor-pointer select-none rounded-md px-2 py-1.5 text-sm font-semibold text-foreground hover:bg-muted">
                   手动创建（不经过角色构建师）
                 </summary>
                 <div className="mt-2">
@@ -2175,7 +2287,7 @@ function MembersTab({
                     />
                   </div>
                   <details>
-                    <summary className={cn('mt-1.5 cursor-pointer', MUTED_CLASS)}>
+                    <summary className="-mx-2 mt-1.5 cursor-pointer select-none rounded-md px-2 py-1.5 text-sm font-semibold text-foreground hover:bg-muted">
                       角色手册（可选，Markdown：使命/职责/规则/领域专章/沟通风格/交付标准）
                     </summary>
                     <div className={cn(FORM_ROW_CLASS, 'mt-2')}>
@@ -2213,16 +2325,11 @@ function MembersTab({
     return (
       // 版式：详情列不再限宽（用户要求解除固定宽度），面板全宽利用
       <div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="text-[12px]"
-          onClick={() => setView('list')}
-        >
-          ← 返回角色列表
+        <Button type="button" variant="outline" size="sm" onClick={() => setView('list')}>
+          <ArrowLeft className="h-3.5 w-3.5" />
+          返回角色列表
         </Button>
-        <Card className={cn(PANEL_CARD_CLASS, 'mt-2 px-[18px] py-4')}>
+        <Card className={cn(PANEL_CARD_CLASS, 'mt-2')}>
           <div className="flex items-center gap-3.5">
             {/* 头像描边环（视觉升级）：品牌淡底档（D21b token），柔和不抢戏。 */}
             <div className="rounded-full border-2 border-solid p-0.5 leading-none border-business-tint">
@@ -2235,8 +2342,10 @@ function MembersTab({
             </div>
             {/* 角色（用户反馈）：不再需要标签——名字即身份，手册即人设。 */}
             <div className="min-w-0 flex-1">
-              <div className="text-[17px] font-bold text-foreground">{detail.name}</div>
-              <div className={cn(MUTED_CLASS, 'mt-0.5 text-[11px]')}>
+              <div className="text-lg font-semibold tracking-tight text-foreground">
+                {detail.name}
+              </div>
+              <div className={cn(MUTED_CLASS, 'mt-0.5')}>
                 {isLeader ? '系统保留角色 · 手册只读' : '点击下方「编辑」可修改角色手册'}
               </div>
               {teamNames.length > 0 && (
@@ -2348,11 +2457,11 @@ function MembersTab({
                     <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={40} />
                     {/* 角色（用户反馈）：不再需要标签——名字即身份。 */}
                     <div className="min-w-0">
-                      <span className="eteams-role-name block max-w-full text-[13px] font-semibold text-foreground">
+                      <span className="eteams-role-name block max-w-full text-sm font-semibold text-foreground">
                         {m.name}
                       </span>
                       {teamNames.length > 0 && (
-                        <div className={cn('eteams-role-name', MUTED_CLASS, 'mt-0.5 text-[11px]')}>
+                        <div className={cn('eteams-role-name', MUTED_CLASS, 'mt-0.5')}>
                           {teamNames.join('、')}
                         </div>
                       )}
@@ -2412,11 +2521,11 @@ function TasksTab({
         if (rows.length === 0) return null;
         return (
           <div key={group.id} className="mb-3.5">
-            <div className={cn(SECTION_TITLE_CLASS, 'mb-1')}>
-              <Pill tone={group.tone}>
-                <span className={dotClass(group.tone)} />
-                {group.label} · {rows.length}
-              </Pill>
+            {/* D22e 任务页组头降噪：彩 pill → 中性文字 + 计数 + 彩色 6px dot。 */}
+            <div className="mb-1 flex items-center gap-1.5 text-sm font-semibold leading-6 text-foreground">
+              <span className={dotClass(group.tone)} />
+              {group.label}
+              <span className="text-xs font-normal text-muted-foreground">· {rows.length}</span>
             </div>
             {rows.map((t) => (
               <div key={t.taskId}>
@@ -2429,7 +2538,7 @@ function TasksTab({
                     <span className={MUTED_CLASS}>
                       {' '}
                       {STATUS_LABELS[t.status] ?? t.status}
-                      {t.retryCount > 0 ? ` · ⟳${t.retryCount}` : ''}
+                      {t.retryCount > 0 ? ` · 重试 ${t.retryCount}` : ''}
                       {t.assignee !== null ? ` · ${t.assignee}` : ''}
                     </span>
                   </div>

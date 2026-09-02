@@ -21,8 +21,9 @@
  *   （R1-F3，S3 桥只补默认边框色，接线消费面无需再逐处叠类）。
  *
  * 动画类（data-[state=open]:animate-in 等）依赖 tailwindcss-animate 插件
- * （tailwind.config.ts 已挂）；bg-black/80 / z-50 等为 Tailwind 默认色阶
- * （非宿主变量 token，D19c 的 /alpha 禁令仅约束 token 色）。
+ * （tailwind.config.ts 已挂）；bg-slate-900/50 / z-50 等为 Tailwind 默认色阶
+ * （非宿主变量 token，D19c 的 /alpha 禁令仅约束 token 色；S24-2 D22f：遮罩
+ * bg-black/80→bg-slate-900/50，官网式轻遮罩，浅暗通用）。
  *
  * @module dsh-eteams/client/components/ui/dialog
  */
@@ -63,7 +64,7 @@ const DialogOverlay = React.forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      'fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
+      'fixed inset-0 z-50 bg-slate-900/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
       className,
     )}
     {...props}
