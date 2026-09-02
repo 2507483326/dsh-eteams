@@ -12,10 +12,10 @@
  *   24/20 用户仍嫌大）；
  * - **坦克暂时下架（D23-4）**：TANK_COUNT=0——引擎坦克代码全量保留
  *   （含其全部测试锁），改回常量即恢复；
- * - **鼠标波纹（D23-5）**：pointermove 挂画布父元素（canvas 自身保持
- *   pointer-events-none 不吃交互），节流（≥90ms 且位移 ≥24px）落点；
- *   有活波纹才跑 rAF（30fps），全部消亡即停帧；reduced-motion / 页面
- *   隐藏时不生成波纹；
+ * - **鼠标格子微光（D24-1，取代外扩环波纹）**：pointermove 挂画布父元素
+ *   （canvas 自身保持 pointer-events-none 不吃交互），节流（≥90ms 且位移
+ *   ≥24px）向热场 splat——格子本身微亮再指数退热，无新增图形元素；热场空
+ *   即停帧；reduced-motion / 页面隐藏时不生成；
  * - DPR 封顶 2（D20e）；画布级合成透明度 = COMPOSITE_ALPHA_CAP（恒 1.0）；
  * - **壳自愈（D22g-6 保留）**：① MO palette 相等短路 + 150ms 防抖；② rAF
  *   重排到 hidden 检查之后；③ 1s 看门狗（lastRender > 2500ms：context lost
@@ -38,14 +38,15 @@ import {
   COMPOSITE_ALPHA_CAP,
   createHeightField,
   createTanks,
-  planRippleOps,
+  decayHeat,
+  planHeatOps,
   planStaticLayer,
-  rippleDead,
   sampleBackdropPalette,
+  splatHeat,
   stepTanks,
   nowMs,
   type BackdropPalette,
-  type Ripple,
+  type HeatField,
   type StaticOp,
   type Tank,
 } from './backdropEngine';
@@ -94,7 +95,7 @@ export function EteamsBackdrop(): ReactNode {
     let palette: BackdropPalette = sampleBackdropPalette(() => null);
     let staticOps: StaticOp[] = [];
     let tanks: Tank[] = [];
-    let ripples: Ripple[] = [];
+    let heat: HeatField = new Map();
     let offscreen: HTMLCanvasElement | null = null;
     let lastT = 0;
     let lastRender = 0;
@@ -128,15 +129,17 @@ export function EteamsBackdrop(): ReactNode {
       }
     };
 
-    /** 全量重规划：调色板 → 静层 → 坦克（同 seed 确定性重建）。 */
+    /** 全量重规划：调色板 → 静层 → 坦克（同 seed 确定性重建）。热键随 cell
+     * 变化失效（D24-1：resize 即清空热场，退热中的微光随重绘自然消失）。 */
     const replan = (): void => {
       palette = sampleBackdropPalette(readVar);
       renderStatic();
       tanks = createTanks(TANK_COUNT, w, h, cell, BACKDROP_SEED);
+      heat = new Map();
       drawFrame(true);
     };
 
-    /** 画一帧：离屏静层 + 活波纹（坦克 D23-4 下架后动层只剩波纹）。 */
+    /** 画一帧：离屏静层 + 格子微光叠加（坦克 D23-4 下架后动层只剩热场）。 */
     const drawFrame = (force: boolean): void => {
       const now = nowMs();
       if (!force && now - lastRender < FRAME_MIN_MS) return;
@@ -145,11 +148,9 @@ export function EteamsBackdrop(): ReactNode {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       if (offscreen !== null) ctx.drawImage(offscreen, 0, 0);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      for (const ripple of ripples) {
-        for (const op of planRippleOps(ripple, now, w, h, palette)) {
-          ctx.fillStyle = op.color;
-          ctx.fillRect(op.x, op.y, op.w, op.h);
-        }
+      for (const op of planHeatOps(heat, cell, w, h, palette)) {
+        ctx.fillStyle = op.color;
+        ctx.fillRect(op.x, op.y, op.w, op.h);
       }
     };
 
@@ -160,16 +161,13 @@ export function EteamsBackdrop(): ReactNode {
       const dt = lastT === 0 ? 0 : Math.min((t - lastT) / 1000, 0.1);
       lastT = t;
       stepTanks(tanks, dt, w, h, cell);
-      // 波纹消亡即清理；全空（且无坦克）→ 停帧省电（D23-5 按需循环）。
-      if (ripples.length > 0) {
-        const now = nowMs();
-        ripples = ripples.filter((r) => !rippleDead(r, now));
-        if (ripples.length === 0 && tanks.length === 0) {
-          cancelAnimationFrame(raf);
-          raf = 0;
-          drawFrame(false);
-          return;
-        }
+      heat = decayHeat(heat, dt);
+      // 热场熄灭（且无坦克）→ 停帧省电（D24-1 按需循环）。
+      if (heat.size === 0 && tanks.length === 0) {
+        cancelAnimationFrame(raf);
+        raf = 0;
+        drawFrame(false);
+        return;
       }
       drawFrame(false);
     };
@@ -260,15 +258,16 @@ export function EteamsBackdrop(): ReactNode {
     };
     document.addEventListener('visibilitychange', onVisibility);
 
-    // 鼠标波纹（D23-5）：监听挂画布**父元素**（canvas 自身 pointer-events-none
-    // 不吃交互，事件天然穿到内容层——这里收的是面板内任意位置的扫过）。节流：
-    // 距上次落点 ≥90ms 且位移 ≥24px 才落一粒（快速扫过 ~10 粒、悬停不动 0 粒）。
-    // reduced-motion / 页面隐藏时不生成（静板）。落点即按需启动 rAF 循环。
-    const RIPPLE_MIN_INTERVAL_MS = 90;
-    const RIPPLE_MIN_DIST_PX = 24;
-    let lastRippleAt = 0;
-    let lastRippleX = -1e9;
-    let lastRippleY = -1e9;
+    // 鼠标格子微光（D24-1）：监听挂画布**父元素**（canvas 自身 pointer-events-
+    // none 不吃交互，事件天然穿到内容层——这里收的是面板内任意位置的扫过）。
+    // 节流：距上次落点 ≥90ms 且位移 ≥24px 才 splat 一粒（快速扫过 ~10 粒、
+    // 悬停不动 0 粒）。reduced-motion / 页面隐藏时不生成（静板）。落点即按需
+    // 启动 rAF 循环；replan 后 cell 可能变化，热场按新 cell 键重建前直接清空。
+    const HEAT_MIN_INTERVAL_MS = 90;
+    const HEAT_MIN_DIST_PX = 24;
+    let lastHeatAt = 0;
+    let lastHeatX = -1e9;
+    let lastHeatY = -1e9;
     const parentEl = canvas.parentElement ?? canvas;
     const onPointerMove = (event: PointerEvent): void => {
       if (disposed || hidden || reduced) return;
@@ -277,13 +276,12 @@ export function EteamsBackdrop(): ReactNode {
       const rect = canvas.getBoundingClientRect();
       const x = event.clientX - rect.left;
       const y = event.clientY - rect.top;
-      const dist = Math.hypot(x - lastRippleX, y - lastRippleY);
-      if (now - lastRippleAt < RIPPLE_MIN_INTERVAL_MS || dist < RIPPLE_MIN_DIST_PX) return;
-      lastRippleAt = now;
-      lastRippleX = x;
-      lastRippleY = y;
-      ripples.push({ x, y, born: now });
-      if (ripples.length > 12) ripples = ripples.slice(-12); // 极端快扫兜底
+      const dist = Math.hypot(x - lastHeatX, y - lastHeatY);
+      if (now - lastHeatAt < HEAT_MIN_INTERVAL_MS || dist < HEAT_MIN_DIST_PX) return;
+      lastHeatAt = now;
+      lastHeatX = x;
+      lastHeatY = y;
+      heat = splatHeat(heat, x, y, cell, w, h);
       if (raf === 0 && !disposed) {
         lastT = 0;
         raf = requestAnimationFrame(loop);
@@ -293,12 +291,12 @@ export function EteamsBackdrop(): ReactNode {
 
     // 看门狗（D22g-6 / R4 兜底）：可见且未降运动而 lastRender 静止超阈值，
     // 先辨上下文丢失（丢则全量 replan 重建），否则强制推帧（lastT=0 ⇒ 下帧
-    // dt=0，物理无跳变）。**空闲豁免**：波纹/坦克皆空且静层已画过（动层无
-    // 内容）时停帧是 D23-5 的设计态，不算 stall——只对「动层非空却静止」
-    // 或「静层尚未画过」自愈。
+    // dt=0，物理无跳变）。**空闲豁免**：热场空且静层已画过（动层无内容）时
+    // 停帧是 D24-1 的设计态，不算 stall——只对「动层非空却静止」或「静层
+    // 尚未画过」自愈。
     const watchdog = setInterval(() => {
       if (disposed || hidden || reduced) return;
-      if (ripples.length === 0 && tanks.length === 0 && offscreen !== null) return;
+      if (heat.size === 0 && tanks.length === 0 && offscreen !== null) return;
       if (performance.now() - lastRender <= WATCHDOG_STALL_MS) return;
       if (ctx.isContextLost()) replan();
       else {

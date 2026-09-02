@@ -52,7 +52,7 @@ import { getApp } from './store/app';
 
 /** Landing options for {@link enterTeamsPanel}: which panel view to open. */
 export interface TeamsPanelOptions {
-  /** Land on the 团队 tab (its page hosts the 新建团队 form). */
+  /** Land on the 团队 tab and open the 新增团队 dialog (creator flow). */
   readonly creator?: boolean;
   /** Open the 新增角色 flow (panel 角色 tab with the build workbench). */
   readonly memberBuilder?: boolean;

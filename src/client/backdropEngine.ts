@@ -20,6 +20,10 @@
  * 4. **静层指令合并**：网格按线合并、地形按行（再按列）合并、α<0.01 跳过
  *    （诊断 simE：10166 条 @1920×1080/c24 → 预算 ≤400）。
  *
+ * R6（docs/25 25.5，D24-1）：鼠标「外扩双环波纹」下架（用户反馈观感差），
+ * 改「**格子微光**」热场——指针扫过时格子**本身**微亮再退热（splat/decay/
+ * plan 三纯函数，无新增图形元素）。
+ *
  * @module dsh-eteams/client/backdropEngine
  */
 
@@ -248,7 +252,7 @@ export function sampleBackdropPalette(read: (name: string) => string | null): Ba
 
 /* —— 静层绘制指令（网格 + 高地图，D22g 合并版）—— */
 
-/** 矩形填充指令（坐标逻辑 px；color 已带 alpha）。 */
+/** 矩形填充指令（坐标逻辑 px；color 已带 alpha）。R6 起 kind:'ring' 不再产出。 */
 export interface StaticOp {
   kind: 'rect' | 'ring';
   x: number;
@@ -441,23 +445,130 @@ export function planStaticLayer(
   return ops;
 }
 
-/* —— 鼠标波纹（docs/25 D23-5）—— */
+/* —— 鼠标格子微光（docs/25 25.5 D24-1，取代外扩双环波纹）—— */
 
-/** 波纹生命期（秒）：出生后 0.9s 淡出完毕即消亡。 */
-export const RIPPLE_MAX_AGE = 0.9;
-/** 波纹半径扩张速度（px/s）：0.9s 走 ~99px，一次扫过的水痕尺度。 */
-export const RIPPLE_EXPANSION = 110;
-/** 波纹环厚（px，近似 1px stroke 的轴对齐双环）。 */
-export const RIPPLE_RING_W = 1;
-/** 波纹峰值 alpha（出生瞬间）；随 age 线性衰减到 0，再乘右上渐隐同源系数。 */
-export const RIPPLE_PEAK_ALPHA = 0.35;
+/**
+ * 用户反馈（25.5）：外扩环波纹「太差」。新方案不创建任何新图形——指针扫过
+ * 时让**格子本身**微亮，随后慢慢退回原色。引擎侧三件套（全部纯函数）：
+ *
+ * - `splatHeat`：落点写入热场（指针所在格 + 邻格随距离衰减）；
+ * - `decayHeat`：每帧全场指数退热（e 指数，与帧率无关）；
+ * - `planHeatOps`：热场 → 叠加填充指令（只输出有热的格子）。
+ *
+ * 热场是 `Map<cellKey, heat>`，只持有被扫过的格子（面板其余部分零状态），
+ * 每帧从 Map 清零项删除——长面板扫一圈也不会积累状态。
+ */
 
-/** 一次鼠标扫过的波纹记录：出生点（逻辑 px，画布坐标）与出生时刻（performance.now 口径）。 */
+/** 单格微光峰值 α（heat=1 时叠加的 alpha；远低于坦克 0.55，水印级之上）。 */
+export const HEAT_PEAK_ALPHA = 0.14;
+/** 邻格衰减系数：距落点 d 格的热量 = dist^(-d)（d=0 → 1，d=1 → 1/2，…）。 */
+export const HEAT_NEIGHBOR_FALLOFF = 0.5;
+/** 单帧退热时间常数（秒）：heat *= exp(-dt / TAU)——0.35s 后剩 ~e^-1。 */
+export const HEAT_DECAY_TAU = 0.35;
+/** 热量低于此值视为熄灭（Map 删除 + 指令跳过）。 */
+export const HEAT_OFF_THRESHOLD = 0.012;
+/** 单次 splat 半径（格）：十字 4 邻 + 本格（不斜向扩散，痕迹更「格子」）。 */
+export const HEAT_SPLAT_RADIUS = 1;
+
+/** 一次指针落点的格子微光记录：指针逻辑 px 坐标与时刻（performance.now 口径）。 */
 export interface Ripple {
   x: number;
   y: number;
   /** 出生时刻（performance.now()，ms）。 */
   born: number;
+}
+
+/**
+ * 热场：cellKey「cx,cy」→ heat ∈ (0,1]。宿主（组件/预览页）持有并跨帧
+ * 传递；引擎只做纯变换。
+ */
+export type HeatField = Map<string, number>;
+
+/** 格坐标 → 热场键。 */
+export function heatKey(cx: number, cy: number): string {
+  return `${cx},${cy}`;
+}
+
+/**
+ * 把一次指针落点写入热场（**纯**——返回新 Map，不改输入）。
+ * 指针所在格 (cx,cy) 热量 = 1，正交邻格按 HEAT_NEIGHBOR_FALLOFF^d 递减；
+ * 已有热量的格子取 max（连续扫过只增不跳变）。出界格子不写入。
+ */
+export function splatHeat(
+  field: HeatField,
+  x: number,
+  y: number,
+  cell: number,
+  w: number,
+  h: number,
+): HeatField {
+  const cols = Math.max(1, Math.ceil(w / cell));
+  const rows = Math.max(1, Math.ceil(h / cell));
+  const cx = Math.floor(x / cell);
+  const cy = Math.floor(y / cell);
+  if (cx < 0 || cy < 0 || cx >= cols || cy >= rows) return field;
+  const next = new Map(field);
+  const spots: readonly (readonly [number, number, number])[] = [
+    [cx, cy, 1],
+    [cx - 1, cy, HEAT_NEIGHBOR_FALLOFF],
+    [cx + 1, cy, HEAT_NEIGHBOR_FALLOFF],
+    [cx, cy - 1, HEAT_NEIGHBOR_FALLOFF],
+    [cx, cy + 1, HEAT_NEIGHBOR_FALLOFF],
+  ];
+  for (const [sx, sy, heat] of spots) {
+    if (sx < 0 || sy < 0 || sx >= cols || sy >= rows) continue;
+    const key = heatKey(sx, sy);
+    next.set(key, Math.max(next.get(key) ?? 0, heat));
+  }
+  return next;
+}
+
+/**
+ * 全场退热一帧（**纯**）：heat = heat × e^(−dt/TAU)，低于熄灭阈值的格子
+ * 从 Map 删除。dt ≤ 0 时原样返回。
+ */
+export function decayHeat(field: HeatField, dt: number): HeatField {
+  if (dt <= 0) return field;
+  const factor = Math.exp(-dt / HEAT_DECAY_TAU);
+  const next = new Map<string, number>();
+  for (const [key, heat] of field) {
+    const decayed = heat * factor;
+    if (decayed >= HEAT_OFF_THRESHOLD) next.set(key, decayed);
+  }
+  return next;
+}
+
+/**
+ * 热场 → 叠加填充指令（**纯**）：每个有热的格子一条 rect，色 = palette.brand
+ * （与峰顶 accent 同源），α = HEAT_PEAK_ALPHA × heat × fadeAlpha(格心)——
+ * 与静层同一右上渐隐源，左下扫过自然无痕迹。返回的指令按 reading order
+ * 排列（y 后 x），壳直接 fillRect 即可。
+ */
+export function planHeatOps(
+  field: HeatField,
+  cell: number,
+  w: number,
+  h: number,
+  palette: BackdropPalette,
+): StaticOp[] {
+  if (field.size === 0) return [];
+  const ops: StaticOp[] = [];
+  for (const [key, heat] of field) {
+    if (heat < HEAT_OFF_THRESHOLD) continue;
+    const comma = key.indexOf(',');
+    const cx = Number.parseInt(key.slice(0, comma), 10);
+    const cy = Number.parseInt(key.slice(comma + 1), 10);
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) continue;
+    const x = cx * cell;
+    const y = cy * cell;
+    const cw = Math.min(cell, w - x);
+    const ch = Math.min(cell, h - y);
+    if (cw <= 0 || ch <= 0) continue;
+    const alpha = HEAT_PEAK_ALPHA * heat * fadeAlpha(x + cw / 2, y + ch / 2, w, h);
+    if (alpha < MIN_OP_ALPHA) continue;
+    ops.push({ kind: 'rect', x, y, w: cw, h: ch, color: withAlpha(palette.brand, alpha) });
+  }
+  return ops;
 }
 
 /**
@@ -469,19 +580,17 @@ export function nowMs(): number {
   return typeof performance !== 'undefined' ? performance.now() : 0;
 }
 
-/** 波纹是否已消亡。 */
+/** 波纹是否已消亡（兼容旧签名：born 距今 ≥ HEAT_DECAY_TAU×3 秒）。
+ * @deprecated R6 后壳改用 decayHeat 的 Map 自清理；保留供旧测试/预览过渡。 */
 export function rippleDead(ripple: Ripple, now: number): boolean {
-  return (now - ripple.born) / 1000 >= RIPPLE_MAX_AGE;
+  return (now - ripple.born) / 1000 >= HEAT_DECAY_TAU * 3;
 }
 
 /**
- * 规划一条波纹的绘制指令：以出生点为圆心的**双环**（r 与 0.6r，轴对齐
- * stroke 近似——每环 4 条 1px 矩形边），α = RIPPLE_PEAK_ALPHA × (1−age/MAX)
- * × fadeAlpha(x,y)——与网格同一右上渐隐源，左下水域波纹自然不可见。
- * 死波纹返回 []。纯函数。
+ * 规划一条波纹的绘制指令：R6 起外扩环已下架（用户反馈观感差），微光由
+ * splatHeat/decayHeat/planHeatOps 三件套承担。恒返回 []（兼容旧调用）。
  *
- * 指令仍为 StaticOp（kind:'ring'），坐标是外接盒——壳按 rect 画（fill 即
- * 环的近似：环厚 1px，视觉读作细线圆环；4 条边分 4 条指令）。
+ * @deprecated 改用 planHeatOps。
  */
 export function planRippleOps(
   ripple: Ripple,
@@ -490,28 +599,12 @@ export function planRippleOps(
   h: number,
   palette: BackdropPalette,
 ): StaticOp[] {
-  if (rippleDead(ripple, now)) return [];
-  const age = (now - ripple.born) / 1000;
-  const peak = RIPPLE_PEAK_ALPHA * (1 - age / RIPPLE_MAX_AGE);
-  const fade = fadeAlpha(ripple.x, ripple.y, w, h);
-  if (peak * fade < MIN_OP_ALPHA) return [];
-  const color = withAlpha(palette.brand, peak * fade);
-  const ops: StaticOp[] = [];
-  for (const radius of [RIPPLE_EXPANSION * age, RIPPLE_EXPANSION * age * 0.6]) {
-    const r = Math.round(radius);
-    if (r <= 0) continue;
-    const x0 = ripple.x - r;
-    const y0 = ripple.y - r;
-    const d = r * 2;
-    // 4 条边（上/下/左/右）各一条 1px rect——轴对齐近似圆环。
-    ops.push(
-      { kind: 'ring', x: x0, y: y0, w: d, h: RIPPLE_RING_W, color },
-      { kind: 'ring', x: x0, y: y0 + d, w: d, h: RIPPLE_RING_W, color },
-      { kind: 'ring', x: x0, y: y0, w: RIPPLE_RING_W, h: d, color },
-      { kind: 'ring', x: x0 + d, y: y0, w: RIPPLE_RING_W, h: d, color },
-    );
-  }
-  return ops;
+  void ripple;
+  void now;
+  void w;
+  void h;
+  void palette;
+  return [];
 }
 
 /* —— 像素坦克（D20f → D22g 彩色化；D23-4 坦克暂时下架，引擎保留）—— */

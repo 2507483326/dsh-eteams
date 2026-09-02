@@ -437,15 +437,17 @@ const SHELL_CLASS =
 const CONTENT_CLASS = 'min-w-0 flex-1 overflow-x-hidden overflow-y-auto pr-0.5';
 /* docs/23 S23-3：原 styles.formError（FORM_ERROR_CLASS）迁移 FormErrorNote
    （shadcn Alert destructive 紧凑档，见上方组件），常量删除。 */
-/** 原 styles.cardGrid（团队/角色卡片栅格，最小 210px 自适应列）。 */
+/** 原 styles.cardGrid（团队/角色卡片栅格，最小 210px 自适应列）——团队列表
+ * 已改长条卡（用户迭代 2026-09，见 TEAM_ROW_CLASS），仍服务角色卡片栅格。 */
 const CARD_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(210px,1fr))] gap-3';
+/** 长条形团队卡（用户迭代 2026-09）：整行一张（flex 纵列容器里 100% 宽），
+ * 左内容 + 右成员略缩图；底色/边框/悬停仍由 .eteams-team-card 样式表接管，
+ * p-4 = D22f 卡内呼吸感。 */
+const TEAM_ROW_CLASS = 'flex min-w-0 cursor-pointer items-center rounded-xl p-4';
 /** 原 styles.phasePill（团队卡片阶段徽标：D22e 中性圆 pill + 彩色 6px dot
  * ——dot 由使用位按 PHASE_TONES 插入，状态彩底全撤）。 */
 const PHASE_PILL_CLASS =
   'inline-flex w-fit shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-[color:var(--eteams-pill-bg)] px-2.5 py-0.5 text-xs font-medium text-[color:var(--eteams-pill-ink)]';
-/** 原 styles.teamCard（底色/边框/悬停仍由 .eteams-team-card 样式表接管）；
- * p-4 = D22f 卡内呼吸感。 */
-const TEAM_CARD_CLASS = 'min-w-0 cursor-pointer rounded-xl p-4';
 /** 原 styles.roleCard（同上：底色/边框/悬停由 .eteams-role-row 样式表接管）；
  * p-4 = D22f 卡内呼吸感。 */
 const ROLE_CARD_CLASS =
@@ -478,8 +480,8 @@ const GLYPH_TONE_CLASS: Record<string, string> = {
 };
 
 /** 页签标题（S24-2 新增，官网 h2 签名）：五 tab 内容区顶部的页头行——
- * 20px bold tracking-tight + mb-4；右侧动作位（看板页放「＋ 新增团队」
- * 主按钮）。标题字即 tab 名，不发明副标题。 */
+ * 20px bold tracking-tight + mb-4；右侧动作位（团队页放「＋ 新增团队」
+ * 主按钮 → 创建弹窗）。标题字即 tab 名，不发明副标题。 */
 function PageHeader({ label, children }: { label: string; children?: ReactNode }): ReactNode {
   return (
     <div className="mb-4 flex items-center gap-3">
@@ -708,6 +710,10 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
   // 宽栏侧栏筛选框（S24-2 官网 Quick search 签名）：对五个页签名做大小写
   // 不敏感子串过滤，空串全显；纯前端视觉态，不触碰导航数据。
   const [railQuery, setRailQuery] = useState('');
+  // 新增团队弹窗信号（用户迭代 2026-09）：递增计数驱动 TeamTab 打开创建
+  // 弹窗（同 openAddTick 模式）——团队页头右上角按钮与 GOTO_ADD_TEAM 跳转
+  // 信号（hero/弹层「新增团队」）都走它，表单卡片已撤。
+  const [openCreateTick, setOpenCreateTick] = useState(0);
   // docs/22 S22-2：面板作用域根宽 ≥ RAIL_WIDE_MIN_WIDTH 用官网风格宽栏，
   // 否则回落 84px 窄栏。Tailwind v3 无容器查询，以作用域根实测为准；
   // useLayoutEffect 首帧前同步测量避免闪栏，ResizeObserver 跟随布局变化，
@@ -736,10 +742,13 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
       dispatch({ type: 'ui/setNav', payload: 'roster' });
       setOpenAddTick((t) => t + 1);
     };
-    // 「新增团队」信号：落到团队 tab（新建表单就在那里）。
+    // 「新增团队」信号：落到团队 tab，并打开创建弹窗（表单卡片已撤——
+    // hero/弹层的「新增团队」入口同走这个信号，createTick 驱动 TeamTab 的
+    // Dialog）。
     const hTeam = (): void => {
       consumePendingGotoAddTeam();
       dispatch({ type: 'ui/setNav', payload: 'team' });
+      setOpenCreateTick((t) => t + 1);
     };
     // 「成员 tab」信号（按钮成员选中直达，docs/13.8.2）：落成员页，不带新增表单。
     const hRoster = (): void => {
@@ -897,21 +906,17 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
 
         <div className={CONTENT_CLASS}>
           {/* 页签标题（S24-2，官网 h2 签名）：每 tab 内容区顶部一行页头，
-            看板页头右侧带「＋ 新增团队」主按钮（跳团队页的创建表单——与
-            GOTO_ADD_TEAM 信号的落点一致）。 */}
-          {activeTab === 'board' && (
-            <PageHeader label="看板">
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => dispatch({ type: 'ui/setNav', payload: 'team' })}
-              >
+            团队页头右侧带「＋ 新增团队」主按钮（打开创建弹窗——名称即建，
+            用户迭代 2026-09：看板页不再放新增入口）。 */}
+          {activeTab === 'board' && <PageHeader label="看板" />}
+          {activeTab === 'team' && (
+            <PageHeader label="团队">
+              <Button type="button" size="sm" onClick={() => setOpenCreateTick((t) => t + 1)}>
                 <Plus className="h-3.5 w-3.5" />
                 新增团队
               </Button>
             </PageHeader>
           )}
-          {activeTab === 'team' && <PageHeader label="团队" />}
           {activeTab === 'roster' && <PageHeader label="角色" />}
           {activeTab === 'tasks' && <PageHeader label="任务" />}
           {activeTab === 'reports' && <PageHeader label="汇报" />}
@@ -930,6 +935,7 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
               pool={pool}
               team={team}
               roster={roster}
+              createTick={openCreateTick}
               onSelectTeam={(id) => dispatch({ type: 'ui/setSelectedTeam', payload: id })}
               agentActivity={agentActivity}
               onOpenReports={(name) => {
@@ -1074,12 +1080,18 @@ function BoardTab({
   );
 }
 
-/** 团队：创建（仅名称）+ 组建团队（成员栅格 + 从角色列表拉人）。 */
+/**
+ * 团队：新增团队（弹窗，名称即建）+ 团队列表/详情两级视图（用户迭代
+ * 2026-09）。列表态是长条形团队卡（名称 + 阶段徽标 + 进度 + 右侧成员
+ * 头像略缩图最多 3 个），点击卡片进入该团队的详情——成员栅格、拉人、
+ * 移出等只在详情视图出现。
+ */
 function TeamTab({
   sessionId,
   pool,
   team,
   roster,
+  createTick,
   onSelectTeam,
   agentActivity,
   onOpenReports,
@@ -1090,6 +1102,8 @@ function TeamTab({
   pool: TeamSnapshot[];
   team: TeamSnapshot | undefined;
   roster: RosterMember[];
+  /** 新增团队弹窗跳转信号（递增计数）：>0 且未消费时打开创建弹窗（openAddTick 同款）。 */
+  createTick: number;
   onSelectTeam: (teamId: string) => void;
   /** Member subagent activity dots (docs/20.4 P4): childId → running/inactive. */
   agentActivity: Record<string, string>;
@@ -1099,6 +1113,18 @@ function TeamTab({
   const [pick, setPick] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 列表/详情两级视图（用户迭代 2026-09）：null=列表（长条卡片），非 null=
+  // 详情（该团队 id）。弹窗建团成功后自动跳进新团队详情。
+  const [detailId, setDetailId] = useState<string | null>(null);
+  // 创建弹窗开合（组件内瞬态）：由 createTick 信号打开，关闭清信号痕迹。
+  const [createOpen, setCreateOpen] = useState(false);
+  const lastCreateTickRef = useRef(0);
+  useEffect(() => {
+    if (createTick > 0 && createTick !== lastCreateTickRef.current) {
+      lastCreateTickRef.current = createTick;
+      setCreateOpen(true);
+    }
+  }, [createTick]);
   // 面板创建团队绑定当前会话（领队即该会话代理）；浮层/无会话时没有可绑定的
   // 会话，创建按钮禁用并给出指引，而不是提交后吃 400 错误。
   const canCreate = typeof sessionId === 'string' && sessionId !== '';
@@ -1108,8 +1134,14 @@ function TeamTab({
     setBusy(true);
     setError(null);
     try {
-      await createTeamViaPanel(sessionId, name.trim());
+      const created = await createTeamViaPanel(sessionId, name.trim());
       setName('');
+      setCreateOpen(false);
+      // 创建成功即选中并进入新团队详情（从 /state 快照回读前先按返回 id 落位）。
+      if (created.teamId !== '') {
+        onSelectTeam(created.teamId);
+        setDetailId(created.teamId);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1118,11 +1150,11 @@ function TeamTab({
   };
 
   const addFromRoster = async (): Promise<void> => {
-    if (busy || team === undefined || pick === '') return;
+    if (busy || detailTeam === null || pick === '') return;
     setBusy(true);
     setError(null);
     try {
-      await addTeamMember(team.teamId, { name: pick, fromRoster: true });
+      await addTeamMember(detailTeam.teamId, { name: pick, fromRoster: true });
       setPick('');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -1131,50 +1163,141 @@ function TeamTab({
     }
   };
 
+  const detailTeam = detailId === null ? null : (pool.find((t) => t.teamId === detailId) ?? null);
+
   return (
     <div>
-      {/* 团队卡片栅格（用户反馈：列表改卡片）：名称 + 阶段/进度/成员数，
-      点击切换当前团队；当前团队高亮描边。多团队时取代原顶栏下拉。
-      S14：容器换 shadcn Card（PANEL_CARD_CLASS + pb-3 覆盖层），栅格/卡片/
-      徽标/进度条全迁工具类；进度条宽度是运行时动态值（inline，S5 先例）。 */}
-      {pool.length > 0 && (
+      {/* 新增团队弹窗（用户迭代 2026-09）：shadcn Dialog + Input，输入名称按
+      「新增团队」创建——创建由面板会话绑定限制（canCreate）同表单一致。 */}
+      <Dialog
+        open={createOpen}
+        onOpenChange={(next) => {
+          if (!next) {
+            setCreateOpen(false);
+            setError(null);
+            setName('');
+          }
+        }}
+      >
+        <DialogContent className="max-w-sm">
+          <DialogHeader className="space-y-1 text-left">
+            <DialogTitle>新增团队</DialogTitle>
+            <DialogDescription className={MUTED_CLASS}>
+              {canCreate
+                ? '只需名称即可创建（草案阶段）；目标可在看板中与领队继续完善。'
+                : '当前还没有进行中的对话——开始对话后才能创建团队。'}
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            value={name}
+            autoFocus
+            placeholder="团队名称，如：文档迁移小组"
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void create();
+            }}
+          />
+          {error !== null && <FormErrorNote>{error}</FormErrorNote>}
+          <div className="flex items-center justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() => setCreateOpen(false)}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={busy || !canCreate || name.trim() === ''}
+              onClick={() => void create()}
+            >
+              新增团队
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 列表态：长条形团队卡（用户迭代 2026-09）——一行一团队，名称 + 阶段
+      徽标 + 进度/计数在左，右侧成员头像略缩图最多 3 个（超出 +N）；点击卡片
+      进入该团队详情。当前团队高亮描边沿用 .eteams-team-card[data-active]。 */}
+      {detailTeam === null && pool.length > 0 && (
         <Card className={cn(PANEL_CARD_CLASS, 'pb-3')}>
           <div className="mb-2.5 flex items-center gap-2">
             <h3 className={LIST_TITLE_CLASS}>团队</h3>
             <span className={LIST_COUNT_CLASS}>{pool.length} 个</span>
           </div>
-          <div className={CARD_GRID_CLASS}>
+          <div className="flex flex-col gap-3">
             {pool.map((t) => {
               const active = t.teamId === team?.teamId;
               return (
                 <div
                   key={t.teamId}
-                  className={cn('eteams-team-card', TEAM_CARD_CLASS)}
+                  className={cn('eteams-team-card', TEAM_ROW_CLASS)}
                   data-active={active ? 'true' : 'false'}
-                  onClick={() => onSelectTeam(t.teamId)}
+                  onClick={() => {
+                    // 进详情同时选中该团队：看板/任务/汇报的联动对象跟着走
+                    // （原卡片点击的选中语义保留）。
+                    onSelectTeam(t.teamId);
+                    setDetailId(t.teamId);
+                  }}
                 >
-                  <div className="flex items-center gap-2">
-                    <span className="eteams-team-name flex-1 text-sm font-semibold text-foreground">
-                      {t.name}
-                    </span>
-                    {active && <span className={ROLE_CHIP_CLASS}>当前</span>}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="eteams-team-name flex-1 text-sm font-semibold text-foreground">
+                        {t.name}
+                      </span>
+                      {active && <span className={ROLE_CHIP_CLASS}>当前</span>}
+                    </div>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      <span className={PHASE_PILL_CLASS}>
+                        {/* D22e：状态彩底全撤——阶段语义由彩色 6px dot 承载。 */}
+                        <span className={dotClass(PHASE_TONES[t.phase] ?? 'muted')} />
+                        {PHASE_LABELS[t.phase] ?? t.phase}
+                      </span>
+                      <span className={LIST_COUNT_CLASS}>
+                        {t.progress.completed}/{t.progress.total} 任务 · {t.members.length} 成员
+                      </span>
+                    </div>
+                    <Progress
+                      className="mt-2.5 h-1.5"
+                      value={
+                        t.progress.total === 0 ? 0 : (t.progress.completed / t.progress.total) * 100
+                      }
+                    />
                   </div>
-                  <div className="mt-1.5 flex items-center gap-1.5">
-                    <span className={PHASE_PILL_CLASS}>
-                      {/* D22e：状态彩底全撤——阶段语义由彩色 6px dot 承载。 */}
-                      <span className={dotClass(PHASE_TONES[t.phase] ?? 'muted')} />
-                      {PHASE_LABELS[t.phase] ?? t.phase}
-                    </span>
-                    <span className={LIST_COUNT_CLASS}>
-                      {t.progress.completed}/{t.progress.total} 任务 · {t.members.length} 成员
-                    </span>
+                  {/* 右侧成员略缩图（用户迭代 2026-09）：领队 + 成员头像最多
+                  3 个，超出计数 +N；负间距叠放 + 底色描边环（官网常见略缩图
+                  签名），title 兜底全名。 */}
+                  <div className="flex shrink-0 items-center -space-x-2 pl-3">
+                    {[t.captain, ...t.members].slice(0, 3).map((m) => (
+                      <span
+                        key={m.name}
+                        className="inline-flex shrink-0 rounded-full ring-2 ring-[color:var(--background)]"
+                        title={m.name}
+                      >
+                        <Avatar
+                          name={m.name}
+                          seed={m.avatar?.seed}
+                          salt={m.avatar?.salt}
+                          size={28}
+                        />
+                      </span>
+                    ))}
+                    {t.members.length + 1 > 3 && (
+                      <span
+                        className={cn(
+                          'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold',
+                          'bg-muted text-muted-foreground ring-2 ring-[color:var(--background)]',
+                        )}
+                        title={`其余 ${t.members.length + 1 - 3} 人`}
+                      >
+                        +{t.members.length + 1 - 3}
+                      </span>
+                    )}
                   </div>
-                  <Progress
-                    className="mb-0 h-1.5"
-                    value={
-                      t.progress.total === 0 ? 0 : (t.progress.completed / t.progress.total) * 100
-                    }
-                  />
                 </div>
               );
             })}
@@ -1182,44 +1305,44 @@ function TeamTab({
         </Card>
       )}
 
-      <Card className={PANEL_CARD_CLASS}>
-        <div className="mb-2.5 flex items-center gap-2">
-          <h3 className={LIST_TITLE_CLASS}>新建团队</h3>
-        </div>
-        <div className="flex items-center gap-2">
-          <Input
-            value={name}
-            placeholder="团队名称，如：文档迁移小组"
-            onChange={(e) => setName(e.target.value)}
-          />
-          <Button
-            size="sm"
-            disabled={busy || !canCreate || name.trim() === ''}
-            onClick={() => void create()}
-          >
-            <IconPlusOutline16 />
-            创建
-          </Button>
-        </div>
-        <div className={MUTED_CLASS}>
-          {canCreate
-            ? '只需名称即可创建（草案阶段）；目标可在看板中与领队继续完善。'
-            : '当前还没有进行中的对话——开始对话后即可在这里创建团队。'}
-        </div>
-        {error !== null && <FormErrorNote>{error}</FormErrorNote>}
-      </Card>
+      {detailTeam === null && pool.length === 0 && (
+        <div className={EMPTY_CLASS}>还没有团队。点右上角「新增团队」创建第一个团队。</div>
+      )}
 
-      {team === undefined ? (
-        <div className={EMPTY_CLASS}>尚未选择团队。创建团队后在这里从「角色」列表拉人组队。</div>
-      ) : (
+      {/* 详情态（用户迭代 2026-09）：点长条卡片才进来——团队成员、拉人组队
+      都在这里。返回按钮回列表。 */}
+      {detailTeam !== null && (
         <>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setDetailId(null);
+                setPick('');
+              }}
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              返回团队列表
+            </Button>
+            <span className="text-lg font-semibold tracking-tight text-foreground">
+              {detailTeam.name}
+            </span>
+            <span className={PHASE_PILL_CLASS}>
+              <span className={dotClass(PHASE_TONES[detailTeam.phase] ?? 'muted')} />
+              {PHASE_LABELS[detailTeam.phase] ?? detailTeam.phase}
+            </span>
+          </div>
+
           {/* 团队成员卡（S13/S14）：容器 shadcn Card（PANEL_CARD_CLASS 覆盖层，
-          S12 先例）；拉人选择与成员栅格 Tailwind 化。上方的团队卡片栅格与
-          新建团队卡已随 S14 一并迁移（同款覆盖层）。 */}
-          <Card className={PANEL_CARD_CLASS}>
+          S12 先例）；拉人选择与成员栅格 Tailwind 化。 */}
+          <Card className={cn(PANEL_CARD_CLASS, 'mt-2')}>
             <div className="mb-2.5 flex items-center gap-2">
               <h3 className={LIST_TITLE_CLASS}>团队成员</h3>
-              <span className={LIST_COUNT_CLASS}>{team.members.length} 人 · 领队默认在团</span>
+              <span className={LIST_COUNT_CLASS}>
+                {detailTeam.members.length} 人 · 领队默认在团
+              </span>
             </div>
             {roster.length > 0 && (
               <div className="mb-2.5 flex items-center gap-2">
@@ -1239,7 +1362,8 @@ function TeamTab({
                     {roster
                       .filter(
                         (m) =>
-                          m.name !== LEADER_NAME && !team.members.some((t) => t.name === m.name),
+                          m.name !== LEADER_NAME &&
+                          !detailTeam.members.some((t) => t.name === m.name),
                       )
                       .map((m) => (
                         <SelectItem key={m.name} value={m.name} className="text-[12px]">
@@ -1259,19 +1383,19 @@ function TeamTab({
               </div>
             )}
             <div className={MEMBER_GRID_CLASS}>
-              <LeaderCard captain={team.captain} />
-              {team.members.map((m) => (
+              <LeaderCard captain={detailTeam.captain} />
+              {detailTeam.members.map((m) => (
                 <MemberCard
                   key={m.name}
                   member={m}
                   activity={m.childId !== null ? agentActivity[m.childId] : undefined}
                   onOpenReports={onOpenReports}
                   onRemove={(memberName) => {
-                    void removeTeamMember(team.teamId, memberName).catch(() => undefined);
+                    void removeTeamMember(detailTeam.teamId, memberName).catch(() => undefined);
                   }}
                 />
               ))}
-              {team.members.length === 0 && (
+              {detailTeam.members.length === 0 && (
                 <div className={MUTED_CLASS}>
                   还没有角色——先到「角色」页新增，或从上方角色列表拉人。
                 </div>

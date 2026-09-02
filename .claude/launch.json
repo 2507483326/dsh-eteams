@@ -5,7 +5,15 @@
       "name": "preview",
       "runtimeExecutable": "npx",
       "runtimeArgs": ["-y", "serve", "-l", "8791", ".tmp-tw-docs/preview"],
-      "port": 8791
+      "port": 8791,
+      "autoPort": true
+    },
+    {
+      "name": "avatar-preview",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["-y", "serve", "-l", "8792", ".tmp-avatar-preview"],
+      "port": 8792,
+      "autoPort": true
     }
   ]
 }

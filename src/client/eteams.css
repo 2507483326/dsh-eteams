@@ -30,7 +30,7 @@
  * 字体栈）；CJK 仍落系统字体（官网同款行为）。
  *
  * mini-preflight（docs/24 D22c）：preflight 关闭的 UA 默认代价在本文件内做
- * 作用域代偿（盒模型/边框/间距复位），见下方标注块。
+ * 作用域代偿（盒模型/边框/间距/光标复位），见下方标注块。
  */
 @tailwind base;
 @tailwind components;
@@ -192,6 +192,22 @@
   .eteams-ui :where(img, svg):not(:where(.eteams-mdx, .eteams-mdx *)) {
     display: block;
     vertical-align: middle;
+  }
+
+  /*
+   * 光标代偿（D22c 补遗）：preflight 的「button,[role=button]{cursor:pointer} +
+   * :disabled{cursor:default}」随 preflight:false 一起消失——shadcn vendored
+   * 组件（button/tabs/dialog 的交互件）与 mdxeditor 工具栏按钮上游都依赖这条
+   * 规则获手型光标，而它们自身类名不声明 cursor；手写表面已带显式
+   * cursor-pointer 不受影响。按 mini-preflight 同款纪律：:where() 归零特异性
+   * （(0,1,0)，仅高于 UA 默认，低于宿主与面板工具类）、严格限定 .eteams-ui
+   * 子树、豁免 .eteams-mdx（其自有样式体系自带光标语义，不代偿）。
+   */
+  .eteams-ui :where(button, [role='button']):not(:where(.eteams-mdx, .eteams-mdx *)) {
+    cursor: pointer;
+  }
+  .eteams-ui :where(:disabled):not(:where(.eteams-mdx, .eteams-mdx *)) {
+    cursor: default;
   }
 
   /* shadcn 脚手架「* { @apply border-border }」的手动作用域版（D19c：限定

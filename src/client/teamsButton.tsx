@@ -405,7 +405,11 @@ const HINT_CLASS = 'px-2.5 pb-0.5 pt-1.5 text-xs leading-normal text-muted-foreg
 /* 弹层卡体（原 S.card）：bg/background、文字色走语义 token；边框 S24-2 收敛
    语义 token --border（官网 slate-200/slate-800）；阴影逐字保留原 T.shadow。 */
 const POPUP_BORDER_CLASS = 'border-[color:var(--border)]';
-const LIST_CLASS = 'flex max-h-[260px] flex-col gap-0.5 overflow-x-hidden overflow-y-auto p-1.5 pt-2';
+/* 底部锚定（D26-1）的高度链：卡片 inline maxHeight（视口护栏）→ Tabs
+   flex-1 min-h-0 → 列表 min-h-0——空间不足时列表收缩内部滚动，卡片顶边
+   不出视口。max-h-[260px] 保留（正常场景列表自身封顶）。 */
+const LIST_CLASS =
+  'flex min-h-0 max-h-[260px] flex-col gap-0.5 overflow-x-hidden overflow-y-auto p-1.5 pt-2';
 /* D25：tab 头自身不再画分割线（早前 border-b 与 footer border-t 形成重复），
    列表与 tab 头之间由 tab 下划线自然收边，仅 footer 保留一条 border-t。 */
 const FOOTER_CLASS = `flex border-t border-solid p-1.5 ${POPUP_BORDER_CLASS}`;
@@ -430,6 +434,8 @@ const CLEAR_BUTTON_CLASS =
  * in-place surface). It floats ABOVE the trigger with a small gap — the
  * button sits at the bottom of the window, and a below-placement (or a
  * viewport-clamped flip) would cover the 「团队」 label it belongs to.
+ * Bottom-anchored（`bottom` + `maxHeight`，不用 `top`）：卡片高度与定位解耦，
+ * 团队/角色 tab 切换、列表加载只向上长高，位置永不回跳（无闪烁）。
  */
 function TeamsPopup(props: {
   anchor: HTMLElement;
@@ -445,19 +451,23 @@ function TeamsPopup(props: {
   const { anchor, selectedMember, selectedTeam, onSelectMember, onSelectTeam, onClose } = props;
   const [tab, setTab] = useState<'team' | 'member'>(props.initialTab);
   const panelRef = useRef<HTMLDivElement | null>(null);
-  // Hand-rolled above-placement: right-aligned to the trigger, bottom edge
-  // `gap` above its top edge, clamped to the viewport. Re-measured on the
-  // panel's own size changes (tab switch, roster load) via ResizeObserver,
-  // plus window resize and captured scroll. Until the first measurement the
-  // panel stays invisible (no flash at 0,0).
+  // Hand-rolled above-placement: right-aligned to the trigger, BOTTOM edge
+  // `gap` above its top edge, clamped to the viewport. Until the first
+  // measurement the panel stays invisible (no flash at 0,0).
   const [pos, setPos] = useState<CSSProperties | null>(null);
-  // Anti-flicker positioning（用户反馈：切换成员时闪一下）： continuous rAF
-  // tracking instead of event listeners. Events left gaps — selecting swaps
-  // the button face (width change → tool-row reflow) and mutates the panel
-  // (hint text), and the old RO/scroll-only approach repositioned a frame
-  // late, so the card visibly lagged then snapped. Reading rects per frame
-  // with a change-guard keeps the card glued with ZERO re-renders while
-  // nothing moves.
+  // Anti-flicker positioning（用户反馈：切换 tab/成员时闪一下）：continuous
+  // rAF tracking instead of event listeners. Events left gaps — selecting
+  // swaps the button face (width change → tool-row reflow), and the old
+  // RO/scroll-only approach repositioned a frame late, so the card visibly
+  // lagged then snapped. Reading rects per frame with a change-guard keeps
+  // the card glued with ZERO re-renders while nothing moves.
+  // Bottom-anchored（用户反馈：团队/角色 tab 切换闪一下）：the card is placed
+  // with `bottom`, not `top` — its height is decoupled from the position, so
+  // a tab switch / roster load only ever grows the card UPWARD and the
+  // change-guard short-circuits (no reposition round-trip at all). The old
+  // top-anchored scheme needed a full frame for this loop to catch the new
+  // offsetHeight, leaving one visible frame where the card dipped over the
+  // composer before snapping back.
   useLayoutEffect(() => {
     const panel = panelRef.current;
     if (panel === null) return;
@@ -466,15 +476,17 @@ function TeamsPopup(props: {
     const compute = (): void => {
       const r = anchor.getBoundingClientRect();
       const w = panel.offsetWidth;
-      const h = panel.offsetHeight;
       const margin = 8;
       const gap = 6;
       const left = Math.min(Math.max(r.right - w, margin), window.innerWidth - margin - w);
-      const top = Math.max(margin, r.top - gap - h);
-      const key = `${left}|${top}`;
+      const bottom = Math.max(margin, window.innerHeight - r.top + gap);
+      // 顶部护栏 = 旧 `top = max(margin, …)` 的等价表达：可用空间不足时收
+      // 面板（maxHeight），列表内部滚动——而不是把顶边推出视口。
+      const maxHeight = Math.max(160, r.top - gap - margin);
+      const key = `${left}|${bottom}|${maxHeight}`;
       if (key === last) return; // no-op guard: no setState, no re-render
       last = key;
-      setPos({ left, top });
+      setPos({ left, bottom, maxHeight });
     };
     const loop = (): void => {
       compute();
@@ -569,7 +581,7 @@ function TeamsPopup(props: {
           onValueChange={(v) => setTab(v === 'member' ? 'member' : 'team')}
           className="flex min-h-0 flex-1 flex-col"
         >
-          <TabsList className="h-auto w-full justify-start gap-0 rounded-none border-0 bg-transparent p-0">
+          <TabsList className="h-auto w-full flex-none justify-start gap-0 rounded-none border-0 bg-transparent p-0">
             <TabsTrigger
               value="team"
               className="-mb-px flex-1 rounded-none border-0 border-b-2 border-solid border-transparent bg-transparent px-0 pb-2 pt-2.5 text-sm leading-6 font-medium shadow-none ring-offset-0 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:font-semibold data-[state=active]:text-primary data-[state=active]:shadow-none hover:text-foreground"
@@ -668,7 +680,7 @@ function TeamsPopup(props: {
             )}
           </div>
 
-          <div className={FOOTER_CLASS}>
+          <div className={cn(FOOTER_CLASS, 'flex-none')}>
             {tab === 'team' ? (
               <Button
                 variant="outline"

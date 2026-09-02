@@ -22,15 +22,21 @@ import {
   clamp01,
   createHeightField,
   createTanks,
+  decayHeat,
   fadeAlpha,
+  heatKey,
+  HEAT_DECAY_TAU,
+  HEAT_NEIGHBOR_FALLOFF,
+  HEAT_PEAK_ALPHA,
   mulberry32,
   placeTanks,
-  planRippleOps,
+  planHeatOps,
   planStaticLayer,
   planTankOps,
   rotateSprite,
   sampleBackdropPalette,
   smoothstep,
+  splatHeat,
   stepTank,
   stepTanks,
   withAlpha,
@@ -318,39 +324,102 @@ describe('planStaticLayer merge budget (D23-1 lock: finer cells)', () => {
   });
 });
 
-describe('planRippleOps (docs/25 D23-5 mouse ripples)', () => {
+describe('heat field (docs/25 25.5 D24-1: cells glow, no new shapes)', () => {
   const palette = sampleBackdropPalette(() => null);
-  const NOW = 10_000;
+  const TOP_RIGHT = { x: 900, y: 100 }; // 活动区（fade 高）
+  const CELL_PX = 14;
 
-  it('produces 8 ops (double ring × 4 edges) for a live ripple', () => {
-    const ops = planRippleOps({ x: 900, y: 100, born: NOW - 100 }, NOW, W, H, palette);
-    expect(ops.length).toBe(8);
-    for (const op of ops) {
-      expect(op.kind).toBe('ring');
-      expect(alphaOf(op.color)).toBeLessThanOrEqual(0.35 + 1e-9);
-      expect(op.color.startsWith('rgba(')).toBe(true);
+  it('splat lights the pointer cell plus orthogonal neighbors at falloff', () => {
+    const field = splatHeat(new Map(), TOP_RIGHT.x, TOP_RIGHT.y, CELL_PX, W, H);
+    // 顶格点 (900,100) / 14 → 格 (64,7)：本格 1 + 十字 4 邻 0.5。
+    expect(field.size).toBe(5);
+    const cx = Math.floor(TOP_RIGHT.x / CELL_PX);
+    const cy = Math.floor(TOP_RIGHT.y / CELL_PX);
+    expect(field.get(heatKey(cx, cy))).toBe(1);
+    expect(field.get(heatKey(cx - 1, cy))).toBe(HEAT_NEIGHBOR_FALLOFF);
+    expect(field.get(heatKey(cx + 1, cy))).toBe(HEAT_NEIGHBOR_FALLOFF);
+    expect(field.get(heatKey(cx, cy - 1))).toBe(HEAT_NEIGHBOR_FALLOFF);
+    expect(field.get(heatKey(cx, cy + 1))).toBe(HEAT_NEIGHBOR_FALLOFF);
+  });
+
+  it('splat is pure (input field untouched) and clamped to the board', () => {
+    const before = new Map([[heatKey(3, 3), 0.4]]);
+    const field = splatHeat(before, 10, 10, CELL_PX, W, H); // 左上角：负邻格出界丢弃
+    expect(before.get(heatKey(3, 3))).toBe(0.4);
+    expect(field.get(heatKey(3, 3))).toBe(0.4);
+    expect(field.has(heatKey(-1, 0))).toBe(false);
+    expect(field.has(heatKey(0, -1))).toBe(false);
+    // 出界落点：原样返回（y=H+5 仍落在末行部分格内，故用 ≥ 一整格出界）。
+    expect(splatHeat(before, -5, 10, CELL_PX, W, H)).toBe(before);
+    expect(splatHeat(before, 10, H + CELL_PX, CELL_PX, W, H)).toBe(before);
+    expect(splatHeat(before, W + CELL_PX, 10, CELL_PX, W, H)).toBe(before);
+  });
+
+  it('re-splat takes max (no jump brighter than the peak)', () => {
+    let field = new Map<string, number>();
+    field = splatHeat(field, TOP_RIGHT.x, TOP_RIGHT.y, CELL_PX, W, H);
+    const cx = Math.floor(TOP_RIGHT.x / CELL_PX);
+    const cy = Math.floor(TOP_RIGHT.y / CELL_PX);
+    // 先退热半拍再同点补一粒：本格不超 1。
+    field = decayHeat(field, 0.1);
+    field = splatHeat(field, TOP_RIGHT.x + 1, TOP_RIGHT.y + 1, CELL_PX, W, H);
+    expect(field.get(heatKey(cx, cy))).toBeLessThanOrEqual(1);
+    expect(field.get(heatKey(cx, cy)) ?? 0).toBeGreaterThan(0.5);
+  });
+
+  it('decays exponentially and deletes cold cells', () => {
+    let field = splatHeat(new Map(), TOP_RIGHT.x, TOP_RIGHT.y, CELL_PX, W, H);
+    field = decayHeat(field, HEAT_DECAY_TAU); // 1τ → e^-1 ≈ 0.368
+    const cx = Math.floor(TOP_RIGHT.x / CELL_PX);
+    const cy = Math.floor(TOP_RIGHT.y / CELL_PX);
+    expect(field.get(heatKey(cx, cy)) ?? 0).toBeCloseTo(Math.exp(-1), 2);
+    expect(field.get(heatKey(cx + 1, cy)) ?? 0).toBeCloseTo(HEAT_NEIGHBOR_FALLOFF * Math.exp(-1), 2);
+    for (let i = 0; i < 200 && field.size > 0; i++) field = decayHeat(field, 0.05); // 10s 后必空
+    expect(field.size).toBe(0);
+    expect(decayHeat(field, 0)).toBe(field); // dt=0 原样
+  });
+
+  it('planHeatOps emits one rect per warm cell, watermarked alpha, top-right fade', () => {
+    const field = splatHeat(new Map(), TOP_RIGHT.x, TOP_RIGHT.y, CELL_PX, W, H);
+    const ops = planHeatOps(field, CELL_PX, W, H, palette);
+    expect(ops.length).toBe(field.size);
+    const cx = Math.floor(TOP_RIGHT.x / CELL_PX);
+    const cy = Math.floor(TOP_RIGHT.y / CELL_PX);
+    const center = ops.find((op) => op.x === cx * CELL_PX && op.y === cy * CELL_PX);
+    expect(center).toBeDefined();
+    expect(center?.w).toBe(CELL_PX);
+    expect(center?.h).toBe(CELL_PX);
+    expect(center?.kind).toBe('rect');
+    // 峰值 = HEAT_PEAK_ALPHA × heat(1) × fade；不超过上限且用品牌色。
+    const aCenter = alphaOf(center!.color);
+    expect(aCenter).toBeLessThanOrEqual(HEAT_PEAK_ALPHA + 1e-9);
+    expect(aCenter).toBeGreaterThan(HEAT_PEAK_ALPHA * 0.5);
+    expect(center!.color).toBe(withAlpha(palette.brand, aCenter));
+    // 邻格 α 更低（heat 0.5）。
+    const side = ops.find((op) => op.x === (cx + 1) * CELL_PX && op.y === cy * CELL_PX);
+    expect(alphaOf(side!.color)).toBeLessThan(aCenter);
+  });
+
+  it('planHeatOps is silent in the faded bottom-left and for an empty field', () => {
+    // 左下深角 fade=0 → 全格 α < MIN_OP_ALPHA → 零指令。
+    const cold = splatHeat(new Map(), 60, H - 40, CELL_PX, W, H);
+    expect(planHeatOps(cold, CELL_PX, W, H, palette)).toEqual([]);
+    expect(planHeatOps(new Map(), CELL_PX, W, H, palette)).toEqual([]);
+  });
+
+  it('a sweeping trail reheats ahead and fades behind (trail semantics)', () => {
+    // 向右扫 6 粒（60ms 间隔）：旧格已退热但未熄灭，新格全亮。
+    let field = new Map<string, number>();
+    const y = TOP_RIGHT.y;
+    for (let i = 0; i < 6; i++) {
+      field = splatHeat(field, TOP_RIGHT.x + i * CELL_PX * 2, y, CELL_PX, W, H);
+      field = decayHeat(field, 0.06);
     }
-  });
-
-  it('fades to zero: dead ripple yields no ops', () => {
-    const ops = planRippleOps({ x: 900, y: 100, born: NOW - 1000 }, NOW, W, H, palette);
-    expect(ops.length).toBe(0);
-  });
-
-  it('expands over time (outer ring radius grows)', () => {
-    const early = planRippleOps({ x: 900, y: 100, born: NOW - 100 }, NOW, W, H, palette);
-    const late = planRippleOps({ x: 900, y: 100, born: NOW - 500 }, NOW, W, H, palette);
-    const span = (list: StaticOp[]): number => Math.max(...list.map((o) => o.w));
-    expect(span(late)).toBeGreaterThan(span(early));
-    // 衰减：同点位晚 400ms 的 α 更小。
-    const aEarly = alphaOf(early[0]!.color);
-    const aLate = alphaOf(late[0]!.color);
-    expect(aLate).toBeLessThan(aEarly);
-  });
-
-  it('respects the top-right fade (ripple in the bottom-left is invisible)', () => {
-    const ops = planRippleOps({ x: 60, y: H - 40, born: NOW - 100 }, NOW, W, H, palette);
-    expect(ops.length).toBe(0); // fade × peak < MIN_OP_ALPHA
+    expect(field.size).toBeGreaterThan(0);
+    for (const heat of field.values()) {
+      expect(heat).toBeGreaterThan(0);
+      expect(heat).toBeLessThanOrEqual(1);
+    }
   });
 });
 

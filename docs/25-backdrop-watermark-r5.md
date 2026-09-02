@@ -50,3 +50,11 @@
 - 宿主修复取证：canvas 定位改内联样式（`position:absolute;inset:0;width:100%;height:100%`）——工具类定位在宿主 DOM 失效的根因规避；若仍异常，2s 后 `backdrop-geom` 诊断给出 canvas/parent 实测尺寸。
 
 **给用户的验收入口**：重启 DSH Desktop 后在面板内验收（背景右上水印格 + 鼠标波纹 + 无坦克 + 触发钮/弹窗 tab 新观感）。坦克回归：`src/client/eteamsBackdrop.tsx` 的 `TANK_COUNT` 改回 3 即恢复。
+
+## 25.5 R6：波纹 → 格子微光（D24 系列，2026-09-02）
+
+> 用户反馈：外扩双环波纹效果太差；要求**不新建图形**，改为扫过的格子本身颜色轻微变化。
+
+| # | 决策点 | 结论 |
+| --- | --- | --- |
+| D24-1 | 波纹下架 → 格子微光热场 | 引擎删 `RIPPLE_*` 常量与双环 `planRippleOps` 绘制（旧签名保留为恒 `[]` 的 deprecated 兼容壳），新增三纯函数：`splatHeat`（落点格 + 十字 4 邻按 `HEAT_NEIGHBOR_FALLOFF^d` 写热，取 max 不跳变，出界不写）、`decayHeat`（每帧 `heat × e^(−dt/HEAT_DECAY_TAU)` 指数退热，低于 `HEAT_OFF_THRESHOLD` 从 Map 删除）、`planHeatOps`（每热格一条 rect，色 = palette.brand、α = `HEAT_PEAK_ALPHA × heat × fadeAlpha(格心)`——与静层同一右上渐隐源，左下自然无痕迹）。参数：PEAK 0.14 / FALLOFF 0.5 / TAU 0.35s / OFF 0.012 / 半径 1 格。热场 = `Map<cellKey, heat>` 只持被扫过的格子；壳：pointermove 节流不变（≥90ms 且 ≥24px），splat 后按需 rAF，`heat.size===0` 即停帧；replan（resize）清空热场（cell 键失效）；看门狗空闲豁免改查热场。预览页同构更新 + engineEntry.iife 重打。测试：波纹 4 锁换热场 7 锁（splat 形状/纯性/取 max/指数衰减与清空/planHot α 上限/左下静默/拖尾语义），48 例全绿；四绿门全绿（148 例） |

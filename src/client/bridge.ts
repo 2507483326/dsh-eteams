@@ -22,7 +22,7 @@ const EXCLUDED_ANCESTORS = `[${ETEAMS_DATA_ATTR}],[role="menu"],[role="dialog"],
 /** Custom window event: a surface asks the panel to open the member builder. */
 export const GOTO_ADD_EVENT = 'eteams:goto-add';
 
-/** Custom window event: a surface asks the panel to open the team creator (团队 tab). */
+/** Custom window event: a surface asks the panel to open the team creator (团队 tab, 新增团队 dialog auto-opens). */
 export const GOTO_ADD_TEAM_EVENT = 'eteams:goto-add-team';
 
 /** Custom window event: select one team in the panel (CustomEvent detail: teamId). */

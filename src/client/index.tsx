@@ -101,7 +101,7 @@ export function apply(ctx: Context): void {
   // 会话未开始的新会话屏（hero）没有可供插件入驻的 additive 槽位——
   // hero 行两个席位都是 single 且已被宿主占用——因此走 DOM 注入：
   // 在「标准模式」旁补一枚团队按钮（heroTeamsButton 模块头有完整推理）。
-  // 落点 = 团队 tab 页（新建表单就在那一页）；对话未开始时宿主渲染不出
+  // 落点 = 团队 tab 页（新增团队弹窗随即自开）；对话未开始时宿主渲染不出
   // 标签环，enterTeamsPanel 会改落整页团队页（teamsPanel 模块头有推理）。
   guard('hero.teams-button', () =>
     installHeroTeamsButton(() => enterTeamsPanel({ creator: true })),
