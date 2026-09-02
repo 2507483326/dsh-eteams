@@ -1,25 +1,37 @@
 /**
- * 背景板引擎单测（docs/22 S22-3 / D20d；docs/23 D21g R2 重定标）：纯逻辑
- * 层确定性验证——高度场、渐隐、调色板采样（实色基底）、静层指令（单次
- * 烘焙有效 alpha + 可见性回归锁）、坦克步进与「不喧宾夺主」上限
- * （D20e/f/g 语义经 D21g 重定标）。node 环境无 DOM：被测模块零 DOM
- * 依赖（设计约束本身）。
+ * 背景板引擎单测（docs/24 S24-3 / D22g；前承 S22-3/D20d、S23/D21g R2）：
+ * 纯逻辑层确定性验证——高度场、渐隐（D22g 重定标 0.12/0.55）、调色板采样
+ * （自有 token 兜底）、静层指令（合并后墨量守恒 + 右上可见 + 左下静默 +
+ * ≤400 预算）、坦克步进（防死锁 9 锁 + 碰撞仲裁）与「不喧宾夺主」上限。
+ * node 环境无 DOM：被测模块零 DOM 依赖（设计约束本身）。
  */
 import { describe, expect, it } from 'vitest';
 import {
   COMPOSITE_ALPHA_CAP,
+  FADE_FAR,
+  FADE_NEAR,
+  GRID_LINE_ALPHA,
+  HALF_TANK,
+  HOLD_TIMEOUT,
+  TANK_ACCENTS,
+  TANK_BODY_ALPHA,
+  TANK_DARK_ALPHA,
+  TANK_ACCENT_ALPHA,
+  TANK_PIXEL,
   TANK_SPRITE,
   clamp01,
   createHeightField,
   createTanks,
   fadeAlpha,
   mulberry32,
+  placeTanks,
   planStaticLayer,
   planTankOps,
   rotateSprite,
   sampleBackdropPalette,
   smoothstep,
   stepTank,
+  stepTanks,
   withAlpha,
   type StaticOp,
   type Tank,
@@ -29,12 +41,34 @@ import {
 const W = 1200;
 const H = 800;
 const CELL = 30;
+/** 仿真步长（30fps）。 */
+const DT = 1 / 30;
 
 /** 从 rgba() 字符串里抠 alpha（断言「不喧宾夺主」上限用）。 */
 function alphaOf(color: string): number {
   const m = /rgba\([^)]*,([0-9.]+)\)/.exec(color);
   expect(m, `not an rgba color: ${color}`).not.toBeNull();
   return Number.parseFloat(m?.[1] ?? '0');
+}
+
+/** rgba() 的 rgb 前缀（色族断言用，不含 alpha）。 */
+function rgbOf(color: string): string {
+  const m = /^(rgba?\([^)]+)\)/.exec(color);
+  expect(m, `not an rgba color: ${color}`).not.toBeNull();
+  return m?.[1] ?? '';
+}
+
+/** 手工构造一辆确定性坦克（碰撞/防死锁场景用；字段对引擎全部可选兼容）。 */
+function makeTank(x: number, y: number, dir: Tank['dir'], speed: number, seed: number): Tank {
+  return {
+    x,
+    y,
+    dir,
+    speed,
+    age: 0,
+    nextTurnAt: Number.POSITIVE_INFINITY, // 场景车不随机转向
+    rand: mulberry32(seed),
+  };
 }
 
 describe('mulberry32', () => {
@@ -54,7 +88,12 @@ describe('mulberry32', () => {
   });
 });
 
-describe('smoothstep / fadeAlpha (D20g)', () => {
+describe('smoothstep / fadeAlpha (D20g → D22g rescale)', () => {
+  it('keeps the D22g rescale constants (0.12 / 0.55)', () => {
+    expect(FADE_NEAR).toBe(0.12);
+    expect(FADE_FAR).toBe(0.55);
+  });
+
   it('smoothstep clamps and transitions 0→1', () => {
     expect(smoothstep(0.2, 0.8, 0.1)).toBe(0);
     expect(smoothstep(0.2, 0.8, 0.9)).toBe(1);
@@ -76,6 +115,15 @@ describe('smoothstep / fadeAlpha (D20g)', () => {
       prev = a;
     }
   });
+
+  it('keeps a strong corner zone and a fully silent far corner (D22g area rescale)', () => {
+    // D22g：FADE 0.12/0.55 把「有东西」压回右上角——角部 15% 带内近全实，
+    // 25% 带内仍显著，左下深角（5%,95%）精确为 0（R3 诊断「背景不在右上角」
+    // 的用户反馈回归锁；87.1% 可见 → ~48% 的面积定标由 simD 复跑取证）。
+    expect(fadeAlpha(W * 0.85, H * 0.15, W, H)).toBeGreaterThanOrEqual(0.9);
+    expect(fadeAlpha(W * 0.75, H * 0.25, W, H)).toBeGreaterThanOrEqual(0.7);
+    expect(fadeAlpha(W * 0.05, H * 0.95, W, H)).toBe(0);
+  });
 });
 
 describe('withAlpha', () => {
@@ -94,26 +142,27 @@ describe('withAlpha', () => {
   });
 });
 
-describe('sampleBackdropPalette (D20h/D21e/D21g)', () => {
-  it('falls back to solid DSW-blue/slate literal bases when host vars are absent', () => {
+describe('sampleBackdropPalette (D20h/D21e → D22g-7 own tokens)', () => {
+  it('falls back to slate-600/sky-500 literal bases when host vars are absent', () => {
     const p = sampleBackdropPalette(() => null);
-    // D21g：调色板只带实色基底（alpha 在使用位单次烘焙）。
+    // D22g-7：调色板采样源换自有 token（eteams.css D22a 官网字面值），
+    // 兜底 = 同名字面（slate-600 #475569 / sky-500 #0ea5e9）。
     expect(p.label).toBe('#475569');
-    expect(p.brand).toBe('#4176e6');
+    expect(p.brand).toBe('#0ea5e9');
     expect(p.compositeAlpha).toBe(COMPOSITE_ALPHA_CAP);
-    expect(COMPOSITE_ALPHA_CAP).toBe(1); // D21g：全局减半层废除
+    expect(COMPOSITE_ALPHA_CAP).toBe(1); // D21g：全局减半层废除（保持）
   });
 
-  it('passes host-provided solid bases through (D21e var names)', () => {
+  it('reads the D22g own-token var names', () => {
     const p = sampleBackdropPalette((name) =>
-      name === '--dsw-alias-label-secondary'
+      name === '--eteams-backdrop-label'
         ? '#94a3b8'
-        : name === '--dsw-alias-button-info-fill'
-          ? '#679efe'
+        : name === '--eteams-backdrop-accent'
+          ? '#38bdf8'
           : 'rgba(0,0,0,0)',
     );
     expect(p.label).toBe('#94a3b8');
-    expect(p.brand).toBe('#679efe');
+    expect(p.brand).toBe('#38bdf8');
   });
 });
 
@@ -138,13 +187,20 @@ describe('createHeightField', () => {
   });
 });
 
-describe('planStaticLayer', () => {
+describe('planStaticLayer (D22g-5 merge + rescale)', () => {
   const palette = sampleBackdropPalette(() => null);
   const heights = createHeightField(Math.ceil(W / CELL) + 1, Math.ceil(H / CELL) + 1, 11);
   const ops = planStaticLayer(W, H, CELL, palette, heights);
+  const gridOps = ops.filter((op) => op.w === 1 || op.h === 1);
 
-  it('produces ops strictly inside the canvas', () => {
+  /** 指令与盒的交面积。 */
+  const clip = (op: StaticOp, bx: number, by: number, bw: number, bh: number): number =>
+    Math.max(0, Math.min(op.x + op.w, bx + bw) - Math.max(op.x, bx)) *
+    Math.max(0, Math.min(op.y + op.h, by + bh) - Math.max(op.y, by));
+
+  it('produces ops strictly inside the canvas (and merging collapses the count)', () => {
     expect(ops.length).toBeGreaterThan(100);
+    expect(ops.length).toBeLessThan(1000); // 合并生效（未合并 ~6500 @c30）
     for (const op of ops) {
       expect(op.x).toBeGreaterThanOrEqual(0);
       expect(op.y).toBeGreaterThanOrEqual(0);
@@ -153,35 +209,101 @@ describe('planStaticLayer', () => {
     }
   });
 
-  it('never exceeds the D21g subtlety caps (grid 0.07 / terrain 0.11 / peak 0.13)', () => {
+  it('never exceeds the D22g subtlety caps (grid 0.07 / terrain 0.04-0.08-0.13)', () => {
     for (const op of ops) {
       expect(alphaOf(op.color)).toBeLessThanOrEqual(0.13 + 1e-9);
     }
   });
 
-  it('keeps the grid VISIBLE in the top-right zone (D21g R2 regression lock)', () => {
-    // R2 缺陷回归锁：一期三重叠乘后网格有效 alpha ~0.001（用户「看不到
-    // 格子」）。定标后右上核心区（x>0.8W、y<0.2H，fade≥0.93）网格段
-    // alpha 必须 ≥ 0.06——可见下限之上（1px 段指令：w===1 或 h===1）。
-    const gridOps = ops.filter((op) => (op.w === 1 || op.h === 1) && op.x > W * 0.8 && op.y < H * 0.2);
-    expect(gridOps.length).toBeGreaterThan(20);
+  it('keeps the grid VISIBLE in the top-right core (D22g ink regression lock)', () => {
+    // R2 缺陷回归锁（D22g 重写为「墨量」口径）：合并后单条指令是长段均色，
+    // 逐段 α≥0.06 的旧口径失效；改锁两件事——
+    // ① 右上核心区（x>0.8W、y<0.2H）网格墨量 ≥ 0.6 × 理想（按同一采样栅格
+    //    逐格 fade·GRID_LINE_ALPHA 数值积分）：合并只准均色、不准丢墨；
+    // ② 与核心区相交的网格指令 α ≥ 0.04（可见下限之上）。
+    let inkOps = 0;
+    let coreMin = Number.POSITIVE_INFINITY;
     for (const op of gridOps) {
-      expect(alphaOf(op.color)).toBeGreaterThanOrEqual(0.06 - 1e-9);
+      const a = alphaOf(op.color);
+      const c = clip(op, W * 0.8, 0, W * 0.2, H * 0.2);
+      if (c > 0) {
+        inkOps += a * c;
+        coreMin = Math.min(coreMin, a);
+      }
     }
+    let inkIdeal = 0;
+    for (let cx = 0; cx <= Math.floor(W / CELL); cx++) {
+      const x = Math.min(cx * CELL, W - 1);
+      if (x < W * 0.8) continue;
+      for (let y = 0; y < H * 0.2; y++) inkIdeal += fadeAlpha(x, y, W, H) * GRID_LINE_ALPHA;
+    }
+    for (let cy = 0; cy <= Math.floor(H / CELL); cy++) {
+      const y = Math.min(cy * CELL, H - 1);
+      if (y > H * 0.2) continue;
+      for (let x = W * 0.8; x < W; x++) inkIdeal += fadeAlpha(x, y, W, H) * GRID_LINE_ALPHA;
+    }
+    expect(inkIdeal).toBeGreaterThan(0);
+    expect(inkOps / inkIdeal).toBeGreaterThanOrEqual(0.6);
+    expect(coreMin).toBeGreaterThanOrEqual(0.04);
   });
 
-  it('skips fully faded cells (bottom-left stays silent)', () => {
-    // 左下角 60%×60% 区块内不允许出现 fade≈0 的实体指令——所有落在这块的
-    // 指令 alpha 必须接近 0（<0.005）。
-    for (const op of ops) {
-      if (op.x < W * 0.2 && op.y > H * 0.8) {
-        expect(alphaOf(op.color)).toBeLessThan(0.005);
+  it('keeps total grid ink (merge conserves ink on the whole board)', () => {
+    // 均色合并的墨量守恒：全板网格指令墨量 ≈ 理想（同栅格逐格积分）。
+    let inkOps = 0;
+    for (const op of gridOps) inkOps += alphaOf(op.color) * op.w * op.h;
+    let inkIdeal = 0;
+    for (let cx = 0; cx <= Math.floor(W / CELL); cx++) {
+      const x = Math.min(cx * CELL, W - 1);
+      for (let cy = 0; cy <= Math.floor(H / CELL); cy++) {
+        const y0 = cy * CELL;
+        const hh = Math.min(CELL, H - y0);
+        inkIdeal += fadeAlpha(x, Math.min(y0 + hh / 2, H - 1), W, H) * GRID_LINE_ALPHA * hh;
       }
+    }
+    for (let cy = 0; cy <= Math.floor(H / CELL); cy++) {
+      const y = Math.min(cy * CELL, H - 1);
+      for (let cx = 0; cx <= Math.floor(W / CELL); cx++) {
+        const x0 = cx * CELL;
+        const ww = Math.min(CELL, W - x0);
+        inkIdeal += fadeAlpha(Math.min(x0 + ww / 2, W - 1), y, W, H) * GRID_LINE_ALPHA * ww;
+      }
+    }
+    expect(inkOps / inkIdeal).toBeGreaterThanOrEqual(0.9);
+    expect(inkOps / inkIdeal).toBeLessThanOrEqual(1.15);
+  });
+
+  it('keeps the bottom-left quadrant silent (D22g merge does not borrow ink there)', () => {
+    // 左下 1/4 盒（x<0.25W、y>0.75H）总墨量 < 全板 1%——合并后的长段均色
+    // 不得把右上亮度「借」到深区（R3「背景不在右上角」的另一半）。
+    let inkBox = 0;
+    let inkAll = 0;
+    for (const op of ops) {
+      const a = alphaOf(op.color);
+      inkAll += a * op.w * op.h;
+      inkBox += a * clip(op, 0, H * 0.75, W * 0.25, H * 0.25);
+    }
+    expect(inkAll).toBeGreaterThan(0);
+    expect(inkBox / inkAll).toBeLessThan(0.01);
+  });
+});
+
+describe('planStaticLayer merge budget (D22g-5 lock: ≤400 @1920x1080/c24)', () => {
+  it('stays within the instruction budget and drops sub-0.01 ops', () => {
+    const BW = 1920;
+    const BH = 1080;
+    const BC = 24;
+    const palette = sampleBackdropPalette(() => null);
+    const heights = createHeightField(Math.ceil(BW / BC) + 1, Math.ceil(BH / BC) + 1, 0x0ea5e9);
+    const ops = planStaticLayer(BW, BH, BC, palette, heights);
+    // R3 诊断：未合并 10166 条 → 合并后 ≤400（24× 削减）。
+    expect(ops.length).toBeLessThanOrEqual(400);
+    for (const op of ops) {
+      expect(alphaOf(op.color)).toBeGreaterThanOrEqual(0.01 - 1e-9); // 最终 α<0.01 跳过
     }
   });
 });
 
-describe('rotateSprite / planTankOps (D20f)', () => {
+describe('rotateSprite / planTankOps (D20f → D22g-3 colors)', () => {
   const pixelCount = (sprite: readonly (readonly number[])[]): number =>
     sprite.flat().filter((p) => p !== 0).length;
 
@@ -242,7 +364,7 @@ describe('rotateSprite / planTankOps (D20f)', () => {
       expect(barrel, `dir=${dir} barrel protrusion`).toHaveLength(2);
       expect(barrel[1]! - barrel[0]!).toBe(1);
       for (const k of barrel) expect(at(2, k), `dir=${dir} barrel tone`).toBe(2);
-      // 全 sprite 恰 1 个 DSW 蓝炮塔像素，位于中带。
+      // 全 sprite 恰 1 个点缀色炮塔像素，位于中带。
       expect(s.flat().filter((p) => p === 3)).toHaveLength(1);
       expect(runOf(2).some((k) => at(2, k) === 3)).toBe(true);
     }
@@ -253,21 +375,22 @@ describe('rotateSprite / planTankOps (D20f)', () => {
     x: 900,
     y: 120,
     dir: 0,
-    speed: 12,
+    speed: 16,
     age: 0,
     nextTurnAt: 5,
     rand: mulberry32(3),
   };
 
-  it('emits one rect per sprite pixel with baked palette colors and pixel size 2-3', () => {
+  it('emits one rect per sprite pixel with baked palette colors at TANK_PIXEL', () => {
     const ops: StaticOp[] = planTankOps(tank, CELL, palette);
     const expected = TANK_SPRITE.flat().filter((p) => p !== 0).length;
     expect(ops.length).toBe(expected);
     for (const op of ops) {
-      expect(op.w).toBeGreaterThanOrEqual(2);
-      expect(op.w).toBeLessThanOrEqual(3);
-      // D21g 上限：DSW 蓝点缀 0.62（车身 0.45 / 深档 0.55）。
-      expect(alphaOf(op.color)).toBeLessThanOrEqual(0.62 + 1e-9);
+      // D22g-4：TANK_PIXEL 与 CELL 解耦（恒 3px，缩 cell 不缩坦克）。
+      expect(op.w).toBe(TANK_PIXEL);
+      expect(op.h).toBe(TANK_PIXEL);
+      // D22g-3 上限：点缀 0.75（车身 0.55 / 深档 0.60）。
+      expect(alphaOf(op.color)).toBeLessThanOrEqual(TANK_ACCENT_ALPHA + 1e-9);
     }
     // 居中：车体包围盒罩住锚点。
     const minX = Math.min(...ops.map((o) => o.x));
@@ -276,36 +399,74 @@ describe('rotateSprite / planTankOps (D20f)', () => {
     expect(tank.x).toBeLessThan(maxX);
   });
 
-  it('renders tanks as recognizable pixel sprites (D21g R2 regression lock)', () => {
-    // R2 缺陷回归锁：一期车身有效 alpha ~0.16 且 sprite 过疏——用户看到
-    // 「三个点」。定标后：≥25 实体像素（7×5 经典轮廓）、车身/深档/点缀
-    // 三档 alpha 均在可辨识带（0.45 / 0.55 / 0.62），像素尺寸 3px（cell
-    // =30 → 全车 21×15px）。
+  it('renders tanks as recognizable pixel sprites (D22g rescale lock)', () => {
+    // R2 缺陷回归锁（D22g 重定标）：≥25 实体像素（7×5 经典轮廓）、
+    // 车身/深档/点缀三档 alpha 落在新带（0.55 / 0.60 / 0.75）、像素 3px。
     expect(TANK_SPRITE.flat().filter((p) => p !== 0).length).toBeGreaterThanOrEqual(25);
     expect(TANK_SPRITE.flat().filter((p) => p === 3).length).toBeGreaterThanOrEqual(1);
     const ops: StaticOp[] = planTankOps(tank, CELL, palette);
-    const body = ops.find((o) => alphaOf(o.color) > 0.4 && alphaOf(o.color) < 0.5);
-    const dark = ops.find((o) => alphaOf(o.color) > 0.5 && alphaOf(o.color) < 0.58);
-    const accent = ops.find((o) => alphaOf(o.color) >= 0.62 - 1e-9);
+    const body = ops.find((o) => Math.abs(alphaOf(o.color) - TANK_BODY_ALPHA) < 0.02);
+    const dark = ops.find((o) => Math.abs(alphaOf(o.color) - TANK_DARK_ALPHA) < 0.02);
+    const accent = ops.find((o) => alphaOf(o.color) >= TANK_ACCENT_ALPHA - 1e-9);
     expect(body).toBeDefined();
     expect(dark).toBeDefined();
     expect(accent).toBeDefined();
-    expect(ops[0]?.w).toBe(3); // cell/10 = 3px/像素
+    expect(ops[0]?.w).toBe(3); // TANK_PIXEL
+  });
+
+  it('paints the three-tank accent family round-robin (D22g-3 color family)', () => {
+    // 锁 8：TANK_ACCENTS 恰三色互异；三辆车的车身层覆盖三色 rgb。
+    expect(TANK_ACCENTS).toHaveLength(3);
+    expect(new Set(TANK_ACCENTS).size).toBe(3);
+    const tanks = createTanks(3, W, H, CELL, 0x0ea5e9);
+    expect(tanks.length).toBe(3);
+    const bodyRgbs = new Set<string>();
+    for (const t of tanks) {
+      for (const op of planTankOps(t, CELL, palette)) {
+        if (Math.abs(alphaOf(op.color) - TANK_BODY_ALPHA) < 0.02) bodyRgbs.add(rgbOf(op.color));
+      }
+    }
+    const accentRgbs = TANK_ACCENTS.map((c) => rgbOf(withAlpha(c, TANK_BODY_ALPHA)));
+    for (const rgb of accentRgbs) expect(bodyRgbs.has(rgb)).toBe(true);
   });
 });
 
-describe('tank lifecycle (D20f lane-locked, zone-constrained)', () => {
+describe('tank lifecycle (D20f lane-locked, zone-constrained → D22g speeds)', () => {
   const tanks = createTanks(3, W, H, CELL, 12345);
 
-  it('spawns the requested count on grid intersections inside the zone', () => {
+  it('spawns the requested count on grid intersections inside the zone at D22g speeds', () => {
     expect(tanks.length).toBe(3);
     for (const t of tanks) {
       expect(t.x % CELL).toBe(0);
       expect(t.y % CELL).toBe(0);
       expect(fadeAlpha(t.x, t.y, W, H)).toBeGreaterThanOrEqual(0.3);
-      expect(t.speed).toBeGreaterThanOrEqual(10);
-      expect(t.speed).toBeLessThanOrEqual(16);
+      expect(t.speed).toBeGreaterThanOrEqual(14); // D22g：10-16 → 14-24
+      expect(t.speed).toBeLessThanOrEqual(24);
     }
+  });
+
+  it('spaces same-lane spawns ≥2 cells apart (D22g-2 spawn spacing)', () => {
+    for (const seed of [7, 777, 0x0ea5e9, 20250101]) {
+      const ts = createTanks(3, W, H, CELL, seed);
+      expect(ts.length).toBe(3);
+      for (let i = 0; i < ts.length; i++) {
+        for (let j = i + 1; j < ts.length; j++) {
+          const a = ts[i]!;
+          const b = ts[j]!;
+          if (a.y === b.y) expect(Math.abs(a.x - b.x)).toBeGreaterThanOrEqual(CELL * 2);
+          if (a.x === b.x) expect(Math.abs(a.y - b.y)).toBeGreaterThanOrEqual(CELL * 2);
+        }
+      }
+    }
+  });
+
+  it('returns no tanks for degenerate sizes (min(w,h) < 4·cell) — D22g-5', () => {
+    // 锁 6：w<4cell 或 h<4cell → []（车道塌缩/叠车尺寸直接不生成）。
+    expect(createTanks(3, 100, H, CELL, 1)).toEqual([]); // w < 120
+    expect(createTanks(3, W, 100, CELL, 1)).toEqual([]); // h < 120
+    expect(createTanks(3, 119, 119, CELL, 1)).toEqual([]);
+    expect(createTanks(3, 120, 120, CELL, 1).length).toBeGreaterThan(0); // 恰好 4cell
+    expect(createTanks(3, W, H, CELL, 1).length).toBe(3);
   });
 
   it('replays identical trajectories for identical seeds', () => {
@@ -356,6 +517,194 @@ describe('tank lifecycle (D20f lane-locked, zone-constrained)', () => {
     t.nextTurnAt = Number.POSITIVE_INFINITY;
     stepTank(t, 5, W, H, CELL); // 5s 跳帧 → clamp 到 0.1s
     expect(t.x - startX).toBeCloseTo(t.speed * 0.1, 6);
+  });
+});
+
+describe('anti-deadlock (D22g-1 lock 1: zero pin on the R1-pinned family)', () => {
+  // R1 诊断 15/15 尺寸钉死的病态家族（D22g 后 <4cell 档由 placeTanks 保留
+  // 覆盖——createTanks 已按退化尺寸返回 []，防死锁断言不得因此空转）。
+  const FAMILY: readonly (readonly [number, number])[] = [
+    [800, 20],
+    [360, 40],
+    [240, 60],
+    [1200, 800],
+  ];
+  const WINDOW_STEPS = 30 * 30; // 30s 滑窗（30fps）
+  const SAMPLE_EVERY = 5;
+
+  it('every tank sweeps >2px of position envelope within any 30s sliding window over 1000s', () => {
+    // 口径说明： convoy 巡逻环会在 ~30s 周期后回到原 x（端点位移≈0 但车健康），
+    // 故用「窗内位置包络（max−min）>2px」判钉死——真冻结与亚像素抖动包络≈0，
+    // 任何健康的巡逻/让行/倒车包络都远超 2px。
+    for (const [w, h] of FAMILY) {
+      const tanks = placeTanks(3, w, h, CELL, 0x0ea5e9);
+      expect(tanks.length, `${w}x${h} must place tanks`).toBe(3);
+      const xs: Array<number[]> = tanks.map(() => []);
+      const ys: Array<number[]> = tanks.map(() => []);
+      const keep = (arr: number[], v: number): number => {
+        arr.push(v);
+        if (arr.length > WINDOW_STEPS / SAMPLE_EVERY) arr.shift();
+        return arr.length === WINDOW_STEPS / SAMPLE_EVERY
+          ? Math.max(...arr) - Math.min(...arr)
+          : Number.POSITIVE_INFINITY;
+      };
+      for (let s = 1; s <= 1000 / DT; s++) {
+        stepTanks(tanks, DT, w, h, CELL);
+        if (s % SAMPLE_EVERY !== 0) continue;
+        for (let i = 0; i < tanks.length; i++) {
+          const spread = Math.max(keep(xs[i]!, tanks[i]!.x), keep(ys[i]!, tanks[i]!.y));
+          expect(
+            spread,
+            `${w}x${h} tank#${i} pinned: envelope ${spread.toFixed(2)}px in 30s at t=${(s * DT).toFixed(0)}s`,
+          ).toBeGreaterThan(2);
+        }
+      }
+    }
+  }, 20000);
+});
+
+describe('collisions: same-lane following (D22g-2 lock 2)', () => {
+  it('fast rear never passes the slow front and keeps ≥ tank-length gap over 10^4 steps', () => {
+    const w = 1200;
+    const h = 800;
+    const leader = makeTank(600, 300, 0, 14, 11);
+    const rear = makeTank(480, 300, 0, 24, 22);
+    const tanks = [leader, rear];
+    let sawClamp = false;
+    for (let s = 0; s < 10000; s++) {
+      stepTanks(tanks, DT, w, h, CELL);
+      // 同车道同向（y 相同且同向行进）：后车不得越过前车、中心距 ≥ 车长。
+      if (leader.y === rear.y && leader.dir === rear.dir) {
+        const forward = rear.dir === 0 || rear.dir === 1 ? 1 : -1;
+        const frontGap = (leader.x - rear.x) * forward; // 后车在前为负
+        if (frontGap >= 0 && frontGap <= 1.2 * CELL) sawClamp = true;
+        if (frontGap >= 0) {
+          expect(frontGap, `step ${s}: gap ${frontGap.toFixed(1)}`).toBeGreaterThanOrEqual(15);
+        }
+      }
+      // 永不穿车（任意相对位形的中心距下限 = 交点让行停位 14.5px）。
+      expect(Math.hypot(rear.x - leader.x, rear.y - leader.y)).toBeGreaterThanOrEqual(14);
+    }
+    expect(sawClamp).toBe(true); // 非空转：确实发生过跟车钳停
+  });
+});
+
+describe('collisions: head-on determinism (D22g-2 lock 3)', () => {
+  function scenario(): Tank[] {
+    const a = makeTank(240, 90, 0, 24, 31);
+    const b = makeTank(280, 90, 2, 14, 32);
+    return [a, b];
+  }
+
+  it('replays identical trajectories for the same seed/layout', () => {
+    const a = scenario();
+    const b = scenario();
+    for (let s = 0; s < 10000; s++) {
+      stepTanks(a, DT, 1200, 800, CELL);
+      stepTanks(b, DT, 1200, 800, CELL);
+      for (let i = 0; i < a.length; i++) {
+        expect(b[i]!.x).toBeCloseTo(a[i]!.x, 9);
+        expect(b[i]!.y).toBeCloseTo(a[i]!.y, 9);
+        expect(b[i]!.dir).toBe(a[i]!.dir);
+      }
+    }
+  });
+
+  it('separates monotonically after the head-on pause', () => {
+    const tanks = scenario();
+    let paused = false;
+    let pauseEnd = -1;
+    let dist0 = Number.POSITIVE_INFINITY;
+    for (let s = 0; s < 10000; s++) {
+      stepTanks(tanks, DT, 1200, 800, CELL);
+      if (!paused && (tanks[0]!.yieldUntil ?? 0) > tanks[0]!.age) paused = true;
+      if (paused && pauseEnd < 0 && (tanks[0]!.yieldUntil ?? 0) <= tanks[0]!.age) {
+        pauseEnd = s;
+        dist0 = Math.abs(tanks[0]!.x - tanks[1]!.x);
+      }
+      if (pauseEnd < 0) continue;
+      const d = Math.abs(tanks[0]!.x - tanks[1]!.x);
+      // 倒车执行帧：对方仍前进一步（≤1.5px），此后间距单调增大直至超迟滞界。
+      expect(d, `distance must not shrink during separation (step ${s})`).toBeGreaterThanOrEqual(
+        dist0 - 1.5,
+      );
+      dist0 = Math.max(dist0, d);
+      if (d > 54) {
+        expect(s - pauseEnd, 'separation within 30s of pause end').toBeLessThanOrEqual(30 * 30);
+        return;
+      }
+    }
+    throw new Error('tanks never separated beyond resumeGap after head-on');
+  });
+});
+
+describe('collisions: intersection mutual exclusion (D22g-2 lock 4)', () => {
+  /** 车辆中心若落在某网格交点的 halfTank 盒内，返回该交点（至多一个）。 */
+  function nearIntersection(t: Tank, cell: number): string | null {
+    const ix = Math.round(t.x / cell) * cell;
+    const iy = Math.round(t.y / cell) * cell;
+    return Math.abs(t.x - ix) <= HALF_TANK && Math.abs(t.y - iy) <= HALF_TANK
+      ? `${ix},${iy}`
+      : null;
+  }
+
+  it('no two tanks occupy the same intersection neighborhood in random scenes (10^4 steps)', () => {
+    for (const seed of [1, 2, 3]) {
+      const w = 800;
+      const h = 600;
+      const tanks = createTanks(3, w, h, CELL, seed);
+      expect(tanks.length).toBe(3);
+      for (let s = 0; s < 10000; s++) {
+        stepTanks(tanks, DT, w, h, CELL);
+        for (let i = 0; i < tanks.length; i++) {
+          const ni = nearIntersection(tanks[i]!, CELL);
+          if (ni === null) continue;
+          for (let j = i + 1; j < tanks.length; j++) {
+            const nj = nearIntersection(tanks[j]!, CELL);
+            expect(
+              nj !== ni,
+              `seed ${seed} step ${s}: tanks #${i} and #${j} co-occupy ${ni}`,
+            ).toBe(true);
+          }
+        }
+      }
+    }
+  });
+});
+
+describe('collisions: hold timeout forces reroute (D22g-2 lock 5)', () => {
+  it('a permanently jammed follower reroutes/reverses within 6.5s', () => {
+    const w = 800;
+    const h = 30; // 单车道画布：垂直向无处可去，只能倒车/等待
+    const leader = makeTank(600, 0, 0, 0, 41); // 速度 0 = 永久路障
+    const follower = makeTank(564, 0, 0, 20, 42);
+    const tanks = [leader, follower];
+    let reroutedAt = -1;
+    for (let s = 0; s <= Math.ceil(6.5 / DT); s++) {
+      stepTanks(tanks, DT, w, h, CELL);
+      if (reroutedAt < 0 && (follower.dir !== 0 || follower.x < 564 - 1e-6)) {
+        reroutedAt = s * DT;
+      }
+    }
+    expect(reroutedAt).toBeGreaterThan(0); // 确实等待过（不是立即改道）
+    expect(reroutedAt, `reroute at ${reroutedAt?.toFixed(2)}s`).toBeLessThanOrEqual(6.5);
+  });
+
+  it('fires the reroute right after HOLD_TIMEOUT when waitHold is pre-seeded', () => {
+    const w = 800;
+    const h = 30;
+    const leader = makeTank(600, 0, 0, 0, 43);
+    const follower = makeTank(564, 0, 0, 20, 44);
+    follower.waitHold = HOLD_TIMEOUT - 0.1; // 已等待 5.9s
+    const tanks = [leader, follower];
+    for (let s = 0; s <= Math.ceil(1 / DT); s++) {
+      stepTanks(tanks, DT, w, h, CELL);
+      if (follower.dir !== 0) {
+        expect(follower.waitHold ?? 0).toBeLessThan(HOLD_TIMEOUT); // 改道即清零
+        return;
+      }
+    }
+    throw new Error('pre-seeded waitHold did not trigger the reroute within 1s');
   });
 });
 
