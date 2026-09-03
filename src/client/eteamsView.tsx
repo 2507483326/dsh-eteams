@@ -111,6 +111,7 @@ import { MdEditor } from './mdEditor';
 import {
   addTeamMember,
   createTeamViaPanel,
+  deleteTeam,
   fetchAgentActivity,
   removeTeamMember,
   setLeaderModel,
@@ -348,7 +349,8 @@ const LIST_TITLE_CLASS =
   'm-0 min-w-0 flex-1 text-base font-semibold tracking-tight text-foreground';
 const LIST_COUNT_CLASS = 'text-xs text-muted-foreground';
 /** 原 styles.memberGrid（成员卡片栅格，最小 230px 自适应列）。 */
-const MEMBER_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(230px,1fr))] gap-3';
+/** 成员列表（用户迭代 2026-09 七）：与领队卡同款竖排——一行一个成员占满整行。 */
+const MEMBER_LIST_CLASS = 'flex flex-col gap-2.5';
 /** 原 styles.memberCard（成员卡片：--border 边框 / 12px 圆角 / 官网 shadow-sm
  * 阴影档 / p-4 卡内呼吸感，D22f）。 */
 const MEMBER_CARD_CLASS = `flex flex-col gap-2 rounded-xl border border-solid bg-background p-4 shadow-[0_1px_2px_rgba(15,23,42,0.05)] ${BORDER_L1_CLASS}`;
@@ -454,20 +456,30 @@ const CONTENT_CLASS = 'min-w-0 flex-1 overflow-x-hidden overflow-y-auto pr-0.5';
 /* docs/23 S23-3：原 styles.formError（FORM_ERROR_CLASS）迁移 FormErrorNote
    （shadcn Alert destructive 紧凑档，见上方组件），常量删除。 */
 /** 原 styles.cardGrid（团队/角色卡片栅格，最小 210px 自适应列）——团队列表
- * 已改长条卡（用户迭代 2026-09，见 TEAM_ROW_CLASS），仍服务角色卡片栅格。 */
+ * 已改小卡片栅格（用户迭代 2026-09 七，见 TEAM_CARD_CLASS），仍服务角色卡片栅格。 */
 const CARD_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(210px,1fr))] gap-3';
-/** 长条形团队卡（用户迭代 2026-09）：整行一张（flex 纵列容器里 100% 宽），
- * 左内容 + 右成员略缩图；底色/边框/悬停仍由 .eteams-team-card 样式表接管，
- * p-4 = D22f 卡内呼吸感。 */
-const TEAM_ROW_CLASS = 'flex min-w-0 cursor-pointer items-center rounded-xl p-4';
+/** 团队小卡片（用户迭代 2026-09 七）：列表改两列小卡片——名称 + 人数一行，
+ * 成员略缩图 + 「详情/删除」按钮一行；整卡可点进详情，data-active 高亮沿用。
+ * 底色/边框/悬停仍由 .eteams-team-card 样式表接管，p-3.5 = 卡内呼吸感。 */
+const TEAM_CARD_CLASS = 'flex min-w-0 cursor-pointer flex-col gap-3 rounded-xl p-3.5';
+/** 小卡片栅格（用户迭代 2026-09 七）：两列等宽，行距与卡片内距同节奏。 */
+const TEAM_GRID_CLASS = 'grid grid-cols-2 gap-2.5';
 /** 原 styles.phasePill（团队卡片阶段徽标：D22e 中性圆 pill + 彩色 6px dot
  * ——dot 由使用位按 PHASE_TONES 插入，状态彩底全撤）。 */
 const PHASE_PILL_CLASS =
   'inline-flex w-fit shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-[color:var(--eteams-pill-bg)] px-2.5 py-0.5 text-xs font-medium text-[color:var(--eteams-pill-ink)]';
 /** 原 styles.roleCard（同上：底色/边框/悬停由 .eteams-role-row 样式表接管）；
- * p-4 = D22f 卡内呼吸感。 */
+ * p-4 = D22f 卡内呼吸感。用户迭代 2026-09-03：改一行式横排——头像在前、
+ * 名称（与所属团队）随后、删除钮常驻行尾（不再 hover 显形）。 */
 const ROLE_CARD_CLASS =
-  'relative flex min-w-0 cursor-pointer flex-col items-start gap-2.5 rounded-xl p-4 text-left text-foreground';
+  'flex min-w-0 cursor-pointer items-center gap-2.5 rounded-xl p-4 text-left text-foreground';
+/** 新增角色方式选择卡（choose 态，用户迭代 2026-09-03）：整行可点（图标 +
+ * 标题 + 描述 + 右箭头）；底色/边框/悬停同角色卡片走 .eteams-role-row。 */
+const ADD_MODE_CARD_CLASS =
+  'flex w-full cursor-pointer items-center gap-3 rounded-xl p-4 text-left text-foreground';
+/** 方式选择卡图标底（品牌淡底圆牌，STEP_NUM_CLASS 同口径放大到 32px）。 */
+const ADD_MODE_ICON_CLASS =
+  'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-business-tint text-primary';
 /** 原 styles.pagePill（分页计数 pill：D22e 中性 pill 口径 12px/20）。 */
 const PAGE_PILL_CLASS =
   'inline-flex w-fit items-center whitespace-nowrap rounded-full bg-[color:var(--eteams-pill-bg)] px-2.5 py-0.5 text-xs text-[color:var(--eteams-pill-ink)]';
@@ -869,7 +881,7 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
       {/* 背景板（docs/22 S22-4）：absolute inset-0 打底，纯装饰零交互；壳
         relative 盖上（两个定位元素按 DOM 序 painting），内容永远可读。 */}
       <EteamsBackdrop />
-      {/* 卡片化样式（用户反馈）：角色/团队卡片与删除按钮的 hover 态一次注入，
+      {/* 卡片化样式（用户反馈）：角色/团队卡片与删除按钮的悬停态一次注入，
         面板内与整页团队页共用同一渲染根，注入一次即可。 */}
       <style>{ROLE_LIST_CSS}</style>
       <div className={SHELL_CLASS}>
@@ -1053,9 +1065,9 @@ function BoardTab({
         />
         <div className={MUTED_CLASS}>
           {team.progress.completed}/{team.progress.total} 完成 · {team.progress.active} 执行中 ·{' '}
-          {/* 成员计数（用户迭代 2026-09 修正）：只数成员，领队不占名额——
-          与看板卡、添加成员弹窗同一口径。 */}
-          {team.members.length} 成员 ·{' '}
+          {/* 人数（用户迭代 2026-09 六：领队也算成员）——含领队，与看板卡、
+          添加成员弹窗同一口径；领队被移出时只剩成员。 */}
+          {team.members.length + (team.leaderRemoved ? 0 : 1)} 人 ·{' '}
           {/* 阶段徽标（S12）：原为 muted 行内文本，按「状态徽标用 shadcn」
           施工面升级为 outline Badge + TONE_CLASS 查表；tone 对齐 STATUS_GROUPS
           既有语义（PHASE_TONES）。D22d：12px 小字档（11px 档消灭）。 */}
@@ -1134,7 +1146,7 @@ function TeamTab({
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // 列表/详情两级视图（用户迭代 2026-09）：null=列表（长条卡片），非 null=
+  // 列表/详情两级视图（用户迭代 2026-09）：null=列表（小卡片栅格），非 null=
   // 详情（该团队 id）。弹窗建团成功后自动跳进新团队详情。
   const [detailId, setDetailId] = useState<string | null>(null);
   // 创建弹窗开合（组件内瞬态）：由 createTick 信号打开，关闭清信号痕迹。
@@ -1151,6 +1163,11 @@ function TeamTab({
   >(null);
   const [modelSavingName, setModelSavingName] = useState<string | null>(null);
   const [leaderModelSaving, setLeaderModelSaving] = useState(false);
+  // 删除团队（用户迭代 2026-09 七）：小卡片「删除」按钮 → 确认弹窗。null =
+  // 收起；deleting 提交中防连点；错误就地显示在弹窗内。
+  const [deleteTarget, setDeleteTarget] = useState<{ teamId: string; name: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   // 模型目录（用户迭代 2026-09：模型选择与对话一致；同日二级菜单）：与对话
   // /model 选择同一共享目录（ctx.modelDirectories，只读），loading/failed/
   // reload 与对话选择器打开时刷新、错误条+重试同款；catalog 为 null = 服务
@@ -1190,6 +1207,26 @@ function TeamTab({
 
   const detailTeam = detailId === null ? null : (pool.find((t) => t.teamId === detailId) ?? null);
 
+  // 删除团队（用户迭代 2026-09 七）：确认弹窗提交——host 端 deleteTeam 只放行
+  // staged/completed/halted（running 拒绝，错误就地显示）；成功后清弹窗、若删
+  // 的是当前选中团队则把看板联动选中清空（'' → find 落空），并刷新快照。
+  const confirmDeleteTeam = (): void => {
+    if (deleteTarget === null || deleting) return;
+    setDeleting(true);
+    setDeleteError(null);
+    void deleteTeam(deleteTarget.teamId)
+      .then(() => {
+        const removedId = deleteTarget.teamId;
+        setDeleteTarget(null);
+        if (team?.teamId === removedId) onSelectTeam('');
+        refreshActivitySoon();
+      })
+      .catch((e) => {
+        setDeleteError(memberOpError(e));
+      })
+      .finally(() => setDeleting(false));
+  };
+
   // 详情态成员操作（用户迭代 2026-09）：失败统一落到 detailError 就地展示。
   const memberOpError = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -1198,7 +1235,8 @@ function TeamTab({
   // 模型目录默认强度（model.reasoning.defaultEffort——对话 /model 弹层的
   // selectionOf 同款）；同一路线重选由菜单自行关闭不上送（对话 choose()
   // 同款）。目录查不到的旧路线原样保留 provider/model 与已存强度。
-  // 'inherit' = 清 override（跟随领队/会话默认）。null = 非法行值（防御）。
+  // 'inherit' = 清 override（会话默认，用户迭代 2026-09 七：成员与领队统一
+  // 文案；宿主侧 inherit 解析到团队默认路线）。null = 非法行值（防御）。
   const routeBody = (
     value: string,
     stored: { provider: string; model: string; reasoningEffort: string | null },
@@ -1250,7 +1288,7 @@ function TeamTab({
       },
     };
     applyRoutePatch(patch);
-    // inherit = 跟随领队（清 override）；其余按会话模型目录（与对话一致）下发。
+    // inherit = 会话默认（清 override）；其余按会话模型目录（与对话一致）下发。
     void setMemberModel(detailTeam.teamId, memberName, body)
       .then(() => refreshActivitySoon())
       .catch((e) => {
@@ -1314,7 +1352,7 @@ function TeamTab({
   };
 
   // 领队模型选择（用户迭代 2026-09：领队也选模型；2026-09 模型选择与对话
-  // 一致）：领队卡右侧下拉——这是「团队默认模型」，成员选「跟随领队」时
+  // 一致）：领队卡右侧下拉——这是「团队默认模型」，成员选「会话默认」时
   // 启动即按它下发；领队自身（面板会话）模型不受影响。行值语义同 changeModel。
   const changeLeaderModel = (value: string): void => {
     if (detailTeam === null) return;
@@ -1436,22 +1474,73 @@ function TeamTab({
         </DialogContent>
       </Dialog>
 
-      {/* 列表态：长条形团队卡（用户迭代 2026-09）——一行一团队，名称 + 阶段
-      徽标 + 进度/计数在左，右侧成员头像略缩图最多 3 个（超出 +N）；点击卡片
-      进入该团队详情。当前团队高亮描边沿用 .eteams-team-card[data-active]。 */}
+      {/* 删除团队确认弹窗（用户迭代 2026-09 七）：小卡片「删除」→ 二次确认。
+      host 只放行 staged/completed/halted；running 拒绝的错误就地显示。 */}
+      <Dialog
+        open={deleteTarget !== null}
+        onOpenChange={(next) => {
+          if (!next) {
+            setDeleteTarget(null);
+            setDeleteError(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-sm">
+          <DialogHeader className="space-y-1 text-left">
+            <DialogTitle>删除团队</DialogTitle>
+            <DialogDescription className={MUTED_CLASS}>
+              确定删除「{deleteTarget?.name ?? ''}」？团队记录将永久移除，不可恢复。
+            </DialogDescription>
+          </DialogHeader>
+          {deleteError !== null && <FormErrorNote>{deleteError}</FormErrorNote>}
+          <div className="flex items-center justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={deleting}
+              onClick={() => {
+                setDeleteTarget(null);
+                setDeleteError(null);
+              }}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              disabled={deleting}
+              onClick={confirmDeleteTeam}
+            >
+              删除
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 列表态：小卡片栅格（用户迭代 2026-09 七）——两列等宽小卡。信息精简：
+      名称 + 人数一行、成员略缩图 + 「详情/删除」按钮一行；整卡可点进详情
+      （当前团队高亮描边沿用 .eteams-team-card[data-active]），按钮区
+      stopPropagation 不触发整卡点击。删除走确认弹窗（host 只放行
+      staged/completed/halted）。 */}
       {detailTeam === null && pool.length > 0 && (
         <Card className={cn(PANEL_CARD_CLASS, 'pb-3')}>
           <div className="mb-2.5 flex items-center gap-2">
             <h3 className={LIST_TITLE_CLASS}>团队</h3>
             <span className={LIST_COUNT_CLASS}>{pool.length} 个</span>
           </div>
-          <div className="flex flex-col gap-3">
+          <div className={TEAM_GRID_CLASS}>
             {pool.map((t) => {
               const active = t.teamId === team?.teamId;
+              // 人数含领队（用户迭代 2026-09 六：领队也算成员，初始化默认在团；
+              // 移出后只剩成员）——与详情页/添加弹窗同口径。
+              const headcount = t.members.length + (t.leaderRemoved ? 0 : 1);
+              const faces = t.leaderRemoved ? t.members : [t.captain, ...t.members];
               return (
                 <div
                   key={t.teamId}
-                  className={cn('eteams-team-card', TEAM_ROW_CLASS)}
+                  className={cn('eteams-team-card group', TEAM_CARD_CLASS)}
                   data-active={active ? 'true' : 'false'}
                   onClick={() => {
                     // 进详情同时选中该团队：看板/任务/汇报的联动对象跟着走
@@ -1460,37 +1549,17 @@ function TeamTab({
                     setDetailId(t.teamId);
                   }}
                 >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="eteams-team-name flex-1 text-sm font-semibold text-foreground">
-                        {t.name}
-                      </span>
-                      {active && <span className={ROLE_CHIP_CLASS}>当前</span>}
-                    </div>
-                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                      <span className={PHASE_PILL_CLASS}>
-                        {/* D22e：状态彩底全撤——阶段语义由彩色 6px dot 承载。 */}
-                        <span className={dotClass(PHASE_TONES[t.phase] ?? 'muted')} />
-                        {PHASE_LABELS[t.phase] ?? t.phase}
-                      </span>
-                      <span className={LIST_COUNT_CLASS}>
-                        {t.progress.completed}/{t.progress.total} 任务 · {t.members.length} 成员
-                      </span>
-                    </div>
-                    <Progress
-                      className="mt-2.5 h-1.5"
-                      value={
-                        t.progress.total === 0 ? 0 : (t.progress.completed / t.progress.total) * 100
-                      }
-                    />
+                  <div className="flex items-center gap-2">
+                    <span className="eteams-team-name min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
+                      {t.name}
+                    </span>
+                    <span className={LIST_COUNT_CLASS}>{headcount} 人</span>
                   </div>
-                  {/* 右侧成员略缩图（用户迭代 2026-09）：领队 + 成员头像最多
-                  3 个，超出计数 +N；负间距叠放 + 底色描边环（官网常见略缩图
-                  签名），title 兜底全名。 */}
-                  <div className="flex shrink-0 items-center -space-x-2 pl-3">
-                    {(t.leaderRemoved ? t.members : [t.captain, ...t.members])
-                      .slice(0, 3)
-                      .map((m) => (
+                  {/* 底行：成员略缩图（领队 + 成员头像最多 3 个，超出 +N；负
+                  间距叠放 + 底色描边环，title 兜底全名）+ 详情/删除按钮。 */}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex shrink-0 items-center -space-x-2">
+                      {faces.slice(0, 3).map((m) => (
                         <span
                           key={m.name}
                           className="inline-flex shrink-0 rounded-full ring-2 ring-[color:var(--background)]"
@@ -1500,21 +1569,53 @@ function TeamTab({
                             name={m.name}
                             seed={m.avatar?.seed}
                             salt={m.avatar?.salt}
-                            size={28}
+                            size={24}
                           />
                         </span>
                       ))}
-                    {(t.leaderRemoved ? 0 : 1) + t.members.length > 3 && (
-                      <span
-                        className={cn(
-                          'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold',
-                          'bg-muted text-muted-foreground ring-2 ring-[color:var(--background)]',
-                        )}
-                        title={`其余 ${(t.leaderRemoved ? 0 : 1) + t.members.length - 3} 人`}
+                      {headcount > 3 && (
+                        <span
+                          className={cn(
+                            'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold',
+                            'bg-muted text-muted-foreground ring-2 ring-[color:var(--background)]',
+                          )}
+                          title={`其余 ${headcount - 3} 人`}
+                        >
+                          +{headcount - 3}
+                        </span>
+                      )}
+                    </div>
+                    <div
+                      className="flex shrink-0 gap-1"
+                      onClick={(e) => {
+                        // 按钮区不冒泡：点详情/删除不触发整卡的进详情点击。
+                        e.stopPropagation();
+                      }}
+                    >
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          onSelectTeam(t.teamId);
+                          setDetailId(t.teamId);
+                        }}
                       >
-                        +{(t.leaderRemoved ? 0 : 1) + t.members.length - 3}
-                      </span>
-                    )}
+                        详情
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="text-destructive hover:text-destructive"
+                        onClick={() => {
+                          setDeleteError(null);
+                          setDeleteTarget({ teamId: t.teamId, name: t.name });
+                        }}
+                      >
+                        删除
+                      </Button>
+                    </div>
                   </div>
                 </div>
               );
@@ -1572,8 +1673,8 @@ function TeamTab({
             <div className="mb-2.5 flex items-center gap-2">
               <h3 className={LIST_TITLE_CLASS}>团队成员</h3>
               <span className={LIST_COUNT_CLASS}>
-                {detailTeam.members.length}/{memberCap} 人 ·{' '}
-                {detailTeam.leaderRemoved ? '领队已移除' : '领队默认在团（不占名额）'}
+                {detailTeam.members.length + (detailTeam.leaderRemoved ? 0 : 1)}/{memberCap} 人 ·{' '}
+                {detailTeam.leaderRemoved ? '领队已移除' : '含领队'}
               </span>
               <span className="flex-1" />
               <Button
@@ -1591,7 +1692,7 @@ function TeamTab({
             {detailError !== null && (
               <FormErrorNote className="mb-2.5">{detailError}</FormErrorNote>
             )}
-            <div className={MEMBER_GRID_CLASS}>
+            <div className={MEMBER_LIST_CLASS}>
               {!detailTeam.leaderRemoved && (
                 <LeaderCard
                   captain={detailTeam.captain}
@@ -1609,7 +1710,6 @@ function TeamTab({
                   member={m}
                   catalog={modelCatalog}
                   activity={m.childId !== null ? agentActivity[m.childId] : undefined}
-                  onOpenReports={onOpenReports}
                   onRemove={removeMember}
                   onModelChange={changeModel}
                   onEffortChange={changeMemberEffort}
@@ -1640,7 +1740,7 @@ function TeamTab({
 }
 
 /** 领队静态选项（目录不可用时的回退，用户迭代 2026-09）：inherit=会话默认。
- * 领队即面板会话，自身模型不由插件切换——此路线是团队默认，成员「跟随领队」
+ * 领队即面板会话，自身模型不由插件切换——此路线是团队默认，成员「会话默认」
  * spawn 时解析到它。目录就绪时由 RouteOptionItems 以会话模型目录替代。 */
 const LEADER_MODEL_OPTIONS: { value: string; label: string }[] = [
   { value: 'inherit', label: '会话默认' },
@@ -1657,7 +1757,7 @@ const PICKER_OPTION_CLASS =
 
 /** 模型二级菜单（用户迭代 2026-09：与对话 ModelSelect 同款交互）——root
  * 面板两行（「模型」「推理等级」：label + 当前值 + 右箭头），各自钻入列表。
- * 模型列表首行 inherit（跟随领队/会话默认——面板路线语义，对话没有此项），
+ * 模型列表首行 inherit（会话默认——面板路线语义，对话没有此项），
  * 其后按提供方分组列出会话模型目录（与对话 /model 弹层同一份 groups：
  * 行 id=`provider/model`、名称=目录显示名、sticky 组头、title 带描述），
  * 加载失败的提供方以警示条列出（对话同款，不可选）；推理等级列表 = 该模型
@@ -1680,9 +1780,9 @@ function ModelRoutePicker({
 }: {
   /** 会话模型目录状态（数据 + loading/failed/reload，对话选择器同款）。 */
   catalogState: ModelCatalogState;
-  /** 当前存储路线（inherit 哨兵 = 跟随领队/会话默认）。 */
+  /** 当前存储路线（inherit 哨兵 = 会话默认）。 */
   stored: { provider: string; model: string; reasoningEffort: string | null };
-  /** inherit 行/触发器文案（成员=跟随领队，领队=会话默认）。 */
+  /** inherit 行/触发器文案（用户迭代 2026-09 七：成员与领队统一「会话默认」）。 */
   inheritLabel: string;
   /** 静态回退选项（目录不可用时渲染，含 inherit 行）。 */
   fallback: { value: string; label: string }[];
@@ -1853,7 +1953,7 @@ function ModelRoutePicker({
         )}
         {pane === 'model' && (
           <>
-            {/* inherit 行：面板路线语义（跟随领队/会话默认），对话没有此项。 */}
+            {/* inherit 行：面板路线语义（会话默认），对话没有此项。 */}
             <button
               type="button"
               role="menuitemradio"
@@ -2051,7 +2151,7 @@ function LeaderCard({
   onOpenDetail?: () => void;
 }): ReactNode {
   return (
-    <div className={cn(MEMBER_CARD_CLASS, 'col-span-full')}>
+    <div className={MEMBER_CARD_CLASS}>
       <div className="flex items-center gap-2.5">
         <div
           className={cn(
@@ -2086,7 +2186,7 @@ function LeaderCard({
             disabled={modelSaving}
             onModelPick={onModelChange}
             onEffortPick={(effort) => onEffortChange !== undefined && onEffortChange(effort)}
-            title="选择领队模型（= 团队默认；成员「跟随领队」启动时按此下发；目录与对话模型选择一致）"
+            title="选择领队模型（= 团队默认；成员「会话默认」启动时按此下发；目录与对话模型选择一致）"
           />
         )}
         {onRemove !== undefined && (
@@ -2105,25 +2205,27 @@ function LeaderCard({
   );
 }
 
-/** 成员模型选项（用户迭代 2026-09）：inherit=跟随领队（默认路线）；切换只改
- * member.modelRoute——staged 成员启动即生效，运行中的成员下次启动生效。 */
-/** 成员静态选项（目录不可用时的回退）：inherit=跟随领队（默认路线）；切换
+/** 成员模型选项（用户迭代 2026-09 七）：inherit=会话默认（与领队同款，默认
+ * 路线）；切换只改 member.modelRoute——staged 成员启动即生效，运行中的成员
+ * 下次启动生效。 */
+/** 成员静态选项（目录不可用时的回退）：inherit=会话默认（与领队同款）；切换
  * 只改 member.modelRoute——staged 成员启动即生效，运行中的成员下次启动生效。 */
 const MODEL_OPTIONS: { value: string; label: string }[] = [
-  { value: 'inherit', label: '跟随领队' },
+  { value: 'inherit', label: '会话默认' },
   { value: 'deepseek-chat', label: 'DeepSeek Chat' },
   { value: 'deepseek-reasoner', label: 'DeepSeek Reasoner' },
 ];
 
-/** One team-member card: seeded avatar + status pill + 工号 + 右侧模型选择 +
- * 推理强度 + 移出团队（用户迭代 2026-09：工号/模型/删除；模型目录与对话
- * 一致——二级菜单内多档 effort 模型带「推理等级」子面板——用户迭代 2026-09 二）。
- * 用户迭代 2026-09 四：点卡片（头像/名字区）进成员详情页。 */
+/** 成员卡（用户迭代 2026-09 七）：与领队卡同款单行、竖排一行一个——头像 +
+ * 名字（+ 子代理活动点）+ 工号 · 角色，右侧模型选择（默认「会话默认」，与
+ * 领队一致）+ 移出团队。状态 pill（staged 等）与「汇报记录」按钮已去掉
+ * （用户迭代 2026-09 七）；模型目录与对话一致——二级菜单内多档 effort 模型
+ * 带「推理等级」子面板。用户迭代 2026-09 四：点卡片（头像/名字区）进成员
+ * 详情页。团队可以没有领队：领队被移出时这里只剩成员行。 */
 function MemberCard({
   member: m,
   catalog,
   activity,
-  onOpenReports,
   onRemove,
   onModelChange,
   onEffortChange,
@@ -2135,9 +2237,8 @@ function MemberCard({
   catalog: ModelCatalogState;
   /** Subagent activity (docs/20.4 P4): 'running' | 'inactive' | undefined. */
   activity?: string;
-  onOpenReports?: (name: string) => void;
   onRemove?: (name: string) => void;
-  /** 模型选择（右侧二级菜单）：行 id=`provider/model`，'inherit' = 跟随领队路线。 */
+  /** 模型选择（右侧二级菜单）：行 id=`provider/model`，'inherit' = 会话默认。 */
   onModelChange?: (memberName: string, model: string) => void;
   /** 推理等级改写（菜单内「推理等级」子面板；null = 提供方默认）。 */
   onEffortChange?: (memberName: string, effort: string | null) => void;
@@ -2146,7 +2247,6 @@ function MemberCard({
   /** 点卡片（头像/名字区）进成员详情页。 */
   onOpenDetail?: (name: string) => void;
 }): ReactNode {
-  const tone = memberTone(m.status);
   const openDetail = (): void => {
     if (onOpenDetail !== undefined) onOpenDetail(m.name);
   };
@@ -2193,26 +2293,15 @@ function MemberCard({
               model: m.model,
               reasoningEffort: m.reasoningEffort,
             }}
-            inheritLabel="跟随领队"
+            inheritLabel="会话默认"
             fallback={MODEL_OPTIONS}
             disabled={modelSaving}
             onModelPick={(v) => onModelChange !== undefined && onModelChange(m.name, v)}
             onEffortPick={(effort) =>
               onEffortChange !== undefined && onEffortChange(m.name, effort)
             }
-            title="选择成员运行的模型（目录与对话模型选择一致；运行中的成员下次启动时生效）"
+            title="选择成员运行的模型（「会话默认」= 团队默认路线；运行中的成员下次启动时生效）"
           />
-        )}
-      </div>
-      <Pill tone={tone}>
-        {STATUS_LABELS[m.status] ?? m.status}
-        {m.currentTaskId !== null && <span className="font-normal">· {m.currentTaskId}</span>}
-      </Pill>
-      <div className="flex gap-1.5">
-        {onOpenReports !== undefined && (
-          <Button type="button" variant="outline" size="sm" onClick={() => onOpenReports(m.name)}>
-            汇报记录
-          </Button>
         )}
         {onRemove !== undefined && (
           <Button
@@ -2536,12 +2625,13 @@ function StepButtons({
 /**
  * 添加成员弹窗（用户迭代 2026-09 三）：一行一个角色 + 加减步进器——每行
  * 行尾 [−] n [+]，＋ 加一份、－ 减一份（同一角色可加多份，第二份起自动
- * -2/-3 后缀并照抄角色库默认值）；弹窗底部给出已选人数与成员名额口径
- * （上限 = memberCap，领队不占名额——用户迭代 2026-09 修正：「一个团队
- * 10 个人」指可加 10 名成员）。工号不在此展示也不逐份填写：角色还没加入
- * 成员时没有工号，加入团队时由 host 自动分配（同名角色沿用同一工号）。
- * 领队被移出时菜单首位出现「领队」行，＋ 即加回（不占成员名额）。下单 =
- * 逐个 POST，遇到错误停在原地，已加成功的成员保留在团队里。
+ * -2/-3 后缀并照抄角色库默认值）；弹窗底部给出已选人数与名额口径
+ * （上限 = memberCap，含领队——用户迭代 2026-09 六：领队也算成员，初始化
+ * 默认在团、占 1 个名额，移出后空位可补成员）。工号不在此展示也不逐份填写：
+ * 角色还没加入成员时没有工号，加入团队时由 host 自动分配（同名角色沿用
+ * 同一工号）。领队被移出时菜单首位出现「领队」行，＋ 即加回（占 1 个名额，
+ * 满员时禁用）。下单 = 逐个 POST，遇到错误停在原地，已加成功的成员保留
+ * 在团队里。
  */
 function AddMembersDialog({
   open,
@@ -2562,13 +2652,13 @@ function AddMembersDialog({
   const [error, setError] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
 
-  // 成员名额（用户迭代 2026-09 修正：领队不占名额）：上限只对成员生效，
-  // 「领队」行的 ＋ 加回领队不受它约束。footer 的「成员 N/上限 · 还可加 K」
-  // 与看板/团队页的成员计数同口径。
-  const occupied = team.members.length;
+  // 团队名额（用户迭代 2026-09 六：领队也算成员）：上限含领队——领队默认
+  // 在团占 1 个名额，移出后空出；「加回领队」行同样占名额。footer 的
+  // 「成员 N/上限 · 还可加 K」与看板/团队页的人数口径一致。
+  const occupied = team.members.length + (team.leaderRemoved ? 0 : 1);
   const total = cart.reduce((n, c) => n + c.qty, 0);
   const leaderTaken = leaderPicked ? 1 : 0;
-  const left = Math.max(0, memberCap - occupied - total);
+  const left = Math.max(0, memberCap - occupied - total - leaderTaken);
   const menu = roster.filter((m) => m.name !== LEADER_NAME && m.name !== ROLE_BUILDER_NAME);
 
   const qtyOf = (roleName: string): number => cart.find((c) => c.name === roleName)?.qty ?? 0;
@@ -2670,7 +2760,7 @@ function AddMembersDialog({
                   {team.captain.name}
                 </div>
                 <div className={cn(MUTED_CLASS, 'truncate text-xs')}>
-                  领队 · ＋ 加回（不占成员名额）
+                  领队 · ＋ 加回（占 1 个名额）
                 </div>
               </div>
               <StepButtons
@@ -2683,9 +2773,11 @@ function AddMembersDialog({
                   setLeaderPicked(false);
                   setError(null);
                 }}
-                addDisabled={leaderPicked}
+                addDisabled={leaderPicked || left <= 0}
                 removeDisabled={!leaderPicked}
-                addTitle="加回领队"
+                addTitle={
+                  left <= 0 ? '名额已满：团队上限 ' + memberCap + ' 人（含领队）' : '加回领队'
+                }
                 removeTitle="取消加回"
               />
             </div>
@@ -2705,7 +2797,9 @@ function AddMembersDialog({
                   onRemove={() => removeOne(m.name)}
                   addDisabled={left <= 0}
                   removeDisabled={qty === 0}
-                  addTitle={left <= 0 ? '名额已满：成员上限 ' + memberCap + ' 人' : '加一份'}
+                  addTitle={
+                    left <= 0 ? '名额已满：团队上限 ' + memberCap + ' 人（含领队）' : '加一份'
+                  }
                   removeTitle="减一份"
                 />
               </div>
@@ -2723,8 +2817,8 @@ function AddMembersDialog({
 
         <div className="flex items-center justify-between gap-2">
           <span className={LIST_COUNT_CLASS}>
-            已选 {total + leaderTaken} 人 · 成员 {occupied + total}/{memberCap} · 还可加{' '}
-            {Math.max(0, memberCap - occupied - total)} 人
+            已选 {total + leaderTaken} 人 · 成员 {occupied + total + leaderTaken}/{memberCap} ·
+            还可加 {left} 人
           </span>
           <div className="flex items-center gap-2">
             <Button
@@ -2906,7 +3000,7 @@ function handbookSeed(member: HandbookSource): string {
  */
 /**
  * 角色/团队 list stylesheet（卡片化 + 视觉升级）：hover/抬升/阴影/过渡与删除
- * 按钮的显隐全部内联样式表达不了（且内联底色会压住 :hover——弹窗行的同一
+ * 按钮的悬停换色内联样式表达不了（且内联底色会压住 :hover——弹窗行的同一
  * 教训），统一走这里；token 直接从主题插值，fallback 已内建。
  */
 const ROLE_LIST_CSS = `
@@ -2915,8 +3009,9 @@ const ROLE_LIST_CSS = `
 .eteams-team-card{background:var(--background);border:1px solid var(--border);box-shadow:0 1px 2px rgba(15,23,42,0.05);transition:background .15s ease,border-color .15s ease,box-shadow .15s ease}
 .eteams-team-card:hover{border-color:color-mix(in srgb,var(--foreground) 18%,transparent);background:var(--muted)}
 .eteams-team-card[data-active="true"]{border-color:color-mix(in srgb,var(--primary) 50%,transparent);background:var(--business-tint);box-shadow:0 0 0 1px color-mix(in srgb,var(--primary) 20%,transparent)}
-.eteams-role-del{padding:3px 10px;font-size:12px;border-radius:6px;border:1px solid var(--border);background:var(--background);color:var(--destructive);cursor:pointer;flex-shrink:0;font-family:inherit;line-height:18px;opacity:0;transition:opacity .15s ease,border-color .15s ease,background .15s ease}
-.eteams-role-row:hover .eteams-role-del,.eteams-role-row:focus-within .eteams-role-del{opacity:1}
+/* 删除钮（用户迭代 2026-09-03）：常驻显形，不再 hover 才出现——小卡片
+   一行式布局下按钮固定行尾，可见性即可达性；hover 仅保留自身的描边换色。 */
+.eteams-role-del{padding:3px 10px;font-size:12px;border-radius:6px;border:1px solid var(--border);background:var(--background);color:var(--destructive);cursor:pointer;flex-shrink:0;font-family:inherit;line-height:18px;transition:border-color .15s ease,background .15s ease}
 .eteams-role-del:hover{border-color:var(--destructive);background:color-mix(in srgb,var(--destructive) 6%,transparent)}
 .eteams-role-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .eteams-team-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -3049,7 +3144,13 @@ function MembersTab({
   const [name, setName] = useState('');
   const [role, setRole] = useState('');
   const [personaMd, setPersonaMd] = useState('');
-  const [copied, setCopied] = useState(false);
+  // 新增方式（用户迭代 2026-09-03）：进入新增页先选「手动创建 / AI 创建」，
+  // 不再默认把命令填进对话输入框——点「AI 创建」此刻才预填，手动创建直接
+  // 进角色手册编辑页。
+  const [addMode, setAddMode] = useState<'choose' | 'ai' | 'manual'>('choose');
+  // AI 创建的预填结果（'set' 填入输入框 / 'copied' 退化剪贴板 / 'aborted'
+  // 用户取消覆盖），驱动 AI 创建页的状态行。
+  const [aiPrefill, setAiPrefill] = useState<PrefillOutcome | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   // 角色列表搜索 + 分页（用户反馈）：按名字/角色字段过滤，每页 8 条。
   const [query, setQuery] = useState('');
@@ -3073,7 +3174,6 @@ function MembersTab({
   // 以 startedAt 为会话键去重自动跳转（用户手动离开后不反复强拉，状态
   // 再迁移才再次跳转）的侧效应搬进下方 useEffect。
   const build = useSelector((s: RootState) => s.build.session);
-  const [justFilled, setJustFilled] = useState(false);
   const [draftEdit, setDraftEdit] = useState<DraftEdit>(EMPTY_EDIT);
   const [confirming, setConfirming] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -3100,6 +3200,9 @@ function MembersTab({
     }
     if (build.status === 'awaiting_confirmation' && seenReviewRef.current !== build.startedAt) {
       seenReviewRef.current = build.startedAt;
+      // AI 创建流（用户迭代 2026-09-03）：草稿确认态属于 AI 创建路径，自动
+      // 跳转时顺带把新增页切到 ai 模式，避免回落到方式选择页。
+      setAddMode('ai');
       setView('add');
     }
     if (
@@ -3117,11 +3220,12 @@ function MembersTab({
     return () => clearInterval(h);
   }, [refreshBuild]);
 
-  // 创建卡片跳转（docs/19.9.5）：信号递增时打开新增工作台。
+  // 创建卡片跳转（docs/19.9.5）：信号递增时打开新增工作台（AI 创建路径）。
   const lastAddTickRef = useRef(0);
   useEffect(() => {
     if (openAddTick > 0 && openAddTick !== lastAddTickRef.current) {
       lastAddTickRef.current = openAddTick;
+      setAddMode('ai');
       setView('add');
     }
   }, [openAddTick]);
@@ -3252,34 +3356,48 @@ function MembersTab({
     refreshBuild();
   };
 
-  // 通过对话创建（用户要求）：面板生成命令，用户粘贴到会话里由领队执行
-  // eteams_member_save 入库——面板不直连写成员。personaMd（完整角色手册）
-  // 以 Markdown 围栏附在命令尾部，由领队原样作为 personaMd 参数传入。
-  // 手册原文自带 ``` 代码块时用更长的围栏包裹，避免嵌套断裂。
-  const maxBacktickRun = personaMd.match(/`{3,}/g)?.reduce((m, f) => Math.max(m, f.length), 0) ?? 0;
-  const mdFence = '`'.repeat(Math.max(3, maxBacktickRun + 1));
-  // 全部提炼到角色手册（用户反馈）：结构化字段不再单独收集，人设内容只走
-  // personaMd 全文。
-  const command = [
-    '用 eteams_member_save 创建角色：',
-    `- 名字：${name.trim()}`,
-    `- 角色：${role.trim()}`,
-    ...(personaMd.trim() !== ''
-      ? [
-          '- 人设手册：把下面围栏内的 Markdown 原文作为 personaMd 参数传入',
-          '',
-          `${mdFence}eteams-persona-md`,
-          personaMd.trim(),
-          mdFence,
-        ]
-      : []),
-  ].join('\n');
+  // AI 创建入口（方式选择卡 / 重试填充 / 再建一个共用）：此刻才把命令预填
+  // 进对话输入框（onPrefillAddPeople → addPeople.prefillComposer），面板不
+  // 自动发送；结果落 aiPrefill 驱动 AI 创建页的状态行。
+  const fillAi = (): void => {
+    setAiPrefill(onPrefillAddPeople());
+    setAddMode('ai');
+  };
 
-  const copyCommand = (): void => {
-    void writeClipboard(command).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+  // 手动创建（用户迭代 2026-09-03）：面板直连名册保存（`roster/saveRoster`
+  // → POST /roster，与详情页 HandbookEditor 同一写路径），不再借对话命令
+  // 中转。personaMd 留空则只建名字+角色条目，手册随后可在详情页补写。
+  const [manualSaving, setManualSaving] = useState(false);
+  const [manualError, setManualError] = useState<string | null>(null);
+  const saveManual = async (): Promise<void> => {
+    const trimmed = name.trim();
+    // 同名即覆盖（宿主 upsert 语义）——手动直存前先挡一手，避免误盖已有角色。
+    if (members.some((m) => m.name === trimmed)) {
+      setManualError(`已存在同名角色「${trimmed}」——换一个名字，或到角色详情里编辑它。`);
+      return;
+    }
+    setManualSaving(true);
+    setManualError(null);
+    try {
+      await dispatch({
+        type: 'roster/saveRoster',
+        payload: {
+          name: trimmed,
+          role: role.trim(),
+          ...(personaMd.trim() !== '' ? { personaMd } : {}),
+        },
+      });
+      setName('');
+      setRole('');
+      setPersonaMd('');
+      setAddMode('choose');
+      onDeleted(); // 保存成功 → 父级重拉名册，翻回列表即见新角色
+      setView('list');
+    } catch (e) {
+      setManualError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setManualSaving(false);
+    }
   };
 
   // 该角色已加入的团队（按当前可见团队池计算）。
@@ -3308,15 +3426,20 @@ function MembersTab({
             <ArrowLeft className="h-3.5 w-3.5" />
             返回角色列表
           </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => activateConversationTab()}
-            title="切到会话的对话视图，看命令卡片与进度行"
-          >
-            <MessageSquare className="h-3.5 w-3.5 text-muted-foreground" />
-            对话页看进度
-          </Button>
+          {/* 对话页看进度只在 AI 创建路径有意义（手动创建不经对话）。 */}
+          {(addMode === 'ai' ||
+            (build !== null &&
+              (build.status === 'active' || build.status === 'awaiting_confirmation'))) && (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => activateConversationTab()}
+              title="切到会话的对话视图，看命令卡片与进度行"
+            >
+              <MessageSquare className="h-3.5 w-3.5 text-muted-foreground" />
+              对话页看进度
+            </Button>
+          )}
         </div>
         <Card className={cn(PANEL_CARD_CLASS, 'mt-2')}>
           {build !== null && build.status === 'active' && (
@@ -3593,7 +3716,8 @@ function MembersTab({
                 <Button
                   size="sm"
                   onClick={() => {
-                    if (onPrefillAddPeople() === 'set') setJustFilled(true);
+                    setAiPrefill(onPrefillAddPeople());
+                    setAddMode('ai');
                   }}
                 >
                   再建一个
@@ -3618,87 +3742,170 @@ function MembersTab({
               </div>
             </Card>
           )}
-          {(build === null || build.status === 'cancelled') && (
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="inline-flex text-primary">
-                  <IconSparkle16 />
-                </span>
-                <div className={cn(LINE_CLASS, 'font-semibold')}>新增角色 · 角色构建师</div>
-                <Pill tone="info">对话式构建</Pill>
+          {(build === null || build.status === 'cancelled') &&
+            (addMode === 'manual' ? (
+              // 手动创建（用户迭代 2026-09-03）：直接进入角色手册编辑页，
+              // 保存即入库（`roster/saveRoster` 直连），不经对话命令中转。
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex text-primary">
+                    <PenLine className="h-4 w-4" />
+                  </span>
+                  <div className={cn(LINE_CLASS, 'font-semibold')}>手动创建</div>
+                  <Pill tone="muted">直接填写手册</Pill>
+                  <span className="min-w-0 flex-1" />
+                  <Button size="sm" variant="ghost" onClick={() => setAddMode('choose')}>
+                    返回
+                  </Button>
+                </div>
+                <div className={cn(FORM_ROW_CLASS, 'mt-2.5')}>
+                  <span className={FORM_LABEL_CLASS}>角色名</span>
+                  <Input
+                    value={name}
+                    placeholder="角色名，如：alice"
+                    onChange={(e) => setName(e.target.value)}
+                  />
+                </div>
+                <div className={FORM_ROW_CLASS}>
+                  <span className={FORM_LABEL_CLASS}>角色</span>
+                  <Input
+                    value={role}
+                    placeholder="角色：前端开发者 / 后端架构师 / UI 设计师 / 趣味注入师 / researcher / …"
+                    onChange={(e) => setRole(e.target.value)}
+                  />
+                </div>
+                <div className={FORM_ROW_CLASS}>
+                  <span className={FORM_LABEL_CLASS}>
+                    角色手册（Markdown：frontmatter + 身份/使命/规则/领域专章/沟通风格/交付标准）
+                  </span>
+                  <MdEditor value={personaMd} onChange={setPersonaMd} minHeight={220} />
+                </div>
+                {manualError !== null && <FormErrorNote>保存失败：{manualError}</FormErrorNote>}
+                <div className="mt-2 flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    disabled={manualSaving || name.trim() === '' || role.trim() === ''}
+                    onClick={() => void saveManual()}
+                  >
+                    <IconPlusOutline16 />
+                    保存入库
+                  </Button>
+                  <span className={MUTED_CLASS}>
+                    保存后角色进入角色列表，到「团队」页拉进团队即可使用。
+                  </span>
+                </div>
               </div>
-              {justFilled ? (
-                <div>
-                  {/* docs/23 S23-3：原 PREFILL_BANNER_CLASS → shadcn Alert
-                      （default 变体 + 品牌淡底覆盖）；D22e 品牌档字色改
-                      brand-ink token、D22f 官网呼吸感 px-4 py-3 + 14px。 */}
+            ) : addMode === 'ai' ? (
+              // AI 创建（用户迭代 2026-09-03）：点「AI 创建」此刻才把命令填
+              // 进对话输入框，回车发送后回到本页实时看构建。
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex text-primary">
+                    <IconSparkle16 />
+                  </span>
+                  <div className={cn(LINE_CLASS, 'font-semibold')}>AI 创建 · 角色构建师</div>
+                  <Pill tone="info">对话式构建</Pill>
+                  <span className="min-w-0 flex-1" />
+                  <Button size="sm" variant="ghost" onClick={() => setAddMode('choose')}>
+                    返回
+                  </Button>
+                </div>
+                {aiPrefill === 'set' && (
                   <Alert className="mt-2.5 flex items-start gap-2 rounded-[10px] bg-business-tint px-4 py-3">
                     <span className="text-sm font-semibold text-[color:var(--eteams-brand-ink)]">
                       ✓ 已填充到对话输入框
                     </span>
                   </Alert>
-                  <CommandChip text={ADD_PEOPLE_TEMPLATE} />
-                  {PREFILL_STEPS.map((s, i) => (
-                    <div key={s} className={STEP_ROW_CLASS}>
-                      <span className={STEP_NUM_CLASS}>{i + 1}</span>
-                      <span>{s}</span>
-                    </div>
-                  ))}
+                )}
+                {aiPrefill === 'copied' && (
+                  <Alert className="mt-2.5 flex items-start gap-2 rounded-[10px] bg-business-tint px-4 py-3">
+                    <span className="text-sm font-semibold text-[color:var(--eteams-brand-ink)]">
+                      ✓ 命令已复制——去对话输入框粘贴发送
+                    </span>
+                  </Alert>
+                )}
+                <CommandChip text={ADD_PEOPLE_TEMPLATE} />
+                {PREFILL_STEPS.map((s, i) => (
+                  <div key={s} className={STEP_ROW_CLASS}>
+                    <span className={STEP_NUM_CLASS}>{i + 1}</span>
+                    <span>{s}</span>
+                  </div>
+                ))}
+                {aiPrefill === 'set' ? (
                   <div className={cn(MUTED_CLASS, 'mt-2.5')}>
                     提示：已模拟「键入 /eteam +
                     空格」完成命令认领（claimed）——补全两个【】占位符后直接回车即可；编辑正文时命令高亮收起属正常行为。
                   </div>
-                </div>
-              ) : (
-                <div className={cn(MUTED_CLASS, 'mt-1')}>
-                  点角色列表上方的「新增角色」：命令会填进对话输入框，在对话里补全信息后回车，这里实时看构建。
-                </div>
-              )}
-              <details>
-                <summary className="mt-2.5 -mx-2 cursor-pointer select-none rounded-md px-2 py-1.5 text-sm font-semibold text-foreground hover:bg-muted">
-                  手动创建（不经过角色构建师）
-                </summary>
-                <div className="mt-2">
-                  <div className="mb-2 flex gap-2">
-                    <Input
-                      value={name}
-                      placeholder="角色名，如：alice"
-                      onChange={(e) => setName(e.target.value)}
-                    />
-                    <Input
-                      value={role}
-                      placeholder="角色：前端开发者 / 后端架构师 / UI 设计师 / 趣味注入师 / researcher / …"
-                      onChange={(e) => setRole(e.target.value)}
-                    />
-                  </div>
-                  <details>
-                    <summary className="-mx-2 mt-1.5 cursor-pointer select-none rounded-md px-2 py-1.5 text-sm font-semibold text-foreground hover:bg-muted">
-                      角色手册（可选，Markdown：使命/职责/规则/领域专章/沟通风格/交付标准）
-                    </summary>
-                    <div className={cn(FORM_ROW_CLASS, 'mt-2')}>
-                      <MdEditor value={personaMd} onChange={setPersonaMd} minHeight={220} />
-                    </div>
-                  </details>
-                  <div className="mt-2 flex items-center gap-2">
+                ) : (
+                  <div className="mt-2.5 flex items-center gap-2">
+                    <Button size="sm" variant="secondary" onClick={fillAi}>
+                      重试填充
+                    </Button>
                     <Button
                       size="sm"
-                      disabled={name.trim() === '' || role.trim() === ''}
-                      onClick={copyCommand}
+                      variant="ghost"
+                      onClick={() => void writeClipboard(ADD_PEOPLE_TEMPLATE)}
                     >
-                      <IconPlusOutline16 />
-                      复制对话命令
+                      复制命令
                     </Button>
-                    <span className={MUTED_CLASS}>
-                      粘贴到对话发送，主会话智能体执行 eteams_member_save 入库；成功后列表会出现。
+                    <span className={cn(MUTED_CLASS, 'mt-0')}>
+                      {aiPrefill === 'aborted'
+                        ? '你保留了输入框里未发送的草稿——重试填充会再次询问是否覆盖。'
+                        : '也可复制命令去对话粘贴发送。'}
                     </span>
                   </div>
-                  {copied && (
-                    <div className={cn(MUTED_CLASS, 'mt-1.5')}>✓ 已复制——去对话里粘贴发送</div>
-                  )}
+                )}
+              </div>
+            ) : (
+              // 方式选择（默认态，用户迭代 2026-09-03）：不再默认预填——两条
+              // 创建路径各自显式进入。
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex text-primary">
+                    <IconPlusOutline16 />
+                  </span>
+                  <div className={cn(LINE_CLASS, 'font-semibold')}>新增角色</div>
+                  <Pill tone="muted">选择创建方式</Pill>
                 </div>
-              </details>
-            </div>
-          )}
+                <div className="mt-3 flex flex-col gap-2.5">
+                  <button
+                    type="button"
+                    className={cn('eteams-role-row', ADD_MODE_CARD_CLASS)}
+                    onClick={fillAi}
+                  >
+                    <span className={ADD_MODE_ICON_CLASS}>
+                      <IconSparkle16 />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-semibold text-foreground">AI 创建</span>
+                      <span className="mt-0.5 block text-xs leading-5 text-muted-foreground">
+                        把命令填进对话输入框，角色构建师在对话里帮你补全人设；草稿就绪后回来确认入库。
+                      </span>
+                    </span>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  </button>
+                  <button
+                    type="button"
+                    className={cn('eteams-role-row', ADD_MODE_CARD_CLASS)}
+                    onClick={() => {
+                      setAiPrefill(null);
+                      setAddMode('manual');
+                    }}
+                  >
+                    <span className={ADD_MODE_ICON_CLASS}>
+                      <PenLine className="h-4 w-4" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-semibold text-foreground">手动创建</span>
+                      <span className="mt-0.5 block text-xs leading-5 text-muted-foreground">
+                        直接进入角色手册（Markdown）编辑页，填好名字与手册，保存即入库。
+                      </span>
+                    </span>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  </button>
+                </div>
+              </div>
+            ))}
         </Card>
       </div>
     );
@@ -3756,9 +3963,23 @@ function MembersTab({
   return (
     <div>
       <Card className={PANEL_CARD_CLASS}>
+        {/* 页头（用户迭代 2026-09-03）：搜索框与「角色」标题平齐（同一行），
+          右侧留新增入口；空列表不渲染搜索框。 */}
         <div className="mb-2.5 flex items-center gap-2">
-          <h3 className={LIST_TITLE_CLASS}>角色</h3>
+          <h3 className={cn(LIST_TITLE_CLASS, 'flex-none')}>角色</h3>
           <span className={LIST_COUNT_CLASS}>{members.length} 个</span>
+          <span className="min-w-0 flex-1" />
+          {members.length > 0 && (
+            <Input
+              value={query}
+              placeholder="搜索角色名…"
+              className="w-[200px]"
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setPage(0); // 新搜索从头翻页
+              }}
+            />
+          )}
           {build !== null &&
           (build.status === 'active' || build.status === 'awaiting_confirmation') ? (
             // 有未入库的构建草稿：新增入口让位给「待加入角色」，防止误开新
@@ -3766,6 +3987,7 @@ function MembersTab({
             <Button
               size="sm"
               onClick={() => {
+                setAddMode('ai');
                 setView('add');
               }}
             >
@@ -3775,16 +3997,10 @@ function MembersTab({
             <Button
               size="sm"
               onClick={() => {
-                // 一键预填（D18-1）：命令进输入框 → 跳到构建工作台；不可用时
-                // 退化为复制，提示去对话粘贴。
-                const outcome = onPrefillAddPeople();
-                if (outcome === 'set') {
-                  setJustFilled(true);
-                  setView('add');
-                } else if (outcome === 'copied') {
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 2000);
-                }
+                // 用户迭代 2026-09-03：新增不再默认预填对话——先进新增页选
+                // 「手动创建 / AI 创建」，点「AI 创建」才把命令填进输入框。
+                setAddMode('choose');
+                setView('add');
               }}
             >
               <IconPlusOutline16 />
@@ -3795,25 +4011,14 @@ function MembersTab({
         {listError !== null && <FormErrorNote>{listError}</FormErrorNote>}
         {members.length === 0 ? (
           <div className={EMPTY_CLASS}>
-            还没有角色。点「新增角色」，在对话里补全信息，角色构建师会帮你构建人设。
+            还没有角色。点「新增角色」创建第一个角色——AI
+            创建在对话里构建人设，手动创建直接填写角色手册。
           </div>
         ) : (
           <>
-            {/* 搜索 + 分页（用户反馈）：按名字/角色字段过滤，每页 8 条。 */}
-            <div className="mb-1.5 flex items-center gap-2">
-              <div className="min-w-0 flex-1">
-                <Input
-                  value={query}
-                  placeholder="搜索角色名…"
-                  onChange={(e) => {
-                    setQuery(e.target.value);
-                    setPage(0); // 新搜索从头翻页
-                  }}
-                />
-              </div>
-            </div>
-            {/* 角色卡片栅格（用户反馈：列表改卡片）：头像在上、名字与所属团队
-            在下，删除按钮悬于右上角；hover/描边由 ROLE_LIST_CSS 接管。 */}
+            {/* 角色卡片栅格（用户迭代 2026-09-03）：一行式横排——头像在前、
+            名称与所属团队随后、删除钮常驻行尾（不再 hover 显形）；
+            hover/描边由 ROLE_LIST_CSS 接管。 */}
             <div className={CARD_GRID_CLASS}>
               {pageRows.map((m) => {
                 const teamNames = teamsOf(m.name);
@@ -3827,21 +4032,9 @@ function MembersTab({
                       setView('detail');
                     }}
                   >
-                    {isProtected ? null : (
-                      <button
-                        type="button"
-                        className="eteams-role-del absolute right-2 top-2"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          del(m.name);
-                        }}
-                      >
-                        删除
-                      </button>
-                    )}
                     <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={40} />
                     {/* 角色（用户反馈）：不再需要标签——名字即身份。 */}
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <span className="eteams-role-name block max-w-full text-sm font-semibold text-foreground">
                         {m.name}
                       </span>
@@ -3851,6 +4044,18 @@ function MembersTab({
                         </div>
                       )}
                     </div>
+                    {isProtected ? null : (
+                      <button
+                        type="button"
+                        className="eteams-role-del"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          del(m.name);
+                        }}
+                      >
+                        删除
+                      </button>
+                    )}
                   </div>
                 );
               })}

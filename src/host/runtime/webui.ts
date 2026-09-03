@@ -38,6 +38,7 @@ import {
 import {
   addMember,
   createTeam,
+  deleteTeam,
   removeMember,
   setLeaderModel,
   setLeaderRemoved,
@@ -898,6 +899,35 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                       ? { reasoningEffort: str(body.reasoningEffort) }
                       : {}),
                   },
+                );
+              } catch (e) {
+                sendError(res, 400, e instanceof Error ? e.message : String(e));
+                return;
+              }
+              sendJson(res, 200, { ok: true });
+              return;
+            }
+            // POST /team/<id>/delete — permanently remove a team directory
+            // (deleteTeam allows staged/completed/halted only; running teams
+            // must cancel tasks first). 团队列表小卡片「删除」按钮（用户迭代
+            // 2026-09 七）。
+            if (
+              req.method === 'POST' &&
+              segments[0] === 'team' &&
+              segments.length === 3 &&
+              segments[2] === 'delete'
+            ) {
+              const located = locateTeam(ctx, config, segments[1]!);
+              if (!located) {
+                sendError(res, 404, `团队 ${segments[1]} 不存在`);
+                return;
+              }
+              const { team, workspacePath } = located;
+              try {
+                await deleteTeam(
+                  envFor(ctx, config, workspacePath),
+                  agentFor(team.captainSessionId),
+                  team.id,
                 );
               } catch (e) {
                 sendError(res, 400, e instanceof Error ? e.message : String(e));

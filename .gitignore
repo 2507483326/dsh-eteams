@@ -10,3 +10,5 @@
 .dsh-worktrees/
 /.tmp-tw-docs
 /.tmp-avatar-preview
+/.tmp-harness
+/.tmp-repro

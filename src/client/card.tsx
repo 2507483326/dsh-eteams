@@ -213,13 +213,21 @@ function ETeamsCardBody({ node }: { node: { data: unknown } }): ReactNode {
         {team !== undefined ? (
           <>
             <div className="mb-1 mt-2 flex items-center">
-              {team.members.slice(0, 8).map((m) => (
-                <span key={m.name} className="-mr-1.5" title={`${m.name} · ${m.status}`}>
-                  <Avatar name={m.name} size={26} />
-                </span>
-              ))}
+              {/* 人数/头像含领队（用户迭代 2026-09 六：领队也算成员，初始化
+              默认在团；移出后只剩成员）——与团队页、添加弹窗同一口径。 */}
+              {(team.leaderRemoved ? team.members : [team.captain, ...team.members])
+                .slice(0, 8)
+                .map((m) => (
+                  <span
+                    key={m.name}
+                    className="-mr-1.5"
+                    title={`${m.name}${'status' in m ? ` · ${m.status}` : ' · 领队'}`}
+                  >
+                    <Avatar name={m.name} size={26} />
+                  </span>
+                ))}
               <span className="ml-3 text-xs text-muted-foreground">
-                {team.members.length} 名成员
+                {team.members.length + (team.leaderRemoved ? 0 : 1)} 人
               </span>
             </div>
             {/* docs/23 S23-5：进度条迁 shadcn Progress（原手写 track/fill 双 div；

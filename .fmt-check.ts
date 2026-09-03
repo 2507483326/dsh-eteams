@@ -3,7 +3,7 @@
  * (docs/12.2 shape) and the event summarizer, driven offline through the
  * runtime ops with a fake subagent runtime.
  */
-import { existsSync, mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -184,9 +184,6 @@ describe('panel write routes (M5 first slice)', () => {
           : key === 'workspaceRegistry'
             ? { list: () => [{ path: workspace, title: 'ws' }] }
             : undefined,
-      // delete/archive ops resolve the captain's live agent through the
-      // registry (absent here → the op falls back to the session-id agent).
-      agents: { get: () => undefined },
       effect: (fn: () => unknown) => {
         fn();
         return () => undefined;
@@ -685,25 +682,6 @@ describe('panel write routes (M5 first slice)', () => {
     const restoreOk = await post(`/eteams-api/team/${teamId}/leader/restore`, {});
     expect(restoreOk.code).toBe(200);
     expect(readTeamFromDisk(teamId).leaderRemoved).toBe(false);
-  });
-
-  it('deletes a staged team via POST /team/:id/delete (团队列表小卡片删除，用户迭代 2026-09 七)', async () => {
-    const { handler, res, post } = await installFake();
-    const created = await post('/eteams-api/team', { name: '待删团队', sessionId: 'sess-panel' });
-    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
-
-    const del = await post(`/eteams-api/team/${teamId}/delete`, {});
-    expect(del.code).toBe(200);
-    // Directory removed from disk and the team no longer lists in /state.
-    expect(existsSync(join(workspace, '.eteams', teamId))).toBe(false);
-    const r = res();
-    await handler({ method: 'GET', url: '/eteams-api/state' }, r);
-    const body = JSON.parse(r.body) as { teams: { teamId: string }[] };
-    expect(body.teams.find((t) => t.teamId === teamId)).toBeUndefined();
-
-    // Deleting again (or an unknown id) → 404 from the route locator.
-    const again = await post(`/eteams-api/team/${teamId}/delete`, {});
-    expect(again.code).toBe(404);
   });
 
   it('saves the member handbook copy via POST /team/:id/member/:name/persona and projects it in /state', async () => {

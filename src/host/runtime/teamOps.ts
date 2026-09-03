@@ -5,7 +5,7 @@
  *
  * @module dsh-eteams/runtime/teamOps
  */
-import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, renameSync, rmdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { JsonValue } from '@deepseek-ai/dsh-session';
@@ -220,12 +220,13 @@ export async function addMember(
       throw new ETeamsError(`成员「${name}」已在团队中`);
     }
     const active = fresh.members.filter((m) => m.status !== 'removed');
-    // 成员上限（用户迭代 2026-09 修正：领队不占名额）——「一个团队 10 个人」
-    // 指可加 10 名成员；领队是管理者（拆解/指派/调度），不占成员名额，加回
-    // 领队因此也不再受上限约束。看板/团队页的成员计数同口径。
-    if (active.length >= env.config.maxMembers) {
+    // 团队上限（用户迭代 2026-09 六：领队也算成员）——「一个团队 10 个人」
+    // 含领队：领队初始化时默认拉进团、占 1 个名额；移出领队（leaderRemoved）
+    // 空出的名额可以补成员。看板/团队页/添加弹窗的计数同口径。
+    const leaderTaken = fresh.leaderRemoved === true ? 0 : 1;
+    if (active.length + leaderTaken >= env.config.maxMembers) {
       throw new ETeamsError(
-        `成员数已达上限（${env.config.maxMembers}）`,
+        `团队人数已达上限（${env.config.maxMembers}，含领队）`,
         '先 eteams_remove_member 再添加，或调整配置 maxMembers',
       );
     }
@@ -450,7 +451,17 @@ export async function setLeaderRemoved(
     : await requireCaptainTeam(env, captain);
   return withTeam(env, team.id, async (fresh, root) => {
     if (fresh.leaderRemoved === params.removed) return fresh;
-    // 加回领队不受成员上限约束（用户迭代 2026-09 修正：领队不占成员名额）。
+    // 加回领队同样占团队名额（用户迭代 2026-09 六：领队也算成员）：满员时
+    // 拒绝加回，先移出一名成员。
+    if (!params.removed) {
+      const active = fresh.members.filter((m) => m.status !== 'removed');
+      if (active.length + 1 > env.config.maxMembers) {
+        throw new ETeamsError(
+          `团队人数已达上限（${env.config.maxMembers}，含领队）`,
+          '先 eteams_remove_member 再加回领队，或调整配置 maxMembers',
+        );
+      }
+    }
     fresh.leaderRemoved = params.removed;
     await recordEvent(
       root,
@@ -719,6 +730,24 @@ export async function archiveTeam(
   });
 }
 
+/**
+ * 递归删除目录树（{@link deleteTeam} 用）：node:fs 的 rmSync 在本机
+ * （Node 24 / Win32）对非 ASCII 路径会静默失败（unlinkSync/rmdirSync/
+ * renameSync 均正常）——团队 id 多为中文团队名，删除必须绕开 rmSync，
+ * 手动后序删除（先清文件再删空目录）。
+ */
+function rmTree(target: string): void {
+  for (const entry of readdirSync(target, { withFileTypes: true })) {
+    const child = join(target, entry.name);
+    if (entry.isDirectory()) {
+      rmTree(child);
+    } else {
+      unlinkSync(child);
+    }
+  }
+  rmdirSync(target);
+}
+
 /** Delete a staged/completed team directory permanently. */
 export async function deleteTeam(env: RuntimeEnv, captain: Agent, teamId: string): Promise<void> {
   const team = await requireTeamById(env, captain, teamId);
@@ -732,7 +761,7 @@ export async function deleteTeam(env: RuntimeEnv, captain: Agent, teamId: string
       captainAgent,
       fresh.members.map((m) => m.id),
     );
-    rmSync(join(root, fresh.id), { recursive: true, force: true });
+    rmTree(join(root, fresh.id));
   });
 }
 

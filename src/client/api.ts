@@ -232,6 +232,18 @@ export async function removeTeamMember(teamId: string, name: string): Promise<vo
   );
 }
 
+/**
+ * Delete one team permanently（团队列表小卡片「删除」按钮，用户迭代 2026-09
+ * 七）：staged/completed/halted 可删，running 需先取消任务（host 校验）。
+ */
+export async function deleteTeam(teamId: string): Promise<void> {
+  await requestJson(`${API_BASE}/team/${encodeURIComponent(teamId)}/delete`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+}
+
 // ---------- session persona takeover (docs/13.8.2) ----------
 
 /**

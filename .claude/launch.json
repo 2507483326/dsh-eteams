@@ -14,6 +14,13 @@
       "runtimeArgs": ["-y", "serve", "-l", "8792", ".tmp-avatar-preview"],
       "port": 8792,
       "autoPort": true
+    },
+    {
+      "name": "repro",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["-y", "serve", "-l", "8793", ".tmp-repro"],
+      "port": 8793,
+      "autoPort": true
     }
   ]
 }

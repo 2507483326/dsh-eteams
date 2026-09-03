@@ -12,7 +12,15 @@
  *   24/20 用户仍嫌大）；
  * - **坦克暂时下架（D23-4）**：TANK_COUNT=0——引擎坦克代码全量保留
  *   （含其全部测试锁），改回常量即恢复；
- * - **鼠标格子微光（D24-1，取代外扩环波纹）**：pointermove 挂画布父元素
+ * - **可视区锚定（D27，用户迭代「角色详情背景变化」）**：画布改挂 0 高
+ *   sticky 条（top:0）内、位图按**可视高度**（面板根高与最近滚动/裁剪祖先
+ *   高取 min）规划。根因：宿主 active 相位 `.wSkVaW_viewArea{flex:1 0 auto;
+ *   min-height:auto}` 随内容生长——长手册把面板根从 720px 拉到 2600px+，
+ *   旧 `absolute/inset-0` 画布跟着拉长，RO 实测新尺寸后整幅重排（高度场/
+ *   渐隐全部按新盒重算），进出角色详情即见背景「变形/漂移」；锚定后位图
+ *   尺寸恒等于主页面（同宽同高同 cell ⇒ 同种子逐像素一致），sticky 保证长
+ *   页滚动时水印钉在可视区右上（与主页面观感一致）；
+ * - **鼠标格子微光（D24-1，取代外扩环波纹）**：pointermove 挂作用域根
  *   （canvas 自身保持 pointer-events-none 不吃交互），节流（≥90ms 且位移
  *   ≥24px）向热场 splat——格子本身微亮再指数退热，无新增图形元素；热场空
  *   即停帧；reduced-motion / 页面隐藏时不生成；
@@ -25,10 +33,10 @@
  * - 主题采样（D22g-7）：从作用域根元素 getComputedStyle 读
  *   `--eteams-backdrop-label` / `--eteams-backdrop-accent`。
  *
- * 堆叠契约（eteamsView 接线，S22-4）：作用域根 inline `position:relative`
- * 承载本画布（内联 absolute/inset，D25：宿主内工具类定位失效的根因修复），
- * SHELL_CLASS 加 `relative`——两个定位元素按 DOM 序 painting，壳自然盖在
- * 画布上。
+ * 堆叠契约（eteamsView 接线，S22-4）：作用域根 inline `position:relative` 承载
+ * 本画布（画布内联 absolute 挂 0 高 sticky 条下——D25：宿主内工具类定位失效
+ * 的根因修复，定位必须内联），SHELL_CLASS 加 `relative`——sticky 条与壳都是
+ * 定位元素、按 DOM 序 painting，壳自然盖在画布上。
  *
  * @module dsh-eteams/client/eteamsBackdrop
  */
@@ -104,10 +112,27 @@ export function EteamsBackdrop(): ReactNode {
       typeof matchMedia === 'function' &&
       matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-    /** D20h：从作用域根（画布父元素）采样宿主变量，缺省落官网兜底。 */
+    // 作用域根与滚动宿主（D27）：画布的直接父元素是 0 高 sticky 条，变量
+    // 采样 / 事件监听 / 尺寸测量都要落到真正的面板根（.eteams-ui）；可视
+    // 高度取「面板根高」与「最近滚动/裁剪祖先高」的较小者——宿主 active
+    // 相位下面板根会随内容生长（角色详情长手册），只有滚动宿主（host
+    // scrollBody / overlay 裁剪层）代表真正可见的区域。
+    const scopeEl =
+      canvas.closest<HTMLElement>('.eteams-ui') ?? canvas.parentElement ?? document.body;
+    const findScrollHost = (el: HTMLElement): HTMLElement | null => {
+      let cur: HTMLElement | null = el.parentElement;
+      while (cur !== null) {
+        const oy = getComputedStyle(cur).overflowY;
+        if (oy === 'auto' || oy === 'scroll' || oy === 'hidden') return cur;
+        cur = cur.parentElement;
+      }
+      return null;
+    };
+    const scrollHost = findScrollHost(scopeEl);
+
+    /** D20h：从作用域根采样宿主变量，缺省落官网兜底。 */
     const readVar = (name: string): string | null => {
-      const el = canvas.parentElement ?? document.body;
-      const v = getComputedStyle(el).getPropertyValue(name);
+      const v = getComputedStyle(scopeEl).getPropertyValue(name);
       return v.trim() === '' ? null : v;
     };
 
@@ -184,14 +209,23 @@ export function EteamsBackdrop(): ReactNode {
       raf = requestAnimationFrame(loop);
     };
 
-    // 尺寸：画布跟随作用域根（resize 由 RO 实测其盒）。**定位必须内联**：
-    // D25 诊断——宿主内 absolute/inset-0 工具类未生效（画布落回 UA 内联块
-    // 300×150 = 用户看到的「左侧一小块」；预览页 gen.css 作用域正常故无法
-    // 复现）。内联样式免疫宿主 CSS 上下文，class 仅作语义标记。
-    const ro = new ResizeObserver((entries) => {
-      const rect = entries[0]?.contentRect;
-      const nextW = rect?.width ?? canvas.clientWidth;
-      const nextH = rect?.height ?? canvas.clientHeight;
+    // 尺寸（D27 重构）：位图按**可视区**规划——宽取作用域根，高 = min(作用
+    // 域根高, 滚动宿主可视高)（无滚动宿主时兜底文档可视高）。**定位必须内
+    // 联**：D25 诊断——宿主内工具类定位未生效（画布落回 UA 内联块 300×150 =
+    // 用户看到的「左侧一小块」；预览页 gen.css 作用域正常故无法复现）。内联
+    // 样式免疫宿主 CSS 上下文，class 仅作语义标记。RO 同时盯作用域根（宽/
+    // 内容高）与滚动宿主（可视高）：进出角色详情只把根拉高、不改 min 结果
+    // → 尺寸守卫短路，位图零重排——背景与主页面逐像素一致（D27 验收口径）。
+    const measure = (): void => {
+      const nextW = scopeEl.clientWidth;
+      const rootH = scopeEl.clientHeight;
+      const hostH =
+        scrollHost !== null
+          ? scrollHost.clientHeight
+          : typeof document !== 'undefined'
+            ? document.documentElement.clientHeight
+            : rootH;
+      const nextH = Math.min(rootH, hostH);
       if (nextW <= 0 || nextH <= 0) return;
       const nextDpr = Math.min(window.devicePixelRatio || 1, DPR_CAP);
       const nextCell = cellFor(nextW);
@@ -209,18 +243,22 @@ export function EteamsBackdrop(): ReactNode {
       cell = nextCell;
       canvas.width = Math.max(1, Math.round(w * dpr));
       canvas.height = Math.max(1, Math.round(h * dpr));
+      canvas.style.height = `${h}px`; // sticky 条 0 高，CSS 高度不能再吃 100%
       replan();
-    });
-    ro.observe(canvas.parentElement ?? canvas);
-    // 一次性几何诊断（recordClientDiag）：RO 首回调后画布/父盒尺寸——若宿主
-    // 内再次出现「左侧一小块」，日志直接给出三者实测，定位问题不再靠猜。
+    };
+    const ro = new ResizeObserver(() => measure());
+    measure(); // 同步首测（挂载帧内即定尺寸，RO 首回调幂等短路）
+    ro.observe(scopeEl);
+    if (scrollHost !== null) ro.observe(scrollHost);
+    // 一次性几何诊断（recordClientDiag）：RO 后画布/根/滚动宿主实测——若宿
+    // 主内再次出现「左侧一小块」或背景漂移，日志直接给出三者，定位不靠猜。
     const diagTimer = setTimeout(() => {
-      const parent = canvas.parentElement;
       recordClientDiag(
         'backdrop-geom',
         `canvas=${canvas.clientWidth}x${canvas.clientHeight} ` +
           `attr=${canvas.getAttribute('style') ?? ''} ` +
-          `parent=${parent?.clientWidth ?? -1}x${parent?.clientHeight ?? -1}`,
+          `root=${scopeEl.clientWidth}x${scopeEl.clientHeight} ` +
+          `scroll=${scrollHost === null ? 'none' : `${scrollHost.clientWidth}x${scrollHost.clientHeight}`}`,
       );
     }, 2000);
 
@@ -258,8 +296,9 @@ export function EteamsBackdrop(): ReactNode {
     };
     document.addEventListener('visibilitychange', onVisibility);
 
-    // 鼠标格子微光（D24-1）：监听挂画布**父元素**（canvas 自身 pointer-events-
-    // none 不吃交互，事件天然穿到内容层——这里收的是面板内任意位置的扫过）。
+    // 鼠标格子微光（D24-1）：监听挂**作用域根**（canvas 自身 pointer-events-
+    // none 不吃交互，事件天然穿到内容层——这里收的是面板内任意位置的扫过；
+    // D27 起直接父元素是 0 高 sticky 条，不能当事件面）。
     // 节流：距上次落点 ≥90ms 且位移 ≥24px 才 splat 一粒（快速扫过 ~10 粒、
     // 悬停不动 0 粒）。reduced-motion / 页面隐藏时不生成（静板）。落点即按需
     // 启动 rAF 循环；replan 后 cell 可能变化，热场按新 cell 键重建前直接清空。
@@ -268,7 +307,6 @@ export function EteamsBackdrop(): ReactNode {
     let lastHeatAt = 0;
     let lastHeatX = -1e9;
     let lastHeatY = -1e9;
-    const parentEl = canvas.parentElement ?? canvas;
     const onPointerMove = (event: PointerEvent): void => {
       if (disposed || hidden || reduced) return;
       if (event.pointerType === 'touch') return;
@@ -287,7 +325,7 @@ export function EteamsBackdrop(): ReactNode {
         raf = requestAnimationFrame(loop);
       }
     };
-    parentEl.addEventListener('pointermove', onPointerMove);
+    scopeEl.addEventListener('pointermove', onPointerMove);
 
     // 看门狗（D22g-6 / R4 兜底）：可见且未降运动而 lastRender 静止超阈值，
     // 先辨上下文丢失（丢则全量 replan 重建），否则强制推帧（lastT=0 ⇒ 下帧
@@ -316,23 +354,33 @@ export function EteamsBackdrop(): ReactNode {
       mo.disconnect();
       reducedMq?.removeEventListener('change', onReduced);
       document.removeEventListener('visibilitychange', onVisibility);
-      parentEl.removeEventListener('pointermove', onPointerMove);
+      scopeEl.removeEventListener('pointermove', onPointerMove);
     };
   }, []);
 
   return (
-    <canvas
-      ref={canvasRef}
+    <div
       aria-hidden="true"
-      data-eteams="backdrop"
-      className="pointer-events-none eteams-backdrop-canvas"
-      style={{
-        position: 'absolute',
-        inset: '0',
-        width: '100%',
-        height: '100%',
-        opacity: COMPOSITE_ALPHA_CAP,
-      }}
-    />
+      data-eteams="backdrop-pin"
+      // 0 高 sticky 条（D27）：占位为零不挤内容；画布 absolute 挂其下并随
+      // 滚动钉在可视区顶部——长页（角色详情）滚动时水印保持主页面「右上角」
+      // 观感，不再随内容拉长/重排。
+      style={{ position: 'sticky', top: 0, height: 0 }}
+    >
+      <canvas
+        ref={canvasRef}
+        aria-hidden="true"
+        data-eteams="backdrop"
+        className="pointer-events-none eteams-backdrop-canvas"
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: '100%',
+          opacity: COMPOSITE_ALPHA_CAP,
+        }}
+      />
+    </div>
   );
 }
