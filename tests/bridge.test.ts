@@ -8,7 +8,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   activateETeamsTab,
   consumePendingGotoAdd,
-  consumePendingGotoAddTeam,
   consumePendingGotoRoster,
   consumePendingSelectTeam,
   ETEAMS_TAB_LABEL,
@@ -216,22 +215,19 @@ describe('teamsTabVisible (DOM stub)', () => {
 
 describe('pending jump signals', () => {
   it('stage + consume is one-shot for every signal kind', () => {
-    stageTeamSignals({ creator: true, memberBuilder: true, roster: true, teamId: 't1' });
+    stageTeamSignals({ memberBuilder: true, roster: true, teamId: 't1' });
     expect(consumePendingGotoAdd()).toBe(true);
-    expect(consumePendingGotoAddTeam()).toBe(true);
     expect(consumePendingGotoRoster()).toBe(true);
     expect(consumePendingSelectTeam()).toBe('t1');
     // consumed flags must not leak into a later mount
     expect(consumePendingGotoAdd()).toBe(false);
-    expect(consumePendingGotoAddTeam()).toBe(false);
     expect(consumePendingGotoRoster()).toBe(false);
     expect(consumePendingSelectTeam()).toBe(null);
   });
 
   it('leaves flags untouched when the kind is not requested', () => {
-    stageTeamSignals({ creator: true });
-    expect(consumePendingGotoAdd()).toBe(false);
-    expect(consumePendingGotoAddTeam()).toBe(true);
+    stageTeamSignals({ memberBuilder: true });
+    expect(consumePendingGotoAdd()).toBe(true);
     expect(consumePendingGotoRoster()).toBe(false);
     expect(consumePendingSelectTeam()).toBe(null);
   });

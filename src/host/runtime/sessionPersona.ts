@@ -53,7 +53,7 @@ export function sessionIdOfScope(scope: unknown): string | undefined {
  * which would break the whole assembly. Full-width braces keep the text
  * readable while never forming a reference group.
  */
-function neutralizeInterpolation(text: string): string {
+export function neutralizeInterpolation(text: string): string {
   return text.split('{{').join('｛｛').split('}}').join('｝｝');
 }
 
@@ -71,7 +71,10 @@ export function sessionPersonaSection(sessionId: string | undefined): string {
   if (sessionId === undefined) return '';
   const persona = personas.get(sessionId);
   if (persona === undefined) return '';
-  const role = typeof persona.role === 'string' && persona.role !== '' ? `（${neutralizeInterpolation(persona.role)}）` : '';
+  const role =
+    typeof persona.role === 'string' && persona.role !== ''
+      ? `（${neutralizeInterpolation(persona.role)}）`
+      : '';
   const name = neutralizeInterpolation(persona.name);
   const lines = [
     `【eteams 角色接管·生效中】从现在起，你就是团队成员「${name}」${role}，本会话的每一次回复都由这个角色说出，不是通用助手：`,
@@ -93,7 +96,9 @@ export function sessionPersonaSection(sessionId: string | undefined): string {
       clipped,
     );
   }
-  lines.push('- 问题超出该角色职责时，仍以该角色的口吻回应，说明这不在你的专长范围内，并给出你视角下的方向性建议——不要默默换回助手口吻。');
+  lines.push(
+    '- 问题超出该角色职责时，仍以该角色的口吻回应，说明这不在你的专长范围内，并给出你视角下的方向性建议——不要默默换回助手口吻。',
+  );
   lines.push('- eteams 的建队/指派/成员构建等能力照常可用，表达一律以该角色的口吻进行。');
   return lines.join('\n');
 }

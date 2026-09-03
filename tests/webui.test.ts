@@ -10,8 +10,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Context } from '@deepseek-ai/cordis';
 import { ETeamsConfig, type ETeamsResolvedConfig } from '../src/host/config';
 import { createCaptainTools } from '../src/host/tools/captainTools';
+import { createMemberTools } from '../src/host/tools/memberTools';
 import { installWebSurface, summarizeEvent, teamSnapshot } from '../src/host/runtime/webui';
 import { archiveRoot } from '../src/host/state/events';
+import { taskSlug } from '../src/host/model/taskMachine';
 import type { TeamState } from '../src/host/model/types';
 
 let workspace: string;
@@ -782,6 +784,257 @@ describe('panel write routes (M5 first slice)', () => {
     const entry = roster2.members.find((m) => m.name === 'Frank-2')!;
     expect(entry.role).toBe('engineer');
     expect(entry.personaMd).toBe('# Frank-2 副本手册');
+  });
+});
+
+describe('conversation task workflow (docs/26)', () => {
+  /**
+   * Combined harness: the captain/member tool face and the panel web surface
+   * share one host ctx (fake subagent runtime hands out sequential childIds),
+   * so a test can drive the full loop — 对话提交 → 面板拆解 → 面板批准 →
+   * 执行 → 主任务自动收口 — end to end.
+   */
+  async function installFull(): Promise<{
+    handler: (req: unknown, res: unknown) => Promise<void>;
+    post: (path: string, body: unknown) => Promise<{ code: number; body: string }>;
+    call: (name: string, args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    mem: (
+      agent: { id: string },
+      name: string,
+      args: Record<string, unknown>,
+    ) => Promise<Record<string, unknown>>;
+    memberAgent: (childId: string) => { id: string; session: { header: { cwd: string } } };
+  }> {
+    const registered: { handler: (req: unknown, res: unknown) => Promise<void> }[] = [];
+    const captains = new Map<string, { id: string; session: { header: { cwd: string } } }>();
+    let childCounter = 0;
+    const ctx = {
+      logger: { info: () => undefined, warn: () => undefined },
+      subagents: {
+        async startContinuable() {
+          const childId = `sess-child-${++childCounter}`;
+          return { childId, messageId: 'm-fake' };
+        },
+        async followup() {
+          return 'm-fake';
+        },
+        interrupt() {},
+      },
+      agents: { get: (id: string) => captains.get(id) },
+      tools: { register() {} },
+      systemPrompt: { section() {} },
+      get: (key: string) =>
+        key === 'webServer'
+          ? {
+              register: (route: { handler: (req: unknown, res: unknown) => Promise<void> }) => {
+                registered.push(route);
+              },
+            }
+          : key === 'workspaceRegistry'
+            ? { list: () => [{ path: workspace, title: 'ws' }] }
+            : undefined,
+      effect: (fn: () => unknown) => {
+        fn();
+        return () => undefined;
+      },
+    } as unknown as Context;
+    const captainAgent = { id: 'cap-conv', session: { header: { cwd: workspace } } };
+    captains.set(captainAgent.id, captainAgent);
+    const captainTools = createCaptainTools(config, ctx);
+    const memberTools = createMemberTools(config, ctx);
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const tool = captainTools.find((t) => t.name === name);
+      if (!tool) throw new Error(`missing captain tool ${name}`);
+      return (await tool.execute(
+        args as never,
+        { agent: captainAgent, signal: undefined } as never,
+      )) as Record<string, unknown>;
+    };
+    const memberAgent = (childId: string) => ({
+      id: childId,
+      session: { header: { cwd: workspace } },
+    });
+    const mem = async (agent: { id: string }, name: string, args: Record<string, unknown>) => {
+      const tool = memberTools.find((t) => t.name === name);
+      if (!tool) throw new Error(`missing member tool ${name}`);
+      return (await tool.execute(args as never, { agent, signal: undefined } as never)) as Record<
+        string,
+        unknown
+      >;
+    };
+    installWebSurface(ctx, config);
+    const handler = registered[0]!.handler;
+    const post = async (path: string, body: unknown) => {
+      const r = {
+        code: 0,
+        body: '',
+        writeHead(code: number) {
+          this.code = code;
+        },
+        end(data?: string) {
+          this.body = data ?? '';
+        },
+      };
+      const payload = JSON.stringify(body);
+      await handler(
+        {
+          method: 'POST',
+          url: path,
+          on(event: string, cb: (chunk?: Buffer) => void) {
+            if (event === 'data') cb(Buffer.from(payload, 'utf8'));
+            if (event === 'end') cb();
+          },
+        },
+        r,
+      );
+      return { code: r.code, body: r.body };
+    };
+    return { handler, post, call, mem, memberAgent };
+  }
+
+  it('binds and clears the session team via POST /session-team (团队必须存在)', async () => {
+    const { post } = await installFull();
+    const created = await post('/eteams-api/team', { name: '绑定团队', sessionId: 'cap-conv' });
+    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
+    const bind = await post('/eteams-api/session-team', { sessionId: 'sess-a', teamId });
+    expect(bind.code).toBe(200);
+    // Stale selection (team deleted) → 404, not a silent bind.
+    const bad = await post('/eteams-api/session-team', { sessionId: 'sess-a', teamId: 'ghost' });
+    expect(bad.code).toBe(404);
+    // Empty fields are rejected.
+    const blank = await post('/eteams-api/session-team', { sessionId: 'sess-a', teamId: '' });
+    expect(blank.code).toBe(400);
+    const clear = await post('/eteams-api/session-team/clear', { sessionId: 'sess-a' });
+    expect(clear.code).toBe(200);
+    const clearBlank = await post('/eteams-api/session-team/clear', {});
+    expect(clearBlank.code).toBe(400);
+  });
+
+  it('runs the docs/26 loop: 提交 → 面板拆解 → 批准 → 执行 → 主任务自动收口', async () => {
+    const h = await installFull();
+    const created = await h.post('/eteams-api/team', { name: '对话任务', sessionId: 'cap-conv' });
+    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
+    await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Alice', role: 'researcher' });
+    await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Bob', role: 'engineer' });
+
+    // 1. 对话提交：staged 团队立即生成任务 ID + 专属文件夹（不等批准）。
+    const submitted = await h.call('eteams_submit_task', {
+      subject: '官网迁移',
+      description: '把官网迁到新域名',
+      questionnaire: ['交付形式？', '验收偏好？'],
+    });
+    expect(submitted.ok).toBe(true);
+    expect(submitted.status).toBe('draft');
+    let team = readTeamFromDisk(teamId);
+    const group = team.tasks[0]!;
+    expect(group.kind).toBe('group');
+    expect(team.workDir).toBeTruthy();
+    expect(submitted.folder).toBe(`${team.workDir}/tasks/${taskSlug(group)}`);
+    const groupDir = join(workspace, team.workDir!, 'tasks', taskSlug(group));
+    expect(existsSync(join(groupDir, 'contract.md'))).toBe(true);
+    expect(existsSync(join(groupDir, 'notes.md'))).toBe(true);
+
+    // 2. 面板拆解：parentTaskId 挂任务单；chain 站点 = 成员槽接力。
+    const sub = await h.post(`/eteams-api/team/${teamId}/task`, {
+      subject: '梳理页面清单',
+      parentTaskId: group.id,
+      chain: [
+        { member: 'Alice', stageBrief: '调研' },
+        { member: 'Bob', stageBrief: '整理' },
+      ],
+    });
+    expect(sub.code).toBe(200);
+    const subId = (JSON.parse(sub.body) as { taskId: string }).taskId;
+    team = readTeamFromDisk(teamId);
+    const subRec = team.tasks.find((t) => t.id === subId)!;
+    expect(subRec.parentId).toBe(group.id);
+    expect(subRec.status).toBe('draft');
+    // 小任务文件夹落在主任务 sub/ 下（问询结论写回主任务 contract）。
+    expect(
+      existsSync(
+        join(
+          workspace,
+          team.workDir!,
+          'tasks',
+          taskSlug(group),
+          'sub',
+          taskSlug(subRec),
+          'notes.md',
+        ),
+      ),
+    ).toBe(true);
+
+    // 3. 面板修改（主题 + 成员槽）与删除。
+    const upd = await h.post(`/eteams-api/team/${teamId}/task/${subId}/update`, {
+      subject: '梳理新旧页面映射',
+      chain: [{ member: 'Bob', stageBrief: 'Bob 先行' }],
+    });
+    expect(upd.code).toBe(200);
+    team = readTeamFromDisk(teamId);
+    expect(team.tasks.find((t) => t.id === subId)!.subject).toBe('梳理新旧页面映射');
+    expect(team.tasks.find((t) => t.id === subId)!.chain[0]!.member).toBe('Bob');
+
+    const temp = await h.post(`/eteams-api/team/${teamId}/task`, {
+      subject: '临时小任务',
+      parentTaskId: group.id,
+    });
+    const tempId = (JSON.parse(temp.body) as { taskId: string }).taskId;
+    const del = await h.post(`/eteams-api/team/${teamId}/task/${tempId}/delete`, {});
+    expect(del.code).toBe(200);
+    expect(readTeamFromDisk(teamId).tasks.some((t) => t.id === tempId)).toBe(false);
+
+    // 4. 面板批准：staged → running（fake spawn 两成员）；重复批准 400。
+    const approve = await h.post(`/eteams-api/team/${teamId}/approve`, {});
+    expect(approve.code).toBe(200);
+    team = readTeamFromDisk(teamId);
+    expect(team.phase).toBe('running');
+    expect(team.tasks.find((t) => t.id === subId)!.status).toBe('ready');
+    const again = await h.post(`/eteams-api/team/${teamId}/approve`, {});
+    expect(again.code).toBe(400);
+
+    // 5. 执行：指派链首 Bob → claim → 未领取窗口关闭（合同冻结，改删 400）。
+    const assigned = await h.call('eteams_assign_task', { taskId: subId, member: 'Bob' });
+    expect(assigned.ok).toBe(true);
+    const childId = readTeamFromDisk(teamId).members.find((m) => m.name === 'Bob')!.id!;
+    const bob = h.memberAgent(childId);
+    const claimed = await h.mem(bob, 'eteams_claim_task', { taskId: subId });
+    const frozenUpd = await h.post(`/eteams-api/team/${teamId}/task/${subId}/update`, {
+      subject: '迟到修改',
+    });
+    expect(frozenUpd.code).toBe(400);
+    const frozenDel = await h.post(`/eteams-api/team/${teamId}/task/${subId}/delete`, {});
+    expect(frozenDel.code).toBe(400);
+
+    // 6. 末个小任务完成 → 主任务自动收口（joined outcome + 事件）。
+    const done = await h.mem(bob, 'eteams_complete_task', {
+      taskId: subId,
+      attemptId: claimed.attemptId,
+      token: claimed.token,
+      output: '新旧页面映射表完成',
+    });
+    expect(done.done).toBe(true);
+    team = readTeamFromDisk(teamId);
+    expect(team.tasks.find((t) => t.id === group.id)!.status).toBe('completed');
+    expect(team.tasks.find((t) => t.id === group.id)!.outcome).toContain('映射表完成');
+
+    // 快照投影：kind/parentId/folder；progress 只统计非 group 任务。
+    const snap = teamSnapshot(team, workspace, config);
+    expect(snap.workDir).toBe(team.workDir);
+    expect(snap.progress).toEqual({ completed: 1, total: 1, cancelled: 0, active: 0 });
+    const views = snap.tasks as {
+      taskId: string;
+      kind: string;
+      parentId: string | null;
+      folder: string | null;
+    }[];
+    const subView = views.find((t) => t.taskId === subId)!;
+    expect(subView.kind).toBe('task');
+    expect(subView.parentId).toBe(group.id);
+    expect(subView.folder).toContain('sub/');
+    const groupView = views.find((t) => t.taskId === group.id)!;
+    expect(groupView.kind).toBe('group');
+    expect(groupView.folder).not.toContain('sub/');
+    void h.handler;
   });
 });
 

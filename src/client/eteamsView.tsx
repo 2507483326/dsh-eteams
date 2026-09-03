@@ -76,11 +76,9 @@ import { Avatar } from './avatar';
 import {
   activateConversationTab,
   consumePendingGotoAdd,
-  consumePendingGotoAddTeam,
   consumePendingGotoRoster,
   consumePendingSelectTeam,
   GOTO_ADD_EVENT,
-  GOTO_ADD_TEAM_EVENT,
   GOTO_ROSTER_EVENT,
   SELECT_TEAM_EVENT,
 } from './bridge';
@@ -99,6 +97,7 @@ import {
   DialogTitle,
 } from './components/ui/dialog';
 import { Input } from './components/ui/input';
+import { Textarea } from './components/ui/textarea';
 import { Popover, PopoverContent, PopoverTrigger } from './components/ui/popover';
 import { Progress } from './components/ui/progress';
 import {
@@ -111,8 +110,11 @@ import {
 import { MdEditor } from './mdEditor';
 import {
   addTeamMember,
+  approveTeamPlan,
+  createTeamTask,
   createTeamViaPanel,
   deleteTeam,
+  deleteTeamTask,
   fetchAgentActivity,
   removeTeamMember,
   setLeaderModel,
@@ -120,9 +122,11 @@ import {
   setTeamLeaderRemoved,
   syncMemberToRoster,
   updateMemberPersona,
+  updateTeamTask,
   type BuildDraft,
   type InterviewQuestion,
   type RosterMember,
+  type TaskSlotInput,
 } from './api';
 import { catalogRow, useModelCatalog, type ModelCatalogState } from './modelCatalog';
 import {
@@ -742,10 +746,6 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
   // 宽栏侧栏筛选框（S24-2 官网 Quick search 签名）：对五个页签名做大小写
   // 不敏感子串过滤，空串全显；纯前端视觉态，不触碰导航数据。
   const [railQuery, setRailQuery] = useState('');
-  // 新增团队弹窗信号（用户迭代 2026-09）：递增计数驱动 TeamTab 打开创建
-  // 弹窗（同 openAddTick 模式）——团队页头右上角按钮与 GOTO_ADD_TEAM 跳转
-  // 信号（hero/弹层「新增团队」）都走它，表单卡片已撤。
-  const [openCreateTick, setOpenCreateTick] = useState(0);
   // docs/22 S22-2：面板作用域根宽 ≥ RAIL_WIDE_MIN_WIDTH 用官网风格宽栏，
   // 否则回落 84px 窄栏。Tailwind v3 无容器查询，以作用域根实测为准；
   // useLayoutEffect 首帧前同步测量避免闪栏，ResizeObserver 跟随布局变化，
@@ -774,14 +774,6 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
       dispatch({ type: 'ui/setNav', payload: 'roster' });
       setOpenAddTick((t) => t + 1);
     };
-    // 「新增团队」信号：落到团队 tab，并打开创建弹窗（表单卡片已撤——
-    // hero/弹层的「新增团队」入口同走这个信号，createTick 驱动 TeamTab 的
-    // Dialog）。
-    const hTeam = (): void => {
-      consumePendingGotoAddTeam();
-      dispatch({ type: 'ui/setNav', payload: 'team' });
-      setOpenCreateTick((t) => t + 1);
-    };
     // 「成员 tab」信号（按钮成员选中直达，docs/13.8.2）：落成员页，不带新增表单。
     const hRoster = (): void => {
       consumePendingGotoRoster();
@@ -795,18 +787,15 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
         dispatch({ type: 'ui/setSelectedTeam', payload: id });
     };
     window.addEventListener(GOTO_ADD_EVENT, h);
-    window.addEventListener(GOTO_ADD_TEAM_EVENT, hTeam);
     window.addEventListener(GOTO_ROSTER_EVENT, hRoster);
     window.addEventListener(SELECT_TEAM_EVENT, hSelect);
     // 补消费挂载前的跳转信号：跳转方先点宿主 tab 再触发本面板
     // 挂载，窗口事件会错过——pending 标记在这里兜底（docs/19.16）。
     if (consumePendingGotoAdd()) h();
-    if (consumePendingGotoAddTeam()) hTeam();
     if (consumePendingGotoRoster()) hRoster();
     hSelect();
     return () => {
       window.removeEventListener(GOTO_ADD_EVENT, h);
-      window.removeEventListener(GOTO_ADD_TEAM_EVENT, hTeam);
       window.removeEventListener(GOTO_ROSTER_EVENT, hRoster);
       window.removeEventListener(SELECT_TEAM_EVENT, hSelect);
     };
@@ -937,18 +926,11 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
         )}
 
         <div className={CONTENT_CLASS}>
-          {/* 页签标题（S24-2，官网 h2 签名）：每 tab 内容区顶部一行页头，
-            团队页头右侧带「＋ 新增团队」主按钮（打开创建弹窗——名称即建，
-            用户迭代 2026-09：看板页不再放新增入口）。 */}
+          {/* 页签标题（S24-2，官网 h2 签名）：每 tab 内容区顶部一行页头。
+            团队页的页头（含「＋ 新增团队」按钮）由 TeamTab 自渲染——创建
+            弹窗开合是它的组件内瞬态（用户反馈 2026-09：跳转信号自开弹窗
+            撤销，创建只从这里进）。 */}
           {activeTab === 'board' && <PageHeader label="看板" />}
-          {activeTab === 'team' && (
-            <PageHeader label="团队">
-              <Button type="button" size="sm" onClick={() => setOpenCreateTick((t) => t + 1)}>
-                <Plus className="h-3.5 w-3.5" />
-                新增团队
-              </Button>
-            </PageHeader>
-          )}
           {activeTab === 'roster' && <PageHeader label="角色" />}
           {activeTab === 'tasks' && <PageHeader label="任务" />}
           {activeTab === 'reports' && <PageHeader label="汇报" />}
@@ -967,7 +949,6 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
               pool={pool}
               team={team}
               roster={roster}
-              createTick={openCreateTick}
               memberCap={state.maxMembers}
               onSelectTeam={(id) => dispatch({ type: 'ui/setSelectedTeam', payload: id })}
               agentActivity={agentActivity}
@@ -985,6 +966,7 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
               onDeleted={refreshRoster}
               onPrefillAddPeople={prefillAddPeople}
               openAddTick={openAddTick}
+              onAddTickConsumed={() => setOpenAddTick(0)}
             />
           )}
           {activeTab === 'tasks' && team !== undefined && (
@@ -1026,6 +1008,24 @@ function BoardTab({
   fetchedAt: number;
   error: string | null;
 }): ReactNode {
+  // docs/26 面板批准：staged + 计划待批准时的「批准计划」按钮（确认弹窗 →
+  // POST approve → 立即回拉快照）。hooks 在早退分支之前，规则安全。
+  const [approveOpen, setApproveOpen] = useState(false);
+  const [approveBusy, setApproveBusy] = useState(false);
+  const [approveError, setApproveError] = useState<string | null>(null);
+  const confirmApprove = (): void => {
+    if (team === undefined) return;
+    setApproveBusy(true);
+    setApproveError(null);
+    approveTeamPlan(team.teamId)
+      .then(() => {
+        setApproveOpen(false);
+        refreshActivitySoon();
+      })
+      .catch((e: unknown) => setApproveError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setApproveBusy(false));
+  };
+
   if (team === undefined) {
     return (
       <div className={EMPTY_CLASS}>
@@ -1089,6 +1089,14 @@ function BoardTab({
             : ''}
         </div>
         {team.workDir !== null && <div className={MUTED_CLASS}>任务文档：{team.workDir}/</div>}
+        {/* docs/26 面板批准入口：计划待批准（staged + awaiting_review）时出现。 */}
+        {team.phase === 'staged' && team.planReviewState === 'awaiting_review' && (
+          <div className="mt-2.5">
+            <Button type="button" size="sm" onClick={() => setApproveOpen(true)}>
+              批准计划
+            </Button>
+          </div>
+        )}
       </Card>
       <Card className={PANEL_CARD_CLASS}>
         <div className={SECTION_TITLE_CLASS}>最近动态</div>
@@ -1111,6 +1119,46 @@ function BoardTab({
           数据更新于 {fetchedAt === 0 ? '—' : relativeTime(fetchedAt, now)}
         </div>
       </Card>
+
+      {/* docs/26 批准计划确认弹窗：批准 = staged → running、小任务 draft→ready、
+      全员子代理启动；合同冻结，后续变更在对话中留痕。失败就地显示。 */}
+      <Dialog
+        open={approveOpen}
+        onOpenChange={(next) => {
+          if (!next) {
+            setApproveOpen(false);
+            setApproveError(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-sm">
+          <DialogHeader className="space-y-1 text-left">
+            <DialogTitle>批准计划</DialogTitle>
+            <DialogDescription className={MUTED_CLASS}>
+              批准后团队进入执行：小任务转为待指派，成员子代理全部启动；合同随之冻结，
+              后续变更需在对话中留痕。
+            </DialogDescription>
+          </DialogHeader>
+          {approveError !== null && <FormErrorNote>{approveError}</FormErrorNote>}
+          <div className="flex items-center justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={approveBusy}
+              onClick={() => {
+                setApproveOpen(false);
+                setApproveError(null);
+              }}
+            >
+              取消
+            </Button>
+            <Button type="button" size="sm" disabled={approveBusy} onClick={confirmApprove}>
+              批准
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -1126,7 +1174,6 @@ function TeamTab({
   pool,
   team,
   roster,
-  createTick,
   memberCap,
   onSelectTeam,
   agentActivity,
@@ -1138,8 +1185,6 @@ function TeamTab({
   pool: TeamSnapshot[];
   team: TeamSnapshot | undefined;
   roster: RosterMember[];
-  /** 新增团队弹窗跳转信号（递增计数）：>0 且未消费时打开创建弹窗（openAddTick 同款）。 */
-  createTick: number;
   /** 每队成员上限（host /state maxMembers）：添加成员弹窗的购物车配额。 */
   memberCap: number;
   onSelectTeam: (teamId: string) => void;
@@ -1153,7 +1198,8 @@ function TeamTab({
   // 列表/详情两级视图（用户迭代 2026-09）：null=列表（小卡片栅格），非 null=
   // 详情（该团队 id）。弹窗建团成功后自动跳进新团队详情。
   const [detailId, setDetailId] = useState<string | null>(null);
-  // 创建弹窗开合（组件内瞬态）：由 createTick 信号打开，关闭清信号痕迹。
+  // 创建弹窗开合（组件内瞬态）：页头「＋ 新增团队」按钮打开；卸载即复位
+  // （切 tab 重挂不残留——用户反馈 2026-09 的自开弹窗类问题不再可能）。
   const [createOpen, setCreateOpen] = useState(false);
   // 添加成员弹窗（用户迭代 2026-09：Ele.me 点餐式）开合；详情态成员操作
   // （模型选择/移出/领队移除）的错误就地提示，不再静默吞掉。
@@ -1178,13 +1224,6 @@ function TeamTab({
   // 缺失（旧运行时），退回静态选项。成员/领队卡的选项与推理等级词汇表都
   // 来自这里。
   const modelCatalog = useModelCatalog(sessionId);
-  const lastCreateTickRef = useRef(0);
-  useEffect(() => {
-    if (createTick > 0 && createTick !== lastCreateTickRef.current) {
-      lastCreateTickRef.current = createTick;
-      setCreateOpen(true);
-    }
-  }, [createTick]);
   // 面板创建团队绑定当前会话（领队即该会话代理）；浮层/无会话时没有可绑定的
   // 会话，创建按钮禁用并给出指引，而不是提交后吃 400 错误。
   const canCreate = typeof sessionId === 'string' && sessionId !== '';
@@ -1425,6 +1464,15 @@ function TeamTab({
 
   return (
     <div>
+      {/* 团队页头（S24-2，官网 h2 签名）：标题 + 右侧「＋ 新增团队」主按钮。
+        创建弹窗只从这里开——跳转信号自开弹窗已撤（用户反馈 2026-09：一进
+        团队页就弹新增弹窗很突兀）。 */}
+      <PageHeader label="团队">
+        <Button type="button" size="sm" onClick={() => setCreateOpen(true)}>
+          <Plus className="h-3.5 w-3.5" />
+          新增团队
+        </Button>
+      </PageHeader>
       {/* 新增团队弹窗（用户迭代 2026-09）：shadcn Dialog + Input，输入名称按
       「新增团队」创建——创建由面板会话绑定限制（canCreate）同表单一致。 */}
       <Dialog
@@ -3049,6 +3097,7 @@ function MembersTab({
   onDeleted,
   onPrefillAddPeople,
   openAddTick,
+  onAddTickConsumed,
 }: {
   members: RosterMember[];
   pool: TeamSnapshot[];
@@ -3057,6 +3106,8 @@ function MembersTab({
   onPrefillAddPeople: () => 'set' | 'copied' | 'aborted';
   /** 创建卡片跳转信号：>0 时打开新增工作台（docs/19.9.5）。 */
   openAddTick: number;
+  /** 消费回执：信号打开新增工作台后清零（防滞留信号重进角色页时复跳）。 */
+  onAddTickConsumed: () => void;
 }): ReactNode {
   const dispatch = useDispatch();
   const [view, setView] = useState<'list' | 'add' | 'detail'>('list');
@@ -3140,15 +3191,21 @@ function MembersTab({
     return () => clearInterval(h);
   }, [refreshBuild]);
 
-  // 创建卡片跳转（docs/19.9.5）：信号递增时打开新增工作台（AI 创建路径）。
+  // 创建卡片跳转（docs/19.9.5）：父级消费制——滞留信号曾让重进角色页时
+  // 自动跳进新增工作台；tick 归零后复位 lastTickRef。
   const lastAddTickRef = useRef(0);
   useEffect(() => {
-    if (openAddTick > 0 && openAddTick !== lastAddTickRef.current) {
+    if (openAddTick === 0) {
+      lastAddTickRef.current = 0;
+      return;
+    }
+    if (openAddTick !== lastAddTickRef.current) {
       lastAddTickRef.current = openAddTick;
       setAddMode('ai');
       setView('add');
+      onAddTickConsumed();
     }
-  }, [openAddTick]);
+  }, [openAddTick, onAddTickConsumed]);
 
   // 删除角色（用户反馈）：先弹确认框；失败信息显式上报。领队与角色构建师
   // 为保留角色，面板不给删除按钮（宿主同样拒删）。
@@ -4177,9 +4234,27 @@ function MembersTab({
   );
 }
 
+/** 成员槽编辑行（任务编辑弹窗内的一站草稿）。 */
+interface SlotDraft {
+  member: string;
+  stageBrief: string;
+}
+
+/** 任务编辑/新增弹窗目标（docs/26）：group = 挂靠的主任务（任务单）；
+ * task = 被编辑的小任务，null = 新增小任务。 */
+interface TaskEditTarget {
+  group: TaskView;
+  task: TaskView | null;
+}
+
 /** 任务：按状态分组的任务清单（原「任务」）。S13 Tailwind 化：分组头 pill、
 任务行、依赖芯片与空态全迁 Tailwind 类；详情抽屉为 shadcn Dialog（见
-TaskDrawer），开合仍走 ui model 的 setExpandedTask。 */
+TaskDrawer），开合仍走 ui model 的 setExpandedTask。
+docs/26 对话任务：顶部「对话任务」区块渲染 kind==='group' 的主任务（任务
+单）卡 + 嵌套小任务行；小任务在 draft/ready（未领取）时面板可改删——修
+改弹窗（主题/说明/成员槽编辑）与删除确认弹窗，主任务卡内可新增小任务。
+编辑/删除弹窗为组件内瞬态 useState，不入 ui model；保存/删除成功后
+refreshActivitySoon 立即回拉快照。 */
 function TasksTab({
   team,
   now,
@@ -4191,10 +4266,189 @@ function TasksTab({
   expandedTask: string | null;
   setExpandedTask: (id: string | null) => void;
 }): ReactNode {
+  const [editTarget, setEditTarget] = useState<TaskEditTarget | null>(null);
+  const [editSubject, setEditSubject] = useState('');
+  const [editDesc, setEditDesc] = useState('');
+  const [editSlots, setEditSlots] = useState<SlotDraft[]>([]);
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<TaskView | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const editingTask = editTarget !== null && editTarget.task !== null ? editTarget.task : null;
+
+  const openEdit = (group: TaskView, task: TaskView | null): void => {
+    setEditTarget({ group, task });
+    setEditSubject(task?.subject ?? '');
+    setEditDesc(task?.description ?? '');
+    setEditSlots(
+      task === null ? [] : task.chain.map((s) => ({ member: s.member, stageBrief: s.stageBrief })),
+    );
+    setEditError(null);
+  };
+  const closeEdit = (): void => {
+    setEditTarget(null);
+    setEditError(null);
+  };
+  const saveEdit = async (): Promise<void> => {
+    const target = editTarget;
+    if (target === null) return;
+    // 未选成员的空站点丢弃；chain 整体替换——未动的站原样重发。
+    const chain: TaskSlotInput[] = editSlots
+      .filter((s) => s.member !== '')
+      .map((s) => ({ member: s.member, stageBrief: s.stageBrief.trim() }));
+    setEditBusy(true);
+    setEditError(null);
+    try {
+      if (target.task === null) {
+        await createTeamTask(team.teamId, {
+          subject: editSubject.trim(),
+          ...(editDesc.trim() !== '' ? { description: editDesc.trim() } : {}),
+          parentTaskId: target.group.taskId,
+          ...(chain.length > 0 ? { chain } : {}),
+        });
+      } else {
+        await updateTeamTask(team.teamId, target.task.taskId, {
+          subject: editSubject.trim(),
+          description: editDesc.trim(),
+          chain,
+        });
+      }
+      setEditTarget(null);
+      refreshActivitySoon();
+    } catch (e) {
+      setEditError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setEditBusy(false);
+    }
+  };
+  const confirmDelete = async (): Promise<void> => {
+    const target = deleteTarget;
+    if (target === null) return;
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      await deleteTeamTask(team.teamId, target.taskId);
+      setDeleteTarget(null);
+      refreshActivitySoon();
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
+
+  const groups = team.tasks.filter((t) => t.kind === 'group');
   return (
     <div>
+      {/* docs/26 对话任务：主任务（任务单）卡 + 嵌套小任务行。小任务在
+      draft/ready（未领取）时可改删；领取后合同冻结，按钮消失（06.4）。 */}
+      {groups.length > 0 && (
+        <div className="mb-3.5">
+          <div className="mb-1 flex items-center gap-1.5 text-sm font-semibold leading-6 text-foreground">
+            <span className={dotClass('info')} />
+            对话任务
+            <span className="text-xs font-normal text-muted-foreground">· {groups.length}</span>
+          </div>
+          {groups.map((group) => {
+            const subs = team.tasks.filter((t) => t.parentId === group.taskId);
+            const done = subs.filter((t) => t.status === 'completed').length;
+            const mutable = group.status === 'draft' || group.status === 'ready';
+            return (
+              <div
+                key={group.taskId}
+                className={cn(
+                  'mb-2.5 rounded-[8px] border border-solid bg-background px-3 py-2.5',
+                  BORDER_L1_CLASS,
+                )}
+              >
+                <div>
+                  <strong>{group.taskId}</strong> {group.subject}
+                  <span className={MUTED_CLASS}>
+                    {' '}
+                    {STATUS_LABELS[group.status] ?? group.status} · 小任务 {done}/{subs.length} 完成
+                  </span>
+                </div>
+                {group.folder !== null && (
+                  <div className={MUTED_CLASS}>文件夹：{group.folder}/</div>
+                )}
+                {mutable && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="mt-1.5"
+                    onClick={() => openEdit(group, null)}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    新增小任务
+                  </Button>
+                )}
+                {subs.map((t) => {
+                  const subMutable = t.status === 'draft' || t.status === 'ready';
+                  return (
+                    <div key={t.taskId}>
+                      <div
+                        className={cn(TASK_ROW_CLASS, 'ml-4')}
+                        onClick={() => setExpandedTask(expandedTask === t.taskId ? null : t.taskId)}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <strong>{t.taskId}</strong> {t.subject}
+                            <span className={MUTED_CLASS}>
+                              {' '}
+                              {STATUS_LABELS[t.status] ?? t.status}
+                              {t.assignee !== null ? ` · ${t.assignee}` : ''}
+                            </span>
+                          </div>
+                          {subMutable && (
+                            <div
+                              className="flex shrink-0 gap-1.5"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => openEdit(group, t)}
+                              >
+                                修改
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setDeleteTarget(t)}
+                              >
+                                删除
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                        <TaskStations task={t} />
+                      </div>
+                      {expandedTask === t.taskId && (
+                        <TaskDrawer
+                          team={team}
+                          task={t}
+                          now={now}
+                          onClose={() => setExpandedTask(null)}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      )}
       {STATUS_GROUPS.map((group) => {
-        const rows = team.tasks.filter((t) => group.statuses.includes(t.status));
+        // docs/26：主任务（group）在上方「对话任务」区块，小任务挂在组卡内
+        // ——状态分组只列顶层普通任务。
+        const rows = team.tasks.filter(
+          (t) => group.statuses.includes(t.status) && t.parentId === null && t.kind !== 'group',
+        );
         if (rows.length === 0) return null;
         return (
           <div key={group.id} className="mb-3.5">
@@ -4244,8 +4498,172 @@ function TasksTab({
         );
       })}
       {team.tasks.length === 0 && (
-        <div className={EMPTY_CLASS}>还没有任务。计划批准后任务会出现在这里。</div>
+        <div className={EMPTY_CLASS}>
+          还没有任务。在对话中把任务交给团队，或计划批准后任务会出现在这里。
+        </div>
       )}
+
+      {/* docs/26 小任务编辑/新增弹窗：主题 + 说明 + 成员槽（站点按序接力）。
+      新增时空表单；修改时按当前值回填（成员槽从执行链展开）。host 校验
+      成员在团/合同冻结（领取后），错误就地显示。 */}
+      <Dialog
+        open={editTarget !== null}
+        onOpenChange={(next) => {
+          if (!next) closeEdit();
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader className="space-y-1 text-left">
+            <DialogTitle>
+              {editingTask !== null ? `修改 ${editingTask.taskId}` : '新增小任务'}
+            </DialogTitle>
+            <DialogDescription className={MUTED_CLASS}>
+              挂靠任务单 {editTarget?.group.taskId ?? ''}（{editTarget?.group.subject ?? ''}）；
+              成员槽按序接力，站点留空可跳过。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2.5">
+            <Input
+              value={editSubject}
+              autoFocus
+              placeholder="小任务主题"
+              onChange={(e) => setEditSubject(e.target.value)}
+            />
+            <Textarea
+              value={editDesc}
+              rows={2}
+              placeholder="说明 / 验收要点（可空）"
+              onChange={(e) => setEditDesc(e.target.value)}
+            />
+            <div>
+              <span className={FORM_LABEL_CLASS}>成员槽（按序接力）</span>
+              {editSlots.map((s, i) => (
+                <div key={i} className="mt-1.5 flex items-center gap-1.5">
+                  <Select
+                    value={s.member === '' ? SELECT_NONE : s.member}
+                    onValueChange={(v) =>
+                      setEditSlots((list) =>
+                        list.map((x, j) =>
+                          j === i ? { ...x, member: v === SELECT_NONE ? '' : v } : x,
+                        ),
+                      )
+                    }
+                  >
+                    <SelectTrigger className="h-[30px] w-[42%] shrink-0 px-2.5 text-[12px] font-medium">
+                      <SelectValue placeholder="— 成员 —" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={SELECT_NONE} className="text-[12px]">
+                        — 成员 —
+                      </SelectItem>
+                      {team.members.map((m) => (
+                        <SelectItem key={m.name} value={m.name} className="text-[12px]">
+                          {m.name}（{m.role}）
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Input
+                    className="h-[30px] min-w-0 flex-1 px-2.5 text-[12px]"
+                    value={s.stageBrief}
+                    placeholder="该站产出 / 交接物"
+                    onChange={(e) =>
+                      setEditSlots((list) =>
+                        list.map((x, j) => (j === i ? { ...x, stageBrief: e.target.value } : x)),
+                      )
+                    }
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="h-[30px] w-[30px] shrink-0"
+                    aria-label="移除站点"
+                    onClick={() => setEditSlots((list) => list.filter((_, j) => j !== i))}
+                  >
+                    <Minus className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              ))}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-1.5"
+                onClick={() => setEditSlots((list) => [...list, { member: '', stageBrief: '' }])}
+              >
+                <Plus className="h-3.5 w-3.5" />
+                添加站点
+              </Button>
+            </div>
+            {editError !== null && <FormErrorNote>{editError}</FormErrorNote>}
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={editBusy}
+                onClick={closeEdit}
+              >
+                取消
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={editBusy || editSubject.trim() === ''}
+                onClick={() => void saveEdit()}
+              >
+                {editingTask !== null ? '保存' : '新增'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* docs/26 小任务删除确认弹窗：未领取（draft/ready）可删，host 校验。 */}
+      <Dialog
+        open={deleteTarget !== null}
+        onOpenChange={(next) => {
+          if (!next) {
+            setDeleteTarget(null);
+            setDeleteError(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-sm">
+          <DialogHeader className="space-y-1 text-left">
+            <DialogTitle>删除小任务</DialogTitle>
+            <DialogDescription className={MUTED_CLASS}>
+              确定删除「{deleteTarget?.taskId ?? ''} {deleteTarget?.subject ?? ''}」？未领取的
+              任务删除后不可恢复。
+            </DialogDescription>
+          </DialogHeader>
+          {deleteError !== null && <FormErrorNote>{deleteError}</FormErrorNote>}
+          <div className="flex items-center justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={deleteBusy}
+              onClick={() => {
+                setDeleteTarget(null);
+                setDeleteError(null);
+              }}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              disabled={deleteBusy}
+              onClick={() => void confirmDelete()}
+            >
+              删除
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

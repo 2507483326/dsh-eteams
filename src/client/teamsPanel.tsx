@@ -21,9 +21,20 @@
  *    hero button（标准模式 neighbor）and the composer popup land on while the
  *    conversation has not started.
  *
- * Pending jump signals (新增团队 / 新增角色 / select-team) are staged BEFORE
+ * 层级（用户反馈 2026-09：设置弹窗被拦）：页面用 z-[500]——压过宿主内容层
+ * （conversation/hero 均 z-auto），但低于宿主模态层（dsh-client-ui-primitives
+ * Modal.module.css `.root` z-index:1000，宿主左下角设置弹窗即此档）：宿主
+ * 弹窗开在整页团队页之上，遮罩顺带压暗页面（标准模态表现）。宿主浮层
+ * （Menu/Tooltip/HoverCard z-100）虽低于页面，但页面打开时内容窗格已被盖住、
+ * 窗格内宿主浮层无从触发；左栏（页面不覆盖）的浮层几何上不与页面重叠。
+ * 宿主层级台账：内容 z-auto < 浮层 100 < 模态 1000 < toast/onboarding 1100
+ * （primitives 各 module.css 实测）。
+ *
+ * Pending jump signals (新增角色 / select-team) are staged BEFORE
  * either surface opens, so the panel consumes them on mount — the same
  * mount-time consumption pattern as openMemberBuilder (docs/19.16).
+ * （新增团队不再走跳转信号——用户反馈 2026-09：一进团队页就弹新增弹窗很突兀，
+ * 创建入口收敛为团队页头右上角的「＋ 新增团队」按钮。）
  *
  * S11 样式迁移（docs/21-client-ui-stack.md 21.6 / D19b/D19c）：全屏页的
  * inline style 迁 Tailwind 类。pane 矩形（left/top/width/height）是实时测量
@@ -52,8 +63,6 @@ import { getApp } from './store/app';
 
 /** Landing options for {@link enterTeamsPanel}: which panel view to open. */
 export interface TeamsPanelOptions {
-  /** Land on the 团队 tab and open the 新增团队 dialog (creator flow). */
-  readonly creator?: boolean;
   /** Open the 新增角色 flow (panel 角色 tab with the build workbench). */
   readonly memberBuilder?: boolean;
   /** Land on the 角色 tab (roster page, no add form). */
@@ -186,7 +195,7 @@ function TeamsOverlay({ onClose }: { onClose: () => void }): ReactNode {
           data-eteams="overlay-page"
           /* S24-2（D22f）：整页底改语义 token --background（官网 v3 值：亮
             白 / 暗 slate-900，不再直引 bg-base 别名）。 */
-          className="fixed z-[1000] flex flex-col bg-background text-foreground"
+          className="fixed z-[500] flex flex-col bg-background text-foreground"
           style={{ left: pane.left, top: pane.top, width: pane.width, height: pane.height }}
         >
           {/* 官网顶栏（S24-2）：--border 细线 + 白底条；左标题（官网条内

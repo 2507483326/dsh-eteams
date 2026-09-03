@@ -20,9 +20,11 @@
  *   border-style:none 会让边框不渲染——基类显式补 `border-solid`
  *   （R1-F3，S3 桥只补默认边框色，接线消费面无需再逐处叠类）。
  *
- * 动画类（data-[state=open]:animate-in 等）依赖 tailwindcss-animate 插件
- * （tailwind.config.ts 已挂）；bg-slate-900/50 / z-50 等为 Tailwind 默认色阶
- * （非宿主变量 token，D19c 的 /alpha 禁令仅约束 token 色；S24-2 D22f：遮罩
+ * 开合动画类已移除（用户反馈 2026-09：宿主 webview 被节流时 CSS 动画冻结，
+ * Radix Presence 等 `animationend` 不卸载——遮罩滞留成半透明暗层挡住整页、
+ * 内容停在近透明「看不见的弹窗」）。无动画时 Radix 立即挂/卸载，该类问题
+ * 不复存在。bg-slate-900/50 / z-50 等为 Tailwind 默认色阶（非宿主变量
+ * token，D19c 的 /alpha 禁令仅约束 token 色；S24-2 D22f：遮罩
  * bg-black/80→bg-slate-900/50，官网式轻遮罩，浅暗通用）。
  *
  * @module dsh-eteams/client/components/ui/dialog
@@ -63,10 +65,7 @@ const DialogOverlay = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Overlay
     ref={ref}
-    className={cn(
-      'fixed inset-0 z-50 bg-slate-900/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
-      className,
-    )}
+    className={cn('fixed inset-0 z-50 bg-slate-900/50', className)}
     {...props}
   />
 ));
@@ -81,7 +80,7 @@ const DialogContent = React.forwardRef<
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        'fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border border-solid bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg',
+        'fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border border-solid bg-background p-6 shadow-lg sm:rounded-lg',
         className,
       )}
       {...props}

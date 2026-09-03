@@ -146,6 +146,13 @@ export interface DecisionRecord {
 export interface TaskRecord {
   id: string;
   subject: string;
+  /**
+   * 任务角色（docs/26）：`group` = 对话提交的主任务（任务单容器，不经执行
+   * 链，随全部小任务完成自动收口）；缺省 `task` = 普通任务（兼容旧数据）。
+   */
+  kind?: 'group' | 'task';
+  /** 父组任务 id（对话拆解的小任务挂到对应 group 下）。 */
+  parentId?: string;
   description?: string;
   acceptance?: string[];
   inScope?: string[];

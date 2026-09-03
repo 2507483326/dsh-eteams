@@ -11,6 +11,9 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import type { Context } from '@deepseek-ai/cordis';
 import type { ETeamsResolvedConfig } from '../config.js';
 import { ETeamsError, stateRootOf, type RuntimeContext } from '../runtime/base.js';
+import { recordEvent } from '../state/events.js';
+import { readTeam } from '../state/store.js';
+import { taskDirRel } from '../runtime/docs.js';
 import {
   createTeam,
   addMember,
@@ -50,7 +53,8 @@ import { stationProgress } from '../model/taskMachine.js';
 import type { TaskRecord } from '../model/types.js';
 
 /** JSON-schema snippet helpers (literal types required by the spec union). */
-const str = (description: string) => ({ type: 'string' as const, description });const strR = (description: string) => ({
+const str = (description: string) => ({ type: 'string' as const, description });
+const strR = (description: string) => ({
   type: 'string' as const,
   description,
   required: true as const,
@@ -378,7 +382,9 @@ export function createCaptainTools(
               properties: {
                 id: str('问题唯一 id'),
                 question: str('问题文本'),
-                header: str('问题题头（可省）：模型常沿用 ask_user_question 的 header 习惯，工作台渲染为问题上方的小标题'),
+                header: str(
+                  '问题题头（可省）：模型常沿用 ask_user_question 的 header 习惯，工作台渲染为问题上方的小标题',
+                ),
                 options: {
                   type: 'array' as const,
                   description: '2-4 个选项，推荐项放首位并在 label 尾加「（推荐）」',
@@ -449,7 +455,12 @@ export function createCaptainTools(
       const inlineAnswers = (Array.isArray(args.answers) ? args.answers : []).filter(
         (a): a is { id: string; choice: string } => {
           const o = a as Record<string, unknown>;
-          return typeof o.id === 'string' && o.id !== '' && typeof o.choice === 'string' && o.choice !== '';
+          return (
+            typeof o.id === 'string' &&
+            o.id !== '' &&
+            typeof o.choice === 'string' &&
+            o.choice !== ''
+          );
         },
       );
       if (inlineAnswers.length > 0) {
@@ -597,7 +608,12 @@ export function createCaptainTools(
       const answers = (Array.isArray(args.answers) ? args.answers : [])
         .filter((a): a is { id: string; choice: string } => {
           const o = a as Record<string, unknown>;
-          return typeof o.id === 'string' && o.id !== '' && typeof o.choice === 'string' && o.choice !== '';
+          return (
+            typeof o.id === 'string' &&
+            o.id !== '' &&
+            typeof o.choice === 'string' &&
+            o.choice !== ''
+          );
         })
         .map((a) => ({ id: a.id, choice: a.choice }));
       if (answers.length === 0) throw new ETeamsError('answers 不能为空');
@@ -737,9 +753,10 @@ export function createCaptainTools(
   const createTaskTool = defineTool({
     name: 'eteams_create_task',
     description:
-      '创建任务：一句主题 + 合同（description/acceptance/inScope/outOfScope/deliverables/idempotencyNote）+ 显式 dependencies + 可选执行链 chain。staged 团队生成草稿，批准后自动就绪；running 团队直接就绪。',
+      '创建任务：一句主题 + 合同（description/acceptance/inScope/outOfScope/deliverables/idempotencyNote）+ 显式 dependencies + 可选执行链 chain。staged 团队生成草稿，批准后自动就绪；running 团队直接就绪。对话任务拆解（docs/26）：传 parentTaskId 把本任务挂为对应主任务（任务单）下的小任务——chain 站点即成员槽，成员按序接力；小任务文件夹落在主任务文件夹 sub/ 下。',
     parameters: {
       subject: strR('任务主题（一句话，作为文件夹 slug）'),
+      parentTaskId: str('父主任务 id（对话任务拆解：挂到对应任务单下）'),
       description: str('任务说明'),
       acceptance: strArr('验收标准（逐条可核对）'),
       inScope: strArr('允许改动的范围'),
@@ -776,9 +793,57 @@ export function createCaptainTools(
     },
   });
 
+  const submitTaskTool = defineTool({
+    name: 'eteams_submit_task',
+    description:
+      '对话任务入口（docs/26）：用户在对话中把一个任务交给团队时先调它——立即生成任务 ID（主任务/任务单容器）与专属任务文件夹，面板「任务」页立刻可见。提交后按工作流推进：先向用户问询明确目标（结论用 eteams_update_task 写回本主任务 description），再用 eteams_create_task（带 parentTaskId）把任务拆解成多个小任务（每个小任务 chain 站点即成员槽）。',
+    parameters: {
+      subject: strR('任务主题（一句话）'),
+      description: str('当前对任务的理解/背景（问询后更新）'),
+      questionnaire: strArr('计划向用户问询的问题（留档；答案更新进 description）'),
+    },
+    output: {
+      schema: {
+        type: 'object' as const,
+        properties: {
+          ok: bool('是否成功'),
+          taskId: str('主任务 id'),
+          status: str('任务状态'),
+          folder: str('专属任务文件夹（相对工作区）'),
+        },
+        additionalProperties: false as const,
+      },
+      render: (_a, v) => text(`任务 ${v.taskId} 已提交（任务单文件夹 ${v.folder}）`),
+    },
+    execute: async (args, exec) => {
+      const env = envForAgent(config, runtime, exec.agent, exec.signal);
+      const caller = await resolveCaller(env, exec.agent!);
+      if (caller.kind !== 'captain') throw new ETeamsError('只有领队可以提交对话任务');
+      const task = await createTask(
+        env,
+        { teamId: caller.team.id, actor: caller.actor },
+        { subject: args.subject, description: args.description, kind: 'group' },
+      );
+      if (args.questionnaire !== undefined && args.questionnaire.length > 0) {
+        await recordEvent(stateRootOf(env), caller.team.id, caller.actor, 'plan.questionnaire', {
+          taskId: task.id,
+          payload: { questions: args.questionnaire },
+        });
+      }
+      const fresh = await readTeam(stateRootOf(env), caller.team.id);
+      return {
+        ok: true as const,
+        taskId: task.id,
+        status: task.status,
+        folder: fresh ? taskDirRel(fresh, task) : '',
+      };
+    },
+  });
+
   const updateTaskTool = defineTool({
     name: 'eteams_update_task',
-    description: '更新草稿任务的合同/依赖/执行链（计划期可改；批准后合同冻结）。',
+    description:
+      '更新未领取任务（draft/ready 可改）的合同/依赖/执行链；对话任务工作流里用它把问询结论写回主任务（任务单）description。已入执行（指派后）的任务合同冻结。',
     parameters: {
       taskId: strR('任务 id'),
       subject: str('新主题'),
@@ -818,7 +883,8 @@ export function createCaptainTools(
 
   const deleteTaskTool = defineTool({
     name: 'eteams_delete_task',
-    description: '删除草稿任务（被依赖或已入执行的任务不可删）。',
+    description:
+      '删除未领取任务（draft/ready 可删；主任务级联删除其全部未领取小任务并清任务文件夹）。被依赖或已入执行的任务不可删。',
     parameters: { taskId: strR('任务 id') },
     output: {
       schema: {
@@ -1235,6 +1301,7 @@ export function createCaptainTools(
     interviewAnswerTool,
     removeMemberTool,
     updateMemberTool,
+    submitTaskTool,
     createTaskTool,
     updateTaskTool,
     deleteTaskTool,

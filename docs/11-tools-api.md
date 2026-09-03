@@ -8,6 +8,7 @@
 |---|---|---|---|
 | eteams_create_team / edit_team / switch_team / archive_team / delete_team / resume_team | ✔ | ✘ | 团队管理 |
 | eteams_add_member / remove_member / update_member | ✔ | ✘ | 成员管理 |
+| eteams_submit_task | ✔ | ✘ | 对话任务入口（docs/26）：建任务单 group |
 | eteams_create_task / update_task / delete_task | ✔ | ✘ | 任务清单（运行中编辑 D5） |
 | eteams_approve_plan | ✘（用户） | ✘ | 仅 UI/批准路由可调（防领队自批） |
 | eteams_assign_task / reassign_task | ✔ | ✘ | 指派（D4；含偏离说明） |
@@ -58,17 +59,26 @@ eteams_remove_member({ name })
 ### 任务清单（staged + 运行中，D5）
 
 ```
+eteams_submit_task({ subject, description?, questionnaire?: string[] })   # 对话任务入口（docs/26）
+  行为：建 kind:'group' 主任务（任务单）+ 立即分配团队 workDir 与专属文件夹
+        （staged 不等批准）；questionnaire 记问询事件；面板任务页立即可见。
+  返回：{ taskId, folder }。
+
 eteams_create_task({ subject, description, dependencies: string[], chain?,
-                     acceptance?, inScope?, deliverables?, idempotencyNote? })
-  chain: Array<{ member: string; stageBrief: string }>  # 执行链（D11）；单站或省略 = 单执行人任务
+                     acceptance?, inScope?, deliverables?, idempotencyNote?,
+                     parentTaskId? })
+  chain: Array<{ member: string; stageBrief: string }>  # 执行链（D11）= 对话小任务的成员槽（可多成员接力）
+  parentTaskId: 挂到主任务（任务单）下（docs/26 拆解）；父须为 group 且 draft/ready。
   行为：staged -> draft；running -> ready（依赖满足时）。写入即查环（06.5）。
+        group 主任务是容器：不接受 chain/dependencies/parentTaskId。
   idempotencyNote：幂等纪律栏（10.6）--副作用风险与核对命令。
 
 eteams_update_task({ task_id, subject?, description?, dependencies?, acceptance?, chain? })
-  行为：按 06.4 编辑矩阵校验（chain 编辑规则见 6.4 补充：未开始可改，开始后仅追加）；
-        dependencies 变更触发下游刷新。
+  行为：按 06.4 编辑矩阵校验（06.4 放宽：draft|ready 未领取可改；chain 编辑规则见 6.4 补充：
+        未开始可改，开始后仅追加）；dependencies 变更触发下游刷新。
+        主任务 description = 问询结论（docs/26）。
 
-eteams_delete_task({ task_id })     # 按 06.4：仅 draft/ready(未领取)/suspended
+eteams_delete_task({ task_id })     # 按 06.4：draft/ready(未领取)；组任务级联删全部小任务（须全部未领取）
 ```
 
 ### 指派与控制

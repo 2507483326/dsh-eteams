@@ -25,7 +25,7 @@ import type {
 import { archiveRoot, readEventsSync, readMailboxSync } from '../state/events.js';
 import { listTeamIds, readTeamSync } from '../state/store.js';
 import { joinPath, type RuntimeContext, type RuntimeEnv } from './base.js';
-import { teamWorkDirRel } from './docs.js';
+import { taskDirRel } from './docs.js';
 import { composeCaptainPersona } from '../prompts/persona.js';
 import {
   avatarSeedFor,
@@ -38,6 +38,7 @@ import {
 } from './roster.js';
 import {
   addMember,
+  approvePlan,
   createTeam,
   deleteTeam,
   removeMember,
@@ -47,6 +48,7 @@ import {
   syncMemberToRoster,
   updateMember,
 } from './teamOps.js';
+import { createTask, deleteTask, updateTask } from './assignment.js';
 import {
   answerBuildInterview,
   cancelBuildSession,
@@ -60,6 +62,7 @@ import {
 } from './roleBuilder.js';
 import { spawnBuildPhase, spawnContinueAfterAnswers } from './builderPhases.js';
 import { clearSessionPersona, setSessionPersona } from './sessionPersona.js';
+import { clearSessionTeam, setSessionTeam } from './sessionTeam.js';
 
 /** Web-server service key candidates, newest first. */
 const WEB_SERVER_KEYS = ['webServer', 'httpServer'] as const;
@@ -148,10 +151,14 @@ function memberView(team: TeamState, m: MemberRecord) {
 }
 
 /** Per-task view row with chain station marks and a compact attempt summary. */
-function taskView(t: TaskRecord) {
+function taskView(t: TaskRecord, team: TeamState) {
   return {
     taskId: t.id,
     subject: t.subject,
+    kind: t.kind ?? 'task',
+    parentId: t.parentId ?? null,
+    folder: team.workDir ? taskDirRel(team, t) : null,
+    description: t.description ?? null,
     status: t.status,
     assignee: t.assignee ?? null,
     dependencies: t.dependencies,
@@ -202,13 +209,18 @@ export function teamSnapshot(
     captainSessionId: team.captainSessionId,
     version: team.version,
     leaderRemoved: team.leaderRemoved === true,
-    workDir: team.phase === 'staged' ? null : teamWorkDirRel(team),
-    progress: {
-      completed: team.tasks.filter((t) => t.status === 'completed').length,
-      total: team.tasks.length,
-      cancelled: team.tasks.filter((t) => t.status === 'cancelled').length,
-      active: team.tasks.filter((t) => ACTIVE_STATUSES.includes(t.status)).length,
-    },
+    // docs/26：staged 团队提交对话任务后 workDir 已提前分配——有值即展示。
+    workDir: team.workDir ?? null,
+    // docs/26：任务单（group 容器）不计入进度——进度只反映真实小任务。
+    progress: (() => {
+      const real = team.tasks.filter((t) => t.kind !== 'group');
+      return {
+        completed: real.filter((t) => t.status === 'completed').length,
+        total: real.length,
+        cancelled: real.filter((t) => t.status === 'cancelled').length,
+        active: real.filter((t) => ACTIVE_STATUSES.includes(t.status)).length,
+      };
+    })(),
     captain: {
       name: '项目牧羊人',
       employeeId: rosterLeader?.employeeId ?? 'ET-0001',
@@ -227,7 +239,7 @@ export function teamSnapshot(
       reasoningEffort: team.leaderModelRoute?.reasoningEffort ?? null,
     },
     members: team.members.filter((m) => m.status !== 'removed').map((m) => memberView(team, m)),
-    tasks: team.tasks.map(taskView),
+    tasks: team.tasks.map((t) => taskView(t, team)),
     pendingDecisions: team.pendingDecisions
       .filter((d) => d.status === 'open')
       .map((d) => ({
@@ -614,6 +626,45 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               sendJson(res, 200, { ok: true });
               return;
             }
+            // POST /session-team — the composer's 团队 selection (docs/26):
+            // binds the conversation to a team; the session agent's prompt
+            // gains a 团队绑定 band (sessionTeam.ts) with the conversation
+            // task workflow and the leadership branch (领队 / 主窗口充当
+            // 领队 / 团队建在他会话的可行动提示).
+            if (req.method === 'POST' && segments[0] === 'session-team' && segments.length === 1) {
+              const body = parseJsonObject(await readBody(req));
+              const sessionId = str(body.sessionId, '');
+              const teamId = str(body.teamId, '');
+              if (sessionId === '' || teamId === '') {
+                sendError(res, 400, 'sessionId / teamId 均不能为空');
+                return;
+              }
+              const located = locateTeam(ctx, config, teamId);
+              if (located === undefined) {
+                sendError(res, 404, `团队「${teamId}」不存在`);
+                return;
+              }
+              setSessionTeam(sessionId, { teamId, name: located.team.name, boundAt: Date.now() });
+              sendJson(res, 200, { ok: true });
+              return;
+            }
+            // POST /session-team/clear — deselect (plain conversation again).
+            if (
+              req.method === 'POST' &&
+              segments[0] === 'session-team' &&
+              segments[1] === 'clear' &&
+              segments.length === 2
+            ) {
+              const body = parseJsonObject(await readBody(req));
+              const sessionId = str(body.sessionId, '');
+              if (sessionId === '') {
+                sendError(res, 400, 'sessionId 不能为空');
+                return;
+              }
+              clearSessionTeam(sessionId);
+              sendJson(res, 200, { ok: true });
+              return;
+            }
             if (req.method === 'POST' && segments[0] === 'roster' && segments.length === 1) {
               const body = parseJsonObject(await readBody(req));
               // 用户迭代 2026-09-03：面板显式保存（名称/头像/手册一体）——
@@ -636,9 +687,7 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                   ...(body.duty !== undefined ? { duty: str(body.duty) } : {}),
                   ...(body.style !== undefined ? { style: str(body.style) } : {}),
                   ...(body.skills !== undefined ? { skills: str(body.skills) } : {}),
-                  ...(Array.isArray(body.rules)
-                    ? { rules: body.rules.map((r) => str(r)) }
-                    : {}),
+                  ...(Array.isArray(body.rules) ? { rules: body.rules.map((r) => str(r)) } : {}),
                   ...(body.executionPrompt !== undefined
                     ? { executionPrompt: str(body.executionPrompt) }
                     : {}),
@@ -1028,6 +1077,142 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               sendJson(res, 200, { ok: true });
               return;
             }
+            // ---------- conversation task workflow (docs/26) ----------
+            // POST /team/<id>/task — panel 小任务 CRUD（docs/26 审阅步骤）：
+            // 用户在任务页修改/删除拆解出的小任务、新增小任务；任务一经领取
+            // （updateTask/deleteTask 校验 draft/ready）即冻结。
+            if (
+              req.method === 'POST' &&
+              segments[0] === 'team' &&
+              segments.length === 3 &&
+              segments[2] === 'task'
+            ) {
+              const body = parseJsonObject(await readBody(req));
+              const subject = str(body.subject, '');
+              if (subject === '') {
+                sendError(res, 400, 'subject 不能为空');
+                return;
+              }
+              const located = locateTeam(ctx, config, segments[1]!);
+              if (!located) {
+                sendError(res, 404, `团队 ${segments[1]} 不存在`);
+                return;
+              }
+              const { team, workspacePath } = located;
+              const chain = readChainParam(body.chain);
+              try {
+                const task = await createTask(
+                  envFor(ctx, config, workspacePath),
+                  { teamId: team.id, actor: { kind: 'user', name: '用户' } },
+                  {
+                    subject,
+                    ...(body.description !== undefined
+                      ? { description: str(body.description) }
+                      : {}),
+                    ...(str(body.parentTaskId, '') !== ''
+                      ? { parentTaskId: str(body.parentTaskId) }
+                      : {}),
+                    ...(chain !== undefined ? { chain } : {}),
+                  },
+                );
+                sendJson(res, 200, { ok: true, taskId: task.id, status: task.status });
+              } catch (e) {
+                sendError(res, 400, e instanceof Error ? e.message : String(e));
+              }
+              return;
+            }
+            // POST /team/<id>/task/<taskId>/update — 修改未领取小任务（主题/
+            // 说明/成员槽）。
+            if (
+              req.method === 'POST' &&
+              segments[0] === 'team' &&
+              segments.length === 5 &&
+              segments[2] === 'task' &&
+              segments[4] === 'update'
+            ) {
+              const body = parseJsonObject(await readBody(req));
+              const located = locateTeam(ctx, config, segments[1]!);
+              if (!located) {
+                sendError(res, 404, `团队 ${segments[1]} 不存在`);
+                return;
+              }
+              const { team, workspacePath } = located;
+              const chain = readChainParam(body.chain);
+              try {
+                const task = await updateTask(
+                  envFor(ctx, config, workspacePath),
+                  { teamId: team.id, actor: { kind: 'user', name: '用户' } },
+                  {
+                    taskId: segments[3]!,
+                    ...(str(body.subject, '') !== '' ? { subject: str(body.subject) } : {}),
+                    ...(body.description !== undefined
+                      ? { description: str(body.description) }
+                      : {}),
+                    ...(chain !== undefined ? { chain } : {}),
+                  },
+                );
+                sendJson(res, 200, { ok: true, taskId: task.id });
+              } catch (e) {
+                sendError(res, 400, e instanceof Error ? e.message : String(e));
+              }
+              return;
+            }
+            // POST /team/<id>/task/<taskId>/delete — 删除未领取任务（主任务
+            // 级联删除全部小任务并清任务文件夹）。
+            if (
+              req.method === 'POST' &&
+              segments[0] === 'team' &&
+              segments.length === 5 &&
+              segments[2] === 'task' &&
+              segments[4] === 'delete'
+            ) {
+              const located = locateTeam(ctx, config, segments[1]!);
+              if (!located) {
+                sendError(res, 404, `团队 ${segments[1]} 不存在`);
+                return;
+              }
+              const { team, workspacePath } = located;
+              try {
+                await deleteTask(
+                  envFor(ctx, config, workspacePath),
+                  { teamId: team.id, actor: { kind: 'user', name: '用户' } },
+                  segments[3]!,
+                );
+              } catch (e) {
+                sendError(res, 400, e instanceof Error ? e.message : String(e));
+                return;
+              }
+              sendJson(res, 200, { ok: true });
+              return;
+            }
+            // POST /team/<id>/approve — the panel 批准计划 button (docs/26):
+            // the user's approval gate; reuses approvePlan（workDir 幂等分配、
+            // draft→ready、全员 spawn、phase→running）.
+            if (
+              req.method === 'POST' &&
+              segments[0] === 'team' &&
+              segments.length === 3 &&
+              segments[2] === 'approve'
+            ) {
+              const located = locateTeam(ctx, config, segments[1]!);
+              if (!located) {
+                sendError(res, 404, `团队 ${segments[1]} 不存在`);
+                return;
+              }
+              const { team, workspacePath } = located;
+              try {
+                await approvePlan(
+                  envFor(ctx, config, workspacePath),
+                  agentFor(team.captainSessionId),
+                  team.id,
+                );
+              } catch (e) {
+                sendError(res, 400, e instanceof Error ? e.message : String(e));
+                return;
+              }
+              sendJson(res, 200, { ok: true });
+              return;
+            }
             // ---------- role-builder build session (docs/19.6, D18) ----------
             // GET /rolebuilder — the single build-session slot; {empty:true}
             // when no session exists yet.
@@ -1390,7 +1575,8 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
 }
 
 /** Resolve one team across all workspaces; returns it with its root paths. */
-function locateTeam(
+/** Locate a team across registered workspaces (live readTeamSync). */
+export function locateTeam(
   ctx: Context,
   config: ETeamsResolvedConfig,
   teamId: string,
@@ -1431,6 +1617,23 @@ function envFor(ctx: Context, config: ETeamsResolvedConfig, workspace: string): 
 /** Synthesize the captain Agent identity from a session id (staged ops only need id). */
 function agentFor(sessionId: string): Agent {
   return { id: sessionId } as unknown as Agent;
+}
+
+/**
+ * Tighten a client-supplied chain (成员槽) param into station pairs — panel
+ * payloads are untrusted, so every entry is coerced field-by-field (same
+ * treatment as the tool layer's chain mapping). Non-array = undefined
+ * (caller omits the field); a present-but-empty array clears the chain.
+ */
+function readChainParam(value: unknown): { member: string; stageBrief: string }[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.map((entry) => {
+    const record = (typeof entry === 'object' && entry !== null ? entry : {}) as Record<
+      string,
+      unknown
+    >;
+    return { member: str(record.member, ''), stageBrief: str(record.stageBrief, '') };
+  });
 }
 
 /** Parse a JSON object body; throws on non-object payloads. */

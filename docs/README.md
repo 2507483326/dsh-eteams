@@ -29,6 +29,7 @@
 | 19 | [19 对话式新增成员与角色构建师](19-role-builder-add-people.md) | 点「新增成员」→ 对话框预填 `eTeam --add-people …` → 预置成员「角色构建师」访谈构建人设并入库（D18） |
 | 20 | [20 子代理生命周期与回收](20-subagent-lifecycle.md) | 官方 Subagent 语义逐段核对：one-shot 与 continuable 两种形态、可续会话回收（drainContinuable*）与「构建完结后成员仍挂界面」的治理规划 |
 | 21 | [21 客户端 UI 栈升级](21-client-ui-stack.md) | 引入 Tailwind CSS 3.4 + shadcn/ui + dva-core：构建管线、作用域与主题桥、状态拓扑与分步迁移计划（D19） |
+| 26 | [26 对话调用团队执行任务](26-conversation-task-workflow.md) | 用户在对话中把任务交给团队：会话-团队绑定（领队/主窗口充当领队三分支）、任务单（group）提交→问询→拆解、面板审阅/批准与自动收口 |
 
 ## 决策记录（2026-02 与用户确认）
 

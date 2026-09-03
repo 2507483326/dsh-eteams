@@ -30,8 +30,9 @@ import { PLUGIN_ID, PLUGIN_VERSION, STATE_SCHEMA_VERSION, TOOL_PREFIX } from './
 import { createCaptainTools } from './tools/captainTools.js';
 import { createMemberTools } from './tools/memberTools.js';
 import { installMemberRuntime } from './runtime/members.js';
-import { installWebSurface, rootForWrites } from './runtime/webui.js';
+import { installWebSurface, locateTeam, rootForWrites } from './runtime/webui.js';
 import { sessionPersonaSection, sessionIdOfScope } from './runtime/sessionPersona.js';
+import { sessionTeamSection } from './runtime/sessionTeam.js';
 import type { RuntimeContext } from './runtime/base.js';
 import {
   hasBuildSessionFile,
@@ -43,10 +44,7 @@ import { spawnBuildPhase } from './runtime/builderPhases.js';
 import { CAPTAIN_SECTION_SHORT } from './prompts/captain.js';
 import { composeCaptainPersona } from './prompts/persona.js';
 import { personaDigest } from './prompts/persona.js';
-import {
-  buildActivationMessage,
-  ROLE_BUILDER_SECTION,
-} from './prompts/roleBuilder.js';
+import { buildActivationMessage, ROLE_BUILDER_SECTION } from './prompts/roleBuilder.js';
 
 /** Host services this plugin requires at mount time. */
 export const inject = ['tools', 'subagents', 'agents', 'systemPrompt', 'commands'];
@@ -178,9 +176,11 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
         }): unknown;
       };
     };
-    (ctx as unknown as {
-      inject(deps: string[], fn: (scope: SystemPromptScope) => void): void;
-    }).inject(['systemPrompt'], (scope) => {
+    (
+      ctx as unknown as {
+        inject(deps: string[], fn: (scope: SystemPromptScope) => void): void;
+      }
+    ).inject(['systemPrompt'], (scope) => {
       scope.systemPrompt.context({
         name: 'eteams-session-persona',
         order: 900, // late in the snapshot: reads last, i.e. freshest
@@ -190,6 +190,53 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
     });
   } catch (error) {
     log.warn('eteams: session persona context registration failed: %s', String(error));
+  }
+
+  // 3b3) Session team binding (docs/26, dynamic): the composer's 团队 button
+  // binds the conversation to a team via /eteams-api/session-team; this
+  // session's prompt gains a 团队绑定 band carrying the conversation-task
+  // workflow. Same dual-channel pattern as 3b2 (scope IS the session agent).
+  // The band reads the LIVE team snapshot per assembly (locateTeam), so
+  // 批准/阶段变化即时反映，无需重绑。
+  const teamBand = (context: { scope?: unknown }): string =>
+    sessionTeamSection(
+      sessionIdOfScope(context.scope),
+      (teamId) => locateTeam(ctx, config, teamId)?.team,
+    );
+  try {
+    ctx.systemPrompt.section({
+      name: 'eteams-session-team',
+      order: 108,
+      text: teamBand,
+    });
+    log.info('eteams: session team section registered');
+  } catch (error) {
+    log.warn('eteams: session team section registration failed: %s', String(error));
+  }
+  try {
+    type SystemPromptScope = {
+      systemPrompt: {
+        context(contribution: {
+          name: string;
+          order: number;
+          text: (context: { scope?: unknown }) => string;
+        }): unknown;
+      };
+    };
+    (
+      ctx as unknown as {
+        inject(deps: string[], fn: (scope: SystemPromptScope) => void): void;
+      }
+    ).inject(['systemPrompt'], (scope) => {
+      scope.systemPrompt.context({
+        name: 'eteams-session-team',
+        order: 901,
+        text: teamBand,
+      });
+      log.info('eteams: session team context registered');
+    });
+  } catch (error) {
+    log.warn('eteams: session team context registration failed: %s', String(error));
   }
 
   // 3c) /eteam slash command (docs/19.4, D18): the command-plane entry for

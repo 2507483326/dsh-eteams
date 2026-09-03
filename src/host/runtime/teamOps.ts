@@ -126,6 +126,27 @@ export async function createTeam(
   });
 }
 
+/**
+ * 幂等分配团队工作目录（D12, docs/26）：已分配则原样复用；未分配时与其他
+ * 团队的工作目录消歧（目录名冲突/已存在即加 -2、-3 后缀）。approvePlan 与
+ * 对话提交路径共用（staged 团队首次提交任务即物化目录树）；调用方负责把
+ * 返回值写回 team.workDir。
+ */
+export async function ensureWorkDir(env: RuntimeEnv, team: TeamState): Promise<string> {
+  if (team.workDir) return team.workDir;
+  const root = stateRootOf(env);
+  const base = teamWorkDirRel(team);
+  const others = await listTeams(root);
+  const taken = new Set(others.filter((t) => t.id !== team.id).map((t) => t.workDir));
+  let workDir = base;
+  if (taken.has(workDir) || existsSync(join(env.workspace, workDir))) {
+    let n = 2;
+    while (taken.has(`${base}-${n}`)) n++;
+    workDir = `${base}-${n}`;
+  }
+  return workDir;
+}
+
 /** Approve a staged plan (user/panel action; NEVER a captain tool, docs/11). */
 export async function approvePlan(
   env: RuntimeEnv,
@@ -136,16 +157,9 @@ export async function approvePlan(
     if (team.captainSessionId !== String(captain.id))
       throw new ETeamsError('只有该团队的领队会话可以批准');
     if (team.phase !== 'staged') throw new ETeamsError(`团队处于 ${team.phase}，无需批准`);
-    // Work dir allocation (D12): disambiguate against other teams' dirs.
-    let workDir = teamWorkDirRel(team);
-    const others = await listTeams(root);
-    const taken = new Set(others.filter((t) => t.id !== team.id).map((t) => t.workDir));
-    if (taken.has(workDir) || existsSync(join(env.workspace, workDir))) {
-      let n = 2;
-      while (taken.has(`${teamWorkDirRel(team)}-${n}`)) n++;
-      workDir = `${teamWorkDirRel(team)}-${n}`;
-    }
-    team.workDir = workDir;
+    // Work dir allocation (D12/26): idempotent allocation — a staged team that
+    // already materialized a dir via submitted conversation tasks reuses it.
+    team.workDir = await ensureWorkDir(env, team);
     // Tasks: draft → ready (docs/06.2 approve edge).
     const now = Date.now();
     for (const task of team.tasks) {
@@ -158,7 +172,9 @@ export async function approvePlan(
         });
       }
     }
-    await recordEvent(root, team.id, captainActor(team), 'plan.approved', { payload: { workDir } });
+    await recordEvent(root, team.id, captainActor(team), 'plan.approved', {
+      payload: { workDir: team.workDir },
+    });
     // Spawn all staged members atomically (rollback keeps them staged).
     await spawnTeamMembers(env, team, captain);
     team.phase = 'running';
@@ -674,6 +690,8 @@ export function teamView(env: RuntimeEnv, team: TeamState): Record<string, JsonV
       assignee: t.assignee ?? null,
       chain: t.chain.length,
       cursor: t.chainCursor,
+      kind: t.kind ?? 'task',
+      parent: t.parentId ?? null,
     })),
     pendingDecisions: team.pendingDecisions
       .filter((d) => d.status === 'open')
@@ -733,12 +751,12 @@ export async function archiveTeam(
 }
 
 /**
- * 递归删除目录树（{@link deleteTeam} 用）：node:fs 的 rmSync 在本机
- * （Node 24 / Win32）对非 ASCII 路径会静默失败（unlinkSync/rmdirSync/
- * renameSync 均正常）——团队 id 多为中文团队名，删除必须绕开 rmSync，
- * 手动后序删除（先清文件再删空目录）。
+ * 递归删除目录树：node:fs 的 rmSync 在本机（Node 24 / Win32）对非 ASCII
+ * 路径会静默失败（unlinkSync/rmdirSync/renameSync 均正常）——团队 id 多为
+ * 中文团队名，删除必须绕开 rmSync，手动后序删除（先清文件再删空目录）。
+ * {@link deleteTeam} 与任务文件夹清理（docs/26 deleteTask）共用。
  */
-function rmTree(target: string): void {
+export function rmTree(target: string): void {
   for (const entry of readdirSync(target, { withFileTypes: true })) {
     const child = join(target, entry.name);
     if (entry.isDirectory()) {

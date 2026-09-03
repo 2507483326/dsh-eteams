@@ -6,6 +6,8 @@
  *
  * @module dsh-eteams/runtime/assignment
  */
+import { existsSync, renameSync } from 'node:fs';
+import { join } from 'node:path';
 import type {
   Actor,
   AttemptRecord,
@@ -18,6 +20,7 @@ import {
   hasUpcomingStation,
   nextChainStation,
   refreshDependencyStatus,
+  taskSlug,
   unsatisfiedDependencies,
   wouldCycle,
 } from '../model/taskMachine.js';
@@ -25,21 +28,31 @@ import { recordEvent } from '../state/events.js';
 import { writeTeam } from '../state/store.js';
 import { ETeamsError, generateToken, memberActor, type RuntimeEnv } from './base.js';
 import { notifyCaptain, queueNotice, readBox, wakeMember } from './notifier.js';
-import { renderTeamDocs } from './docs.js';
+import { renderTeamDocs, taskDirAbs } from './docs.js';
 import { sendAssignment } from './members.js';
 import { declineMail, reportCompletedMail, reportFailedMail } from '../prompts/handoff.js';
 import { requireMember } from './notifier.js';
-import { withTeam } from './teamOps.js';
+import { ensureWorkDir, rmTree, withTeam } from './teamOps.js';
 
 /** Active member statuses that block a new assignment. */
 const MEMBER_BUSY = new Set(['working']);
 
-/** Create a task with contract + optional execution chain (docs/07.3.1). */
+/**
+ * Create a task with contract + optional execution chain (docs/07.3.1).
+ * docs/26：`kind:'group'` 即对话提交的主任务容器（不经执行链、无依赖）；小
+ * 任务声明 `parentTaskId` 挂到组下——chain 站点即成员槽（可多成员接力），
+ * 文件夹嵌套在组文件夹 `sub/` 下。staged 团队首次建任务即分配 workDir 并
+ * 物化文档树（不等批准）。
+ */
 export async function createTask(
   env: RuntimeEnv,
   who: OpActor,
   params: {
     subject: string;
+    /** docs/26：主任务容器（eteams_submit_task / 面板新建任务单）。 */
+    kind?: 'group' | 'task';
+    /** docs/26：拆解小任务、挂到对应组任务下（成员槽 = chain 站点）。 */
+    parentTaskId?: string;
     description?: string;
     acceptance?: string[];
     inScope?: string[];
@@ -83,9 +96,28 @@ export async function createTask(
       if (station.stageBrief.trim() === '')
         throw new ETeamsError(`站点「${station.member}」的 stageBrief 不能为空`);
     }
+    // docs/26 validation: groups are containers (no chain/deps/parent); a
+    // subtask's parent must be a live group task.
+    const kind = params.kind ?? 'task';
+    if (kind === 'group' && (chain.length > 0 || deps.length > 0 || params.parentTaskId)) {
+      throw new ETeamsError(
+        '主任务（任务单）是容器：不接受执行链、依赖或父任务',
+        '拆解小任务时用 parentTaskId 挂到主任务下',
+      );
+    }
+    let parent: TaskRecord | undefined;
+    if (params.parentTaskId) {
+      parent = team.tasks.find((t) => t.id === params.parentTaskId);
+      if (!parent || parent.kind !== 'group')
+        throw new ETeamsError(`父任务 ${params.parentTaskId} 不存在或不是主任务（任务单）`);
+      if (!['draft', 'ready'].includes(parent.status))
+        throw new ETeamsError(`主任务 ${parent.id} 处于 ${parent.status}，不能再挂小任务`);
+    }
     const now = Date.now();
     const task: TaskRecord = {
       id,
+      ...(kind === 'group' ? { kind } : {}),
+      ...(parent ? { parentId: parent.id } : {}),
       subject: subject.trim(),
       description: params.description,
       acceptance: params.acceptance,
@@ -113,13 +145,15 @@ export async function createTask(
         status: task.status,
       },
     });
+    // docs/26：staged 团队首次建任务即分配 workDir 并物化文档树（D12 前置）。
+    if (!team.workDir) team.workDir = await ensureWorkDir(env, team);
     await writeTeam(root, team);
     renderTeamDocs(env.workspace, team, (msg) => env.ctx.logger.warn(msg));
     return task;
   });
 }
 
-/** Update a draft task (计划期可改，合同冻结后只读 — docs/11). */
+/** Update an unclaimed task（draft/ready 可改，合同冻结后只读 — docs/06.4）。 */
 export async function updateTask(
   env: RuntimeEnv,
   who: OpActor,
@@ -138,12 +172,14 @@ export async function updateTask(
 ): Promise<TaskRecord> {
   return withTeam(env, who.teamId, async (team, root) => {
     const task = requireTask(team, params.taskId);
-    if (task.status !== 'draft') {
+    if (!['draft', 'ready'].includes(task.status)) {
       throw new ETeamsError(
         `任务 ${task.id} 处于 ${task.status}，合同已冻结`,
-        '执行期变更用 suspend → update 不支持时，取消后重建任务',
+        '未领取（draft/ready）的任务才可修改；执行期变更先取消后重建',
       );
     }
+    // 改主题会改文件夹名（taskSlug）：记住旧目录名，落盘后重命名。
+    const oldSlug = taskSlug(task);
     if (params.dependencies) {
       for (const dep of params.dependencies) {
         if (dep === task.id) throw new ETeamsError('任务不能依赖自身');
@@ -176,26 +212,81 @@ export async function updateTask(
       payload: { fields: Object.keys(params).filter((k) => k !== 'taskId') },
     });
     await writeTeam(root, team);
+    renameTaskFolder(env.workspace, team, oldSlug, task);
     renderTeamDocs(env.workspace, team, (msg) => env.ctx.logger.warn(msg));
     return task;
   });
 }
 
-/** Delete a draft task (计划期). */
+/**
+ * 改主题后的任务文件夹改名（docs/26）：旧目录存在且与新目录不同即
+ * renameSync（中文路径安全）。组任务改名时 sub/ 下的全部小任务目录随父
+ * 目录整体移动；目录缺失（staged 未物化）静默跳过，renderTeamDocs 会在
+ * 新路径补齐。渲染视图不阻塞状态（docs/07.2）——失败只留旧目录孤儿。
+ */
+function renameTaskFolder(
+  workspace: string,
+  team: TeamState,
+  oldSlug: string,
+  task: TaskRecord,
+): void {
+  const target = taskDirAbs(workspace, team, task);
+  const parts = target.split(/[\\/]/);
+  parts.pop();
+  const oldDir = join(...parts, oldSlug);
+  if (!existsSync(oldDir) || oldDir === target) return;
+  try {
+    renameSync(oldDir, target);
+  } catch (error) {
+    console.warn(`eteams: 任务文件夹重命名失败（不阻塞状态）：${String(error)}`);
+  }
+}
+
+/**
+ * Delete an unclaimed task（draft/ready 未领取可删，docs/06.4）：组任务级联
+ * 删除全部小任务（要求全部未领取）；任务文件夹一并移除（rmTree 手动递归，
+ * 规避本机 rmSync 对中文路径的静默失效）。
+ */
 export async function deleteTask(env: RuntimeEnv, who: OpActor, taskId: string): Promise<void> {
   return withTeam(env, who.teamId, async (team, root) => {
     const task = requireTask(team, taskId);
-    if (task.status !== 'draft')
-      throw new ETeamsError(`任务 ${task.id} 处于 ${task.status}，只能删除草稿任务`);
-    if (team.tasks.some((t) => t.dependencies.includes(task.id))) {
-      throw new ETeamsError(`任务 ${task.id} 被其他任务依赖`, '先移除下游任务的依赖');
+    if (!['draft', 'ready'].includes(task.status))
+      throw new ETeamsError(
+        `任务 ${task.id} 处于 ${task.status}，只能删除未领取（draft/ready）任务`,
+      );
+    const doomed = [task, ...team.tasks.filter((t) => t.parentId === task.id)];
+    for (const sub of doomed.slice(1)) {
+      if (!['draft', 'ready'].includes(sub.status))
+        throw new ETeamsError(
+          `小任务 ${sub.id} 处于 ${sub.status}，主任务不能级联删除`,
+          '先处理（删除）该小任务，或等它完成',
+        );
     }
-    team.tasks = team.tasks.filter((t) => t.id !== task.id);
+    const doomedIds = new Set(doomed.map((t) => t.id));
+    for (const other of team.tasks) {
+      if (doomedIds.has(other.id)) continue;
+      if (other.dependencies.some((dep) => doomedIds.has(dep))) {
+        throw new ETeamsError(`任务 ${task.id} 被其他任务依赖`, '先移除下游任务的依赖');
+      }
+    }
+    const dir = taskDirAbs(env.workspace, team, task);
+    team.tasks = team.tasks.filter((t) => !doomedIds.has(t.id));
+    if (existsSync(dir)) {
+      try {
+        rmTree(dir);
+      } catch (error) {
+        env.ctx.logger.warn(`eteams: 任务文件夹删除失败（不阻塞状态）：${String(error)}`);
+      }
+    }
     await recordEvent(root, team.id, who.actor, 'task.deleted', {
       taskId: task.id,
-      payload: { subject: task.subject },
+      payload: {
+        subject: task.subject,
+        ...(doomed.length > 1 ? { cascade: doomed.map((t) => t.id) } : {}),
+      },
     });
     await writeTeam(root, team);
+    renderTeamDocs(env.workspace, team, (msg) => env.ctx.logger.warn(msg));
   });
 }
 
@@ -710,6 +801,8 @@ export async function completeTask(
       payload: { output, changedPaths: params.changedPaths, isStation, final: final || !isStation },
     });
     refreshDependents(fresh, root, memberActor(memberRec), task.id, now);
+    // docs/26：组任务收口——末个小任务完成且全组 completed 时自动落组状态。
+    await completeGroupIfDone(fresh, root, memberActor(memberRec), task, now);
     await notifyCaptain(
       env,
       fresh,
@@ -932,6 +1025,33 @@ async function refreshDependents(
       );
     }
   }
+}
+
+/**
+ * 对话任务组收口（docs/26）：小任务完成时检查父组——组内小任务全部
+ * completed 即把组任务 ready→completed（applyTransition 的 group 特例边），
+ * outcome 汇总各小任务产出；有子任务取消/失败则组保持现状，交领队处理。
+ */
+async function completeGroupIfDone(
+  team: TeamState,
+  root: string,
+  actor: Actor,
+  subtask: TaskRecord,
+  now: number,
+): Promise<void> {
+  if (!subtask.parentId) return;
+  const parent = team.tasks.find((t) => t.id === subtask.parentId);
+  if (!parent || parent.kind !== 'group' || parent.status === 'completed') return;
+  const subs = team.tasks.filter((t) => t.parentId === parent.id);
+  if (subs.length === 0 || !subs.every((t) => t.status === 'completed')) return;
+  applyTransition(parent, 'completed', now);
+  parent.outcome = subs
+    .map((t) => `${t.id} ${t.subject}：${t.outcome ?? '（无产出说明）'}`)
+    .join('\n');
+  await recordEvent(root, team.id, actor, 'task.completed', {
+    taskId: parent.id,
+    payload: { via: 'subtasks.completed', children: subs.map((t) => t.id) },
+  });
 }
 
 async function notifyMemberSuspended(

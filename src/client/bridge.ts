@@ -22,9 +22,6 @@ const EXCLUDED_ANCESTORS = `[${ETEAMS_DATA_ATTR}],[role="menu"],[role="dialog"],
 /** Custom window event: a surface asks the panel to open the member builder. */
 export const GOTO_ADD_EVENT = 'eteams:goto-add';
 
-/** Custom window event: a surface asks the panel to open the team creator (团队 tab, 新增团队 dialog auto-opens). */
-export const GOTO_ADD_TEAM_EVENT = 'eteams:goto-add-team';
-
 /** Custom window event: select one team in the panel (CustomEvent detail: teamId). */
 export const SELECT_TEAM_EVENT = 'eteams:select-team';
 
@@ -38,9 +35,6 @@ export const GOTO_ROSTER_EVENT = 'eteams:goto-roster';
  */
 let pendingGotoAdd = false;
 
-/** Pending 「新增团队」 jump signal — same mount-time consumption as {@link pendingGotoAdd}. */
-let pendingGotoAddTeam = false;
-
 /** Pending 成员-tab jump signal — same mount-time consumption. */
 let pendingGotoRoster = false;
 
@@ -51,13 +45,6 @@ let pendingSelectTeam: string | null = null;
 export function consumePendingGotoAdd(): boolean {
   const value = pendingGotoAdd;
   pendingGotoAdd = false;
-  return value;
-}
-
-/** Whether a team-creator jump is waiting; consumes it (one-shot). */
-export function consumePendingGotoAddTeam(): boolean {
-  const value = pendingGotoAddTeam;
-  pendingGotoAddTeam = false;
   return value;
 }
 
@@ -90,7 +77,6 @@ function dispatchSignal(name: string, detail?: string): void {
  */
 export function stageTeamSignals(
   opts: {
-    creator?: boolean;
     memberBuilder?: boolean;
     roster?: boolean;
     teamId?: string;
@@ -99,10 +85,6 @@ export function stageTeamSignals(
   if (opts.memberBuilder === true) {
     pendingGotoAdd = true;
     dispatchSignal(GOTO_ADD_EVENT);
-  }
-  if (opts.creator === true) {
-    pendingGotoAddTeam = true;
-    dispatchSignal(GOTO_ADD_TEAM_EVENT);
   }
   if (opts.roster === true) {
     pendingGotoRoster = true;

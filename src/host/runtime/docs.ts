@@ -22,8 +22,26 @@ export function teamWorkDirAbs(workspace: string, team: TeamState): string {
   return join(workspace, team.workDir ?? teamWorkDirRel(team));
 }
 
-/** Absolute task folder for one task. */
+/** Workspace-relative task folder (tool output / panel display, docs/26). */
+export function taskDirRel(team: TeamState, task: TaskRecord): string {
+  const base = team.workDir ?? teamWorkDirRel(team);
+  if (task.parentId) {
+    const parent = team.tasks.find((t) => t.id === task.parentId);
+    if (parent) return `${base}/tasks/${taskSlug(parent)}/sub/${taskSlug(task)}`;
+  }
+  return `${base}/tasks/${taskSlug(task)}`;
+}
+
+/**
+ * Absolute task folder for one task. docs/26: a group's subtasks nest under
+ * the parent folder (`sub/<taskId>-<slug>`), so renaming/removing the parent
+ * folder takes the whole subtree with it.
+ */
 export function taskDirAbs(workspace: string, team: TeamState, task: TaskRecord): string {
+  if (task.parentId) {
+    const parent = team.tasks.find((t) => t.id === task.parentId);
+    if (parent) return join(taskDirAbs(workspace, team, parent), 'sub', taskSlug(task));
+  }
   return join(teamWorkDirAbs(workspace, team), 'tasks', taskSlug(task));
 }
 
@@ -45,11 +63,17 @@ export function renderTeamReadme(team: TeamState): string {
     lines.push(`- **${m.name}**（${m.role}）· ${m.status} · 路线 ${routeLabel(m)}`);
   lines.push('', '## 任务');
   if (team.tasks.length === 0) lines.push('（暂无任务）');
-  for (const t of team.tasks) {
+  const taskLine = (t: TaskRecord, indent = ''): string => {
     const station = stationProgress(t);
     const chainTxt = station !== undefined ? ` · 链 ${station.done}/${station.total}` : '';
     const assignee = t.assignee ? ` · ${t.assignee}` : '';
-    lines.push(`- ${t.id} ${t.subject} — ${t.status}${assignee}${chainTxt}`);
+    const groupTxt = t.kind === 'group' ? '（任务单）' : '';
+    return `${indent}- ${t.id} ${t.subject}${groupTxt} — ${t.status}${assignee}${chainTxt}`;
+  };
+  for (const t of team.tasks.filter((x) => !x.parentId)) {
+    lines.push(taskLine(t));
+    for (const sub of team.tasks.filter((x) => x.parentId === t.id))
+      lines.push(taskLine(sub, '  '));
   }
   lines.push(
     '',
@@ -92,6 +116,20 @@ export function renderTaskContract(team: TeamState, task: TaskRecord): string {
       lines.push(`${mark} ${i + 1}. **${s.member}**：${s.stageBrief}`);
     }
   }
+  if (task.kind === 'group') {
+    // docs/26: 主任务合同渲染小任务清单（成员槽接力见各小任务自己的合同）。
+    const subs = team.tasks.filter((t) => t.parentId === task.id);
+    lines.push('', '## 小任务');
+    if (subs.length === 0) lines.push('（尚未拆解）');
+    for (const s of subs) {
+      const st = stationProgress(s);
+      lines.push(
+        `- ${s.id} ${s.subject} — ${s.status}${s.assignee ? ` · ${s.assignee}` : ''}${
+          st ? ` · 链 ${st.done}/${st.total}` : ''
+        }`,
+      );
+    }
+  }
   if (task.attempts.length > 0) {
     lines.push('', '## 执行记录');
     for (const a of task.attempts) {
@@ -120,7 +158,9 @@ export function renderTeamDocs(
   team: TeamState,
   log?: (msg: string) => void,
 ): string[] {
-  if (team.phase === 'staged') return []; // workDir is allocated + materialized at approval (D12)
+  // docs/26：staged 且尚未提交任务的团队（workDir 未分配）不落文档树；
+  // 一旦分配（批准或首次提交）即物化，phase 不再是唯一闸门。
+  if (!team.workDir) return [];
   const warnings: string[] = [];
   const warn = log ?? (() => undefined);
   try {

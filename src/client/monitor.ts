@@ -77,6 +77,17 @@ export interface AttemptSummary {
 export interface TaskView {
   taskId: string;
   subject: string;
+  /**
+   * 任务角色（docs/26）：'group' = 对话提交的主任务（任务单容器）；'task' =
+   * 普通/小任务。旧运行时快照缺省按 'task' 处理。
+   */
+  kind: string;
+  /** 父主任务 id（docs/26 拆解的小任务）；null = 顶层。 */
+  parentId: string | null;
+  /** 专属任务文件夹（相对工作区）；null = 团队工作目录尚未分配。 */
+  folder: string | null;
+  /** 任务说明/合同摘要（docs/26 面板编辑弹窗回填）；null = 无。旧运行时缺省 null。 */
+  description: string | null;
   status: string;
   assignee: string | null;
   dependencies: string[];

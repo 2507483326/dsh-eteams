@@ -284,6 +284,98 @@ export async function clearSessionPersona(sessionId: string): Promise<void> {
   });
 }
 
+// ---------- session team binding (docs/26 对话调用团队执行任务) ----------
+
+/**
+ * Bind the conversation to a team (composer 团队 selection): the session
+ * agent's prompt gains the 团队绑定 band — conversation task workflow plus
+ * the leadership branch (领队 / 主窗口充当领队 / 团队建在他会话的提示).
+ */
+export async function setSessionTeam(sessionId: string, teamId: string): Promise<void> {
+  await requestJson(`${API_BASE}/session-team`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId, teamId }),
+  });
+}
+
+/** Clear the team binding (deselect in the 团队 popup). */
+export async function clearSessionTeam(sessionId: string): Promise<void> {
+  await requestJson(`${API_BASE}/session-team/clear`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId }),
+  });
+}
+
+// ---------- conversation task workflow (docs/26 面板审阅/批准) ----------
+
+/** One member slot (execution-chain station) as edited on the panel. */
+export interface TaskSlotInput {
+  member: string;
+  stageBrief: string;
+}
+
+/** Create a task (小任务 or 顶层任务) from the panel's task page. */
+export async function createTeamTask(
+  teamId: string,
+  payload: {
+    subject: string;
+    description?: string;
+    parentTaskId?: string;
+    chain?: TaskSlotInput[];
+  },
+): Promise<{ taskId: string }> {
+  const body = (await requestJson(`${API_BASE}/team/${encodeURIComponent(teamId)}/task`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      subject: payload.subject,
+      ...(payload.description !== undefined ? { description: payload.description } : {}),
+      ...(payload.parentTaskId !== undefined ? { parentTaskId: payload.parentTaskId } : {}),
+      ...(payload.chain !== undefined ? { chain: payload.chain } : {}),
+    }),
+  })) as { taskId?: unknown };
+  return { taskId: typeof body.taskId === 'string' ? body.taskId : '' };
+}
+
+/** Update an unclaimed task (subject/description/成员槽). */
+export async function updateTeamTask(
+  teamId: string,
+  taskId: string,
+  payload: { subject?: string; description?: string; chain?: TaskSlotInput[] },
+): Promise<void> {
+  await requestJson(
+    `${API_BASE}/team/${encodeURIComponent(teamId)}/task/${encodeURIComponent(taskId)}/update`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...(payload.subject !== undefined ? { subject: payload.subject } : {}),
+        ...(payload.description !== undefined ? { description: payload.description } : {}),
+        ...(payload.chain !== undefined ? { chain: payload.chain } : {}),
+      }),
+    },
+  );
+}
+
+/** Delete an unclaimed task (主任务级联删除全部小任务). */
+export async function deleteTeamTask(teamId: string, taskId: string): Promise<void> {
+  await requestJson(
+    `${API_BASE}/team/${encodeURIComponent(teamId)}/task/${encodeURIComponent(taskId)}/delete`,
+    { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) },
+  );
+}
+
+/** 批准计划 (docs/26): staged → running, drafts → ready, all members spawn. */
+export async function approveTeamPlan(teamId: string): Promise<void> {
+  await requestJson(`${API_BASE}/team/${encodeURIComponent(teamId)}/approve`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+}
+
 // ---------- role-builder build session (docs/19.6, D18) ----------
 
 /** One persona draft — field names align with eteams_member_save params. */

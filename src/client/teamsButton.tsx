@@ -16,11 +16,14 @@
  * selection is active, with a hover-revealed × to clear. For a role the
  * host asserts a system-prompt persona band for the session (per-assembly
  * dynamic section keyed by the session agent) so the conversation speaks as
- * that role — no draft text, nothing sent. Selections persist per session
- * in localStorage and re-assert to the host on mount. Clicking the button
- * ALWAYS toggles this popup (opened on the tab matching the selection) —
- * panel navigation stays with the 新增 shortcuts. When the slot's
- * `inputActions` kit is unavailable the prefill degrades to clipboard copy.
+ * that role — no draft text, nothing sent. For a team the host asserts the
+ * 团队绑定 band (docs/26: conversation task workflow, led by the captain or
+ * by the main window when the leader is removed). Selections persist per
+ * session in localStorage and re-assert to the host on mount. Clicking the
+ * button ALWAYS toggles this popup (opened on the tab matching the
+ * selection) — panel navigation stays with the 新增 shortcuts. When the
+ * slot's `inputActions` kit is unavailable the prefill degrades to clipboard
+ * copy.
  *
  * S11 样式迁移（docs/21-client-ui-stack.md 21.6 / D19b/D19c/D19g）：弹层与
  * 按钮面的 inline style 与手写注入样式表（POPUP_CSS）全部迁到 Tailwind 类 +
@@ -63,9 +66,11 @@ import { ClientErrorBoundary, recordClientDiag } from './diagnostics';
 import { enterTeamsPanel } from './teamsPanel';
 import {
   clearSessionPersona,
+  clearSessionTeam,
   fetchRoster,
   reportPresence,
   setSessionPersona,
+  setSessionTeam,
   type RosterMember,
 } from './api';
 import { useActivityMonitor } from './monitor';
@@ -97,11 +102,12 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
   const [anchorEl, setAnchorEl] = useState<HTMLDivElement | null>(null);
   // The wrapper is per session — the structural session face carries the id.
   const sessionId = (props.session as { sessionId?: string } | undefined)?.sessionId;
-  // Selections (docs/13.8.2): a selected MEMBER drives the system-prompt
-  // persona band (the conversation speaks as that role); a selected TEAM is
-  // a navigation bookmark. The two are mutually exclusive — the button shows
-  // one thing. Both persist per session in localStorage; the member
-  // selection re-asserts to the host on mount (host restart self-heals).
+  // Selections (docs/13.8.2, docs/26): a selected MEMBER drives the
+  // system-prompt persona band (the conversation speaks as that role); a
+  // selected TEAM drives the 团队绑定 band (conversation task workflow +
+  // leadership branch — docs/26). The two are mutually exclusive — the button
+  // shows one thing. Both persist per session in localStorage and re-assert
+  // to the host on mount (host restart self-heals).
   const [selectedMember, setSelectedMember] = useState<RosterMember | null>(() =>
     loadSelectedMember(sessionId),
   );
@@ -129,10 +135,26 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
                 error instanceof Error ? error.message : String(error),
               );
             });
+          // docs/26：双绑定互斥——恢复角色时清掉宿主侧可能残留的团队绑定。
+          void clearSessionTeam(sessionId).catch(() => undefined);
         }
         return;
       }
-      setSelectedTeam(loadSelectedTeam(sessionId));
+      const team = loadSelectedTeam(sessionId);
+      setSelectedTeam(team);
+      // docs/26：团队绑定挂载重申（宿主重启自愈，同 persona 模式）——绑定
+      // 生效后该会话的提示词携带「团队绑定」band（对话任务工作流）。
+      if (team !== null && sessionId !== undefined) {
+        setSessionTeam(sessionId, team.teamId)
+          .then(() => setPersonaError(null))
+          .catch((error: unknown) => {
+            setPersonaError(error instanceof Error ? error.message : String(error));
+            recordClientDiag(
+              'team-restore',
+              error instanceof Error ? error.message : String(error),
+            );
+          });
+      }
     };
     restore();
   }, [sessionId]);
@@ -167,6 +189,10 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
         setPersonaError(error instanceof Error ? error.message : String(error));
         recordClientDiag('persona-clear', error instanceof Error ? error.message : String(error));
       });
+    // docs/26：团队绑定一并清除（宿主侧可能任一绑定在生效）。
+    void clearSessionTeam(sessionId).catch((error: unknown) => {
+      recordClientDiag('team-clear', error instanceof Error ? error.message : String(error));
+    });
   };
 
   const selectMember = (member: RosterMember): void => {
@@ -199,11 +225,26 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
     saveSelectedTeam(sessionId, next);
     setSelectedMember(null);
     forgetSelectedMember(sessionId);
-    if (next === null && sessionId !== undefined) {
+    if (sessionId === undefined) return;
+    // docs/26：团队绑定驱动「团队绑定」band（对话任务工作流）；与角色接管
+    // 互斥——此前选团队只清本地成员选择、不清宿主 persona band，补齐。
+    if (selectedMember !== null) {
       void clearSessionPersona(sessionId).catch((error: unknown) => {
         recordClientDiag('persona-clear', error instanceof Error ? error.message : String(error));
       });
     }
+    if (next !== null) {
+      setSessionTeam(sessionId, next.teamId)
+        .then(() => setPersonaError(null))
+        .catch((error: unknown) => {
+          setPersonaError(error instanceof Error ? error.message : String(error));
+          recordClientDiag('team-set', error instanceof Error ? error.message : String(error));
+        });
+      return;
+    }
+    void clearSessionTeam(sessionId).catch((error: unknown) => {
+      recordClientDiag('team-clear', error instanceof Error ? error.message : String(error));
+    });
   };
 
   // Button click ALWAYS toggles the popup（用户反馈：无论什么状态都点开小
@@ -541,7 +582,9 @@ function TeamsPopup(props: {
 
   const addTeam = (): void => {
     onClose();
-    enterTeamsPanel({ creator: true });
+    // 落团队 tab/整页团队页；创建走页头「＋ 新增团队」按钮，不再自开弹窗
+    // （用户反馈 2026-09：一进团队页就弹新增弹窗很突兀）。
+    enterTeamsPanel();
   };
 
   const addMember = (): void => {

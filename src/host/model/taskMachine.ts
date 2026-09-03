@@ -55,6 +55,14 @@ export function canTransition(from: TaskStatus, to: TaskStatus): boolean {
  */
 export function applyTransition(task: TaskRecord, to: TaskStatus, now: number): void {
   if (task.status === to) return;
+  // 对话任务组（docs/26）：group 任务不经执行链，全部小任务完成时由插件
+  // 直接 ready→completed（标准边没有这条，这里单独放行）。
+  if (task.kind === 'group' && task.status === 'ready' && to === 'completed') {
+    task.completedAt = now;
+    task.status = to;
+    task.updatedAt = now;
+    return;
+  }
   if (!canTransition(task.status, to)) throw new TransitionError(task.status, to);
   if (to === 'blocked') {
     task.blockedFrom = task.status;
