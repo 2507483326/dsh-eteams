@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  avatarSeedFor,
   ensurePresetMembers,
   LEADER_NAME,
   readRoster,
@@ -59,5 +60,25 @@ describe('protected system members', () => {
       personaMd: '# 自定义手册',
     });
     expect(stored.personaMd).toBe('# 自定义手册');
+  });
+
+  it('edits the leader only through the explicit panel opt-in（用户迭代 2026-09-03）', async () => {
+    await ensurePresetMembers(root);
+    // 默认（对话流/构建器写路径）依旧拒绝。
+    await expect(upsertRosterMember(root, { name: LEADER_NAME, role: 'x' })).rejects.toThrow(
+      /保留名/,
+    );
+    // 面板显式保存（POST /roster → allowLeader）放行：手册与头像可改，
+    // 工号等既有字段保留。
+    const stored = await upsertRosterMember(
+      root,
+      { name: LEADER_NAME, role: '领队', personaMd: '# 领队手册（面板编辑）' },
+      { allowLeader: true },
+    );
+    expect(stored.personaMd).toBe('# 领队手册（面板编辑）');
+    const entry = readRoster(root).find((m) => m.name === LEADER_NAME);
+    expect(entry?.personaMd).toBe('# 领队手册（面板编辑）');
+    // 未传 avatar 沿用预设脸（seed = hashName(领队名)，salt 固定 7）。
+    expect(entry?.avatar).toEqual({ seed: avatarSeedFor(LEADER_NAME), salt: 7 });
   });
 });

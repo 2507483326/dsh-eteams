@@ -170,14 +170,19 @@ export function avatarSeedFor(name: string): number {
 export async function upsertRosterMember(
   stateRoot: string,
   member: Omit<RosterMember, 'updatedAt'>,
+  options?: { allowLeader?: boolean },
 ): Promise<RosterMember> {
   const name = member.name.trim();
   const role = member.role.trim();
   if (name === '') throw new Error('成员名不能为空');
   if (role === '') throw new Error('角色不能为空');
-  // 领队保留名（docs/19.10）：removeRosterMember 拒删，upsert 对称拒绝覆盖，
-  // 防止对话流/面板写路径意外改写领队人设。
-  if (name === LEADER_NAME) throw new Error('领队成员为保留名，不可通过 upsert 覆盖');
+  // 领队保留名（docs/19.10）：removeRosterMember 拒删；upsert 默认同样拒绝
+  // 覆盖，防止对话流/构建器写路径意外改写领队人设。面板的显式编辑（用户
+  // 迭代 2026-09-03「项目牧羊人也可以编辑」）经 allowLeader 放行——用户
+  // 主动保存与成员详情「同步到该角色」走这条路，代理侧写路径保持拒绝。
+  if (name === LEADER_NAME && options?.allowLeader !== true) {
+    throw new Error('领队成员为保留名，不可通过 upsert 覆盖');
+  }
   const members = readRoster(stateRoot);
   const previous = members.find((m) => m.name === name);
   // 工号（docs/21）：新建时从工作区计数器分配；更新保留原号。调用方显式

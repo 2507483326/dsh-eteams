@@ -38,9 +38,16 @@ export interface NewMemberInput {
   duty?: string;
   style?: string;
   skills?: string;
+  rules?: string[];
   executionPrompt?: string;
   /** Full Markdown role playbook (all persona content lives here now). */
   personaMd?: string;
+  /** Pre-generated avatar pair（详情页「随机头像」透传，用户迭代 2026-09-03）. */
+  avatar?: { seed: number; salt: number };
+  /** Preserved fields re-sent by the role-detail save (host replaces the entry). */
+  provider?: string;
+  model?: string;
+  reasoningEffort?: string;
 }
 
 async function requestJson(url: string, init?: RequestInit): Promise<unknown> {

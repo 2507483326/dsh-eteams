@@ -410,7 +410,9 @@ export async function syncMemberToRoster(
     const existing = findRosterMember(root, member.name);
     if (existing !== undefined) {
       // 已有同名角色：只覆盖手册，其余字段（职责风格/工号/头像）原样保留。
-      await upsertRosterMember(root, { ...existing, personaMd: text });
+      // 用户迭代 2026-09-03：成员详情「同步到该角色」是显式用户动作，领队
+      // 同样放行（与角色详情编辑一致，allowLeader 语义见 roster.ts）。
+      await upsertRosterMember(root, { ...existing, personaMd: text }, { allowLeader: true });
     } else if (member.name !== LEADER_NAME && member.name !== ROLE_BUILDER_NAME) {
       // 无同名角色（副本成员等）：按成员记录新建角色库条目。
       await upsertRosterMember(root, {

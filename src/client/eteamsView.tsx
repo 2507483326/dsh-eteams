@@ -64,6 +64,7 @@ import ArrowLeft from 'lucide-react/dist/esm/icons/arrow-left.mjs';
 import Check from 'lucide-react/dist/esm/icons/check.mjs';
 import ChevronDown from 'lucide-react/dist/esm/icons/chevron-down.mjs';
 import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right.mjs';
+import Dices from 'lucide-react/dist/esm/icons/dices.mjs';
 import MessageSquare from 'lucide-react/dist/esm/icons/message-square.mjs';
 import Minus from 'lucide-react/dist/esm/icons/minus.mjs';
 import PenLine from 'lucide-react/dist/esm/icons/pen-line.mjs';
@@ -455,15 +456,18 @@ const SHELL_CLASS =
 const CONTENT_CLASS = 'min-w-0 flex-1 overflow-x-hidden overflow-y-auto pr-0.5';
 /* docs/23 S23-3：原 styles.formError（FORM_ERROR_CLASS）迁移 FormErrorNote
    （shadcn Alert destructive 紧凑档，见上方组件），常量删除。 */
-/** 原 styles.cardGrid（团队/角色卡片栅格，最小 210px 自适应列）——团队列表
- * 已改小卡片栅格（用户迭代 2026-09 七，见 TEAM_CARD_CLASS），仍服务角色卡片栅格。 */
+/** 原 styles.cardGrid（团队/角色卡片栅格，最小 210px 自适应列）——团队与角色
+ * 列表共用：按面板宽度自适应列数，窄两列宽三列，卡片不拉成长条
+ * （用户迭代 2026-09 八）。 */
 const CARD_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(210px,1fr))] gap-3';
-/** 团队小卡片（用户迭代 2026-09 七）：列表改两列小卡片——名称 + 人数一行，
- * 成员略缩图 + 「详情/删除」按钮一行；整卡可点进详情，data-active 高亮沿用。
- * 底色/边框/悬停仍由 .eteams-team-card 样式表接管，p-3.5 = 卡内呼吸感。 */
-const TEAM_CARD_CLASS = 'flex min-w-0 cursor-pointer flex-col gap-3 rounded-xl p-3.5';
-/** 小卡片栅格（用户迭代 2026-09 七）：两列等宽，行距与卡片内距同节奏。 */
-const TEAM_GRID_CLASS = 'grid grid-cols-2 gap-2.5';
+/** 团队小卡片（用户迭代 2026-09 八）：纵排三段式——头行（名称 + 人数）、
+ * 目标一行（截断，给卡片一个「身体」），底栏以上边框分区放成员略缩图 +
+ * 「详情/删除」。整卡可点进详情；底色/边框/悬停仍由
+ * .eteams-team-card 样式表接管，p-3.5 = 卡内呼吸感。 */
+const TEAM_CARD_CLASS = 'flex min-w-0 cursor-pointer flex-col gap-2 rounded-xl p-3.5';
+/** 面板无目标建团时 host 写入的目标占位（webui.ts 建团路由）——小卡片不再
+ * 展示该占位与空目标：目标行只在有真目标时出现（用户迭代 2026-09 九）。 */
+const TEAM_GOAL_PLACEHOLDER = '（待完善：与领队在对话中确认目标）';
 /** 原 styles.phasePill（团队卡片阶段徽标：D22e 中性圆 pill + 彩色 6px dot
  * ——dot 由使用位按 PHASE_TONES 插入，状态彩底全撤）。 */
 const PHASE_PILL_CLASS =
@@ -1519,32 +1523,34 @@ function TeamTab({
         </DialogContent>
       </Dialog>
 
-      {/* 列表态：小卡片栅格（用户迭代 2026-09 七）——两列等宽小卡。信息精简：
-      名称 + 人数一行、成员略缩图 + 「详情/删除」按钮一行；整卡可点进详情
-      （当前团队高亮描边沿用 .eteams-team-card[data-active]），按钮区
-      stopPropagation 不触发整卡点击。删除走确认弹窗（host 只放行
-      staged/completed/halted）。 */}
+      {/* 列表态：小卡片栅格（用户迭代 2026-09 八，复用 CARD_GRID_CLASS）——
+      最小 210px 自适应列，窄两列宽三列。卡片纵排三段式：头行（名称 + 人数）、
+      目标一行（截断）、底栏（上边框分区）放成员略缩图 + 「详情/删除」；整卡
+      可点进详情，按钮区 stopPropagation 不触发整卡点击。删除走确认弹窗
+      （host 只放行 staged/completed/halted）。当前团队不再做选中高亮描边，
+      目标行也只在有真目标时出现（用户迭代 2026-09 九）。 */}
       {detailTeam === null && pool.length > 0 && (
         <Card className={cn(PANEL_CARD_CLASS, 'pb-3')}>
           <div className="mb-2.5 flex items-center gap-2">
             <h3 className={LIST_TITLE_CLASS}>团队</h3>
             <span className={LIST_COUNT_CLASS}>{pool.length} 个</span>
           </div>
-          <div className={TEAM_GRID_CLASS}>
+          <div className={CARD_GRID_CLASS}>
             {pool.map((t) => {
-              const active = t.teamId === team?.teamId;
               // 人数含领队（用户迭代 2026-09 六：领队也算成员，初始化默认在团；
               // 移出后只剩成员）——与详情页/添加弹窗同口径。
               const headcount = t.members.length + (t.leaderRemoved ? 0 : 1);
               const faces = t.leaderRemoved ? t.members : [t.captain, ...t.members];
+              // 目标行：空目标或建团占位（host 无目标建团时写入的「待完善」
+              // 提示）都不渲染，卡片保持干净（用户迭代 2026-09 九）。
+              const goalLine = t.goal === TEAM_GOAL_PLACEHOLDER ? '' : t.goal;
               return (
                 <div
                   key={t.teamId}
-                  className={cn('eteams-team-card group', TEAM_CARD_CLASS)}
-                  data-active={active ? 'true' : 'false'}
+                  className={cn('eteams-team-card', TEAM_CARD_CLASS)}
                   onClick={() => {
                     // 进详情同时选中该团队：看板/任务/汇报的联动对象跟着走
-                    // （原卡片点击的选中语义保留）。
+                    // （原卡片点击的选中语义保留，只是不再画高亮描边）。
                     onSelectTeam(t.teamId);
                     setDetailId(t.teamId);
                   }}
@@ -1555,10 +1561,16 @@ function TeamTab({
                     </span>
                     <span className={LIST_COUNT_CLASS}>{headcount} 人</span>
                   </div>
-                  {/* 底行：成员略缩图（领队 + 成员头像最多 3 个，超出 +N；负
-                  间距叠放 + 底色描边环，title 兜底全名）+ 详情/删除按钮。 */}
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex shrink-0 items-center -space-x-2">
+                  {/* 目标一行（截断）：卡片有了「身体」，排版不再扁长。 */}
+                  {goalLine !== '' && (
+                    <p className="truncate text-xs text-muted-foreground">{goalLine}</p>
+                  )}
+                  {/* 底栏（上边框分区）：成员略缩图（领队 + 成员头像最多 3 个，
+                  超出 +N；小号头像负间距叠放，滑过整组间距松开、滑过单个放大
+                  ——动效由样式表 .eteams-team-avatars 驱动，title 兜底全名）
+                  + 详情/删除。 */}
+                  <div className="mt-0.5 flex items-center gap-2 border-t border-solid pt-2.5">
+                    <div className="eteams-team-avatars flex min-w-0 flex-1 items-center">
                       {faces.slice(0, 3).map((m) => (
                         <span
                           key={m.name}
@@ -1569,14 +1581,14 @@ function TeamTab({
                             name={m.name}
                             seed={m.avatar?.seed}
                             salt={m.avatar?.salt}
-                            size={24}
+                            size={20}
                           />
                         </span>
                       ))}
                       {headcount > 3 && (
                         <span
                           className={cn(
-                            'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold',
+                            'inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold',
                             'bg-muted text-muted-foreground ring-2 ring-[color:var(--background)]',
                           )}
                           title={`其余 ${headcount - 3} 人`}
@@ -2992,11 +3004,11 @@ function handbookSeed(member: HandbookSource): string {
 }
 
 /**
- * The role detail handbook (用户反馈：去掉人设摘要，全部提炼到角色手册；
- * 详情默认只读渲染，点「编辑」进编辑态，保存/取消收尾). Full member upsert
- * on save — the host replaces the whole entry, so every current field is
- * re-sent with the new handbook. Always read-only for the leader (host
- * rejects leader upserts, 保留名).
+ * The role detail handbook (用户反馈：去掉人设摘要，全部提炼到角色手册).
+ * 用户迭代 2026-09-03：编辑钮挪到详情页头，名称/头像/手册一处编辑——保存
+ * 走 POST /roster 整条 upsert（host 替换整个条目，现有字段全量重发）；
+ * 领队经宿主 allowLeader 放行同样可编辑（名称仍为系统保留）。改名 =
+ * 保存新名 + 删除旧条目（保留角色名称锁死，不改名）。
  */
 /**
  * 角色/团队 list stylesheet（卡片化 + 视觉升级）：hover/抬升/阴影/过渡与删除
@@ -3008,7 +3020,13 @@ const ROLE_LIST_CSS = `
 .eteams-role-row:hover{border-color:color-mix(in srgb,var(--foreground) 18%,transparent);background:var(--muted)}
 .eteams-team-card{background:var(--background);border:1px solid var(--border);box-shadow:0 1px 2px rgba(15,23,42,0.05);transition:background .15s ease,border-color .15s ease,box-shadow .15s ease}
 .eteams-team-card:hover{border-color:color-mix(in srgb,var(--foreground) 18%,transparent);background:var(--muted)}
-.eteams-team-card[data-active="true"]{border-color:color-mix(in srgb,var(--primary) 50%,transparent);background:var(--business-tint);box-shadow:0 0 0 1px color-mix(in srgb,var(--primary) 20%,transparent)}
+/* 成员略缩图动效（用户迭代 2026-09 九）：小号头像负间距叠放；滑过整组时
+   间距松开（互相挤开），滑过单个头像时它放大浮到顶层——margin/transform
+   过渡驱动，JSX 只挂 .eteams-team-avatars 类。 */
+.eteams-team-avatars>*{position:relative;margin-left:-6px;transition:margin-left .18s ease,transform .18s ease}
+.eteams-team-avatars>:first-child{margin-left:0}
+.eteams-team-avatars:hover>*{margin-left:-2px}
+.eteams-team-avatars>*:hover{transform:scale(1.35);z-index:30}
 /* 删除钮（用户迭代 2026-09-03）：常驻显形，不再 hover 才出现——小卡片
    一行式布局下按钮固定行尾，可见性即可达性；hover 仅保留自身的描边换色。 */
 .eteams-role-del{padding:3px 10px;font-size:12px;border-radius:6px;border:1px solid var(--border);background:var(--background);color:var(--destructive);cursor:pointer;flex-shrink:0;font-family:inherit;line-height:18px;transition:border-color .15s ease,background .15s ease}
@@ -3023,104 +3041,6 @@ const ROLE_LIST_CSS = `
 .eteams-ui details>summary::before{content:'▸';display:inline-block;margin-right:6px;color:var(--muted-foreground);transition:transform .15s ease}
 .eteams-ui details[open]>summary::before{transform:rotate(90deg)}
 `;
-
-function HandbookEditor({
-  member,
-  readOnly,
-  onSaved,
-}: {
-  member: RosterMember;
-  readOnly: boolean;
-  onSaved: () => void;
-}): ReactNode {
-  const dispatch = useDispatch();
-  // draft === null → read-only Markdown view; string → editing buffer.
-  // Seeded from the CURRENT member on every edit entry, so a roster reload
-  // (post-save) is always what a new edit starts from.
-  const [draft, setDraft] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
-  const display = handbookSeed(member);
-
-  const save = (): void => {
-    if (draft === null) return;
-    // S10：保存改发 `roster/saveRoster`（effect 透传 api，失败 reject——
-    // dispatch promise 即 dva effect 的完成信号），组件 catch 面保持迁移
-    // 前行为（保存失败的显式提示）。
-    void (async (): Promise<void> => {
-      setSaving(true);
-      setError(null);
-      setSaved(false);
-      try {
-        await dispatch({
-          type: 'roster/saveRoster',
-          payload: {
-            name: member.name,
-            role: member.role,
-            ...(member.duty !== undefined ? { duty: member.duty } : {}),
-            ...(member.style !== undefined ? { style: member.style } : {}),
-            ...(member.skills !== undefined ? { skills: member.skills } : {}),
-            ...(Array.isArray(member.rules) ? { rules: member.rules } : {}),
-            ...(member.executionPrompt !== undefined
-              ? { executionPrompt: member.executionPrompt }
-              : {}),
-            ...(member.provider !== undefined ? { provider: member.provider } : {}),
-            ...(member.model !== undefined ? { model: member.model } : {}),
-            ...(member.reasoningEffort !== undefined
-              ? { reasoningEffort: member.reasoningEffort }
-              : {}),
-            ...(member.avatar !== undefined ? { avatar: member.avatar } : {}),
-            personaMd: draft,
-          },
-        });
-        setSaved(true);
-        setDraft(null);
-        setTimeout(() => setSaved(false), 2500);
-        onSaved();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        setSaving(false);
-      }
-    })();
-  };
-
-  return (
-    <Card className={PANEL_CARD_CLASS}>
-      <div className={cn(SECTION_TITLE_CLASS, 'flex items-center gap-2')}>
-        <span className="flex-1">角色手册（Markdown）</span>
-        {readOnly ? (
-          <span className={MUTED_CLASS}>领队为保留角色，手册不可在此修改</span>
-        ) : draft === null ? (
-          <Button size="sm" variant="ghost" onClick={() => setDraft(display)}>
-            编辑
-          </Button>
-        ) : (
-          <>
-            <Button size="sm" variant="ghost" disabled={saving} onClick={() => setDraft(null)}>
-              取消
-            </Button>
-            <Button size="sm" disabled={saving} onClick={save}>
-              保存
-            </Button>
-          </>
-        )}
-      </div>
-      {draft === null ? (
-        <>
-          <MarkdownText text={display} />
-          {saved && <div className={cn(MUTED_CLASS, 'mt-1')}>✓ 已保存</div>}
-        </>
-      ) : (
-        <>
-          <MdEditor value={draft} onChange={setDraft} minHeight={220} />
-          {error !== null && <FormErrorNote>保存失败：{error}</FormErrorNote>}
-        </>
-      )}
-    </Card>
-  );
-}
 
 function MembersTab({
   members,
@@ -3242,6 +3162,94 @@ function MembersTab({
         onDeleted();
       } catch (e) {
         setListError(e instanceof Error ? e.message : String(e));
+      }
+    })();
+  };
+
+  // —— 角色详情编辑（用户迭代 2026-09-03）——
+  // 编辑钮挪到详情页头：名称输入 + 随机头像 + 保存/取消一行收口，手册编辑
+  // 器跟在页头卡下。领队/角色构建师同样可编辑（宿主对面板显式保存放行，
+  // 见 roster.ts allowLeader）；仅名称锁死——领队名绑定团队领队卡、改用
+  // 「新增角色」另建。改名 = 保存新名 + 删除旧条目（两步，非事务）。
+  const [detailEditing, setDetailEditing] = useState(false);
+  const [detailDraftName, setDetailDraftName] = useState('');
+  const [detailDraftAvatar, setDetailDraftAvatar] = useState<{ seed: number; salt: number } | null>(
+    null,
+  );
+  const [detailDraftMd, setDetailDraftMd] = useState('');
+  const [detailSaving, setDetailSaving] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+
+  const startDetailEdit = (): void => {
+    if (detail === null) return;
+    setDetailDraftName(detail.name);
+    setDetailDraftAvatar(detail.avatar ?? null);
+    setDetailDraftMd(handbookSeed(detail));
+    setDetailError(null);
+    setDetailEditing(true);
+  };
+  const cancelDetailEdit = (): void => {
+    setDetailEditing(false);
+    setDetailError(null);
+  };
+  const rollDetailAvatar = (): void => {
+    // 与宿主默认头像同口径：seed 0..996（hashName % 997）、salt 0..999。
+    setDetailDraftAvatar({
+      seed: Math.floor(Math.random() * 997),
+      salt: Math.floor(Math.random() * 1000),
+    });
+  };
+  const saveDetail = (): void => {
+    if (detail === null || detailSaving) return;
+    const newName = detailDraftName.trim();
+    if (newName === '') {
+      setDetailError('角色名不能为空');
+      return;
+    }
+    const nameLocked = PROTECTED_MEMBERS.includes(detail.name);
+    const nameChanged = newName !== detail.name;
+    if (nameChanged && members.some((m) => m.name === newName)) {
+      setDetailError(`角色「${newName}」已存在，换个名字`);
+      return;
+    }
+    setDetailSaving(true);
+    setDetailError(null);
+    void (async (): Promise<void> => {
+      try {
+        // 整条 upsert（host 替换整个条目）：现有字段全量重发，仅名称/头像/
+        // 手册取草稿值。
+        await dispatch({
+          type: 'roster/saveRoster',
+          payload: {
+            name: newName,
+            role: detail.role,
+            ...(detail.duty !== undefined ? { duty: detail.duty } : {}),
+            ...(detail.style !== undefined ? { style: detail.style } : {}),
+            ...(detail.skills !== undefined ? { skills: detail.skills } : {}),
+            ...(Array.isArray(detail.rules) ? { rules: detail.rules } : {}),
+            ...(detail.executionPrompt !== undefined
+              ? { executionPrompt: detail.executionPrompt }
+              : {}),
+            ...(detail.provider !== undefined ? { provider: detail.provider } : {}),
+            ...(detail.model !== undefined ? { model: detail.model } : {}),
+            ...(detail.reasoningEffort !== undefined
+              ? { reasoningEffort: detail.reasoningEffort }
+              : {}),
+            ...(detailDraftAvatar !== null ? { avatar: detailDraftAvatar } : {}),
+            personaMd: detailDraftMd,
+          },
+        });
+        if (nameChanged && !nameLocked) {
+          // 改名 = 新条目已落库后移除旧条目；保留角色锁名不会走到这里。
+          await dispatch({ type: 'roster/deleteRoster', payload: detail.name });
+        }
+        setDetailName(newName); // 详情跟随新名（改名后停在详情页）
+        setDetailEditing(false);
+        onDeleted();
+      } catch (e) {
+        setDetailError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setDetailSaving(false);
       }
     })();
   };
@@ -3914,31 +3922,74 @@ function MembersTab({
   if (view === 'detail' && detail !== null) {
     const teamNames = teamsOf(detail.name);
     const isLeader = detail.name === LEADER_NAME;
+    const nameLocked = PROTECTED_MEMBERS.includes(detail.name);
+    // 头像：编辑态取草稿（随机头像实时预览），只读态取条目现值。
+    const avatarPair =
+      detailEditing && detailDraftAvatar !== null ? detailDraftAvatar : detail.avatar;
     return (
       // 版式：详情列不再限宽（用户要求解除固定宽度），面板全宽利用
       <div>
-        <Button type="button" variant="outline" size="sm" onClick={() => setView('list')}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            setView('list');
+            cancelDetailEdit(); // 编辑中返回列表即丢弃草稿
+          }}
+        >
           <ArrowLeft className="h-3.5 w-3.5" />
           返回角色列表
         </Button>
         <Card className={cn(PANEL_CARD_CLASS, 'mt-2')}>
           <div className="flex items-center gap-3.5">
-            {/* 头像描边环（视觉升级）：品牌淡底档（D21b token），柔和不抢戏。 */}
-            <div className="rounded-full border-2 border-solid p-0.5 leading-none border-business-tint">
-              <Avatar
-                name={detail.name}
-                seed={detail.avatar?.seed}
-                salt={detail.avatar?.salt}
-                size={52}
-              />
+            {/* 头像描边环（视觉升级）：品牌淡底档（D21b token），柔和不抢戏。
+            编辑态头像下挂「随机头像」钮（用户迭代 2026-09-03）。 */}
+            <div className="flex flex-none flex-col items-center gap-1.5">
+              <div className="rounded-full border-2 border-solid p-0.5 leading-none border-business-tint">
+                <Avatar
+                  name={detail.name}
+                  seed={avatarPair?.seed}
+                  salt={avatarPair?.salt}
+                  size={52}
+                />
+              </div>
+              {detailEditing && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 gap-1 px-1.5 text-xs text-muted-foreground"
+                  onClick={rollDetailAvatar}
+                  title="随机换一个头像"
+                >
+                  <Dices className="h-3.5 w-3.5" />
+                  随机头像
+                </Button>
+              )}
             </div>
             {/* 角色（用户反馈）：不再需要标签——名字即身份，手册即人设。 */}
             <div className="min-w-0 flex-1">
-              <div className="text-lg font-semibold tracking-tight text-foreground">
-                {detail.name}
-              </div>
+              {detailEditing && !nameLocked ? (
+                <Input
+                  value={detailDraftName}
+                  onChange={(e) => setDetailDraftName(e.target.value)}
+                  aria-label="角色名称"
+                  className="h-9 max-w-[320px] text-lg font-semibold"
+                />
+              ) : (
+                <div className="text-lg font-semibold tracking-tight text-foreground">
+                  {detail.name}
+                </div>
+              )}
               <div className={cn(MUTED_CLASS, 'mt-0.5')}>
-                {isLeader ? '系统保留角色 · 手册只读' : '点击下方「编辑」可修改角色手册'}
+                {isLeader
+                  ? '领队 · 手册与头像可编辑，名称为系统保留'
+                  : nameLocked
+                    ? '系统保留角色 · 名称不可改，其余可编辑'
+                    : detailEditing
+                      ? '编辑中：名称、头像与手册，保存后生效'
+                      : '点击右上「编辑」可修改名称、头像与手册'}
               </div>
               {teamNames.length > 0 && (
                 <div className="mt-2 flex flex-wrap gap-1.5">
@@ -3950,9 +4001,45 @@ function MembersTab({
                 </div>
               )}
             </div>
+            {/* 编辑/保存/取消（用户迭代 2026-09-03）：编辑钮从手册卡上移到
+            详情页头——与名称/头像同一行收口。 */}
+            {detailEditing ? (
+              <div className="flex flex-none items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={detailSaving}
+                  onClick={cancelDetailEdit}
+                >
+                  取消
+                </Button>
+                <Button size="sm" disabled={detailSaving} onClick={saveDetail}>
+                  保存
+                </Button>
+              </div>
+            ) : (
+              <Button type="button" size="sm" variant="outline" onClick={startDetailEdit}>
+                <PenLine className="h-3.5 w-3.5" />
+                编辑
+              </Button>
+            )}
           </div>
+          {detailError !== null && (
+            <div className="mt-2">
+              <FormErrorNote>{detailError}</FormErrorNote>
+            </div>
+          )}
         </Card>
-        <HandbookEditor member={detail} readOnly={isLeader} onSaved={onDeleted} />
+        <Card className={PANEL_CARD_CLASS}>
+          <div className={cn(SECTION_TITLE_CLASS, 'flex items-center gap-2')}>
+            <span>角色手册（Markdown）</span>
+          </div>
+          {detailEditing ? (
+            <MdEditor value={detailDraftMd} onChange={setDetailDraftMd} minHeight={220} />
+          ) : (
+            <MarkdownText text={handbookSeed(detail)} />
+          )}
+        </Card>
         {team !== undefined && detailMemberView !== null && (
           <MemberDialog team={team} member={detailMemberView} />
         )}

@@ -11,7 +11,8 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import type { ETeamsResolvedConfig } from '../config.js';
 import type {
   EventRecord,
@@ -216,7 +217,9 @@ export function teamSnapshot(
       style: captainPersona.style,
       skills: captainPersona.skills,
       personaMd: captainPersona.personaMd ?? null,
-      avatar: { seed: avatarSeedFor('项目牧羊人'), salt: 7 },
+      // 头像（用户迭代 2026-09-03）：优先名册领队条目——面板「随机头像」
+      // 换脸后团队页领队卡同步；缺省回落固定 (hashName, 7)。
+      avatar: rosterLeader?.avatar ?? { seed: avatarSeedFor('项目牧羊人'), salt: 7 },
       // 领队模型路线（用户迭代 2026-09）：flat 投影与 memberView 同构；
       // 'inherit' = 会话默认。成员「跟随领队」spawn 时解析到这条 override。
       provider: team.leaderModelRoute?.provider ?? 'inherit',
@@ -462,6 +465,75 @@ function appendClientLog(ctx: Context, config: ETeamsResolvedConfig, raw: string
 }
 
 /**
+ * host.log 诊断（用户迭代 2026-09-03 排障）：client.log 全部来自渲染端上报，
+ * 宿主自身无痕——「改完代码重启后行为没变」只能靠猜。这里补两条宿主侧
+ * 留痕（`<stateDir>/logs/host.log`，JSON lines 环形上限，写失败静默）：
+ * 1. Web 面装载即写 host-boot 一行，module/builtAt 取宿主 bundle 自身路径
+ *    与 mtime——运行中的代码到底是哪个构建，磁盘可查；
+ * 2. POST /roster 保存时写 roster-save 一行，含是否收到 avatar——「随机
+ *    头像保存无效」一眼定位：客户端发没发（client 端 fetch 打桩复现）/
+ *    宿主有没有透传（本行）。
+ */
+const HOST_LOG_MAX_LINES = 100;
+
+/** Boot marker is per-process: dedupe across installWebSurface retries. */
+let hostBootLogged = false;
+
+function appendHostLog(
+  ctx: Context,
+  config: ETeamsResolvedConfig,
+  entry: Record<string, unknown>,
+): void {
+  try {
+    const registry = workspaceRegistryOf(ctx);
+    if (registry === undefined) return;
+    const list = registry.list();
+    if (list.length === 0) return;
+    let root = joinPath(list[0]!.path, config.stateDir);
+    for (const ws of list) {
+      const candidate = joinPath(ws.path, config.stateDir);
+      if (existsSync(candidate)) {
+        root = candidate;
+        break;
+      }
+    }
+    const dir = joinPath(root, 'logs');
+    mkdirSync(dir, { recursive: true });
+    const file = joinPath(dir, 'host.log');
+    const prev = existsSync(file)
+      ? readFileSync(file, 'utf8')
+          .split('\n')
+          .filter((l) => l !== '')
+      : [];
+    const lines: string[] = [...prev, JSON.stringify({ at: Date.now(), ...entry })];
+    while (lines.length > HOST_LOG_MAX_LINES) lines.shift();
+    writeFileSync(file, `${lines.join('\n')}\n`, 'utf8');
+  } catch {
+    // sink failure is swallowed by design
+  }
+}
+
+/**
+ * One-time host-boot marker: records the running module's own path and
+ * mtime — i.e. which build is actually executing. Answers「磁盘上明明是新
+ * 构建、行为却是旧的」这类排障（用户迭代 2026-09-03）：宿主 bundle 由
+ * 应用启动时加载一次，重建不热生效。
+ */
+function logHostBoot(ctx: Context, config: ETeamsResolvedConfig): void {
+  if (hostBootLogged) return;
+  hostBootLogged = true;
+  let builtAt = '';
+  let module = '';
+  try {
+    module = fileURLToPath(import.meta.url);
+    builtAt = statSync(module).mtime.toISOString();
+  } catch {
+    // bundler without import.meta.url / stat failure — marker still written
+  }
+  appendHostLog(ctx, config, { kind: 'host-boot', module, builtAt });
+}
+
+/**
  * Install the eteams web surface (idempotent): registers one prefix route
  * covering every read endpoint and returns whether it bound this call.
  */
@@ -469,6 +541,7 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
   const webServer = webServerOf(ctx);
   const workspaceRegistry = workspaceRegistryOf(ctx);
   if (webServer === undefined || workspaceRegistry === undefined) return false;
+  logHostBoot(ctx, config);
 
   ctx.effect(
     () =>
@@ -543,23 +616,42 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
             }
             if (req.method === 'POST' && segments[0] === 'roster' && segments.length === 1) {
               const body = parseJsonObject(await readBody(req));
-              const stored = await upsertRosterMember(rootForWrites(ctx, config), {
+              // 用户迭代 2026-09-03：面板显式保存（名称/头像/手册一体）——
+              // allowLeader 放行领队编辑；avatar 从详情页「随机头像」透传
+              // （此前该路由丢弃 avatar，落库永远沿用旧头像）。
+              const bodyAvatar = readAvatarPair(body.avatar);
+              // 排障留痕：收到保存请求即记一行（客户端发没发 avatar、宿主
+              // 收没收到，两端证据各占一边）。
+              appendHostLog(ctx, config, {
+                kind: 'roster-save',
                 name: str(body.name, ''),
-                role: str(body.role, ''),
-                ...(body.duty !== undefined ? { duty: str(body.duty) } : {}),
-                ...(body.style !== undefined ? { style: str(body.style) } : {}),
-                ...(body.skills !== undefined ? { skills: str(body.skills) } : {}),
-                ...(Array.isArray(body.rules) ? { rules: body.rules.map((r) => str(r)) } : {}),
-                ...(body.executionPrompt !== undefined
-                  ? { executionPrompt: str(body.executionPrompt) }
-                  : {}),
-                ...(body.personaMd !== undefined ? { personaMd: str(body.personaMd) } : {}),
-                ...(body.provider !== undefined ? { provider: str(body.provider) } : {}),
-                ...(body.model !== undefined ? { model: str(body.model) } : {}),
-                ...(body.reasoningEffort !== undefined
-                  ? { reasoningEffort: str(body.reasoningEffort) }
-                  : {}),
+                hasAvatar: bodyAvatar !== undefined,
+                avatar: bodyAvatar ?? null,
               });
+              const stored = await upsertRosterMember(
+                rootForWrites(ctx, config),
+                {
+                  name: str(body.name, ''),
+                  role: str(body.role, ''),
+                  ...(body.duty !== undefined ? { duty: str(body.duty) } : {}),
+                  ...(body.style !== undefined ? { style: str(body.style) } : {}),
+                  ...(body.skills !== undefined ? { skills: str(body.skills) } : {}),
+                  ...(Array.isArray(body.rules)
+                    ? { rules: body.rules.map((r) => str(r)) }
+                    : {}),
+                  ...(body.executionPrompt !== undefined
+                    ? { executionPrompt: str(body.executionPrompt) }
+                    : {}),
+                  ...(body.personaMd !== undefined ? { personaMd: str(body.personaMd) } : {}),
+                  ...(body.provider !== undefined ? { provider: str(body.provider) } : {}),
+                  ...(body.model !== undefined ? { model: str(body.model) } : {}),
+                  ...(body.reasoningEffort !== undefined
+                    ? { reasoningEffort: str(body.reasoningEffort) }
+                    : {}),
+                  ...(bodyAvatar !== undefined ? { avatar: bodyAvatar } : {}),
+                },
+                { allowLeader: true },
+              );
               sendJson(res, 200, { ok: true, member: stored });
               return;
             }
@@ -1365,6 +1457,20 @@ function parseJsonObject(raw: string): Record<string, unknown> {
 /** Coerce one JSON value to a trimmed string with a fallback. */
 function str(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value.trim() : fallback;
+}
+
+/**
+ * 用户迭代 2026-09-03「随机头像」：校验请求体里的 avatar 对（seed/salt 必须都是
+ * 有限数）。非法/缺失一律 undefined——upsert 落库时自然回落到旧头像，畸形
+ * 请求不产生半写。
+ */
+function readAvatarPair(value: unknown): { seed: number; salt: number } | undefined {
+  if (value === null || typeof value !== 'object') return undefined;
+  const seed = (value as { seed?: unknown }).seed;
+  const salt = (value as { salt?: unknown }).salt;
+  if (typeof seed !== 'number' || !Number.isFinite(seed)) return undefined;
+  if (typeof salt !== 'number' || !Number.isFinite(salt)) return undefined;
+  return { seed, salt };
 }
 
 /** Member dialog timeline (D15 read-only): mailbox rows + member events merged. */

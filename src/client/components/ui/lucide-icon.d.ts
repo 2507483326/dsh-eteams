@@ -124,3 +124,13 @@ declare module 'lucide-react/dist/esm/icons/minus.mjs' {
   const Minus: ForwardRefExoticComponent<Omit<LucideProps, 'ref'> & RefAttributes<SVGSVGElement>>;
   export default Minus;
 }
+
+// 用户迭代 2026-09-03 增补：角色详情「随机头像」钮（Dices，骰子语义）。
+// 同款深层导入纪律（一个图标只进一个模块）。
+declare module 'lucide-react/dist/esm/icons/dices.mjs' {
+  import type { ForwardRefExoticComponent, RefAttributes } from 'react';
+  import type { LucideProps } from 'lucide-react';
+
+  const Dices: ForwardRefExoticComponent<Omit<LucideProps, 'ref'> & RefAttributes<SVGSVGElement>>;
+  export default Dices;
+}

@@ -290,3 +290,18 @@
 {"at":1788423383807,"version":"v0.2.12","entry":{"at":1788423381795,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
 {"at":1788423386249,"version":"v0.2.12","entry":{"at":1788423381795,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
 {"at":1788423386249,"version":"v0.2.12","entry":{"at":1788423384237,"kind":"backdrop-geom","message":"canvas=1577x879 attr=position: absolute; top: 0px; left: 0px; width: 100%; height: 879px; opacity: 1; root=1577x879 scroll=1577x1047"}}
+{"at":1788424349094,"version":"v0.2.12","entry":{"at":1788424346163,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788424351105,"version":"v0.2.12","entry":{"at":1788424346163,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788424351105,"version":"v0.2.12","entry":{"at":1788424349095,"kind":"backdrop-geom","message":"canvas=1577x879 attr=position: absolute; top: 0px; left: 0px; width: 100%; height: 879px; opacity: 1; root=1577x879 scroll=1577x1047"}}
+{"at":1788424829096,"version":"v0.2.12","entry":{"at":1788424826557,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788424831099,"version":"v0.2.12","entry":{"at":1788424826557,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788424831099,"version":"v0.2.12","entry":{"at":1788424829097,"kind":"backdrop-geom","message":"canvas=1577x879 attr=position: absolute; top: 0px; left: 0px; width: 100%; height: 879px; opacity: 1; root=1577x879 scroll=1577x1047"}}
+{"at":1788424861266,"version":"v0.2.12","entry":{"at":1788424826557,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788424861266,"version":"v0.2.12","entry":{"at":1788424829097,"kind":"backdrop-geom","message":"canvas=1577x879 attr=position: absolute; top: 0px; left: 0px; width: 100%; height: 879px; opacity: 1; root=1577x879 scroll=1577x1047"}}
+{"at":1788424861266,"version":"v0.2.12","entry":{"at":1788424859264,"kind":"dva:onError","message":"面板路由内部错误：Error: 领队成员为保留名，不可通过 upsert 覆盖"}}
+{"at":1788425813104,"version":"v0.2.12","entry":{"at":1788425810633,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788425816104,"version":"v0.2.12","entry":{"at":1788425810633,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788425816104,"version":"v0.2.12","entry":{"at":1788425814097,"kind":"backdrop-geom","message":"canvas=1577x879 attr=position: absolute; top: 0px; left: 0px; width: 100%; height: 879px; opacity: 1; root=1577x879 scroll=1577x1047"}}
+{"at":1788425911633,"version":"v0.2.12","entry":{"at":1788425909624,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788425914083,"version":"v0.2.12","entry":{"at":1788425909624,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788425914083,"version":"v0.2.12","entry":{"at":1788425912077,"kind":"backdrop-geom","message":"canvas=1577x879 attr=position: absolute; top: 0px; left: 0px; width: 100%; height: 879px; opacity: 1; root=1577x879 scroll=1577x1047"}}
