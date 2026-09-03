@@ -27,10 +27,25 @@
  * 4. 受控模式 —— markdown prop 仅挂载时读取（入门文档明确），编辑经
  *    onChange 上抛；外部 value 与最近一次发出的值不同（面板换成员、构建
  *    刷新草稿）时用 MDXEditorMethods.setMarkdown 整体同步，避免打字回环。
+ * 5. 粘贴转 Markdown（用户迭代 2026-09-03「复制过来的 md 文档没有正确被
+ *    编辑器渲染」）—— mdxeditor 没有任何粘贴处理（全包仅 image 插件监听
+ *    PASTE_COMMAND），纯文本 Markdown 粘贴后 # / - / ** 全部留在字面上；
+ *    markdownShortcutPlugin 只覆盖逐字打键。在容器上加捕获相 onPaste：
+ *    剪贴板纯文本命中 Markdown 语法特征时 preventDefault，改走公开方法
+ *    insertMarkdown（mdast→Lexical 导入管线，插在当前选区）；普通文本与
+ *    富文本 HTML 粘贴不受影响。粘贴文本自带的 frontmatter 一律剥除（本
+ *    编辑器的 frontmatter 区由原文档管理，正文落点在光标处）。
  *
  * @module dsh-eteams/client/mdEditor
  */
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ClipboardEvent as ReactClipboardEvent,
+  type ReactNode,
+} from 'react';
 import {
   BoldItalicUnderlineToggles,
   BlockTypeSelect,
@@ -153,6 +168,30 @@ function useHostDark(): boolean {
   return dark;
 }
 
+/** frontmatter 围栏（仅识别文档开头的 `---` 块）。 */
+const FRONTMATTER_RE = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/;
+
+/**
+ * 判定一段纯文本是否「像 Markdown」：命中原生语法标记才接管粘贴，普通
+ * 句子/代码片段仍走默认粘贴。宽松匹配即可——本编辑器就是 Markdown 写作
+ * 面，误判的代价只是把带标记的文本转成格式（Ctrl+Z 可退）。
+ */
+function looksLikeMarkdown(text: string): boolean {
+  if (text.length === 0 || text.length > 200_000) return false;
+  return (
+    FRONTMATTER_RE.test(text) || // frontmatter
+    /^ {0,3}#{1,6} \S/m.test(text) || // ATX 标题
+    /^ {0,3}(?:```|~~~)/m.test(text) || // 围栏代码块
+    /^ {0,3}> ?\S/m.test(text) || // 引用
+    /^ {0,3}(?:[-*+]|\d{1,9}[.)]) \S/m.test(text) || // 列表
+    /^ {0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/m.test(text) || // 分隔线
+    /^\|.+\|/m.test(text) || // 表格行
+    /\*\*[^*\n]+\*\*/.test(text) || // 加粗
+    /`[^`\n]+`/.test(text) || // 行内代码
+    /\[[^\]\n]+\]\([^)\n]+\)/.test(text) // 链接
+  );
+}
+
 /**
  * 代码块语言表（code-blocks 文档「Pre-loaded language support」格式）：
  * 静态预载 + 关闭动态加载，保证单文件 bundle；未列出的语言退化为纯文本
@@ -255,9 +294,31 @@ export function MdEditor({
     [],
   );
 
+  // 粘贴转 Markdown（见模块注释第 5 条）：捕获相先于 Lexical 在
+  // contentEditable 上的冒泡监听。仅正文 contentEditable 内接管——弹层
+  // （链接对话框等）也 portal 在本容器，代码块是嵌套 CodeMirror，各有
+  // 自己的粘贴面，按事件目标区分。
+  const onPasteCapture = (e: ReactClipboardEvent<HTMLDivElement>): void => {
+    const target = e.target instanceof HTMLElement ? e.target : null;
+    if (target === null) return;
+    if (target.closest('.cm-editor') !== null) return; // CodeMirror（代码块/源模式）
+    if (target.closest('.eteams-mdx-content') === null) return; // 弹窗输入框等
+    const text = e.clipboardData?.getData('text/plain') ?? '';
+    if (!looksLikeMarkdown(text)) return;
+    // 粘贴稿的 frontmatter 一律剥除：本编辑器的 frontmatter 区由原文档
+    // 管理，且光标处插入 frontmatter 节点无意义；正文为空时（只贴了个
+    // frontmatter）不接管，默认粘贴至少可见可编辑。
+    const pasted = text.replace(FRONTMATTER_RE, '');
+    if (pasted.trim() === '') return;
+    e.preventDefault();
+    e.stopPropagation();
+    methodsRef.current?.insertMarkdown(pasted);
+  };
+
   return (
     <div
       ref={setOverlayEl}
+      onPasteCapture={onPasteCapture}
       style={{
         position: 'relative',
         border: `1px solid ${T.border2}`,
