@@ -144,12 +144,70 @@ export async function setMemberModel(
   );
 }
 
+/**
+ * Save one member's own handbook copy（成员详情独立于角色详情，用户迭代
+ * 2026-09 四）：只写成员记录，角色库不受影响。运行中的成员下次启动时生效。
+ */
+export async function updateMemberPersona(
+  teamId: string,
+  name: string,
+  personaMd: string,
+): Promise<void> {
+  await requestJson(
+    `${API_BASE}/team/${encodeURIComponent(teamId)}/member/${encodeURIComponent(name)}/persona`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ personaMd }),
+    },
+  );
+}
+
+/**
+ * 把成员当前的手册副本同步回角色库同名角色（用户迭代 2026-09 四「同步到该
+ * 角色」）：同名角色只覆盖手册；成员无角色库条目（-2 副本等）时按成员记录
+ * 新建。
+ */
+export async function syncMemberToRoster(
+  teamId: string,
+  name: string,
+  personaMd: string,
+): Promise<void> {
+  await requestJson(
+    `${API_BASE}/team/${encodeURIComponent(teamId)}/member/${encodeURIComponent(name)}/sync-roster`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ personaMd }),
+    },
+  );
+}
+
 /** Move the leader out of / back into the team's member roster. */
 export async function setTeamLeaderRemoved(teamId: string, removed: boolean): Promise<void> {
-  await requestJson(`${API_BASE}/team/${encodeURIComponent(teamId)}/leader/${removed ? 'remove' : 'restore'}`, {
+  await requestJson(
+    `${API_BASE}/team/${encodeURIComponent(teamId)}/leader/${removed ? 'remove' : 'restore'}`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    },
+  );
+}
+
+/**
+ * Set the leader's model route（领队卡右侧模型选择，用户迭代 2026-09）：model
+ * 为空 = 重置为会话默认。领队即面板会话，自身模型不由插件切换——此路线是
+ * 团队默认，成员选「跟随领队」时启动即按它下发。
+ */
+export async function setLeaderModel(
+  teamId: string,
+  model: { provider?: string; model?: string; reasoningEffort?: string },
+): Promise<void> {
+  await requestJson(`${API_BASE}/team/${encodeURIComponent(teamId)}/leader/model`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({}),
+    body: JSON.stringify(model),
   });
 }
 

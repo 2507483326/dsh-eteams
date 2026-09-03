@@ -35,6 +35,7 @@ import { ETEAMS_TAB_LABEL, ETEAMS_VIEW_ID } from './bridge';
 import { installClientDiagnostics, recordClientDiag } from './diagnostics';
 import { ETeamsView } from './eteamsView';
 import { installHeroTeamsButton } from './heroTeamsButton';
+import { installModelCatalog } from './modelCatalog';
 import { ensureEteamsStyles } from './tailwind';
 import { enterTeamsPanel } from './teamsPanel';
 import { TeamsButton } from './teamsButton';
@@ -43,8 +44,10 @@ import { TeamsButton } from './teamsButton';
  * `ctx.<service>` property read against this declaration — touching an
  * undeclared service throws ("service X is not declared by your plugin"),
  * so this list must name every service the client plane touches:
- * `slots` (all registrations) and `conversationEvents` (card folding). */
-export const inject = ['slots', 'conversationEvents'];
+ * `slots` (all registrations), `conversationEvents` (card folding, optional)
+ * and `modelDirectories` (session model catalog, optional — 模型选择与对话
+ * 一致，用户迭代 2026-09；缺服务的运行时退回静态选项). */
+export const inject = ['slots', 'conversationEvents', 'modelDirectories'];
 
 /** Run one registration step; a failure is recorded, never fatal. */
 function guard(step: string, run: () => void): void {
@@ -68,6 +71,11 @@ export function apply(ctx: Context): void {
   guard('tailwind-styles', () => ensureEteamsStyles());
 
   installClientDiagnostics();
+
+  // 模型目录（用户迭代 2026-09：模型选择与对话一致）：暂存 client root ctx，
+  // modelDirectories 服务由 ui-model-selection 插件挂载（同一 inject 列表），
+  // 惰性读取——这里只暂存引用，绝不在此刻访问服务属性。
+  guard('model-catalog', () => installModelCatalog(ctx));
 
   guard('conversation.view', () =>
     ctx.slots.inject('conversation.view', () =>

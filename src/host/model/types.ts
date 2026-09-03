@@ -221,6 +221,12 @@ export interface TeamState {
    * 名册里是否展示/保留领队」——移除后可经 /leader/restore 加回。
    */
   leaderRemoved?: boolean;
+  /**
+   * 领队模型路线（用户迭代 2026-09：领队也选模型）。领队即面板会话代理，
+   * 其自身会话模型不由插件切换——这条路线是「团队默认模型」：成员选
+   * 「跟随领队」时 spawn 解析到这条 override（未设置则沿用会话默认）。
+   */
+  leaderModelRoute?: ModelRouteSnapshot;
   createdAt: number;
   updatedAt: number;
   version: number;

@@ -610,6 +610,150 @@ describe('panel write routes (M5 first slice)', () => {
     expect(body.maxMembers).toBe(10);
     expect(body.teams.find((t) => t.teamId === teamId)!.leaderRemoved).toBe(true);
   });
+
+  it('sets the leader model route via POST /team/:id/leader/model and projects it on the captain', async () => {
+    const { handler, res, post } = await installFake();
+    const created = await post('/eteams-api/team', { name: '领队模型', sessionId: 'sess-panel' });
+    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
+
+    const set = await post(`/eteams-api/team/${teamId}/leader/model`, {
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      reasoningEffort: 'high',
+    });
+    expect(set.code).toBe(200);
+    expect(readTeamFromDisk(teamId).leaderModelRoute).toMatchObject({
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      reasoningEffort: 'high',
+      source: 'override',
+    });
+
+    const r = res();
+    await handler({ method: 'GET', url: '/eteams-api/state' }, r);
+    const body = JSON.parse(r.body) as {
+      teams: {
+        teamId: string;
+        captain: { provider: string; model: string; reasoningEffort: string | null };
+      }[];
+    };
+    const captain = body.teams.find((t) => t.teamId === teamId)!.captain;
+    expect(captain.provider).toBe('deepseek');
+    expect(captain.model).toBe('deepseek-chat');
+    expect(captain.reasoningEffort).toBe('high');
+
+    // Empty body clears back to 会话默认（inherited）.
+    const reset = await post(`/eteams-api/team/${teamId}/leader/model`, {});
+    expect(reset.code).toBe(200);
+    expect(readTeamFromDisk(teamId).leaderModelRoute).toMatchObject({
+      provider: 'inherit',
+      model: 'inherit',
+      source: 'inherited',
+    });
+  });
+
+  it('caps members at maxMembers（领队不占成员名额，用户迭代 2026-09 四）', async () => {
+    const { post } = await installFake();
+    const created = await post('/eteams-api/team', { name: '名额团队', sessionId: 'sess-panel' });
+    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
+
+    // Leader in team → members still get the full maxMembers slots (领队不占名额).
+    for (let i = 1; i <= 10; i++) {
+      const add = await post(`/eteams-api/team/${teamId}/member`, { name: `成员-${i}` });
+      expect(add.code).toBe(200);
+    }
+    const eleventh = await post(`/eteams-api/team/${teamId}/member`, { name: '成员-11' });
+    expect(eleventh.code).toBe(400);
+
+    // Leader out → the cap is unchanged (成员口径：上限只对成员生效).
+    const remove = await post(`/eteams-api/team/${teamId}/leader/remove`, {});
+    expect(remove.code).toBe(200);
+    const late = await post(`/eteams-api/team/${teamId}/member`, { name: '成员-11' });
+    expect(late.code).toBe(400);
+
+    // Full house (10 members) → restoring the leader is allowed (不占名额).
+    const restore = await post(`/eteams-api/team/${teamId}/leader/restore`, {});
+    expect(restore.code).toBe(200);
+    expect(readTeamFromDisk(teamId).leaderRemoved).toBe(false);
+  });
+
+  it('saves the member handbook copy via POST /team/:id/member/:name/persona and projects it in /state', async () => {
+    const { handler, res, post } = await installFake();
+    await post('/eteams-api/roster', { name: 'Eve', role: 'engineer', personaMd: '# Eve 初版' });
+    const created = await post('/eteams-api/team', { name: '手册团队', sessionId: 'sess-panel' });
+    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
+    const added = await post(`/eteams-api/team/${teamId}/member`, {
+      name: 'Eve',
+      fromRoster: true,
+    });
+    expect(added.code).toBe(200);
+
+    // 成员详情独立：保存只写成员记录，角色库不受影响。
+    const saved = await post(`/eteams-api/team/${teamId}/member/Eve/persona`, {
+      personaMd: '# Eve 自定义手册',
+    });
+    expect(saved.code).toBe(200);
+    expect(readTeamFromDisk(teamId).members[0]!.persona.personaMd).toBe('# Eve 自定义手册');
+
+    // Empty handbook is rejected.
+    const empty = await post(`/eteams-api/team/${teamId}/member/Eve/persona`, { personaMd: '  ' });
+    expect(empty.code).toBe(400);
+
+    // The member's own copy travels with /state (成员详情页的数据源).
+    const r = res();
+    await handler({ method: 'GET', url: '/eteams-api/state' }, r);
+    const body = JSON.parse(r.body) as {
+      teams: { teamId: string; members: { name: string; personaMd: string | null }[] }[];
+    };
+    const member = body.teams.find((t) => t.teamId === teamId)!.members[0]!;
+    expect(member.name).toBe('Eve');
+    expect(member.personaMd).toBe('# Eve 自定义手册');
+  });
+
+  it('syncs the member handbook back to its roster role via POST /team/:id/member/:name/sync-roster', async () => {
+    const { handler, res, post } = await installFake();
+    await post('/eteams-api/roster', {
+      name: 'Frank',
+      role: 'engineer',
+      personaMd: '# Frank 初版',
+    });
+    const created = await post('/eteams-api/team', { name: '同步团队', sessionId: 'sess-panel' });
+    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
+    const added = await post(`/eteams-api/team/${teamId}/member`, {
+      name: 'Frank',
+      fromRoster: true,
+    });
+    expect(added.code).toBe(200);
+
+    // Member edits its own copy, then syncs back — the roster entry follows.
+    await post(`/eteams-api/team/${teamId}/member/Frank/persona`, { personaMd: '# Frank v2' });
+    const synced = await post(`/eteams-api/team/${teamId}/member/Frank/sync-roster`, {});
+    expect(synced.code).toBe(200);
+
+    const r = res();
+    await handler({ method: 'GET', url: '/eteams-api/roster' }, r);
+    const roster = JSON.parse(r.body) as { members: { name: string; personaMd?: string }[] };
+    expect(roster.members.find((m) => m.name === 'Frank')!.personaMd).toBe('# Frank v2');
+
+    // A copy member without a roster entry gets one created on sync.
+    const copy = await post(`/eteams-api/team/${teamId}/member`, {
+      name: 'Frank-2',
+      sourceName: 'Frank',
+    });
+    expect(copy.code).toBe(200);
+    const copySync = await post(`/eteams-api/team/${teamId}/member/Frank-2/sync-roster`, {
+      personaMd: '# Frank-2 副本手册',
+    });
+    expect(copySync.code).toBe(200);
+    const r2 = res();
+    await handler({ method: 'GET', url: '/eteams-api/roster' }, r2);
+    const roster2 = JSON.parse(r2.body) as {
+      members: { name: string; role: string; personaMd?: string }[];
+    };
+    const entry = roster2.members.find((m) => m.name === 'Frank-2')!;
+    expect(entry.role).toBe('engineer');
+    expect(entry.personaMd).toBe('# Frank-2 副本手册');
+  });
 });
 
 describe('web surface installation', () => {

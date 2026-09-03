@@ -48,6 +48,17 @@ export interface MemberView {
   removed: boolean;
   /** Pre-generated avatar pair (docs/14); null for legacy members. */
   avatar: { seed: number; salt: number } | null;
+  /**
+   * 成员自己的角色手册副本（用户迭代 2026-09 四）：加入团队时从角色库复制，
+   * 之后与角色详情各自独立。null/undefined = 旧成员无手册（详情页按结构
+   * 字段合成骨架）；旧运行时快照不带这些字段。
+   */
+  personaMd?: string | null;
+  duty?: string | null;
+  style?: string | null;
+  skills?: string | null;
+  rules?: string[] | null;
+  executionPrompt?: string | null;
 }
 
 /** One attempt summary row (compact; full line via the track route). */
@@ -101,6 +112,10 @@ export interface CaptainView {
   skills: string;
   personaMd: string | null;
   avatar: { seed: number; salt: number };
+  /** 领队模型路线（用户迭代 2026-09）：'inherit' = 会话默认；成员「跟随领队」spawn 时解析到它。 */
+  provider: string;
+  model: string;
+  reasoningEffort: string | null;
 }
 
 /** Full team snapshot served by /state. */
@@ -144,6 +159,33 @@ export interface ActivityState {
   maxMembers: number;
   fetchedAt: number;
   error: string | null;
+  /**
+   * 乐观路线补丁的 pending 覆盖层（用户迭代 2026-09 模型菜单「选择即变」）。
+   * 只由 activity model 维护：patchRoute 写入、set 同值确认后摘除、失败回滚。
+   * 轮询消费方不读它——快照叠加在 reducer 里完成。
+   */
+  pendingRoutes?: Record<string, PendingRouteEntry>;
+}
+
+/** 路线三元组（成员/领队模型路线的本地口径，与 /state 快照字段一致）。 */
+export interface RouteTriple {
+  provider: string;
+  model: string;
+  reasoningEffort: string | null;
+}
+
+/** 乐观路线补丁：定位一队的一条路线并整体替换（对话 choose() 的本地即时性）。 */
+export interface RoutePatch {
+  teamId: string;
+  target: { kind: 'captain' } | { kind: 'member'; name: string };
+  route: RouteTriple;
+}
+
+/** pending 覆盖层的一条记录（带定位信息，set 到达时可重新解析目标）。 */
+export interface PendingRouteEntry {
+  teamId: string;
+  target: RoutePatch['target'];
+  route: RouteTriple;
 }
 
 /**
@@ -178,7 +220,8 @@ async function fetchState(): Promise<void> {
       payload: {
         teams: body.teams ?? [],
         archivedTeams: body.archivedTeams ?? [],
-        maxMembers: typeof body.maxMembers === 'number' && body.maxMembers > 0 ? body.maxMembers : 10,
+        maxMembers:
+          typeof body.maxMembers === 'number' && body.maxMembers > 0 ? body.maxMembers : 10,
         serverTime: body.serverTime ?? Date.now(),
         fetchedAt: Date.now(),
         error: null,
@@ -195,7 +238,11 @@ async function fetchState(): Promise<void> {
   }
 }
 
-let controller: { stop: () => void; tick: () => Promise<void> } | null = null;
+let controller: {
+  stop: () => void;
+  tick: () => Promise<void>;
+  refresh: () => Promise<void>;
+} | null = null;
 let controllerUsers = 0;
 
 /**
@@ -209,9 +256,21 @@ export function useActivityMonitor(): ActivityState {
     if (controller === null) {
       let cancelled = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
+      // 单飞闸：tick/refresh 共用——在途 fetch 未完成时丢弃后续触发（防
+      // visibilitychange 立即刷新与常规 tick 并行派出第二条永久轮询链）。
+      let inFlight = false;
+      const runOnce = async (): Promise<void> => {
+        if (inFlight || cancelled) return;
+        inFlight = true;
+        try {
+          await fetchState();
+        } finally {
+          inFlight = false;
+        }
+      };
       const tick = async (): Promise<void> => {
         if (cancelled) return;
-        await fetchState();
+        await runOnce();
         if (cancelled) return;
         schedule();
       };
@@ -237,6 +296,8 @@ export function useActivityMonitor(): ActivityState {
             document.removeEventListener('visibilitychange', onVisible);
         },
         tick,
+        // 乐观补丁 POST 成功后的快速确认（不进入轮询节拍链）。
+        refresh: runOnce,
       };
       if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
       void tick();
@@ -251,6 +312,25 @@ export function useActivityMonitor(): ActivityState {
     };
   }, []);
   return snapshot;
+}
+
+/**
+ * 乐观路线补丁（用户迭代 2026-09「选择即变」）：把成员/领队模型路线即时写进
+ * 本地快照 + 记 pending 覆盖层——选择不等 POST + 轮询（对话 choose() 的本地
+ * 即时性同款）。POST 失败由调用方 revertRoutePatch 回滚。
+ */
+export function applyRoutePatch(patch: RoutePatch): void {
+  getApp().store.dispatch({ type: 'activity/patchRoute', payload: patch });
+}
+
+/** 乐观补丁回滚（POST 失败）：摘 pending，路线恢复为改动前的值。 */
+export function revertRoutePatch(patch: RoutePatch, previous: RouteTriple): void {
+  getApp().store.dispatch({ type: 'activity/revertRoute', payload: { patch, previous } });
+}
+
+/** 立即拉一次快照（乐观补丁 POST 成功后调用，服务端真相尽快落地确认）。 */
+export function refreshActivitySoon(): void {
+  void controller?.refresh();
 }
 
 /** Relative time formatting shared by panel views (docs/13.6). */

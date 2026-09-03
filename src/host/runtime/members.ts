@@ -77,7 +77,15 @@ export async function spawnMember(
   member: MemberRecord,
   captain: Agent,
 ): Promise<string> {
-  const route = member.modelRoute;
+  // 模型路线解析（用户迭代 2026-09：领队也选模型）：成员 override > 领队
+  // override（团队默认，成员「跟随领队」随之）> 会话默认（不带 agentOptions，
+  // 子会话继承领队会话模型）。领队自身会话模型不由插件切换。
+  const route =
+    member.modelRoute.source === 'override'
+      ? member.modelRoute
+      : team.leaderModelRoute?.source === 'override'
+        ? team.leaderModelRoute
+        : member.modelRoute;
   const start = await env.ctx.subagents.startContinuable({
     provider: env.config.memberProvider,
     label: buildMemberLabel(team.id, member.name),
@@ -163,10 +171,7 @@ export async function drainMembers(
   const subagents = env.ctx.subagents;
   if (subagents?.drainContinuableChildren === undefined) return;
   try {
-    await subagents.drainContinuableChildren(
-      captain,
-      ids as unknown as readonly SessionId[],
-    );
+    await subagents.drainContinuableChildren(captain, ids as unknown as readonly SessionId[]);
   } catch {
     // absent/settled targets and authority races are acceptable no-ops
   }

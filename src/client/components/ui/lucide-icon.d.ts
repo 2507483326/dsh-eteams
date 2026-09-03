@@ -63,9 +63,7 @@ declare module 'lucide-react/dist/esm/icons/search.mjs' {
   import type { ForwardRefExoticComponent, RefAttributes } from 'react';
   import type { LucideProps } from 'lucide-react';
 
-  const Search: ForwardRefExoticComponent<
-    Omit<LucideProps, 'ref'> & RefAttributes<SVGSVGElement>
-  >;
+  const Search: ForwardRefExoticComponent<Omit<LucideProps, 'ref'> & RefAttributes<SVGSVGElement>>;
   export default Search;
 }
 
@@ -73,9 +71,7 @@ declare module 'lucide-react/dist/esm/icons/plus.mjs' {
   import type { ForwardRefExoticComponent, RefAttributes } from 'react';
   import type { LucideProps } from 'lucide-react';
 
-  const Plus: ForwardRefExoticComponent<
-    Omit<LucideProps, 'ref'> & RefAttributes<SVGSVGElement>
-  >;
+  const Plus: ForwardRefExoticComponent<Omit<LucideProps, 'ref'> & RefAttributes<SVGSVGElement>>;
   export default Plus;
 }
 
@@ -103,8 +99,28 @@ declare module 'lucide-react/dist/esm/icons/pen-line.mjs' {
   import type { ForwardRefExoticComponent, RefAttributes } from 'react';
   import type { LucideProps } from 'lucide-react';
 
-  const PenLine: ForwardRefExoticComponent<
+  const PenLine: ForwardRefExoticComponent<Omit<LucideProps, 'ref'> & RefAttributes<SVGSVGElement>>;
+  export default PenLine;
+}
+
+// 用户迭代 2026-09 增补：模型二级菜单的右箭头（root 行钻入指示，对话
+// ModelSelect 的 cellChevron 同款）。同款深层导入纪律（一个图标只进一个模块）。
+declare module 'lucide-react/dist/esm/icons/chevron-right.mjs' {
+  import type { ForwardRefExoticComponent, RefAttributes } from 'react';
+  import type { LucideProps } from 'lucide-react';
+
+  const ChevronRight: ForwardRefExoticComponent<
     Omit<LucideProps, 'ref'> & RefAttributes<SVGSVGElement>
   >;
-  export default PenLine;
+  export default ChevronRight;
+}
+
+// 用户迭代 2026-09 三增补：添加成员行尾加减步进器的 −（Minus；＋ 已有）。
+// 同款深层导入纪律（一个图标只进一个模块）。
+declare module 'lucide-react/dist/esm/icons/minus.mjs' {
+  import type { ForwardRefExoticComponent, RefAttributes } from 'react';
+  import type { LucideProps } from 'lucide-react';
+
+  const Minus: ForwardRefExoticComponent<Omit<LucideProps, 'ref'> & RefAttributes<SVGSVGElement>>;
+  export default Minus;
 }

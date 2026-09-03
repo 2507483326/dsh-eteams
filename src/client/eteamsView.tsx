@@ -62,11 +62,13 @@ import {
 // components/ui/lucide-icon.d.ts）。D22f：emoji 清零的替换位。
 import ArrowLeft from 'lucide-react/dist/esm/icons/arrow-left.mjs';
 import Check from 'lucide-react/dist/esm/icons/check.mjs';
+import ChevronDown from 'lucide-react/dist/esm/icons/chevron-down.mjs';
+import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right.mjs';
 import MessageSquare from 'lucide-react/dist/esm/icons/message-square.mjs';
+import Minus from 'lucide-react/dist/esm/icons/minus.mjs';
 import PenLine from 'lucide-react/dist/esm/icons/pen-line.mjs';
 import Plus from 'lucide-react/dist/esm/icons/plus.mjs';
 import Search from 'lucide-react/dist/esm/icons/search.mjs';
-import X from 'lucide-react/dist/esm/icons/x.mjs';
 import { Provider, useDispatch, useSelector } from 'react-redux';
 import { ADD_PEOPLE_TEMPLATE, prefillComposer, type PrefillOutcome } from './addPeople';
 import { Avatar } from './avatar';
@@ -96,6 +98,7 @@ import {
   DialogTitle,
 } from './components/ui/dialog';
 import { Input } from './components/ui/input';
+import { Popover, PopoverContent, PopoverTrigger } from './components/ui/popover';
 import { Progress } from './components/ui/progress';
 import {
   Select,
@@ -110,17 +113,26 @@ import {
   createTeamViaPanel,
   fetchAgentActivity,
   removeTeamMember,
+  setLeaderModel,
   setMemberModel,
   setTeamLeaderRemoved,
+  syncMemberToRoster,
+  updateMemberPersona,
   type BuildDraft,
   type InterviewQuestion,
   type RosterMember,
 } from './api';
+import { catalogRow, useModelCatalog, type ModelCatalogState } from './modelCatalog';
 import {
+  applyRoutePatch,
   relativeTime,
+  refreshActivitySoon,
+  revertRoutePatch,
   useActivityMonitor,
   type CaptainView,
   type MemberView,
+  type RoutePatch,
+  type RouteTriple,
   type TaskView,
   type TeamSnapshot,
 } from './monitor';
@@ -1041,6 +1053,8 @@ function BoardTab({
         />
         <div className={MUTED_CLASS}>
           {team.progress.completed}/{team.progress.total} 完成 · {team.progress.active} 执行中 ·{' '}
+          {/* 成员计数（用户迭代 2026-09 修正）：只数成员，领队不占名额——
+          与看板卡、添加成员弹窗同一口径。 */}
           {team.members.length} 成员 ·{' '}
           {/* 阶段徽标（S12）：原为 muted 行内文本，按「状态徽标用 shadcn」
           施工面升级为 outline Badge + TONE_CLASS 查表；tone 对齐 STATUS_GROUPS
@@ -1129,7 +1143,20 @@ function TeamTab({
   // （模型选择/移出/领队移除）的错误就地提示，不再静默吞掉。
   const [addOpen, setAddOpen] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+  // 成员详情页（用户迭代 2026-09 四）：点成员/领队卡进入——成员详情与角色
+  // 详情是两份独立数据（加入时复制），这里查看编辑成员自己的那份。null =
+  // 成员栅格；kind='captain' = 领队详情（手册只读）。
+  const [memberDetail, setMemberDetail] = useState<
+    { kind: 'captain' } | { kind: 'member'; name: string } | null
+  >(null);
   const [modelSavingName, setModelSavingName] = useState<string | null>(null);
+  const [leaderModelSaving, setLeaderModelSaving] = useState(false);
+  // 模型目录（用户迭代 2026-09：模型选择与对话一致；同日二级菜单）：与对话
+  // /model 选择同一共享目录（ctx.modelDirectories，只读），loading/failed/
+  // reload 与对话选择器打开时刷新、错误条+重试同款；catalog 为 null = 服务
+  // 缺失（旧运行时），退回静态选项。成员/领队卡的选项与推理等级词汇表都
+  // 来自这里。
+  const modelCatalog = useModelCatalog(sessionId);
   const lastCreateTickRef = useRef(0);
   useEffect(() => {
     if (createTick > 0 && createTick !== lastCreateTickRef.current) {
@@ -1166,17 +1193,107 @@ function TeamTab({
   // 详情态成员操作（用户迭代 2026-09）：失败统一落到 detailError 就地展示。
   const memberOpError = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-  const changeModel = (memberName: string, model: string): void => {
+  // 行值 → POST body（与对话 /model 选择的 selectionOf 同语义，用户迭代
+  // 2026-09：模型选择与对话一致）：行 id 为 `provider/model`；换模型取该
+  // 模型目录默认强度（model.reasoning.defaultEffort——对话 /model 弹层的
+  // selectionOf 同款）；同一路线重选由菜单自行关闭不上送（对话 choose()
+  // 同款）。目录查不到的旧路线原样保留 provider/model 与已存强度。
+  // 'inherit' = 清 override（跟随领队/会话默认）。null = 非法行值（防御）。
+  const routeBody = (
+    value: string,
+    stored: { provider: string; model: string; reasoningEffort: string | null },
+  ): { provider?: string; model?: string; reasoningEffort?: string } | null => {
+    if (value === 'inherit') return {};
+    const slash = value.indexOf('/');
+    if (slash === -1) {
+      // 目录缺失时的静态回退选项（旧版裸模型 id）：沿用旧语义按 DeepSeek 下发。
+      return { provider: 'deepseek', model: value };
+    }
+    if (slash <= 0 || slash === value.length - 1) return null;
+    const provider = value.slice(0, slash);
+    const model = value.slice(slash + 1);
+    const row = catalogRow(modelCatalog.catalog, provider, model);
+    const effort =
+      stored.provider === provider && stored.model === model
+        ? (stored.reasoningEffort ?? row?.model.reasoning?.defaultEffort)
+        : row?.model.reasoning?.defaultEffort;
+    return {
+      provider,
+      model,
+      ...(effort !== undefined && effort !== '' ? { reasoningEffort: effort } : {}),
+    };
+  };
+
+  const changeModel = (memberName: string, value: string): void => {
     if (detailTeam === null) return;
+    const member = detailTeam.members.find((m) => m.name === memberName);
+    if (member === undefined) return;
+    const previous: RouteTriple = {
+      provider: member.provider,
+      model: member.model,
+      reasoningEffort: member.reasoningEffort,
+    };
+    const body = routeBody(value, previous);
+    if (body === null) return;
     setDetailError(null);
     setModelSavingName(memberName);
-    // inherit = 跟随领队（清 override）；其余按 DeepSeek 官方模型下发。
-    void setMemberModel(
-      detailTeam.teamId,
-      memberName,
-      model === 'inherit' ? {} : { provider: 'deepseek', model },
-    )
-      .catch((e) => setDetailError(memberOpError(e)))
+    // 选择即变（对话 choose() 同款本地即时性）：先打乐观补丁——触发器文案/
+    // 勾选/推理等级入口不等 POST + 1s 轮询；pending 覆盖层防在途旧快照闪回，
+    // POST 成功立即快照确认，失败回滚 + 就地报错。
+    const patch: RoutePatch = {
+      teamId: detailTeam.teamId,
+      target: { kind: 'member', name: memberName },
+      route: {
+        provider: body.provider ?? 'inherit',
+        model: body.model ?? 'inherit',
+        reasoningEffort: body.reasoningEffort ?? null,
+      },
+    };
+    applyRoutePatch(patch);
+    // inherit = 跟随领队（清 override）；其余按会话模型目录（与对话一致）下发。
+    void setMemberModel(detailTeam.teamId, memberName, body)
+      .then(() => refreshActivitySoon())
+      .catch((e) => {
+        revertRoutePatch(patch, previous);
+        setDetailError(memberOpError(e));
+      })
+      .finally(() => setModelSavingName(null));
+  };
+
+  // 推理等级（与对话「推理等级」二级菜单同一词汇表）：只对已有具体路线的
+  // 成员生效——整条路线重发（host 每次整路由写入）。effort 为 null = 提供方
+  // 默认（对话 chooseEffort 的 provider-default 项同款）：重发时省略
+  // reasoningEffort，host 即无强度 override。
+  const changeMemberEffort = (memberName: string, effort: string | null): void => {
+    if (detailTeam === null) return;
+    const member = detailTeam.members.find((m) => m.name === memberName);
+    if (member === undefined || member.provider === 'inherit' || member.model === 'inherit') {
+      return;
+    }
+    setDetailError(null);
+    setModelSavingName(memberName);
+    const previous: RouteTriple = {
+      provider: member.provider,
+      model: member.model,
+      reasoningEffort: member.reasoningEffort,
+    };
+    // 同 changeModel：乐观补丁即时生效，POST 确认/回滚。
+    const patch: RoutePatch = {
+      teamId: detailTeam.teamId,
+      target: { kind: 'member', name: memberName },
+      route: { ...previous, reasoningEffort: effort },
+    };
+    applyRoutePatch(patch);
+    void setMemberModel(detailTeam.teamId, memberName, {
+      provider: member.provider,
+      model: member.model,
+      ...(effort !== null && effort !== '' ? { reasoningEffort: effort } : {}),
+    })
+      .then(() => refreshActivitySoon())
+      .catch((e) => {
+        revertRoutePatch(patch, previous);
+        setDetailError(memberOpError(e));
+      })
       .finally(() => setModelSavingName(null));
   };
 
@@ -1194,6 +1311,74 @@ function TeamTab({
     void setTeamLeaderRemoved(detailTeam.teamId, true).catch((e) =>
       setDetailError(memberOpError(e)),
     );
+  };
+
+  // 领队模型选择（用户迭代 2026-09：领队也选模型；2026-09 模型选择与对话
+  // 一致）：领队卡右侧下拉——这是「团队默认模型」，成员选「跟随领队」时
+  // 启动即按它下发；领队自身（面板会话）模型不受影响。行值语义同 changeModel。
+  const changeLeaderModel = (value: string): void => {
+    if (detailTeam === null) return;
+    const previous: RouteTriple = {
+      provider: detailTeam.captain.provider,
+      model: detailTeam.captain.model,
+      reasoningEffort: detailTeam.captain.reasoningEffort,
+    };
+    const body = routeBody(value, previous);
+    if (body === null) return;
+    setDetailError(null);
+    setLeaderModelSaving(true);
+    // 同 changeModel：乐观补丁即时生效，POST 确认/回滚（目标 = 领队）。
+    const patch: RoutePatch = {
+      teamId: detailTeam.teamId,
+      target: { kind: 'captain' },
+      route: {
+        provider: body.provider ?? 'inherit',
+        model: body.model ?? 'inherit',
+        reasoningEffort: body.reasoningEffort ?? null,
+      },
+    };
+    applyRoutePatch(patch);
+    void setLeaderModel(detailTeam.teamId, body)
+      .then(() => refreshActivitySoon())
+      .catch((e) => {
+        revertRoutePatch(patch, previous);
+        setDetailError(memberOpError(e));
+      })
+      .finally(() => setLeaderModelSaving(false));
+  };
+
+  // 领队推理等级（与对话「推理等级」二级菜单同一词汇表）：只对领队已选具体
+  // 路线时生效；跟随会话默认（inherit）时强度随会话，不可单独改。null =
+  // 提供方默认（重发时省略 reasoningEffort）。
+  const changeLeaderEffort = (effort: string | null): void => {
+    if (detailTeam === null) return;
+    const captain = detailTeam.captain;
+    if (captain.provider === 'inherit' || captain.model === 'inherit') return;
+    setDetailError(null);
+    setLeaderModelSaving(true);
+    const previous: RouteTriple = {
+      provider: captain.provider,
+      model: captain.model,
+      reasoningEffort: captain.reasoningEffort,
+    };
+    // 同 changeModel：乐观补丁即时生效，POST 确认/回滚（目标 = 领队）。
+    const patch: RoutePatch = {
+      teamId: detailTeam.teamId,
+      target: { kind: 'captain' },
+      route: { ...previous, reasoningEffort: effort },
+    };
+    applyRoutePatch(patch);
+    void setLeaderModel(detailTeam.teamId, {
+      provider: captain.provider,
+      model: captain.model,
+      ...(effort !== null && effort !== '' ? { reasoningEffort: effort } : {}),
+    })
+      .then(() => refreshActivitySoon())
+      .catch((e) => {
+        revertRoutePatch(patch, previous);
+        setDetailError(memberOpError(e));
+      })
+      .finally(() => setLeaderModelSaving(false));
   };
 
   return (
@@ -1303,29 +1488,31 @@ function TeamTab({
                   3 个，超出计数 +N；负间距叠放 + 底色描边环（官网常见略缩图
                   签名），title 兜底全名。 */}
                   <div className="flex shrink-0 items-center -space-x-2 pl-3">
-                    {[t.captain, ...t.members].slice(0, 3).map((m) => (
-                      <span
-                        key={m.name}
-                        className="inline-flex shrink-0 rounded-full ring-2 ring-[color:var(--background)]"
-                        title={m.name}
-                      >
-                        <Avatar
-                          name={m.name}
-                          seed={m.avatar?.seed}
-                          salt={m.avatar?.salt}
-                          size={28}
-                        />
-                      </span>
-                    ))}
-                    {t.members.length + 1 > 3 && (
+                    {(t.leaderRemoved ? t.members : [t.captain, ...t.members])
+                      .slice(0, 3)
+                      .map((m) => (
+                        <span
+                          key={m.name}
+                          className="inline-flex shrink-0 rounded-full ring-2 ring-[color:var(--background)]"
+                          title={m.name}
+                        >
+                          <Avatar
+                            name={m.name}
+                            seed={m.avatar?.seed}
+                            salt={m.avatar?.salt}
+                            size={28}
+                          />
+                        </span>
+                      ))}
+                    {(t.leaderRemoved ? 0 : 1) + t.members.length > 3 && (
                       <span
                         className={cn(
                           'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold',
                           'bg-muted text-muted-foreground ring-2 ring-[color:var(--background)]',
                         )}
-                        title={`其余 ${t.members.length + 1 - 3} 人`}
+                        title={`其余 ${(t.leaderRemoved ? 0 : 1) + t.members.length - 3} 人`}
                       >
-                        +{t.members.length + 1 - 3}
+                        +{(t.leaderRemoved ? 0 : 1) + t.members.length - 3}
                       </span>
                     )}
                   </div>
@@ -1340,9 +1527,20 @@ function TeamTab({
         <div className={EMPTY_CLASS}>还没有团队。点右上角「新增团队」创建第一个团队。</div>
       )}
 
+      {/* 成员详情页（用户迭代 2026-09 四）：点成员/领队卡进来，盖在成员栅格
+      之上——查看/编辑成员自己的手册副本、同步回角色库。 */}
+      {detailTeam !== null && memberDetail !== null && (
+        <MemberDetailView
+          team={detailTeam}
+          target={memberDetail}
+          onBack={() => setMemberDetail(null)}
+          onOpenReports={onOpenReports}
+        />
+      )}
+
       {/* 详情态（用户迭代 2026-09）：点长条卡片才进来——团队成员、拉人组队
       都在这里。返回按钮回列表。 */}
-      {detailTeam !== null && (
+      {detailTeam !== null && memberDetail === null && (
         <>
           <div className="flex flex-wrap items-center gap-1.5">
             <Button
@@ -1352,6 +1550,7 @@ function TeamTab({
               onClick={() => {
                 setDetailId(null);
                 setDetailError(null);
+                setMemberDetail(null);
               }}
             >
               <ArrowLeft className="h-3.5 w-3.5" />
@@ -1374,7 +1573,7 @@ function TeamTab({
               <h3 className={LIST_TITLE_CLASS}>团队成员</h3>
               <span className={LIST_COUNT_CLASS}>
                 {detailTeam.members.length}/{memberCap} 人 ·{' '}
-                {detailTeam.leaderRemoved ? '领队已移除' : '领队默认在团'}
+                {detailTeam.leaderRemoved ? '领队已移除' : '领队默认在团（不占名额）'}
               </span>
               <span className="flex-1" />
               <Button
@@ -1394,17 +1593,28 @@ function TeamTab({
             )}
             <div className={MEMBER_GRID_CLASS}>
               {!detailTeam.leaderRemoved && (
-                <LeaderCard captain={detailTeam.captain} onRemove={removeLeader} />
+                <LeaderCard
+                  captain={detailTeam.captain}
+                  catalog={modelCatalog}
+                  onRemove={removeLeader}
+                  onModelChange={changeLeaderModel}
+                  onEffortChange={changeLeaderEffort}
+                  modelSaving={leaderModelSaving}
+                  onOpenDetail={() => setMemberDetail({ kind: 'captain' })}
+                />
               )}
               {detailTeam.members.map((m) => (
                 <MemberCard
                   key={m.name}
                   member={m}
+                  catalog={modelCatalog}
                   activity={m.childId !== null ? agentActivity[m.childId] : undefined}
                   onOpenReports={onOpenReports}
                   onRemove={removeMember}
                   onModelChange={changeModel}
+                  onEffortChange={changeMemberEffort}
                   modelSaving={modelSavingName === m.name}
+                  onOpenDetail={() => setMemberDetail({ kind: 'member', name: m.name })}
                 />
               ))}
               {detailTeam.members.length === 0 && (
@@ -1429,33 +1639,455 @@ function TeamTab({
   );
 }
 
-/** The 领队（项目牧羊人）leader card — expands into its Markdown 手册. S13 Tailwind 化。
- * 用户迭代 2026-09：领队可被移出团队（可经添加成员弹窗加回），onRemove 挂移除钮。 */
+/** 领队静态选项（目录不可用时的回退，用户迭代 2026-09）：inherit=会话默认。
+ * 领队即面板会话，自身模型不由插件切换——此路线是团队默认，成员「跟随领队」
+ * spawn 时解析到它。目录就绪时由 RouteOptionItems 以会话模型目录替代。 */
+const LEADER_MODEL_OPTIONS: { value: string; label: string }[] = [
+  { value: 'inherit', label: '会话默认' },
+  { value: 'deepseek-chat', label: 'DeepSeek Chat' },
+  { value: 'deepseek-reasoner', label: 'DeepSeek Reasoner' },
+];
+
+/** 模型二级菜单的行样式（完整字面量，对话 ModelSelect 同构的 token 化版本：
+ * root 行 = label + 当前值 + 右箭头；列表项 = 名称 + 描述 + 选中勾）。 */
+const PICKER_CELL_CLASS =
+  'flex h-9 w-full items-center gap-2 rounded-lg bg-transparent px-2.5 text-left text-[13px] text-foreground outline-none hover:bg-accent disabled:cursor-default disabled:text-muted-foreground';
+const PICKER_OPTION_CLASS =
+  'flex min-h-[34px] w-full items-center gap-2 rounded-lg bg-transparent px-2 py-1 text-left text-foreground outline-none hover:bg-accent disabled:cursor-default disabled:text-muted-foreground';
+
+/** 模型二级菜单（用户迭代 2026-09：与对话 ModelSelect 同款交互）——root
+ * 面板两行（「模型」「推理等级」：label + 当前值 + 右箭头），各自钻入列表。
+ * 模型列表首行 inherit（跟随领队/会话默认——面板路线语义，对话没有此项），
+ * 其后按提供方分组列出会话模型目录（与对话 /model 弹层同一份 groups：
+ * 行 id=`provider/model`、名称=目录显示名、sticky 组头、title 带描述），
+ * 加载失败的提供方以警示条列出（对话同款，不可选）；推理等级列表 = 该模型
+ * reasoning.efforts（适配器命名），模型无目录默认值时前置「Default」= 提供
+ * 方默认（提交 null，整路由省略 reasoningEffort）。对话组件不可直接复用
+ * （未从包导出、模块加载器包裹、且其 select 会切换会话自身模型），这里按
+ * 同一结构以面板 token 重建；目录缺失（旧运行时）时模型列表退回静态选项。
+ * 交互对齐：每次打开刷新目录（对话 show() → reload()）、Esc 子面板返回
+ * root / root 关闭、方向键在项间漫游、重选当前值仅关闭不上送（choose()
+ * 同款）。 */
+function ModelRoutePicker({
+  catalogState,
+  stored,
+  inheritLabel,
+  fallback,
+  disabled,
+  onModelPick,
+  onEffortPick,
+  title,
+}: {
+  /** 会话模型目录状态（数据 + loading/failed/reload，对话选择器同款）。 */
+  catalogState: ModelCatalogState;
+  /** 当前存储路线（inherit 哨兵 = 跟随领队/会话默认）。 */
+  stored: { provider: string; model: string; reasoningEffort: string | null };
+  /** inherit 行/触发器文案（成员=跟随领队，领队=会话默认）。 */
+  inheritLabel: string;
+  /** 静态回退选项（目录不可用时渲染，含 inherit 行）。 */
+  fallback: { value: string; label: string }[];
+  /** 路由保存中（触发器与选项短暂禁用防连点）。 */
+  disabled?: boolean;
+  /** 模型选择提交：'inherit' | `provider/model` | 回退裸模型 id。 */
+  onModelPick: (value: string) => void;
+  /** 推理等级提交：null = 提供方默认（整路由省略 reasoningEffort）。 */
+  onEffortPick: (effort: string | null) => void;
+  /** 触发器 tooltip。 */
+  title: string;
+}): ReactNode {
+  const catalog = catalogState.catalog;
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const [pane, setPane] = useState<'root' | 'model' | 'effort'>('root');
+  const override = stored.provider !== 'inherit' && stored.model !== 'inherit';
+  const row = override ? catalogRow(catalog, stored.provider, stored.model) : null;
+  const reasoning = row?.model.reasoning;
+  // 触发器模型名：inherit → 跟随文案；目录行在 → 目录显示名；历史路线 →
+  // 存量模型 id（目录查不到的历史路线合成行兜底，选中态可见）。
+  const modelLabel = !override ? inheritLabel : row !== null ? row.model.name : stored.model;
+  // 触发器/推理等级面板的当前等级（对话 effectiveEffort 口径）：已存强度
+  // 优先（哪怕已不在词汇表——对话 find 失败时原样显示），否则目录默认；
+  // null = 提供方默认（对话 effort.providerDefault，显示「Default」）。
+  const effectiveEffort: string | null =
+    override && stored.reasoningEffort !== null
+      ? stored.reasoningEffort
+      : (reasoning?.defaultEffort ?? null);
+  const effortName = (effort: string | null): string =>
+    effort === null ? 'Default' : (reasoning?.efforts.find((e) => e.id === effort)?.name ?? effort);
+  const effortLabel = reasoning === undefined ? undefined : effortName(effectiveEffort);
+  // 推理等级面板条目（对话 effortChoices 同构）：无目录默认值时前置
+  // 「Default」（effort 提交 null = 省略）。
+  const effortChoices: {
+    key: string;
+    effort: string | null;
+    label: string;
+    description?: string;
+  }[] =
+    reasoning === undefined
+      ? []
+      : [
+          ...(reasoning.defaultEffort === undefined
+            ? [{ key: 'provider-default', effort: null, label: 'Default' }]
+            : []),
+          ...reasoning.efforts.map((e) => ({
+            key: `effort:${e.id}`,
+            effort: e.id as string | null,
+            label: e.name,
+            ...(e.description !== undefined ? { description: e.description } : {}),
+          })),
+        ];
+  // 行值口径（选中态匹配用，同旧 routeValue）：目录在 → `provider/model`；
+  // 目录缺失 → 裸模型 id；inherit → 'inherit'。
+  const currentValue = !override
+    ? 'inherit'
+    : catalog === null
+      ? stored.model
+      : `${stored.provider}/${stored.model}`;
+
+  const close = (): void => setOpen(false);
+  // 每次打开重置到 root 并刷新目录（对话 ModelSelect.show() 同款）。
+  const openMenu = (): void => {
+    setPane('root');
+    catalogState.reload();
+    setOpen(true);
+  };
+  const pickModel = (value: string): void => {
+    // 重选当前路线仅关闭不上送（对话 choose() 同款，不重复提交）。
+    if (value !== currentValue) onModelPick(value);
+    close();
+  };
+  const pickEffort = (effort: string | null): void => {
+    if (effort !== effectiveEffort) onEffortPick(effort);
+    close();
+  };
+  // 对话同款焦点巡航：ArrowDown/Up 在浮层内可聚焦项间移动。
+  const moveFocus = (offset: number): void => {
+    const root = rootRef.current;
+    if (root === null) return;
+    const items = Array.from(root.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+    if (items.length === 0) return;
+    const active = document.activeElement;
+    const at = active instanceof HTMLButtonElement ? items.indexOf(active) : -1;
+    items[(Math.max(at, 0) + offset + items.length) % items.length]?.focus();
+  };
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        if (next) openMenu();
+        else close();
+      }}
+    >
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex h-7 w-[132px] shrink-0 items-center gap-1 rounded-md border border-solid bg-transparent px-2 text-xs font-medium outline-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+          title={title}
+          disabled={disabled === true}
+          aria-haspopup="menu"
+          aria-expanded={open}
+        >
+          <span className="min-w-0 flex-1 truncate text-left">{modelLabel}</span>
+          {effortLabel !== undefined && (
+            <span className="flex-none text-[11px] text-muted-foreground">{effortLabel}</span>
+          )}
+          <ChevronDown
+            className={cn(
+              'h-3 w-3 flex-none text-muted-foreground transition-transform',
+              open && 'rotate-180',
+            )}
+          />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        ref={rootRef}
+        align="end"
+        sideOffset={6}
+        role="menu"
+        aria-label="模型与推理等级"
+        className="w-64 rounded-xl border-solid p-1 shadow-lg"
+        // 焦点留在触发器（对话同款），ArrowDown/Up 才能漫游进浮层。
+        onOpenAutoFocus={(event) => event.preventDefault()}
+        // Esc：子面板返回 root（对话同款），root 才真正关闭浮层。
+        onEscapeKeyDown={(event) => {
+          if (pane !== 'root') {
+            event.preventDefault();
+            setPane('root');
+          }
+        }}
+        onKeyDown={(event) => {
+          // Esc：root 面板手动关闭（对话 onRootKeyDown 同款——不依赖浮层库的
+          // dismiss 链路，合成/真实事件行为一致）；子面板由 onEscapeKeyDown
+          // 拦下并返回 root。
+          if (event.key === 'Escape' && pane === 'root') {
+            event.preventDefault();
+            close();
+            return;
+          }
+          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault();
+            moveFocus(event.key === 'ArrowDown' ? 1 : -1);
+          }
+        }}
+      >
+        {pane === 'root' && (
+          <>
+            <button type="button" className={PICKER_CELL_CLASS} onClick={() => setPane('model')}>
+              <span className="flex-none">模型</span>
+              <span className="min-w-0 flex-1 truncate text-right text-muted-foreground">
+                {modelLabel}
+              </span>
+              <ChevronRight className="h-3.5 w-3.5 flex-none text-muted-foreground" />
+            </button>
+            {reasoning !== undefined && (
+              <button type="button" className={PICKER_CELL_CLASS} onClick={() => setPane('effort')}>
+                <span className="flex-none">推理等级</span>
+                <span className="min-w-0 flex-1 truncate text-right text-muted-foreground">
+                  {effortLabel ?? 'Default'}
+                </span>
+                <ChevronRight className="h-3.5 w-3.5 flex-none text-muted-foreground" />
+              </button>
+            )}
+          </>
+        )}
+        {pane === 'model' && (
+          <>
+            {/* inherit 行：面板路线语义（跟随领队/会话默认），对话没有此项。 */}
+            <button
+              type="button"
+              role="menuitemradio"
+              aria-checked={!override}
+              className={PICKER_OPTION_CLASS}
+              disabled={disabled === true}
+              onClick={() => pickModel('inherit')}
+            >
+              <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
+                {inheritLabel}
+              </span>
+              <span className="grid h-4 w-4 flex-none place-items-center">
+                {!override && <Check className="h-3.5 w-3.5" />}
+              </span>
+            </button>
+            {catalogState.loading && (
+              <div className="px-2 py-2 text-xs text-muted-foreground">正在刷新模型列表…</div>
+            )}
+            {catalogState.failed && (
+              <div className="mx-1 mb-1 flex items-center justify-between gap-2 rounded-lg bg-muted px-2 py-1.5 text-xs text-destructive">
+                <span className="min-w-0">目录加载失败</span>
+                <button
+                  type="button"
+                  className="flex-none font-semibold hover:underline"
+                  onClick={() => catalogState.reload()}
+                >
+                  重试
+                </button>
+              </div>
+            )}
+            {catalog !== null ? (
+              <>
+                {catalog.groups.map((g) => (
+                  <section key={g.id} role="group" aria-label={g.name} className="mt-1 first:mt-0">
+                    <div className="sticky top-0 z-[1] bg-popover px-2 pb-1 pt-1.5 text-[11px] font-medium text-muted-foreground">
+                      {g.name}
+                    </div>
+                    {g.models.map((m) => {
+                      const selected =
+                        override && stored.provider === g.id && stored.model === m.id;
+                      return (
+                        <button
+                          key={`${g.id}/${m.id}`}
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={selected}
+                          className={PICKER_OPTION_CLASS}
+                          disabled={disabled === true}
+                          title={
+                            m.description !== undefined ? `${g.name} · ${m.description}` : g.name
+                          }
+                          onClick={() => pickModel(`${g.id}/${m.id}`)}
+                        >
+                          <span className="flex min-w-0 flex-1 flex-col">
+                            <span className="truncate text-[13px] font-medium">{m.name}</span>
+                            {m.description !== undefined && (
+                              <span className="truncate text-[11px] text-muted-foreground">
+                                {m.description}
+                              </span>
+                            )}
+                          </span>
+                          <span className="grid h-4 w-4 flex-none place-items-center">
+                            {selected && <Check className="h-3.5 w-3.5" />}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </section>
+                ))}
+                {catalog.failures.map((f) => (
+                  <div
+                    key={`failure/${f.id}`}
+                    className="mx-1 mb-1 flex items-start justify-between gap-2 rounded-lg bg-muted px-2 py-1.5 text-xs text-warning"
+                    title={f.message}
+                  >
+                    <span className="min-w-0">
+                      {f.name} 加载失败：{f.message}
+                    </span>
+                    <button
+                      type="button"
+                      className="flex-none font-semibold hover:underline"
+                      onClick={() => catalogState.reload()}
+                    >
+                      重试
+                    </button>
+                  </div>
+                ))}
+                {/* 目录查不到的历史路线合成一行，保证选中态可见。 */}
+                {override && row === null && (
+                  <button
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked
+                    className={PICKER_OPTION_CLASS}
+                    disabled
+                  >
+                    <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
+                      {stored.model}
+                    </span>
+                    <span className="grid h-4 w-4 flex-none place-items-center">
+                      <Check className="h-3.5 w-3.5" />
+                    </span>
+                  </button>
+                )}
+              </>
+            ) : !catalogState.failed ? (
+              fallback
+                .filter((o) => o.value !== 'inherit')
+                .map((o) => (
+                  <button
+                    key={o.value}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={currentValue === o.value}
+                    className={PICKER_OPTION_CLASS}
+                    disabled={disabled === true}
+                    onClick={() => pickModel(o.value)}
+                  >
+                    <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
+                      {o.label}
+                    </span>
+                    <span className="grid h-4 w-4 flex-none place-items-center">
+                      {currentValue === o.value && <Check className="h-3.5 w-3.5" />}
+                    </span>
+                  </button>
+                ))
+            ) : null}
+          </>
+        )}
+        {pane === 'effort' && (
+          <>
+            {effortChoices.length === 0 ? (
+              <div className="px-2 py-2 text-xs text-muted-foreground">
+                当前模型未提供推理等级。
+              </div>
+            ) : (
+              effortChoices.map((level) => {
+                const selected = effectiveEffort === level.effort;
+                return (
+                  <button
+                    key={level.key}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={selected}
+                    className={PICKER_OPTION_CLASS}
+                    disabled={disabled === true}
+                    onClick={() => pickEffort(level.effort)}
+                  >
+                    <span className="flex min-w-0 flex-1 flex-col">
+                      <span className="truncate text-[13px] font-medium">{level.label}</span>
+                      {level.description !== undefined && (
+                        <span className="truncate text-[11px] text-muted-foreground">
+                          {level.description}
+                        </span>
+                      )}
+                    </span>
+                    <span className="grid h-4 w-4 flex-none place-items-center">
+                      {selected && <Check className="h-3.5 w-3.5" />}
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** The 领队（项目牧羊人）leader card. S13 Tailwind 化。
+ * 用户迭代 2026-09：领队可被移出团队（可经添加成员弹窗加回），onRemove 挂移除钮；
+ * 领队也算团队一员——工号 + 右侧同款模型二级菜单（= 团队默认路线）。
+ * 用户迭代 2026-09 四：查看手册按钮去掉，点卡片进领队详情（手册只读）。 */
 function LeaderCard({
   captain,
+  catalog,
   onRemove,
+  onModelChange,
+  onEffortChange,
+  modelSaving,
+  onOpenDetail,
 }: {
   captain: CaptainView;
+  /** 会话模型目录状态（数据 + loading/failed/reload，对话选择器同款）。 */
+  catalog: ModelCatalogState;
   onRemove?: () => void;
+  /** 领队模型选择（右侧二级菜单）：'inherit' = 会话默认。 */
+  onModelChange?: (model: string) => void;
+  /** 领队推理等级（菜单内「推理等级」子面板；null = 提供方默认）。 */
+  onEffortChange?: (effort: string | null) => void;
+  /** 领队模型路由保存中（菜单短暂禁用防连点）。 */
+  modelSaving?: boolean;
+  /** 点卡片进领队详情（手册只读）。 */
+  onOpenDetail?: () => void;
 }): ReactNode {
-  const [open, setOpen] = useState(false);
   return (
     <div className={cn(MEMBER_CARD_CLASS, 'col-span-full')}>
       <div className="flex items-center gap-2.5">
-        <Avatar name={captain.name} seed={captain.avatar.seed} salt={captain.avatar.salt} />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold text-foreground">{captain.name}</span>
-            <span className={ROLE_CHIP_CLASS}>领队</span>
-          </div>
-          <div className={cn(MUTED_CLASS, 'mt-px')}>
-            {captain.role} · 不接任务：负责拆解、指派与调度
+        <div
+          className={cn(
+            'flex min-w-0 flex-1 items-center gap-2.5 rounded-lg',
+            onOpenDetail !== undefined && 'cursor-pointer transition-colors hover:bg-muted/60',
+          )}
+          onClick={onOpenDetail}
+          title={onOpenDetail !== undefined ? '进入领队详情' : undefined}
+        >
+          <Avatar name={captain.name} seed={captain.avatar.seed} salt={captain.avatar.salt} />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-foreground">{captain.name}</span>
+              <span className={ROLE_CHIP_CLASS}>领队</span>
+            </div>
+            <div className={cn(MUTED_CLASS, 'mt-px')}>
+              {captain.employeeId !== '' ? `${captain.employeeId} · ` : ''}
+              {captain.role} · 不接任务：负责拆解、指派与调度
+            </div>
           </div>
         </div>
-        {captain.personaMd !== null && (
-          <Button type="button" variant="outline" size="sm" onClick={() => setOpen(!open)}>
-            {open ? '收起手册' : '查看手册'}
-          </Button>
+        {onModelChange !== undefined && (
+          <ModelRoutePicker
+            catalogState={catalog}
+            stored={{
+              provider: captain.provider,
+              model: captain.model,
+              reasoningEffort: captain.reasoningEffort,
+            }}
+            inheritLabel="会话默认"
+            fallback={LEADER_MODEL_OPTIONS}
+            disabled={modelSaving}
+            onModelPick={onModelChange}
+            onEffortPick={(effort) => onEffortChange !== undefined && onEffortChange(effort)}
+            title="选择领队模型（= 团队默认；成员「跟随领队」启动时按此下发；目录与对话模型选择一致）"
+          />
         )}
         {onRemove !== undefined && (
           <Button
@@ -1469,17 +2101,14 @@ function LeaderCard({
           </Button>
         )}
       </div>
-      {open && captain.personaMd !== null && (
-        <div className={cn('mt-2.5 border-t border-solid pt-2.5', BORDER_L1_CLASS)}>
-          <MarkdownText text={captain.personaMd} />
-        </div>
-      )}
     </div>
   );
 }
 
 /** 成员模型选项（用户迭代 2026-09）：inherit=跟随领队（默认路线）；切换只改
  * member.modelRoute——staged 成员启动即生效，运行中的成员下次启动生效。 */
+/** 成员静态选项（目录不可用时的回退）：inherit=跟随领队（默认路线）；切换
+ * 只改 member.modelRoute——staged 成员启动即生效，运行中的成员下次启动生效。 */
 const MODEL_OPTIONS: { value: string; label: string }[] = [
   { value: 'inherit', label: '跟随领队' },
   { value: 'deepseek-chat', label: 'DeepSeek Chat' },
@@ -1487,73 +2116,92 @@ const MODEL_OPTIONS: { value: string; label: string }[] = [
 ];
 
 /** One team-member card: seeded avatar + status pill + 工号 + 右侧模型选择 +
- * 移出团队（用户迭代 2026-09：工号/模型/删除）。 */
+ * 推理强度 + 移出团队（用户迭代 2026-09：工号/模型/删除；模型目录与对话
+ * 一致——二级菜单内多档 effort 模型带「推理等级」子面板——用户迭代 2026-09 二）。
+ * 用户迭代 2026-09 四：点卡片（头像/名字区）进成员详情页。 */
 function MemberCard({
   member: m,
+  catalog,
   activity,
   onOpenReports,
   onRemove,
   onModelChange,
+  onEffortChange,
   modelSaving,
+  onOpenDetail,
 }: {
   member: MemberView;
+  /** 会话模型目录状态（数据 + loading/failed/reload，对话选择器同款）。 */
+  catalog: ModelCatalogState;
   /** Subagent activity (docs/20.4 P4): 'running' | 'inactive' | undefined. */
   activity?: string;
   onOpenReports?: (name: string) => void;
   onRemove?: (name: string) => void;
-  /** 模型选择（右侧下拉）：'inherit' = 跟随领队路线。 */
+  /** 模型选择（右侧二级菜单）：行 id=`provider/model`，'inherit' = 跟随领队路线。 */
   onModelChange?: (memberName: string, model: string) => void;
-  /** 该成员的模型路由保存中（Select 短暂禁用防连点）。 */
+  /** 推理等级改写（菜单内「推理等级」子面板；null = 提供方默认）。 */
+  onEffortChange?: (memberName: string, effort: string | null) => void;
+  /** 该成员的模型路由保存中（菜单短暂禁用防连点）。 */
   modelSaving?: boolean;
+  /** 点卡片（头像/名字区）进成员详情页。 */
+  onOpenDetail?: (name: string) => void;
 }): ReactNode {
   const tone = memberTone(m.status);
-  const routeValue = m.provider === 'inherit' || m.model === 'inherit' ? 'inherit' : m.model;
+  const openDetail = (): void => {
+    if (onOpenDetail !== undefined) onOpenDetail(m.name);
+  };
   return (
     <div className={MEMBER_CARD_CLASS}>
       <div className="flex items-center gap-2.5">
-        <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
-            {activity !== undefined && (
-              <span
-                title={activity === 'running' ? '子代理运行中' : '子代理已完结'}
-                className={
-                  activity === 'running'
-                    ? // 状态点光晕（D22f）：green-100 死字面量改 color-mix
-                      // success 淡环（token 半透明替代路径，button.tsx 先例，
-                      // 亮暗自适应）。
-                      'h-[7px] w-[7px] shrink-0 rounded-full bg-success shadow-[0_0_0_3px_color-mix(in_srgb,var(--success)_15%,transparent)]'
-                    : 'h-[7px] w-[7px] shrink-0 rounded-full bg-muted-foreground'
-                }
-              />
-            )}
-            {m.name}
-          </div>
-          <div className={cn(MUTED_CLASS, 'mt-px')}>
-            {m.employeeId !== null ? `${m.employeeId} · ` : ''}
-            {m.role}
+        <div
+          className={cn(
+            'flex min-w-0 flex-1 items-center gap-2.5 rounded-lg',
+            onOpenDetail !== undefined && 'cursor-pointer transition-colors hover:bg-muted/60',
+          )}
+          onClick={openDetail}
+          title={onOpenDetail !== undefined ? '进入成员详情' : undefined}
+        >
+          <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+              {activity !== undefined && (
+                <span
+                  title={activity === 'running' ? '子代理运行中' : '子代理已完结'}
+                  className={
+                    activity === 'running'
+                      ? // 状态点光晕（D22f）：green-100 死字面量改 color-mix
+                        // success 淡环（token 半透明替代路径，button.tsx 先例，
+                        // 亮暗自适应）。
+                        'h-[7px] w-[7px] shrink-0 rounded-full bg-success shadow-[0_0_0_3px_color-mix(in_srgb,var(--success)_15%,transparent)]'
+                      : 'h-[7px] w-[7px] shrink-0 rounded-full bg-muted-foreground'
+                  }
+                />
+              )}
+              {m.name}
+            </div>
+            <div className={cn(MUTED_CLASS, 'mt-px')}>
+              {m.employeeId !== null ? `${m.employeeId} · ` : ''}
+              {m.role}
+            </div>
           </div>
         </div>
         {onModelChange !== undefined && (
-          <Select
-            value={routeValue}
-            disabled={modelSaving === true}
-            onValueChange={(v) => onModelChange !== undefined && onModelChange(m.name, v)}
-          >
-            <SelectTrigger
-              className="h-7 w-[118px] shrink-0 px-2 text-xs font-medium"
-              title="选择成员运行的模型（运行中的成员下次启动时生效）"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {MODEL_OPTIONS.map((o) => (
-                <SelectItem key={o.value} value={o.value} className="text-xs">
-                  {o.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <ModelRoutePicker
+            catalogState={catalog}
+            stored={{
+              provider: m.provider,
+              model: m.model,
+              reasoningEffort: m.reasoningEffort,
+            }}
+            inheritLabel="跟随领队"
+            fallback={MODEL_OPTIONS}
+            disabled={modelSaving}
+            onModelPick={(v) => onModelChange !== undefined && onModelChange(m.name, v)}
+            onEffortPick={(effort) =>
+              onEffortChange !== undefined && onEffortChange(m.name, effort)
+            }
+            title="选择成员运行的模型（目录与对话模型选择一致；运行中的成员下次启动时生效）"
+          />
         )}
       </div>
       <Pill tone={tone}>
@@ -1582,6 +2230,248 @@ function MemberCard({
   );
 }
 
+/**
+ * 成员详情页（用户迭代 2026-09 四）：点成员/领队卡进入。成员详情与角色详情
+ * 是两份独立数据——加入团队时从角色库复制一份，之后各自演化；这里查看/
+ * 编辑成员自己的手册（「保存」只写成员记录），「同步到角色」把当前手册写回
+ * 角色库同名角色（副本成员无同名角色时按成员记录新建）。领队也走这一页：
+ * 手册由系统合成，只读、无保存/同步。
+ */
+function MemberDetailView({
+  team,
+  target,
+  onBack,
+  onOpenReports,
+}: {
+  team: TeamSnapshot;
+  target: { kind: 'captain' } | { kind: 'member'; name: string };
+  onBack: () => void;
+  onOpenReports?: (name: string) => void;
+}): ReactNode {
+  // 编辑缓冲：null = 只读渲染；string = 编辑中。进入编辑时从当前手册播种。
+  const [draft, setDraft] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [savedNote, setSavedNote] = useState(false);
+  const [syncedNote, setSyncedNote] = useState(false);
+
+  const memberRow =
+    target.kind === 'member' ? team.members.find((m) => m.name === target.name) : undefined;
+
+  if (target.kind === 'member' && memberRow === undefined) {
+    return (
+      <Card className={cn(PANEL_CARD_CLASS, 'mt-2')}>
+        <div className={MUTED_CLASS}>成员不在团队里——可能刚被移出。</div>
+        <Button type="button" variant="outline" size="sm" className="mt-2" onClick={onBack}>
+          <ArrowLeft className="h-3.5 w-3.5" />
+          返回团队成员
+        </Button>
+      </Card>
+    );
+  }
+
+  // 详情页展示口径：优先成员自己的手册副本；旧成员没有副本时按结构字段
+  // 合成骨架（首次保存/同步即落成正式手册）。
+  const view: {
+    name: string;
+    employeeId: string | null;
+    role: string;
+    status: string | null;
+    avatar: { seed: number; salt: number } | null;
+    source: HandbookSource;
+  } =
+    target.kind === 'captain'
+      ? {
+          name: team.captain.name,
+          employeeId: team.captain.employeeId,
+          role: team.captain.role,
+          status: null,
+          avatar: team.captain.avatar,
+          source: {
+            name: team.captain.name,
+            role: team.captain.role,
+            personaMd: team.captain.personaMd,
+            duty: team.captain.duty,
+            style: team.captain.style,
+            skills: team.captain.skills,
+          },
+        }
+      : {
+          name: memberRow?.name ?? target.name,
+          employeeId: memberRow?.employeeId ?? null,
+          role: memberRow?.role ?? '',
+          status: memberRow?.status ?? null,
+          avatar: memberRow?.avatar ?? null,
+          source: {
+            name: memberRow?.name ?? target.name,
+            role: memberRow?.role ?? '',
+            personaMd: memberRow?.personaMd ?? null,
+            duty: memberRow?.duty ?? null,
+            style: memberRow?.style ?? null,
+            skills: memberRow?.skills ?? null,
+            rules: memberRow?.rules ?? null,
+            executionPrompt: memberRow?.executionPrompt ?? null,
+          },
+        };
+  const display = handbookSeed(view.source);
+
+  const save = async (): Promise<void> => {
+    if (draft === null || saving || target.kind !== 'member') return;
+    const text = draft.trim();
+    if (text === '') {
+      setError('手册内容为空');
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await updateMemberPersona(team.teamId, target.name, text);
+      setDraft(null);
+      setSavedNote(true);
+      setTimeout(() => setSavedNote(false), 2500);
+      refreshActivitySoon();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const syncToRole = async (): Promise<void> => {
+    if (syncing || target.kind !== 'member') return;
+    const text = (draft ?? display).trim();
+    if (text === '') {
+      setError('成员手册为空，先编辑保存');
+      return;
+    }
+    setSyncing(true);
+    setError(null);
+    try {
+      await syncMemberToRoster(team.teamId, target.name, text);
+      if (draft !== null) setDraft(null); // 编辑中的草稿已一并落库
+      setSyncedNote(true);
+      setTimeout(() => setSyncedNote(false), 2500);
+      refreshActivitySoon();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Button type="button" variant="outline" size="sm" onClick={onBack}>
+          <ArrowLeft className="h-3.5 w-3.5" />
+          返回团队成员
+        </Button>
+        <span className="text-lg font-semibold tracking-tight text-foreground">{view.name}</span>
+        {target.kind === 'captain' && <span className={ROLE_CHIP_CLASS}>领队</span>}
+        {view.status !== null && (
+          <Pill tone={memberTone(view.status)}>{STATUS_LABELS[view.status] ?? view.status}</Pill>
+        )}
+      </div>
+
+      <Card className={cn(PANEL_CARD_CLASS, 'mt-2')}>
+        <div className="flex items-center gap-3.5">
+          {/* 头像描边环：角色详情页同款（品牌淡底档）。 */}
+          <div className="rounded-full border-2 border-solid p-0.5 leading-none border-business-tint">
+            <Avatar name={view.name} seed={view.avatar?.seed} salt={view.avatar?.salt} size={52} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-lg font-semibold tracking-tight text-foreground">{view.name}</div>
+            <div className={cn(MUTED_CLASS, 'mt-0.5')}>
+              {view.employeeId !== null ? `${view.employeeId} · ` : ''}
+              {view.role}
+              {target.kind === 'captain' ? ' · 不接任务：负责拆解、指派与调度' : ''}
+            </div>
+            {target.kind === 'member' && (
+              <div className={cn(MUTED_CLASS, 'mt-0.5')}>
+                详情独立于角色库：加入团队时复制了一份，可编辑后同步回去
+              </div>
+            )}
+          </div>
+          {target.kind === 'member' && onOpenReports !== undefined && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => onOpenReports(view.name)}
+            >
+              汇报记录
+            </Button>
+          )}
+        </div>
+      </Card>
+
+      <Card className={cn(PANEL_CARD_CLASS, 'mt-2')}>
+        <div className={cn(SECTION_TITLE_CLASS, 'flex items-center gap-2')}>
+          <span className="flex-1">
+            {target.kind === 'captain' ? '领队手册（Markdown）' : '成员手册（Markdown）'}
+          </span>
+          {target.kind === 'captain' ? (
+            <span className={MUTED_CLASS}>领队手册由系统合成，只读</span>
+          ) : draft === null ? (
+            <>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setError(null);
+                  setDraft(display);
+                }}
+              >
+                编辑
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={syncing}
+                title="把当前手册写回角色库同名角色（无同名角色时按成员新建）；编辑中的草稿会一并保存"
+                onClick={() => void syncToRole()}
+              >
+                同步到角色
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button size="sm" variant="ghost" disabled={saving} onClick={() => setDraft(null)}>
+                取消
+              </Button>
+              <Button size="sm" disabled={saving} onClick={() => void save()}>
+                保存
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={saving || syncing}
+                title="把当前手册写回角色库同名角色（无同名角色时按成员新建）"
+                onClick={() => void syncToRole()}
+              >
+                同步到角色
+              </Button>
+            </>
+          )}
+        </div>
+        {draft === null ? (
+          <>
+            <MarkdownText text={display} />
+            {savedNote && <div className={cn(MUTED_CLASS, 'mt-1')}>✓ 已保存到成员详情</div>}
+            {syncedNote && (
+              <div className={cn(MUTED_CLASS, 'mt-1')}>✓ 已同步到角色「{view.name}」</div>
+            )}
+          </>
+        ) : (
+          <MdEditor value={draft} onChange={setDraft} minHeight={260} />
+        )}
+        {error !== null && <FormErrorNote className="mt-2">{error}</FormErrorNote>}
+      </Card>
+    </div>
+  );
+}
+
 /** 添加成员弹窗购物车项：角色名 + 已点份数。 */
 interface CartItem {
   /** Roster role name（领队不进购物车——单独走恢复开关）。 */
@@ -1589,13 +2479,69 @@ interface CartItem {
   qty: number;
 }
 
+/** 加减步进器按钮样式（添加成员行尾 [−] n [+]）。 */
+const STEP_BTN_CLASS =
+  'inline-flex h-6 w-6 items-center justify-center rounded-md border border-solid bg-transparent text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40';
+
 /**
- * 添加成员弹窗（用户迭代 2026-09）：Ele.me 点餐式——角色瓦片点一下加一份，
- * 再点续加（同角色可多人，第二份起自动 -2/-3 后缀并照抄角色库默认值）；
- * 购物车逐份列出，每份可填工号（首份预填角色库工号，留空由 host 分配）。
- * 一队最多 memberCap 人；领队被移出时菜单首位出现「领队」tile，勾选即恢复
- * （不走购物车、不占成员名额）。下单 = 逐个 POST，遇到错误停在原地，
- * 已加成功的成员保留在团队里。
+ * 加减步进器（用户迭代 2026-09 三添加成员行尾）：− 减一份、＋ 加一份，
+ * 中间数字 = 该角色已点份数。＋ 禁用时 title 说明名额口径，按钮不吞点击。
+ */
+function StepButtons({
+  qty,
+  onAdd,
+  onRemove,
+  addDisabled,
+  removeDisabled,
+  addTitle,
+  removeTitle,
+}: {
+  qty: number;
+  onAdd: () => void;
+  onRemove: () => void;
+  addDisabled: boolean;
+  removeDisabled: boolean;
+  addTitle: string;
+  removeTitle: string;
+}): ReactNode {
+  return (
+    <div className="flex flex-none items-center gap-1.5">
+      <button
+        type="button"
+        aria-label={removeTitle}
+        title={removeTitle}
+        disabled={removeDisabled}
+        className={STEP_BTN_CLASS}
+        onClick={onRemove}
+      >
+        <Minus className="h-3.5 w-3.5" />
+      </button>
+      <span className="w-5 text-center text-sm font-semibold tabular-nums text-foreground">
+        {qty}
+      </span>
+      <button
+        type="button"
+        aria-label={addTitle}
+        title={addTitle}
+        disabled={addDisabled}
+        className={STEP_BTN_CLASS}
+        onClick={onAdd}
+      >
+        <Plus className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
+
+/**
+ * 添加成员弹窗（用户迭代 2026-09 三）：一行一个角色 + 加减步进器——每行
+ * 行尾 [−] n [+]，＋ 加一份、－ 减一份（同一角色可加多份，第二份起自动
+ * -2/-3 后缀并照抄角色库默认值）；弹窗底部给出已选人数与成员名额口径
+ * （上限 = memberCap，领队不占名额——用户迭代 2026-09 修正：「一个团队
+ * 10 个人」指可加 10 名成员）。工号不在此展示也不逐份填写：角色还没加入
+ * 成员时没有工号，加入团队时由 host 自动分配（同名角色沿用同一工号）。
+ * 领队被移出时菜单首位出现「领队」行，＋ 即加回（不占成员名额）。下单 =
+ * 逐个 POST，遇到错误停在原地，已加成功的成员保留在团队里。
  */
 function AddMembersDialog({
   open,
@@ -1611,16 +2557,18 @@ function AddMembersDialog({
   memberCap: number;
 }): ReactNode {
   const [cart, setCart] = useState<CartItem[]>([]);
-  // 工号输入（键 = `${roleName}#${copy}`，copy 从 1 起；未填 = host 自动分配）。
-  const [employeeIds, setEmployeeIds] = useState<Record<string, string>>({});
   const [leaderPicked, setLeaderPicked] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
 
-  // 成员名额余量：上限只数成员记录（领队不是成员记录，恢复不占名额）。
-  const remaining = Math.max(0, memberCap - team.members.length);
+  // 成员名额（用户迭代 2026-09 修正：领队不占名额）：上限只对成员生效，
+  // 「领队」行的 ＋ 加回领队不受它约束。footer 的「成员 N/上限 · 还可加 K」
+  // 与看板/团队页的成员计数同口径。
+  const occupied = team.members.length;
   const total = cart.reduce((n, c) => n + c.qty, 0);
+  const leaderTaken = leaderPicked ? 1 : 0;
+  const left = Math.max(0, memberCap - occupied - total);
   const menu = roster.filter((m) => m.name !== LEADER_NAME && m.name !== ROLE_BUILDER_NAME);
 
   const qtyOf = (roleName: string): number => cart.find((c) => c.name === roleName)?.qty ?? 0;
@@ -1634,22 +2582,16 @@ function AddMembersDialog({
   const addItem = (roleName: string): void => {
     setError(null);
     setHint(null);
-    if (total >= remaining) {
-      setHint(remaining === 0 ? '成员名额已满' : `最多还能添加 ${remaining - total} 人`);
+    if (left <= 0) {
+      setHint('成员名额已满');
       return;
     }
-    const wasNew = qtyOf(roleName) === 0;
     // 去重必须在 updater 内判定：同拍连点（快速双击）时外层 qtyOf 是旧值。
     setCart((prev) =>
       prev.some((c) => c.name === roleName)
         ? prev.map((c) => (c.name === roleName ? { ...c, qty: c.qty + 1 } : c))
         : [...prev, { name: roleName, qty: 1 }],
     );
-    // 首份工号预填角色库同号；后续份数留空由 host 分配新号。
-    if (wasNew) {
-      const eid = roster.find((m) => m.name === roleName)?.employeeId ?? '';
-      if (eid !== '') setEmployeeIds((prev) => ({ ...prev, [`${roleName}#1`]: eid }));
-    }
   };
 
   const removeOne = (roleName: string): void => {
@@ -1664,7 +2606,6 @@ function AddMembersDialog({
     onOpenChange(next);
     if (!next) {
       setCart([]);
-      setEmployeeIds({});
       setLeaderPicked(false);
       setError(null);
       setHint(null);
@@ -1680,11 +2621,9 @@ function AddMembersDialog({
       for (const item of cart) {
         for (let copy = 1; copy <= item.qty; copy++) {
           const memberName = copyName(item.name, copy);
-          const eid = employeeIds[`${item.name}#${copy}`]?.trim() ?? '';
           await addTeamMember(team.teamId, {
             name: memberName,
             ...(memberName !== item.name ? { sourceName: item.name } : {}),
-            ...(eid !== '' ? { employeeId: eid } : {}),
           });
         }
       }
@@ -1693,16 +2632,15 @@ function AddMembersDialog({
       setError(e instanceof Error ? e.message : String(e));
       // 已加成功的保留；清空购物车避免重名二次报错。
       setCart([]);
-      setEmployeeIds({});
       setLeaderPicked(false);
     } finally {
       setBusy(false);
     }
   };
 
-  const tileClass = (active: boolean): string =>
+  const rowClass = (active: boolean): string =>
     cn(
-      'flex items-center gap-2.5 rounded-xl border border-solid bg-background px-2.5 py-2 text-left transition-colors hover:border-primary',
+      'flex items-center gap-2.5 rounded-xl border border-solid bg-background px-2.5 py-1.5',
       active ? 'border-primary' : BORDER_L1_CLASS,
     );
 
@@ -1712,71 +2650,67 @@ function AddMembersDialog({
         <DialogHeader className="space-y-1 text-left">
           <DialogTitle>添加成员</DialogTitle>
           <DialogDescription className={MUTED_CLASS}>
-            像点餐一样把角色点进团队：同一角色可以点多份（自动加 -2、-3 后缀），每份可填工号。
+            一行一个角色：＋ 加一份、－ 减一份，同一角色可加多份（自动加 -2、-3
+            后缀），工号在加入团队时自动分配（这里不展示——角色没加入成员前没有工号）。
           </DialogDescription>
         </DialogHeader>
 
-        {/* 菜单：角色瓦片栅格（点按加份，已点显示 ×N 角标）。 */}
-        <div className="max-h-[236px] overflow-y-auto pr-0.5">
-          <div className="grid grid-cols-2 gap-2">
-            {team.leaderRemoved && (
-              <button
-                type="button"
-                className={tileClass(leaderPicked)}
-                onClick={() => {
-                  setLeaderPicked(!leaderPicked);
+        {/* 菜单：一行一个角色，行尾加减步进器（名额满时全体 ＋ 禁用）。 */}
+        <div className="flex max-h-[300px] flex-col gap-1.5 overflow-y-auto pr-0.5">
+          {team.leaderRemoved && (
+            <div className={rowClass(leaderPicked)}>
+              <Avatar
+                name={team.captain.name}
+                seed={team.captain.avatar.seed}
+                salt={team.captain.avatar.salt}
+                size={28}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-semibold text-foreground">
+                  {team.captain.name}
+                </div>
+                <div className={cn(MUTED_CLASS, 'truncate text-xs')}>
+                  领队 · ＋ 加回（不占成员名额）
+                </div>
+              </div>
+              <StepButtons
+                qty={leaderPicked ? 1 : 0}
+                onAdd={() => {
+                  setLeaderPicked(true);
                   setError(null);
                 }}
-              >
-                <Avatar
-                  name={team.captain.name}
-                  seed={team.captain.avatar.seed}
-                  salt={team.captain.avatar.salt}
-                  size={32}
+                onRemove={() => {
+                  setLeaderPicked(false);
+                  setError(null);
+                }}
+                addDisabled={leaderPicked}
+                removeDisabled={!leaderPicked}
+                addTitle="加回领队"
+                removeTitle="取消加回"
+              />
+            </div>
+          )}
+          {menu.map((m) => {
+            const qty = qtyOf(m.name);
+            return (
+              <div key={m.name} className={rowClass(qty > 0)}>
+                <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={28} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-semibold text-foreground">{m.name}</div>
+                  <div className={cn(MUTED_CLASS, 'truncate text-xs')}>{m.role}</div>
+                </div>
+                <StepButtons
+                  qty={qty}
+                  onAdd={() => addItem(m.name)}
+                  onRemove={() => removeOne(m.name)}
+                  addDisabled={left <= 0}
+                  removeDisabled={qty === 0}
+                  addTitle={left <= 0 ? '名额已满：成员上限 ' + memberCap + ' 人' : '加一份'}
+                  removeTitle="减一份"
                 />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-semibold text-foreground">
-                    {team.captain.name}
-                  </span>
-                  <span className={cn(MUTED_CLASS, 'block truncate text-xs')}>
-                    {leaderPicked ? '已勾选·点按取消' : '领队·点按加回'}
-                  </span>
-                </span>
-                {leaderPicked && <Check className="h-4 w-4 shrink-0 text-primary" />}
-              </button>
-            )}
-            {menu.map((m) => {
-              const qty = qtyOf(m.name);
-              const full = !cart.some((c) => c.name === m.name) && total >= remaining;
-              return (
-                <button
-                  key={m.name}
-                  type="button"
-                  disabled={full}
-                  className={cn(tileClass(qty > 0), full && 'opacity-50')}
-                  onClick={() => addItem(m.name)}
-                >
-                  <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={32} />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-semibold text-foreground">
-                      {m.name}
-                    </span>
-                    <span className={cn(MUTED_CLASS, 'block truncate text-xs')}>
-                      {m.role}
-                      {m.employeeId !== undefined && m.employeeId !== '' ? ` · ${m.employeeId}` : ''}
-                    </span>
-                  </span>
-                  {qty > 0 ? (
-                    <span className="inline-flex h-5 min-w-[20px] shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
-                      ×{qty}
-                    </span>
-                  ) : (
-                    <Plus className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  )}
-                </button>
-              );
-            })}
-          </div>
+              </div>
+            );
+          })}
           {menu.length === 0 && !team.leaderRemoved && (
             <div className={cn(MUTED_CLASS, 'py-4 text-center text-xs')}>
               角色库还没有可选角色——先到「角色」页新增。
@@ -1784,49 +2718,13 @@ function AddMembersDialog({
           )}
         </div>
 
-        {/* 购物车：逐份列出（自动后缀名 + 工号输入 + 移除）。 */}
-        {cart.length > 0 && (
-          <div className={cn('rounded-lg border border-solid bg-muted/40 p-2.5', BORDER_L1_CLASS)}>
-            <div className="mb-1.5 text-xs font-semibold text-muted-foreground">已点成员</div>
-            <div className="flex flex-col gap-1.5">
-              {cart.map((item) =>
-                Array.from({ length: item.qty }, (_, idx) => {
-                  const key = `${item.name}#${idx + 1}`;
-                  return (
-                    <div key={key} className="flex items-center gap-1.5">
-                      <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-                        {copyName(item.name, idx + 1)}
-                      </span>
-                      <Input
-                        value={employeeIds[key] ?? ''}
-                        placeholder="工号（留空自动分配）"
-                        className="h-7 w-[150px] px-2 text-xs"
-                        onChange={(e) =>
-                          setEmployeeIds((prev) => ({ ...prev, [key]: e.target.value }))
-                        }
-                      />
-                      <button
-                        type="button"
-                        title="移除这一份"
-                        className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                        onClick={() => removeOne(item.name)}
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  );
-                }),
-              )}
-            </div>
-          </div>
-        )}
-
         {hint !== null && <div className={cn(MUTED_CLASS, 'text-xs')}>{hint}</div>}
         {error !== null && <FormErrorNote>{error}</FormErrorNote>}
 
         <div className="flex items-center justify-between gap-2">
           <span className={LIST_COUNT_CLASS}>
-            已选 {total + (leaderPicked ? 1 : 0)} 人 · 还可加 {Math.max(0, remaining - total)} 人
+            已选 {total + leaderTaken} 人 · 成员 {occupied + total}/{memberCap} · 还可加{' '}
+            {Math.max(0, memberCap - occupied - total)} 人
           </span>
           <div className="flex items-center gap-2">
             <Button
@@ -1953,17 +2851,32 @@ function DraftPreview({ draft }: { draft: BuildDraft }): ReactNode {
 
 /** 角色（用户反馈：成员更名角色，不再需要标签）：角色库全体条目（先有角色，再组建团队）——列表 / 构建工作台 / 详情。 */
 /**
+ * 手册骨架的结构来源（用户迭代 2026-09 四）：角色库条目与成员视图共用的
+ * 最小字段面——成员视图缺手册（旧成员）时按结构字段合成骨架。
+ */
+interface HandbookSource {
+  name: string;
+  role: string;
+  personaMd?: string | null;
+  duty?: string | null;
+  style?: string | null;
+  skills?: string | null;
+  rules?: string[] | null;
+  executionPrompt?: string | null;
+}
+
+/**
  * Synthesize a handbook skeleton from the legacy structured fields so nothing
  * is lost when the user first edits a member that predates personaMd (the
  * digest fields themselves are no longer shown — everything lives in the
  * handbook now, 用户反馈 2026-09).
  */
-function handbookSeed(member: RosterMember): string {
+function handbookSeed(member: HandbookSource): string {
   if (typeof member.personaMd === 'string' && member.personaMd.trim() !== '') {
     return member.personaMd;
   }
   const lines = [`# ${member.name}`, '', `- **角色**：${member.role}`];
-  const fields: [string, string | undefined][] = [
+  const fields: [string, string | null | undefined][] = [
     ['职责边界', member.duty],
     ['工作风格', member.style],
     ['能力', member.skills],

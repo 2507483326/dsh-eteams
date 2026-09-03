@@ -13,7 +13,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import { ETeamsConfig, type ETeamsResolvedConfig } from '../src/host/config';
 import { createCaptainTools } from '../src/host/tools/captainTools';
 import { createMemberTools } from '../src/host/tools/memberTools';
-import { approvePlan } from '../src/host/runtime/teamOps';
+import { approvePlan, setLeaderModel, setMemberModel } from '../src/host/runtime/teamOps';
 import type { RuntimeEnv } from '../src/host/runtime/base';
 import type { TeamState } from '../src/host/model/types';
 
@@ -435,6 +435,57 @@ describe('M1 lifecycle (offline full flow)', () => {
     await expect(mem(bobAgent, 'eteams_claim_task', { taskId: 't1' })).rejects.toThrow(
       /未指派给你/,
     );
+  });
+});
+
+describe('member spawn route resolution (leader model, user iteration 2026-09)', () => {
+  it('spawns 跟随领队 members on the leader route; member overrides keep theirs', async () => {
+    const created = await cap<{ teamId: string }>('eteams_create_team', {
+      name: '领队路线团队',
+      goal: 'g',
+    });
+    const teamId = created.teamId;
+    await cap('eteams_add_member', { name: 'Follower', role: 'engineer', teamId });
+    await cap('eteams_add_member', { name: 'Overrider', role: 'engineer', teamId });
+
+    // Overrider pins its own route; the leader picks the team default.
+    await setMemberModel(runtimeEnvFor(), captain as never, {
+      teamId,
+      name: 'Overrider',
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+    });
+    await setLeaderModel(runtimeEnvFor(), captain as never, {
+      teamId,
+      provider: 'deepseek',
+      model: 'deepseek-reasoner',
+      reasoningEffort: 'high',
+    });
+    expect(readTeam().leaderModelRoute).toMatchObject({
+      provider: 'deepseek',
+      model: 'deepseek-reasoner',
+      source: 'override',
+    });
+
+    await approvePlan(runtimeEnvFor(), captain as never, teamId);
+    const follower = runtime.children.find((c) => c.label.endsWith(':Follower'))!;
+    expect(follower.request.agentOptions).toMatchObject({
+      provider: 'deepseek',
+      model: 'deepseek-reasoner',
+      reasoningEffort: 'high',
+    });
+    const overrider = runtime.children.find((c) => c.label.endsWith(':Overrider'))!;
+    expect(overrider.request.agentOptions).toMatchObject({
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+    });
+
+    // Clearing the leader route (empty body) back to 会话默认: a mid-run add
+    // spawns with no agentOptions at all (session default).
+    await setLeaderModel(runtimeEnvFor(), captain as never, { teamId });
+    await cap('eteams_add_member', { name: 'Latecomer', role: 'engineer', teamId });
+    const latecomer = runtime.children.find((c) => c.label.endsWith(':Latecomer'))!;
+    expect(latecomer.request.agentOptions).toBeUndefined();
   });
 });
 

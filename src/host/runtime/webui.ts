@@ -39,8 +39,11 @@ import {
   addMember,
   createTeam,
   removeMember,
+  setLeaderModel,
   setLeaderRemoved,
   setMemberModel,
+  syncMemberToRoster,
+  updateMember,
 } from './teamOps.js';
 import {
   answerBuildInterview,
@@ -55,7 +58,6 @@ import {
 } from './roleBuilder.js';
 import { spawnBuildPhase, spawnContinueAfterAnswers } from './builderPhases.js';
 import { clearSessionPersona, setSessionPersona } from './sessionPersona.js';
-
 
 /** Web-server service key candidates, newest first. */
 const WEB_SERVER_KEYS = ['webServer', 'httpServer'] as const;
@@ -122,6 +124,15 @@ function memberView(team: TeamState, m: MemberRecord) {
     /** 工号 (docs/21); null for legacy members created before the field. */
     employeeId: m.employeeId ?? null,
     role: m.role,
+    // 成员详情（用户迭代 2026-09 四）：成员自己的角色手册副本——加入团队时
+    // 从角色库复制，之后与角色详情各自独立；/persona 改写、/sync-roster 同步
+    // 回角色库。personaMd 为空（旧成员）时客户端按结构字段合成骨架。
+    personaMd: m.persona.personaMd ?? null,
+    duty: m.persona.duty,
+    style: m.persona.style,
+    skills: m.persona.skills,
+    rules: m.persona.rules,
+    executionPrompt: m.persona.executionPrompt,
     status: m.status as MemberStatus,
     provider: m.modelRoute.provider,
     model: m.modelRoute.model,
@@ -205,6 +216,11 @@ export function teamSnapshot(
       skills: captainPersona.skills,
       personaMd: captainPersona.personaMd ?? null,
       avatar: { seed: avatarSeedFor('项目牧羊人'), salt: 7 },
+      // 领队模型路线（用户迭代 2026-09）：flat 投影与 memberView 同构；
+      // 'inherit' = 会话默认。成员「跟随领队」spawn 时解析到这条 override。
+      provider: team.leaderModelRoute?.provider ?? 'inherit',
+      model: team.leaderModelRoute?.model ?? 'inherit',
+      reasoningEffort: team.leaderModelRoute?.reasoningEffort ?? null,
     },
     members: team.members.filter((m) => m.status !== 'removed').map((m) => memberView(team, m)),
     tasks: team.tasks.map(taskView),
@@ -486,7 +502,11 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
             // POST /session-persona — the panel's member selection (docs/13.8.2):
             // the session agent's system prompt gains a persona band evaluated per
             // assembly (sessionPersona.ts). No conversation message is involved.
-            if (req.method === 'POST' && segments[0] === 'session-persona' && segments.length === 1) {
+            if (
+              req.method === 'POST' &&
+              segments[0] === 'session-persona' &&
+              segments.length === 1
+            ) {
               const body = parseJsonObject(await readBody(req));
               const sessionId = str(body.sessionId, '');
               const name = str(body.name, '');
@@ -589,61 +609,67 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                 sendError(res, 404, `成员库中没有「${name}」`);
                 return;
               }
-              const result = await addMember(
-                envFor(ctx, config, workspacePath),
-                agentFor(team.captainSessionId),
-                {
-                  name,
-                  role: str(body.role, entry?.role ?? 'member'),
-                  ...(body.executionPrompt !== undefined
-                    ? { executionPrompt: str(body.executionPrompt) }
-                    : entry?.executionPrompt !== undefined
-                      ? { executionPrompt: entry.executionPrompt }
-                      : {}),
-                  ...(body.duty !== undefined
-                    ? { duty: str(body.duty) }
-                    : entry?.duty !== undefined
-                      ? { duty: entry.duty }
-                      : {}),
-                  ...(body.style !== undefined
-                    ? { style: str(body.style) }
-                    : entry?.style !== undefined
-                      ? { style: entry.style }
-                      : {}),
-                  ...(body.skills !== undefined
-                    ? { skills: str(body.skills) }
-                    : entry?.skills !== undefined
-                      ? { skills: entry.skills }
-                      : {}),
-                  ...(Array.isArray(body.rules)
-                    ? { rules: body.rules.map((r) => str(r)) }
-                    : entry?.rules !== undefined
-                      ? { rules: entry.rules }
-                      : {}),
-                  ...(body.personaMd !== undefined
-                    ? { personaMd: str(body.personaMd) }
-                    : entry?.personaMd !== undefined
-                      ? { personaMd: entry.personaMd }
-                      : {}),
-                  ...(str(body.employeeId, '') !== ''
-                    ? { employeeId: str(body.employeeId) }
-                    : entry?.employeeId !== undefined
-                      ? { employeeId: entry.employeeId }
-                      : {}),
-                  ...(entry?.avatar !== undefined ? { avatar: entry.avatar } : {}),
-                  ...(body.provider !== undefined && body.model !== undefined
-                    ? { provider: str(body.provider), model: str(body.model) }
-                    : entry?.provider !== undefined && entry.model !== undefined
-                      ? { provider: entry.provider, model: entry.model }
-                      : {}),
-                  ...(body.reasoningEffort !== undefined
-                    ? { reasoningEffort: str(body.reasoningEffort) }
-                    : entry?.reasoningEffort !== undefined
-                      ? { reasoningEffort: entry.reasoningEffort }
-                      : {}),
-                  via: 'panel',
-                },
-              );
+              let result;
+              try {
+                result = await addMember(
+                  envFor(ctx, config, workspacePath),
+                  agentFor(team.captainSessionId),
+                  {
+                    name,
+                    role: str(body.role, entry?.role ?? 'member'),
+                    ...(body.executionPrompt !== undefined
+                      ? { executionPrompt: str(body.executionPrompt) }
+                      : entry?.executionPrompt !== undefined
+                        ? { executionPrompt: entry.executionPrompt }
+                        : {}),
+                    ...(body.duty !== undefined
+                      ? { duty: str(body.duty) }
+                      : entry?.duty !== undefined
+                        ? { duty: entry.duty }
+                        : {}),
+                    ...(body.style !== undefined
+                      ? { style: str(body.style) }
+                      : entry?.style !== undefined
+                        ? { style: entry.style }
+                        : {}),
+                    ...(body.skills !== undefined
+                      ? { skills: str(body.skills) }
+                      : entry?.skills !== undefined
+                        ? { skills: entry.skills }
+                        : {}),
+                    ...(Array.isArray(body.rules)
+                      ? { rules: body.rules.map((r) => str(r)) }
+                      : entry?.rules !== undefined
+                        ? { rules: entry.rules }
+                        : {}),
+                    ...(body.personaMd !== undefined
+                      ? { personaMd: str(body.personaMd) }
+                      : entry?.personaMd !== undefined
+                        ? { personaMd: entry.personaMd }
+                        : {}),
+                    ...(str(body.employeeId, '') !== ''
+                      ? { employeeId: str(body.employeeId) }
+                      : entry?.employeeId !== undefined
+                        ? { employeeId: entry.employeeId }
+                        : {}),
+                    ...(entry?.avatar !== undefined ? { avatar: entry.avatar } : {}),
+                    ...(body.provider !== undefined && body.model !== undefined
+                      ? { provider: str(body.provider), model: str(body.model) }
+                      : entry?.provider !== undefined && entry.model !== undefined
+                        ? { provider: entry.provider, model: entry.model }
+                        : {}),
+                    ...(body.reasoningEffort !== undefined
+                      ? { reasoningEffort: str(body.reasoningEffort) }
+                      : entry?.reasoningEffort !== undefined
+                        ? { reasoningEffort: entry.reasoningEffort }
+                        : {}),
+                    via: 'panel',
+                  },
+                );
+              } catch (e) {
+                sendError(res, 400, e instanceof Error ? e.message : String(e));
+                return;
+              }
               sendJson(res, 200, {
                 ok: true,
                 teamId: team.id,
@@ -721,15 +747,88 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               }
               const { team, workspacePath } = located;
               try {
-                await setMemberModel(envFor(ctx, config, workspacePath), agentFor(team.captainSessionId), {
-                  teamId: team.id,
-                  name: decodeURIComponent(segments[3]!),
-                  ...(str(body.provider, '') !== '' ? { provider: str(body.provider) } : {}),
-                  ...(str(body.model, '') !== '' ? { model: str(body.model) } : {}),
-                  ...(str(body.reasoningEffort, '') !== ''
-                    ? { reasoningEffort: str(body.reasoningEffort) }
-                    : {}),
-                });
+                await setMemberModel(
+                  envFor(ctx, config, workspacePath),
+                  agentFor(team.captainSessionId),
+                  {
+                    teamId: team.id,
+                    name: decodeURIComponent(segments[3]!),
+                    ...(str(body.provider, '') !== '' ? { provider: str(body.provider) } : {}),
+                    ...(str(body.model, '') !== '' ? { model: str(body.model) } : {}),
+                    ...(str(body.reasoningEffort, '') !== ''
+                      ? { reasoningEffort: str(body.reasoningEffort) }
+                      : {}),
+                  },
+                );
+              } catch (e) {
+                sendError(res, 400, e instanceof Error ? e.message : String(e));
+                return;
+              }
+              sendJson(res, 200, { ok: true });
+              return;
+            }
+            // POST /team/<id>/member/<name>/persona - save the member's own
+            // handbook copy (用户迭代 2026-09 四: member detail is separate
+            // from the role detail; only the member record is written).
+            if (
+              req.method === 'POST' &&
+              segments[0] === 'team' &&
+              segments.length === 5 &&
+              segments[2] === 'member' &&
+              segments[4] === 'persona'
+            ) {
+              const body = parseJsonObject(await readBody(req));
+              const personaMd = str(body.personaMd, '');
+              if (personaMd.trim() === '') {
+                sendError(res, 400, 'personaMd 不能为空');
+                return;
+              }
+              const located = locateTeam(ctx, config, segments[1]!);
+              if (!located) {
+                sendError(res, 404, '团队 ' + segments[1] + ' 不存在');
+                return;
+              }
+              const { team, workspacePath } = located;
+              try {
+                await updateMember(
+                  envFor(ctx, config, workspacePath),
+                  agentFor(team.captainSessionId),
+                  { teamId: team.id, name: decodeURIComponent(segments[3]!), personaMd },
+                );
+              } catch (e) {
+                sendError(res, 400, e instanceof Error ? e.message : String(e));
+                return;
+              }
+              sendJson(res, 200, { ok: true });
+              return;
+            }
+            // POST /team/<id>/member/<name>/sync-roster - push the member's
+            // handbook copy back to its roster role (用户迭代 2026-09 四:
+            // 同步到该角色; creates the roster entry for copy members).
+            if (
+              req.method === 'POST' &&
+              segments[0] === 'team' &&
+              segments.length === 5 &&
+              segments[2] === 'member' &&
+              segments[4] === 'sync-roster'
+            ) {
+              const body = parseJsonObject(await readBody(req));
+              const located = locateTeam(ctx, config, segments[1]!);
+              if (!located) {
+                sendError(res, 404, '团队 ' + segments[1] + ' 不存在');
+                return;
+              }
+              const { team, workspacePath } = located;
+              try {
+                await syncMemberToRoster(
+                  envFor(ctx, config, workspacePath),
+                  agentFor(team.captainSessionId),
+                  {
+                    teamId: team.id,
+                    name: decodeURIComponent(segments[3]!),
+                    ...(str(body.personaMd, '') !== '' ? { personaMd: str(body.personaMd) } : {}),
+                  },
+                );
               } catch (e) {
                 sendError(res, 400, e instanceof Error ? e.message : String(e));
                 return;
@@ -754,10 +853,52 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               }
               const { team, workspacePath } = located;
               try {
-                await setLeaderRemoved(envFor(ctx, config, workspacePath), agentFor(team.captainSessionId), {
-                  teamId: team.id,
-                  removed: segments[3] === 'remove',
-                });
+                await setLeaderRemoved(
+                  envFor(ctx, config, workspacePath),
+                  agentFor(team.captainSessionId),
+                  {
+                    teamId: team.id,
+                    removed: segments[3] === 'remove',
+                  },
+                );
+              } catch (e) {
+                sendError(res, 400, e instanceof Error ? e.message : String(e));
+                return;
+              }
+              sendJson(res, 200, { ok: true });
+              return;
+            }
+            // POST /team/<id>/leader/model - set the leader's model route
+            // (user iteration 2026-09: the leader picks a model). The leader
+            // is the panel session itself; this route is the team default
+            // that members on 跟随领队 resolve to at spawn. Empty body clears.
+            if (
+              req.method === 'POST' &&
+              segments[0] === 'team' &&
+              segments.length === 4 &&
+              segments[2] === 'leader' &&
+              segments[3] === 'model'
+            ) {
+              const body = parseJsonObject(await readBody(req));
+              const located = locateTeam(ctx, config, segments[1]!);
+              if (!located) {
+                sendError(res, 404, '团队 ' + segments[1] + ' 不存在');
+                return;
+              }
+              const { team, workspacePath } = located;
+              try {
+                await setLeaderModel(
+                  envFor(ctx, config, workspacePath),
+                  agentFor(team.captainSessionId),
+                  {
+                    teamId: team.id,
+                    ...(str(body.provider, '') !== '' ? { provider: str(body.provider) } : {}),
+                    ...(str(body.model, '') !== '' ? { model: str(body.model) } : {}),
+                    ...(str(body.reasoningEffort, '') !== ''
+                      ? { reasoningEffort: str(body.reasoningEffort) }
+                      : {}),
+                  },
+                );
               } catch (e) {
                 sendError(res, 400, e instanceof Error ? e.message : String(e));
                 return;
@@ -768,11 +909,7 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
             // ---------- role-builder build session (docs/19.6, D18) ----------
             // GET /rolebuilder — the single build-session slot; {empty:true}
             // when no session exists yet.
-            if (
-              req.method === 'GET' &&
-              segments[0] === 'rolebuilder' &&
-              segments.length === 1
-            ) {
+            if (req.method === 'GET' && segments[0] === 'rolebuilder' && segments.length === 1) {
               const session = readBuildSession(rootForWrites(ctx, config));
               sendJson(res, 200, session === null ? { empty: true } : { empty: false, session });
               return;
@@ -1180,8 +1317,10 @@ function isAvatarPair(value: unknown): value is { seed: number; salt: number } {
   if (typeof value !== 'object' || value === null) return false;
   const pair = value as Record<string, unknown>;
   return (
-    typeof pair.seed === 'number' && Number.isFinite(pair.seed) &&
-    typeof pair.salt === 'number' && Number.isFinite(pair.salt)
+    typeof pair.seed === 'number' &&
+    Number.isFinite(pair.seed) &&
+    typeof pair.salt === 'number' &&
+    Number.isFinite(pair.salt)
   );
 }
 

@@ -220,6 +220,9 @@ export async function addMember(
       throw new ETeamsError(`成员「${name}」已在团队中`);
     }
     const active = fresh.members.filter((m) => m.status !== 'removed');
+    // 成员上限（用户迭代 2026-09 修正：领队不占名额）——「一个团队 10 个人」
+    // 指可加 10 名成员；领队是管理者（拆解/指派/调度），不占成员名额，加回
+    // 领队因此也不再受上限约束。看板/团队页的成员计数同口径。
     if (active.length >= env.config.maxMembers) {
       throw new ETeamsError(
         `成员数已达上限（${env.config.maxMembers}）`,
@@ -361,13 +364,69 @@ export async function setMemberModel(
             provider: params.provider,
             model: params.model,
             ...(params.reasoningEffort !== undefined && params.reasoningEffort !== ''
-              ? { reasoningEffort: params.reasoningEffort } : {}),
+              ? { reasoningEffort: params.reasoningEffort }
+              : {}),
             source: 'override',
           }
         : { provider: 'inherit', model: 'inherit', source: 'inherited' };
     member.modelRoute = route;
     await recordEvent(root, fresh.id, captainActor(fresh), 'member.updated', {
       payload: { name: params.name, route },
+    });
+    await writeTeam(root, fresh);
+    renderTeamDocs(env.workspace, fresh, (msg) => env.ctx.logger.warn(msg));
+    return fresh;
+  });
+}
+
+/**
+ * Sync a member's own handbook copy back to its roster role (用户迭代 2026-09
+ * 四：成员详情与角色详情是两份独立数据——加入团队时复制一份，之后各自演
+ * 化；这里把成员当前手册写回角色库同名角色). An existing roster entry keeps
+ * every other field (only personaMd is overwritten); a member without a
+ * roster entry (e.g. -2 副本) gets one created from the member record. The
+ * member's own copy is filled in when it was still empty (旧数据成员）。
+ */
+export async function syncMemberToRoster(
+  env: RuntimeEnv,
+  captain: Agent,
+  params: {
+    teamId?: string;
+    name: string;
+    /** Sync payload; defaults to the member's own saved handbook copy. */
+    personaMd?: string;
+  },
+): Promise<TeamState> {
+  const team = params.teamId
+    ? await requireTeamById(env, captain, params.teamId)
+    : await requireCaptainTeam(env, captain);
+  return withTeam(env, team.id, async (fresh, root) => {
+    const member = requireMember(fresh, params.name);
+    const text = (params.personaMd ?? member.persona.personaMd ?? '').trim();
+    if (text === '') {
+      throw new ETeamsError('成员手册为空，先在成员详情里编辑保存');
+    }
+    const existing = findRosterMember(root, member.name);
+    if (existing !== undefined) {
+      // 已有同名角色：只覆盖手册，其余字段（职责风格/工号/头像）原样保留。
+      await upsertRosterMember(root, { ...existing, personaMd: text });
+    } else if (member.name !== LEADER_NAME && member.name !== ROLE_BUILDER_NAME) {
+      // 无同名角色（副本成员等）：按成员记录新建角色库条目。
+      await upsertRosterMember(root, {
+        name: member.name,
+        role: member.role,
+        personaMd: text,
+        ...(member.avatar !== undefined ? { avatar: member.avatar } : {}),
+      });
+    } else {
+      throw new ETeamsError('系统保留角色不同步到角色库');
+    }
+    // 成员自己还没有手册副本（旧数据）：同步即补齐，详情从此独立可改。
+    if (member.persona.personaMd !== text) {
+      member.persona = mergePersona(member.persona, { personaMd: text });
+    }
+    await recordEvent(root, fresh.id, captainActor(fresh), 'member.synced_roster', {
+      payload: { name: member.name },
     });
     await writeTeam(root, fresh);
     renderTeamDocs(env.workspace, fresh, (msg) => env.ctx.logger.warn(msg));
@@ -391,9 +450,61 @@ export async function setLeaderRemoved(
     : await requireCaptainTeam(env, captain);
   return withTeam(env, team.id, async (fresh, root) => {
     if (fresh.leaderRemoved === params.removed) return fresh;
+    // 加回领队不受成员上限约束（用户迭代 2026-09 修正：领队不占成员名额）。
     fresh.leaderRemoved = params.removed;
-    await recordEvent(root, fresh.id, captainActor(fresh), 'leader.' + (params.removed ? 'removed' : 'restored'), {
-      payload: {},
+    await recordEvent(
+      root,
+      fresh.id,
+      captainActor(fresh),
+      'leader.' + (params.removed ? 'removed' : 'restored'),
+      {
+        payload: {},
+      },
+    );
+    await writeTeam(root, fresh);
+    renderTeamDocs(env.workspace, fresh, (msg) => env.ctx.logger.warn(msg));
+    return fresh;
+  });
+}
+
+/**
+ * Set the leader's model route (user iteration 2026-09: the leader picks a
+ * model too). The leader IS the panel session agent — its own session model
+ * is never switched; this route is the team default that members running on
+ * 「跟随领队」resolve to at spawn (unset → session default). Empty
+ * provider/model clears the override back to inherited.
+ */
+export async function setLeaderModel(
+  env: RuntimeEnv,
+  captain: Agent,
+  params: {
+    teamId?: string;
+    provider?: string;
+    model?: string;
+    reasoningEffort?: string;
+  },
+): Promise<TeamState> {
+  const team = params.teamId
+    ? await requireTeamById(env, captain, params.teamId)
+    : await requireCaptainTeam(env, captain);
+  return withTeam(env, team.id, async (fresh, root) => {
+    const route: ModelRouteSnapshot =
+      params.provider !== undefined &&
+      params.provider !== '' &&
+      params.model !== undefined &&
+      params.model !== ''
+        ? {
+            provider: params.provider,
+            model: params.model,
+            ...(params.reasoningEffort !== undefined && params.reasoningEffort !== ''
+              ? { reasoningEffort: params.reasoningEffort }
+              : {}),
+            source: 'override',
+          }
+        : { provider: 'inherit', model: 'inherit', source: 'inherited' };
+    fresh.leaderModelRoute = route;
+    await recordEvent(root, fresh.id, captainActor(fresh), 'leader.updated', {
+      payload: { route },
     });
     await writeTeam(root, fresh);
     renderTeamDocs(env.workspace, fresh, (msg) => env.ctx.logger.warn(msg));
@@ -593,7 +704,11 @@ export async function archiveTeam(
     // 回收全部成员的驻留 Activation（docs/20.4 P2）：完结团队不应有可唤醒
     // 的成员留在 live 注册表；持久记录随父对话回收。旧运行时静默降级。
     const captainAgent = env.ctx.agents.get(fresh.captainSessionId) ?? captain;
-    await drainMembers(env, captainAgent, fresh.members.map((m) => m.id));
+    await drainMembers(
+      env,
+      captainAgent,
+      fresh.members.map((m) => m.id),
+    );
     await recordEvent(root, fresh.id, captainActor(fresh), 'team.archived', {});
     const dest = join(root, 'archive');
     mkdirSync(dest, { recursive: true });
@@ -612,7 +727,11 @@ export async function deleteTeam(env: RuntimeEnv, captain: Agent, teamId: string
       throw new ETeamsError('running 团队不能直接删除', '先取消任务（cancel_task）或停止团队');
     }
     const captainAgent = env.ctx.agents.get(fresh.captainSessionId) ?? captain;
-    await drainMembers(env, captainAgent, fresh.members.map((m) => m.id));
+    await drainMembers(
+      env,
+      captainAgent,
+      fresh.members.map((m) => m.id),
+    );
     rmSync(join(root, fresh.id), { recursive: true, force: true });
   });
 }
