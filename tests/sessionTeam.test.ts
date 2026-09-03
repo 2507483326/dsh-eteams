@@ -87,8 +87,20 @@ describe('sessionTeamSection branches', () => {
     setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
     const band = sessionTeamSection('s-other', () => team());
     expect(band).toContain('不要直接调用其它 eteams_* 工具');
-    expect(band).toContain('不要自己动手执行用户交给团队的任务');
+    expect(band).toContain('不自己动手执行');
     expect(band).toContain('不要复述全文');
+  });
+
+  it('treats binding itself as task intent (绑定即意图，无需点名)', () => {
+    // User iteration 2026-09-03「选择团队然后使用团队开始任务，主对话直接
+    // 开始完成任务」: the old band gated dispatch on the user explicitly
+    // saying 用团队做X, so a plain task message made the session execute the
+    // task itself. The band must state binding = intent with no phrase gate.
+    setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
+    const band = sessionTeamSection('s-other', () => team());
+    expect(band).toContain('绑定即用户意图');
+    expect(band).toContain('与消息里是否点名团队无关');
+    expect(band).not.toContain('「用团队做X」');
   });
 
   it('is the same relay band whether or not the leader was removed', () => {

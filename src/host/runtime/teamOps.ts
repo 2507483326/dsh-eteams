@@ -681,12 +681,16 @@ export function teamView(env: RuntimeEnv, team: TeamState): Record<string, JsonV
     workDir: team.workDir ?? null,
     members: team.members
       .filter((m) => m.status !== 'removed')
+      // 团队现状精简（用户迭代 2026-09-03「团队现状太繁杂了，目前只需要
+      // 知道工号和角色和状态就行」）：成员只带 工号/角色/状态，route 与
+      // currentTask 去掉——currentTask 可从 tasks 的 assignee+status 读出，
+      // 模型路线属于派发细节，不进领队快照。name 保留：eteams_* 工具按
+      // 成员名指派，没有名字工号无法落地。
       .map((m): JsonValue => ({
         name: m.name,
+        employeeId: m.employeeId ?? null,
         role: m.role,
         status: m.status,
-        route: { ...m.modelRoute },
-        currentTask: currentTaskOf(team, m.name)?.id ?? null,
       })),
     tasks: team.tasks.map((t): JsonValue => ({
       id: t.id,
@@ -701,29 +705,20 @@ export function teamView(env: RuntimeEnv, team: TeamState): Record<string, JsonV
     pendingDecisions: team.pendingDecisions
       .filter((d) => d.status === 'open')
       .map((d): JsonValue => ({ ...d })),
+    // 邮箱尾部同样精简（同上迭代）：只带最近 5 条、正文截断——领队子代理
+    // 是持续会话，通知语境已在既有上下文里，快照只需提示有新邮件。
     captainMailbox: readBox(env, team.id, 'captain')
-      .slice(-10)
+      .slice(-5)
       .map((m): JsonValue => ({
         id: m.id,
         seq: m.seq,
         at: m.at,
         from: { kind: m.from.kind, name: m.from.name ?? null },
-        to: { kind: m.to.kind, name: m.to.name ?? null },
         kind: m.kind,
         taskId: m.taskId ?? null,
-        attemptId: m.attemptId ?? null,
-        content: m.content,
-        readAt: m.readAt ?? null,
+        content: m.content.length > 300 ? `${m.content.slice(0, 300)}…` : m.content,
       })),
   };
-}
-
-function currentTaskOf(team: TeamState, memberName: string) {
-  return team.tasks.find(
-    (t) =>
-      t.assignee === memberName &&
-      ['assigned', 'in_progress', 'retrying', 'paused'].includes(t.status),
-  );
 }
 
 /** Archive a completed/halted team (docs/09.1 archive/<id>). */

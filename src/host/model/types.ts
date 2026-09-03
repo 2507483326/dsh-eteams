@@ -234,6 +234,14 @@ export interface TeamState {
    * 「跟随领队」时 spawn 解析到这条 override（未设置则沿用会话默认）。
    */
   leaderModelRoute?: ModelRouteSnapshot;
+  /**
+   * 持续领队子代理的 durable child session id（docs/26 用户迭代
+   * 2026-09-03「不使用一次性子代理，应该是持续代理」）。首次 dispatch 时
+   * `startContinuable` 建立并落盘；后续 dispatch 经 `followup` 续聊（宿主
+   * 重启后按 durable lineage 冷恢复同一会话，lineage 不符则重建并更新本
+   * 字段）。空缺 = 尚未派发过领队子代理。
+   */
+  captainChildId?: string;
   createdAt: number;
   updatedAt: number;
   version: number;

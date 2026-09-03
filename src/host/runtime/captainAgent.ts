@@ -1,15 +1,20 @@
 /**
  * 领队子代理（docs/26 用户迭代 2026-09-03「主窗口发问题不合适——由领队
- * 子代理完成主持」）：对话驱动团队时，主窗口会话只负责转交，领队工作
- * （提交任务单、问询弹窗、拆解、指派、汇报）由一次性「领队子代理」承担
- * （构建代理同款 one-shot 模式，builderPhases）。
+ * 子代理完成主持」+「不使用一次性子代理，应该是持续代理」）：对话驱动
+ * 团队时，主窗口会话只负责转交，领队工作（提交任务单、问询弹窗、拆解、
+ * 指派、汇报）由**持续领队子代理**承担（每团队一个 continuable 子代理，
+ * 首次 dispatch 建立、后续 followup 续聊）。
  *
  * 本模块持有两样基础设施：
  * - 子代理标签（`eteams-captain:<teamId>`，镜像 members 的 label 模式）；
- * - 身份注册表：dispatch 派发的子代理会话 id → 团队 id，resolveCaller /
+ * - 身份注册表：dispatch 建立的子代理会话 id → 团队 id，resolveCaller /
  *   envForAgent 据此把子代理的 eteams_* 调用按该团队领队解析（含跨工作区
  *   重指），band 组装据此对子代理静默（它自己就是领队，不能再看到
  *   「转交」指示）。
+ *
+ * 子代理是持续会话，注册表条目在其生命周期内常驻：写入发生在建立与每次
+ * 续聊（重启后重登记），撤除只在同队重建（旧会话换新）或派发失败——
+ * 与一次性时代「轮次结算即撤」不同。
  *
  * @module dsh-eteams/host/runtime/captainAgent
  */
@@ -30,9 +35,10 @@ export function parseCaptainLabel(label: string | undefined): { teamId: string }
 }
 
 /**
- * Live dispatch registry: child session id → teamId, written at spawn and
- * dropped when the run settles. One-shot children are dead after their turn,
- * so a leaked entry is inert; the explicit unregister keeps the map tight.
+ * Live dispatch registry: child session id → teamId, written at spawn and on
+ * every followup re-registration (persisted child id survives host restarts,
+ * so the map must be re-populated). Dropped only when the same team rebuilds
+ * its child (stale lineage) — the child is persistent, not turn-scoped.
  */
 const captainChildren = new Map<string, string>();
 
@@ -62,8 +68,9 @@ export function unregisterCaptainChild(childId: string): void {
  * interviews, or re-dispatch captains (recursion guard). Subagent spawn
  * tools ('subagent', 'subagent_fork') are intentionally absent — no such
  * registered names were found in the harness, and denying unregistered
- * names aborts the spawn; the child is one-shot (run.result awaited to
- * completion), so it cannot nest workers anyway.
+ * names aborts the spawn; the child is a continuable runtime ROOT, and
+ * while it may report back to its parent, it must not delegate captains
+ * (the deny list is the hard guard).
  */
 export const CAPTAIN_CHILD_DENIED_TOOLS: readonly string[] = [
   'eteams_create_team',
