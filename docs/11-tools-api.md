@@ -9,6 +9,7 @@
 | eteams_create_team / edit_team / switch_team / archive_team / delete_team / resume_team | ✔ | ✘ | 团队管理 |
 | eteams_add_member / remove_member / update_member | ✔ | ✘ | 成员管理 |
 | eteams_submit_task | ✔ | ✘ | 对话任务入口（docs/26）：建任务单 group |
+| eteams_dispatch_captain | ✔ | ✘ | 对话任务转交（docs/26.1）：派发一次性领队子代理主持（提交/弹窗问询/拆解/指派），透传其最终汇报 |
 | eteams_create_task / update_task / delete_task | ✔ | ✘ | 任务清单（运行中编辑 D5） |
 | eteams_approve_plan | ✘（用户） | ✘ | 仅 UI/批准路由可调（防领队自批） |
 | eteams_assign_task / reassign_task | ✔ | ✘ | 指派（D4；含偏离说明） |
@@ -59,6 +60,16 @@ eteams_remove_member({ name })
 ### 任务清单（staged + 运行中，D5）
 
 ```
+eteams_dispatch_captain({ message })   # 对话任务转交（docs/26.1，领队会话专用）
+  行为：派发一次性「领队子代理」（构建代理同款 one-shot：subagents.start →
+        run.result → dispose）主持当前步骤——prompt =【团队现状】快照
+        （teamView JSON）+ message（用户原话/答复/通知要点），persona =
+        CAPTAIN_CHILD_PERSONA，spawn deny 队长级工具（建队/删队/构建/访谈/
+        再派发，含递归守卫）。子代理的 eteams_* 调用按该团队领队解析
+        （内存注册表，含跨工作区重指）；「团队绑定」band 对其静默。
+  返回：{ ok, relayed }——relayed = 子代理最终文本，主会话原样展示（简短
+        确认，不复述）；stopReason ≠ completed 时 ok:false（异常结束注记）。
+
 eteams_submit_task({ subject, description?, questionnaire?: string[] })   # 对话任务入口（docs/26）
   行为：建 kind:'group' 主任务（任务单）+ 立即分配团队 workDir 与专属文件夹
         （staged 不等批准）；questionnaire 记问询事件；面板任务页立即可见。

@@ -28,6 +28,7 @@ import { ETeamsConfig } from './config.js';
 import type { ETeamsResolvedConfig } from './config.js';
 import { PLUGIN_ID, PLUGIN_VERSION, STATE_SCHEMA_VERSION, TOOL_PREFIX } from './version.js';
 import { createCaptainTools } from './tools/captainTools.js';
+import { createCaptainDispatchTool } from './tools/captainDispatch.js';
 import { createMemberTools } from './tools/memberTools.js';
 import { installMemberRuntime } from './runtime/members.js';
 import { installWebSurface, locateTeam, rootForWrites } from './runtime/webui.js';
@@ -54,6 +55,7 @@ export { ETeamsConfig };
 
 /** Offline verification surface (verify script / integration tests). */
 export { createCaptainTools } from './tools/captainTools.js';
+export { createCaptainDispatchTool } from './tools/captainDispatch.js';
 export { createMemberTools } from './tools/memberTools.js';
 export { approvePlan } from './runtime/teamOps.js';
 export {
@@ -94,6 +96,10 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
   for (const tool of createCaptainTools(config, ctx)) {
     ctx.tools.register(tool);
   }
+  // 1b) 对话任务转交（docs/26 用户迭代 2026-09-03）：主会话把交给团队的
+  // 任务转给一次性领队子代理主持。同一根作用域注册（子代理对 eteams_*
+  // 可见的前提）；成员与领队子代理在 spawn 时 deny。
+  ctx.tools.register(createCaptainDispatchTool(config, ctx));
   log.info('eteams: captain tools registered');
 
   // 2) Member runtime: per-child tool installation + route bookkeeping.

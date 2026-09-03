@@ -22,6 +22,7 @@ import {
 import { recordEvent } from '../state/events.js';
 import { sanitizeKey } from '../model/taskMachine.js';
 import { ETeamsError, captainActor, memberActor, stateRootOf, type RuntimeEnv } from './base.js';
+import { clearSessionTeam } from './sessionTeam.js';
 import { renderTeamDocs, teamWorkDirRel } from './docs.js';
 import {
   allocateEmployeeId,
@@ -118,6 +119,10 @@ export async function createTeam(
       });
     }
     await writeTeam(root, team);
+    // 绑定让位（docs/26 绑定即可驱动）：resolveCaller 绑定优先——刚建的
+    // 新队以本会话为领队，若本会话还绑着旧团队，旧绑定会遮蔽新队（工具
+    // 全落到旧队上）。建队成功即清除本会话的旧绑定。
+    clearSessionTeam(String(captain.id));
     if (params.approval === 'automatic') {
       const fresh = await readTeam(root, id);
       if (fresh) return approvePlan(env, captain, fresh.id);

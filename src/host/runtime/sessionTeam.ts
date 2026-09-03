@@ -3,13 +3,18 @@
  * button selects a team for the conversation; the host records the binding
  * in-memory (mirror of sessionPersona — the client re-asserts on mount, so a
  * host restart self-heals) and the session agent's prompt gains a 团队绑定
- * band with three branches:
+ * band（每次组装时对照活团队现读）——两个分支：
  *
- * - 本会话就是该团队的领队会话（captainSessionId === 本会话）→ 领队主持；
- *   领队已被移出名册（leaderRemoved）时同一会话继续充当领队（用户迭代：
- *   「没有领队就由用户的主窗口充当领队」——领队会话恒在，只是名册不展示）。
- * - 团队建在别的对话（captainSessionId !== 本会话）→ 可行动提示，不接管；
- *   工具层身份校验本来就会拒绝，band 让模型一次讲明白而不是反复撞墙。
+ * - 团队已不存在（被删除或归档）→ 失效提示，请用户在弹层取消选择；
+ * - 团队健在 → 生效中：**领队子代理主持**（用户迭代 2026-09-03「主窗口
+ *   发问题不合适——由领队子代理完成主持」）。主会话不再自己扮演领队
+ *   （提交/问询/拆解/指派全不走），只把用户交给团队的任务经
+ *   `eteams_dispatch_captain` 转交一次性领队子代理，并把子代理的汇报
+ *   原样带给用户。问询走子代理的 `ask_user_question` 确定性弹窗，不再
+ *   依赖主会话模型的文本行为。
+ *
+ * 领队子代理自身（captainAgent 注册表命中的 id）不装配本 band——它就是
+ * 领队，不能看到「调 dispatch 转交」的指示。
  *
  * The band is built per assembly against the LIVE team snapshot (readTeamSync
  * via the webui locateTeam helper) so 批准/阶段变化即时反映，无需重绑。
@@ -17,6 +22,7 @@
  * @module dsh-eteams/host/runtime/sessionTeam
  */
 import type { TeamState } from '../model/types.js';
+import { captainChildTeamOf } from './captainAgent.js';
 import { neutralizeInterpolation, sessionIdOfScope } from './sessionPersona.js';
 
 export { sessionIdOfScope };
@@ -42,6 +48,11 @@ export function clearSessionTeam(sessionId: string): void {
   bindings.delete(sessionId);
 }
 
+/** The session's bound teamId, if any (identity.ts 绑定优先 resolveCaller). */
+export function getSessionTeamId(sessionId: string): string | undefined {
+  return bindings.get(sessionId)?.teamId;
+}
+
 /**
  * The 团队绑定 band for one assembly. `''` contributes nothing — only a
  * session with an active binding sees it. `liveTeam` resolves the current
@@ -52,6 +63,8 @@ export function sessionTeamSection(
   liveTeam: (teamId: string) => TeamState | undefined,
 ): string {
   if (sessionId === undefined) return '';
+  // 领队子代理：band 对其静默（它是领队本人，不该再看到「转交」指示）。
+  if (captainChildTeamOf(sessionId) !== undefined) return '';
   const binding = bindings.get(sessionId);
   if (binding === undefined) return '';
   const team = liveTeam(binding.teamId);
@@ -62,31 +75,15 @@ export function sessionTeamSection(
       '告诉用户在输入栏「团队」弹层取消选择或换一个团队；不要对已删除的团队调用任何 eteams_* 工具。',
     ].join('\n');
   }
-  if (team.captainSessionId !== sessionId) {
-    return [
-      '【eteams 团队绑定·他队】',
-      `本会话绑定了团队「${neutralizeInterpolation(team.name)}」，但该团队建在另一个对话里、由那个会话领队。`,
-      '本会话调用该团队的领队工具会被身份校验拒绝；请告诉用户二选一：回到创建该团队的对话里操作，或在面板删除该团队后回到本对话用 eteams_create_team 重建。不要反复尝试领队工具。',
-    ].join('\n');
-  }
-  const planLine = team.planReviewState === 'awaiting_review' ? '（计划待批准）' : '';
-  const leadership =
-    team.leaderRemoved === true
-      ? '该团队暂无领队——由你（用户主窗口会话）充当领队，直接主持。'
-      : '你就是该团队的领队（项目牧羊人），直接主持。';
   return [
     '【eteams 团队绑定·生效中】',
     `本会话绑定团队「${neutralizeInterpolation(team.name)}」（目标：${neutralizeInterpolation(
       team.goal || '（待完善）',
-    )} · 状态：${team.phase}${planLine}）。${leadership}`,
+    )} · 状态：${team.phase}）。`,
     '',
-    '对话任务工作流——用户把任务交给该团队时按此主持：',
-    '1. 提交：用户给出任务 → 立即 eteams_submit_task（subject 一句话主题 + description 当前理解）→ 生成任务 ID 与专属任务文件夹，面板「任务」页立刻可见；',
-    '2. 问询（FR-37）：交付形式与受众 / 范围边界 / 验收偏好 / 约束 / 优先级，一轮问完；结论用 eteams_update_task 写回主任务 description；',
-    '3. 拆解：每个小任务 eteams_create_task（带 parentTaskId=主任务 id）——chain 站点即成员槽（成员按序接力，单成员任务给单站点）；跨任务依赖用 dependencies 声明；成员未就绪先 eteams_add_member；',
-    '4. 审阅：告诉用户「计划已就绪，可在面板任务页修改 / 删除小任务」；',
-    '5. 批准：团队处于 staged（待批准）时不要指派任务——等用户在面板点「批准计划」，批准后合同冻结；',
-    '6. 执行：eteams_assign_task / eteams_advance_task 按链指派、完成即续派；全部小任务完成后主任务自动收口为 completed；',
-    '7. 汇报：里程碑与状态变化用 eteams_send_message 通知用户。',
+    '分工：团队工作流（提交任务单、问询、拆解、指派、汇报）由领队子代理主持——本会话只负责转交与展示：',
+    '1. 用户把任务交给团队（「用团队做X」「交给团队」等）→ eteams_dispatch_captain（message=用户原话）转交；用户答复领队的问询、或收到团队邮件/面板通知 → 同样转交（message=答复原文或通知要点）；',
+    '2. dispatch 的工具结果就是领队子代理给用户的汇报——原样展示即可（或一句简短确认），不要复述全文、不要替领队补充或回答；',
+    '3. 不要直接调用其它 eteams_* 工具，也不要自己动手执行用户交给团队的任务；与任务无关的问答、闲聊正常回应。',
   ].join('\n');
 }

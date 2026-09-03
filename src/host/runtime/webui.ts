@@ -49,6 +49,7 @@ import {
   updateMember,
 } from './teamOps.js';
 import { createTask, deleteTask, updateTask } from './assignment.js';
+import { notifyCaptain } from './notifier.js';
 import {
   answerBuildInterview,
   cancelBuildSession,
@@ -63,11 +64,10 @@ import {
 import { spawnBuildPhase, spawnContinueAfterAnswers } from './builderPhases.js';
 import { clearSessionPersona, setSessionPersona } from './sessionPersona.js';
 import { clearSessionTeam, setSessionTeam } from './sessionTeam.js';
+import { locateTeamAcrossWorkspaces, workspaceRegistryOf } from './workspaces.js';
 
 /** Web-server service key candidates, newest first. */
 const WEB_SERVER_KEYS = ['webServer', 'httpServer'] as const;
-/** Workspace registry service key candidates, newest first. */
-const WORKSPACE_KEYS = ['workspaceRegistry', 'workspace'] as const;
 
 /** Base URL prefix for every eteams route. */
 export const ROUTE_PREFIX = '/eteams-api';
@@ -79,11 +79,6 @@ interface WebServerLike {
     path: string;
     handler: (req: unknown, res: unknown) => void | Promise<void>;
   }): () => void;
-}
-
-/** Minimal structural view of the workspace registry service. */
-interface WorkspaceRegistryLike {
-  list(): { path: string; title: string }[];
 }
 
 // ---------- snapshot builders (pure over disk state) ----------
@@ -376,13 +371,6 @@ function webServerOf(ctx: Context): WebServerLike | undefined {
   if (typeof get !== 'function') return undefined;
   return (get.call(ctx, WEB_SERVER_KEYS[0]) ?? get.call(ctx, WEB_SERVER_KEYS[1])) as
     WebServerLike | undefined;
-}
-
-function workspaceRegistryOf(ctx: Context): WorkspaceRegistryLike | undefined {
-  const get = (ctx as unknown as { get?: (key: string) => unknown }).get;
-  if (typeof get !== 'function') return undefined;
-  return (get.call(ctx, WORKSPACE_KEYS[0]) ?? get.call(ctx, WORKSPACE_KEYS[1])) as
-    WorkspaceRegistryLike | undefined;
 }
 
 function sendJson(res: unknown, status: number, body: unknown): void {
@@ -1211,6 +1199,15 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                 return;
               }
               sendJson(res, 200, { ok: true });
+              // 批准后执行衔接（docs/26 用户迭代 2026-09-03）：执行期指派由
+              // 领队子代理接管——唤醒领队会话转交；会话不在线时邮件滞留
+              // 邮箱、下次唤醒补投（notifier 已有语义）。best-effort，
+              // 不影响已成功的批准响应。
+              void notifyCaptain(
+                envFor(ctx, config, workspacePath),
+                team,
+                '计划已批准——请转交领队按链指派执行',
+              ).catch(() => undefined);
               return;
             }
             // ---------- role-builder build session (docs/19.6, D18) ----------
@@ -1575,20 +1572,12 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
 }
 
 /** Resolve one team across all workspaces; returns it with its root paths. */
-/** Locate a team across registered workspaces (live readTeamSync). */
 export function locateTeam(
   ctx: Context,
   config: ETeamsResolvedConfig,
   teamId: string,
 ): { team: TeamState; root: string; workspacePath: string } | undefined {
-  const registry = workspaceRegistryOf(ctx);
-  if (!registry) return undefined;
-  for (const workspace of registry.list()) {
-    const root = joinPath(workspace.path, config.stateDir);
-    const team = readTeamSync(root, teamId);
-    if (team) return { team, root, workspacePath: workspace.path };
-  }
-  return undefined;
+  return locateTeamAcrossWorkspaces(ctx, config, teamId);
 }
 
 // ---------- panel-write helpers (M5 first slice) ----------
