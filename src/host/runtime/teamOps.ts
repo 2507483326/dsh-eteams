@@ -10,13 +10,13 @@ import { existsSync, readdirSync, rmdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { JsonValue } from '@deepseek-ai/dsh-session';
-import { mergePersona, defaultPersonaFor } from '../prompts/persona.js';
+import { mergePersona } from '../prompts/personas/framework.js';
+import { defaultPersonaFor } from '../prompts/personas/presets.js';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import type {
   Actor,
   MemberRecord,
   ModelRouteSnapshot,
-  PersonaRecord,
   TaskMemberRecord,
   TaskRecord,
   TeamState,

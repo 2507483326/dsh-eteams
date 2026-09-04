@@ -1,41 +1,17 @@
 /**
- * 角色构建师 (Role Builder) — docs/19.5/19.8, D18: the preset persona is the
- * single source of truth consumed by three faces at once — roster seeding
+ * 角色构建师 (Role Builder) persona family — docs/19.5/19.8, D18: the preset
+ * persona is the single source of truth consumed by roster seeding
  * (ensurePresetMembers via ROLE_TEMPLATES), team adoption (defaultPersonaFor),
- * and the standing system-prompt section that powers conversational member
- * building without any captain relay.
+ * and the builder-phase child prompts (prompts/spawn/builderPhases.ts). The
+ * standing system-prompt section lives in prompts/system/roleBuilder.ts; the
+ * /eteam slash command in commands/eteam.ts.
  *
- * @module dsh-eteams/prompts/roleBuilder
+ * @module dsh-eteams/prompts/personas/builder
  */
 import { ROLE_DOCS } from './roleDocs.js';
 
 /** The preset member's roster key (name = role, like the other presets). */
 export const ROLE_BUILDER_NAME = '角色构建师';
-
-/** The /eteam slash command name (DSH command names are lowercase, docs/19.4). */
-export const ADD_PEOPLE_COMMAND = 'eteam';
-
-/**
- * The model-visible activation prefix (no slash) — the standing section
- * routes on it; the /eteam handler steers exactly this prefix.
- */
-export const ACTIVATION_PREFIX = 'eTeam --add-people';
-
-/** The bare requirement body used when the invocation carries no arguments. */
-const ADD_PEOPLE_BARE_BODY = '我需要创建一个成员 【成员名称】，它的职责是【职责】。';
-
-/**
- * Compose the activation message steered by the /eteam command: normalize a
- * leading `--add-people` (the command hint repeats it), fall back to the
- * bare template body, and prepend the activation marker.
- */
-export function buildActivationMessage(rawInput: string): string {
-  let rest = rawInput.trim();
-  if (rest.startsWith('--add-people')) {
-    rest = rest.slice('--add-people'.length).trim();
-  }
-  return `${ACTIVATION_PREFIX} ${rest === '' ? ADD_PEOPLE_BARE_BODY : rest}`;
-}
 
 /** D13 persona fields (docs/19.5.2/19.5.3). */
 export interface RoleBuilderPreset {
@@ -72,21 +48,6 @@ export const ROLE_BUILDER_PRESET: RoleBuilderPreset = {
     '你是角色构建师：把用户的一句需求构建成完整成员人设草稿，构建过程逐步播报；草稿经用户确认后才入库；只用 eteams_build_report / eteams_member_list / eteams_member_save（确认后）。',
   personaMd: ROLE_DOCS[ROLE_BUILDER_NAME],
 };
-
-/**
- * Compact standing section (order 106, next to the captain band) — the
- * direct-call contract (docs/19.8.1): the `eTeam --add-people` prefix makes
- * the session agent BE the Role Builder for that turn.
- */
-export const ROLE_BUILDER_SECTION = [
-  '## 角色构建师（eteams，D18）',
-  '- 用户消息以 `eTeam --add-people` 开头（含面板预填、/eteam 斜杠命令转交的请求）时：你是**调度员**，不是施工队——不亲自构建，不请示领队。只做「查一次 + 派发」两个动作，不要开构建会话、不要查成员库（那是子代理的事，卡片在子代理首次播报后自动出现）。',
-  '- 调度流程（本回合内完成，仅一个 tool call）：`eteams_build_dispatch(request=用户激活消息原文)`——它自带门禁：已有构建进行中（active/awaiting）时返回 busy 与构建名，此时只回一句「已有成员构建在进行（<名字·步骤>）——先在面板完成或放弃它」；否则它派发一次性阶段代理并返回 spawned，只回一句「已开始构建 <成员名>——后台构建中，卡片将随首次播报出现」。不要用 subagent 工具自己派发（会留下可续聊的持久记录），不要开构建会话、不要查成员库——全部是阶段代理的事，卡片在其首次播报后出现。',
-  '- 「后台构建代理纪律」（宿主已内置，此处仅备查）：构建以**一次性阶段代理**执行——阶段 A（受理：newBuild 开会话 → 查重 → 发布意图访谈）由 eteams_build_dispatch 派发；阶段 B（起草 → 深化 → 完整草稿 + status=awaiting_confirmation）由面板提交访谈答案后宿主派发；阶段 C（放弃后继续）由面板「继续构建」派发。每阶段干完自然结束回合；持久状态全在 .eteams/rolebuilder.json。人设按 agency-agents-zh 单文件规格写（frontmatter name/description/emoji/color + 身份段 → 🧠 身份与记忆 → 🎯 核心使命 → 🔧 关键规则 → ≥2 领域专章 → 💬 沟通风格 → 📊 成功指标，正文 ≥60 行）；duty/style/skills/rules 摘要从 md 提炼；emoji/color 按领域随机、同批不重复；「项目牧羊人」是保留名必须要求改名；未经确认不得 eteams_member_save。',
-  '- 降级：若 eteams_build_dispatch 工具不可用，才在本会话内亲自按上述流程构建（此时用 ask_user_question 选项框访谈，用户在对话里直接可见）。',
-  '- 草稿优先：未经用户确认（面板确认入库，或用户在对话中明确说确认）不得调用 eteams_member_save；对话确认路径落库后须 eteams_build_report(status=confirmed) 播报。',
-  '- 用户在成员构建话题内的后续调整消息（无需前缀）继续以角色构建师身份处理：对既有成员产出新草稿走同一确认流程。',
-].join('\n');
 
 /**
  * Shared spec tail appended to continue/resume phase prompts (docs/19.16):

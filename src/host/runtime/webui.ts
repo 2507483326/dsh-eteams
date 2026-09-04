@@ -26,7 +26,7 @@ import { boardOverview } from '../state/queries.js';
 import { listTeamIds, readTeamSync } from '../state/store.js';
 import { joinPath, type RuntimeContext, type RuntimeEnv } from './base.js';
 import { taskDirRel } from './docs.js';
-import { composeCaptainPersona } from '../prompts/persona.js';
+import { composeCaptainPersona } from '../prompts/personas/captain.js';
 import {
   avatarSeedFor,
   ensurePresetMembers,
@@ -49,7 +49,6 @@ import {
 } from './teamOps.js';
 import { createTask, deleteTask, taskOutcome, updateTask } from './assignment.js';
 import { leaderRowOf, latestInstanceRow, memberStatusOf } from './notifier.js';
-import { stationProgress } from '../model/taskMachine.js';
 import {
   answerBuildInterview,
   cancelBuildSession,
@@ -146,7 +145,6 @@ function memberView(team: TeamState, m: MemberRecord) {
  * （payload.via='subtasks.completed'）——面板按事件反查，小任务仍走
  * attempts 反查（docs/35 §5#10 产出不落列）。 */
 function taskView(t: TaskRecord, team: TeamState, groupOutcomes?: Map<number, string>) {
-  const station = stationProgress(t);
   // 末站完成即 completed（chainCursor 不再推进，docs/35 §5#10）——完成态
   // 按满进度口径显示站点。
   const stationStatus = (i: number): StationView['stationStatus'] =>

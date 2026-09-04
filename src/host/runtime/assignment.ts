@@ -58,7 +58,13 @@ import {
 } from './notifier.js';
 import { renderTeamDocs, taskDirAbs, teamWorkDirRel } from './docs.js';
 import { sendAssignmentInTx, spawnMember } from './members.js';
-import { declineMail, reportCompletedMail, reportFailedMail } from '../prompts/handoff.js';
+import {
+  cancelledNotice,
+  declineMail,
+  reportCompletedMail,
+  reportFailedMail,
+  suspendedNotice,
+} from '../prompts/handoff/mails.js';
 import { ensureTaskWorkDir, rmTree, withTeam } from './teamOps.js';
 
 /** 空唤醒动作（收件人不存在/未起会话时的占位）。 */
@@ -1404,9 +1410,7 @@ function notifyMemberSuspendedInTx(
   note?: string,
 ): Wake {
   if (name === undefined) return noWake;
-  const text = `【挂起】任务 ${task.id} ${task.subject} 已被领队挂起${
-    note !== undefined ? `：${note}` : ''
-  }。停止工作，等待恢复指派。`;
+  const text = suspendedNotice(task, note);
   queueNoticeInTx(tx, team.id, name, text, { taskId: task.id });
   const row = latestInstanceRow(team, name) ?? requireMember(team, name);
   return () => wakeMember(env, team, row, text);
@@ -1422,9 +1426,7 @@ function notifyMemberCancelledInTx(
   reason?: string,
 ): Wake {
   if (name === undefined) return noWake;
-  const text = `【取消】任务 ${task.id} ${task.subject} 已被取消${
-    reason !== undefined ? `：${reason}` : ''
-  }。停止相关工作，保持空闲。`;
+  const text = cancelledNotice(task, reason);
   queueNoticeInTx(tx, team.id, name, text, { taskId: task.id });
   const row = latestInstanceRow(team, name) ?? requireMember(team, name);
   return () => wakeMember(env, team, row, text);

@@ -39,6 +39,7 @@
 | 33   | [33 结构整改审核报告](33-restructure-review.md)               | 对 docs/32 的证据级审核：拆分映射表逐符号全量核验、构建接线/测试/脚本清单回查，阻塞/建议/备忘清单与执行前修订结论（2026-09-04 修订已落实进 32） |
 | 34   | [34 结构整改验收报告](34-acceptance.md)                       | 对 docs/32 全量执行的独立验收：四门 + verifyM0 亲跑全绿、体积台账（5223→5230 KB +0.13%）、110 符号映射逐行复核与结构收口 grep 零命中、8 条偏差记录与实施结果回写 |
 | 37   | [37 Agent Loop 剖析与借鉴](37-agent-loop-lessons.md)          | Claude Code `src/query.ts` 的 agent loop 核心逻辑剖析（循环骨架/消息拼接/工具调用/compact/继续执行）与 eTeam 可借鉴点清单（token 断点恢复、唤醒补投熔断、增量快照、续跑指令文案等 11 条，按 A 类插件可落地 / B 类宿主层分档） |
+| 38   | [38 提示词与命令集中管理](38-prompt-command-organization.md)  | src/host 平面提示词/命令清查矩阵与归位方案：prompts/ 按五类型子目录（system/spawn/handoff/personas/steering）+ commands/ 命令平面的迁移映射、纯文本提纯（builderPhasePrompt 快照化、session band 薄壳化、fallbackExecutionPrompt 统一）、四绿门验收与偏差记录 |
 
 ## 决策记录（2026-02 与用户确认）
 

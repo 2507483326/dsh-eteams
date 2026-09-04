@@ -15,10 +15,10 @@ import type { ETeamsResolvedConfig } from '../config.js';
 import type { MemberRecord, TaskMemberRecord, TaskRecord, TeamState } from '../model/types.js';
 import { insertMailInTx } from '../state/events.js';
 import { readTeamSync, type TeamTx } from '../state/store.js';
-import { ETeamsError, stateRootOf, type RuntimeContext, type RuntimeEnv } from './base.js';
+import { stateRootOf, type RuntimeContext, type RuntimeEnv } from './base.js';
 import { leaderRowOf, makeMail, type Wake, wakeMember } from './notifier.js';
-import { assignmentMail } from '../prompts/handoff.js';
-import { memberWelcome } from '../prompts/member.js';
+import { assignmentMail } from '../prompts/handoff/mails.js';
+import { memberWelcome } from '../prompts/spawn/member.js';
 import { registerMemberSession } from './usage.js';
 
 /** Label prefix identifying eteams member children. */

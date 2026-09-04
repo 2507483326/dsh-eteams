@@ -14,6 +14,10 @@ export const ADD_PEOPLE_COMMAND = 'eteam';
  * Full prefill template with user-visible placeholders (docs/19.4): starts
  * with the registered slash command so the composer command menu/dispatch
  * picks it up.
+ *
+ * 模板副本（docs/38）：host 平面同款契约在 src/host/commands/eteam.ts
+ * （ADD_PEOPLE_COMMAND / ADD_PEOPLE_BARE_BODY）。tsconfig host/client 平面
+ * rootDir 隔离，不能共享模块——两侧各留一份，改动命令文案时必须两处同步。
  */
 export const ADD_PEOPLE_TEMPLATE = `/${ADD_PEOPLE_COMMAND} --add-people 我需要创建一个成员 【成员名称】，它的职责是【职责】。`;
 

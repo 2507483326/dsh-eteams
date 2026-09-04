@@ -12,7 +12,7 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { AvatarRecord, ModelRouteSnapshot, PersonaRecord } from '../model/types.js';
-import { PERSONA_FRAMEWORK_VERSION } from '../prompts/persona.js';
+import { fallbackExecutionPrompt, PERSONA_FRAMEWORK_VERSION } from '../prompts/personas/framework.js';
 
 /** Current db schema version (docs/27：与 team.json 结构版本互不相干，从 1 起步). */
 export const DB_SCHEMA_VERSION = 1;
@@ -65,9 +65,8 @@ function installSqliteWarningFilter(): void {
 // node:sqlite 晚加载：先装过滤器再触发 builtin 编译，首条 ExperimentalWarning
 // 也不漏网。类型走 import type（编译期擦除，不加载模块）。
 installSqliteWarningFilter();
-const DatabaseSyncCtor = (
-  createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite')
-).DatabaseSync;
+const DatabaseSyncCtor = createRequire(import.meta.url)('node:sqlite')
+  .DatabaseSync as typeof DatabaseSync;
 
 // --------------------------------------------------------------------------
 // 连接缓存：同进程每个状态根一条连接（单写者 + 全同步调用，语句不会交错）。
@@ -427,7 +426,8 @@ export function hashName(name: string): number {
 // --------------------------------------------------------------------------
 // persona 序列化（docs/35 §3#4）：持久层只存 persona_md 手册全文；结构字段
 // 写入时烘进全文、读取时从全文解析回来（内存渲染用）。文本格式与
-// prompts/persona.renderPersonaBlock 一致——解析结果经它再渲染可逐字还原。
+// prompts/personas/framework.renderPersonaBlock 一致——解析结果经它再渲染
+// 可逐字还原。
 // --------------------------------------------------------------------------
 
 /** 把 PersonaRecord 烘成 persona_md 全文（六字段 + 可选手册一体）。 */
@@ -497,7 +497,7 @@ export function personaFromMd(md: string, name: string, roleFallback: string): P
     skills: skills ?? '',
     rules,
     ...(playbook !== undefined ? { personaMd: playbook } : {}),
-    executionPrompt: executionPrompt ?? `你是「${name}」，以 ${roleFallback} 的身份为团队交付。`,
+    executionPrompt: executionPrompt ?? fallbackExecutionPrompt(name, roleFallback),
   };
 }
 

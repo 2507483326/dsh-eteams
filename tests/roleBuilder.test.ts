@@ -8,15 +8,14 @@
 import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ADD_PEOPLE_COMMAND, ADD_PEOPLE_TEMPLATE } from '../src/client/lib/addPeople';
-import { CAPTAIN_SECTION_SHORT } from '../src/host/prompts/captain';
-import {
-  buildActivationMessage,
-  ROLE_BUILDER_PRESET,
-  ROLE_BUILDER_SECTION,
-} from '../src/host/prompts/roleBuilder';
-import { PRESET_MEMBER_ROLES, ROLE_TEMPLATES } from '../src/host/prompts/persona';
+import { CAPTAIN_SECTION_SHORT } from '../src/host/prompts/system/captain';
+import { buildActivationMessage, steerEngageNotice } from '../src/host/commands/eteam';
+import type { Agent } from '@deepseek-ai/dsh-agent';
+import { ROLE_BUILDER_PRESET } from '../src/host/prompts/personas/builder';
+import { ROLE_BUILDER_SECTION } from '../src/host/prompts/system/roleBuilder';
+import { PRESET_MEMBER_ROLES, ROLE_TEMPLATES } from '../src/host/prompts/personas/presets';
 import {
   answerBuildInterview,
   cancelBuildSession,
@@ -65,6 +64,34 @@ describe('D18 对话式新增成员', () => {
     expect(buildActivationMessage('我想要一个负责写周报的成员')).toBe(
       'eTeam --add-people 我想要一个负责写周报的成员',
     );
+  });
+
+  it('engage notice steers only conversationally blank sessions (docs/19.16 空会话唤醒)', () => {
+    const steer = vi.fn();
+    const log = { info: vi.fn(), warn: vi.fn() };
+    // 空白会话（从未开过 turn）→ steer 一条 notice
+    steerEngageNotice(
+      { session: { events: [] }, steer } as unknown as Agent,
+      log as unknown as Parameters<typeof steerEngageNotice>[1],
+    );
+    expect(steer).toHaveBeenCalledTimes(1);
+    // 已开过 turn 的会话 → 不加应答回合（无噪音）
+    steerEngageNotice(
+      { session: { events: [{ type: 'turn/start' }] }, steer } as unknown as Agent,
+      log as unknown as Parameters<typeof steerEngageNotice>[1],
+    );
+    expect(steer).toHaveBeenCalledTimes(1);
+    // steer 抛错不外溢（构建照常在后台进行）
+    steerEngageNotice(
+      {
+        session: { events: [] },
+        steer: () => {
+          throw new Error('boom');
+        },
+      } as unknown as Agent,
+      log as unknown as Parameters<typeof steerEngageNotice>[1],
+    );
+    expect(log.warn).toHaveBeenCalledTimes(1);
   });
 
   it('seeds the 角色构建师 preset idempotently (D18-3)', async () => {

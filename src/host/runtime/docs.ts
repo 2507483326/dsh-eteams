@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { sanitizeKey, stationProgress, taskSlug } from '../model/taskMachine.js';
 import type { MemberRecord, ModelRouteSnapshot, TaskRecord, TeamState } from '../model/types.js';
-import { renderContract } from '../prompts/handoff.js';
+import { renderContract } from '../prompts/handoff/mails.js';
 import { leaderRowOf, memberStatusOf } from './notifier.js';
 
 /** 团队工作目录基准段（相对工作区；任务 work_dir 在它之下分配）。 */

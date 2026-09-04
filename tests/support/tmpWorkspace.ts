@@ -7,7 +7,8 @@
  *
  * @module dsh-eteams/tests/support/tmpWorkspace
  */
-import { Dirent, readdirSync, rmSync, rmdirSync, unlinkSync } from 'node:fs';
+import { readdirSync, rmSync, rmdirSync, unlinkSync } from 'node:fs';
+import type { Dirent } from 'node:fs';
 import { closeDb } from '../../src/host/state/db';
 
 /** 同步小睡（Atomics.wait 不可用时自旋兜底）。 */

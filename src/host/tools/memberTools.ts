@@ -19,7 +19,7 @@ import {
 } from '../runtime/assignment.js';
 import { sendMessage, teamView } from '../runtime/teamOps.js';
 import { envForAgent, resolveCaller } from './identity.js';
-import { renderContract } from '../prompts/handoff.js';
+import { renderContract } from '../prompts/handoff/mails.js';
 
 function text(value: string): ContentBlock[] {
   return [{ type: 'text', text: value }];

@@ -534,7 +534,7 @@ describe('panel write routes (M5 first slice)', () => {
     // 逐字原文（agency-agents-zh），不是蒸馏摘要。
     expect(md).toContain('核心使命');
     expect(md).toContain('关键规则');
-    const { renderPersonaBlock } = await import('../src/host/prompts/persona');
+    const { renderPersonaBlock } = await import('../src/host/prompts/personas/framework');
     const block = renderPersonaBlock(readTeam(teamId).members[0]!.persona, '角色构建师');
     expect(block).toContain('# 角色手册');
     expect(block).toContain('核心使命');

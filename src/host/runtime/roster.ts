@@ -21,12 +21,9 @@ import {
 } from '../state/db.js';
 import { ensureWorkspaceReady, seedPresetRows } from '../state/import.js';
 import { withTeamTx } from '../state/store.js';
-import {
-  defaultCaptainPersona,
-  PERSONA_FRAMEWORK_VERSION,
-  PRESET_MEMBER_ROLES,
-  ROLE_TEMPLATES,
-} from '../prompts/persona.js';
+import { defaultCaptainPersona } from '../prompts/personas/captain.js';
+import { fallbackExecutionPrompt, PERSONA_FRAMEWORK_VERSION } from '../prompts/personas/framework.js';
+import { PRESET_MEMBER_ROLES, ROLE_TEMPLATES } from '../prompts/personas/presets.js';
 
 /** Stored avatar pair (docs/14): deterministic seed for the SVG renderer. */
 export interface AvatarPair {
@@ -104,7 +101,7 @@ function rosterPersona(m: RosterMember, name: string): PersonaRecord {
     executionPrompt:
       m.executionPrompt !== undefined && m.executionPrompt.trim() !== ''
         ? m.executionPrompt
-        : `你是「${name}」，以 ${role} 的身份为团队交付。`,
+        : fallbackExecutionPrompt(name, role),
   };
 }
 

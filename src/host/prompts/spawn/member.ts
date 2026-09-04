@@ -1,11 +1,11 @@
 /**
- * Member prompt (docs/07.8): spawn welcome text (persona + contract +
+ * 成员出生提示词（docs/07.8）：spawn welcome text (persona + contract +
  * task board + protocol) and the standing member behavior rules.
  *
- * @module dsh-eteams/prompts/member
+ * @module dsh-eteams/prompts/spawn/member
  */
-import type { MemberRecord, TeamState } from '../model/types.js';
-import { personaDigest, renderPersonaBlock } from './persona.js';
+import type { MemberRecord, TeamState } from '../../model/types.js';
+import { personaDigest, renderPersonaBlock } from '../personas/framework.js';
 
 /** Member-facing standing rules (also rendered into contract handoffs). */
 export const MEMBER_RULES = [

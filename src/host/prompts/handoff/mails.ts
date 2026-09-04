@@ -1,12 +1,12 @@
 /**
  * Handoff templates (docs/04 prompts/handoff, 07.3): assignment mail,
- * stage handoff pack, completion/failure report bodies. Pure string
- * assembly — the runtime fills the blanks.
+ * stage handoff pack, completion/failure report bodies, decline/suspend/
+ * cancel notices. Pure string assembly — the runtime fills the blanks.
  *
- * @module dsh-eteams/prompts/handoff
+ * @module dsh-eteams/prompts/handoff/mails
  */
-import type { TaskRecord } from '../model/types.js';
-import { stationProgress } from '../model/taskMachine.js';
+import type { TaskRecord } from '../../model/types.js';
+import { stationProgress } from '../../model/taskMachine.js';
 
 /** Render the contract section of a task (docs/07.3.1). */
 export function renderContract(task: TaskRecord): string {
@@ -117,4 +117,18 @@ export function reportFailedMail(
 /** Decline notice body → captain. */
 export function declineMail(task: TaskRecord, member: string, reason: string): string {
   return `【婉拒】${member} 无法接取任务 ${task.id} ${task.subject}：${reason}\n任务已回到就绪池，请改派或调整合同。`;
+}
+
+/** 挂起通知正文 → 成员（原 runtime/assignment.ts 内联文本迁入）。 */
+export function suspendedNotice(task: TaskRecord, note?: string): string {
+  return `【挂起】任务 ${task.id} ${task.subject} 已被领队挂起${
+    note !== undefined ? `：${note}` : ''
+  }。停止工作，等待恢复指派。`;
+}
+
+/** 取消通知正文 → 成员（原 runtime/assignment.ts 内联文本迁入）。 */
+export function cancelledNotice(task: TaskRecord, reason?: string): string {
+  return `【取消】任务 ${task.id} ${task.subject} 已被取消${
+    reason !== undefined ? `：${reason}` : ''
+  }。停止相关工作，保持空闲。`;
 }

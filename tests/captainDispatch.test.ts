@@ -15,8 +15,8 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import { resolveConfig, type ETeamsResolvedConfig } from '../src/host/config';
 import { createCaptainDispatchTool } from '../src/host/tools/captainDispatch';
-import { captainChildPersona } from '../src/host/prompts/captain';
-import { composeCaptainPersona } from '../src/host/prompts/persona';
+import { captainChildPersona } from '../src/host/prompts/spawn/captainChild';
+import { composeCaptainPersona } from '../src/host/prompts/personas/captain';
 import {
   CAPTAIN_CHILD_DENIED_TOOLS,
   captainChildTeamOf,

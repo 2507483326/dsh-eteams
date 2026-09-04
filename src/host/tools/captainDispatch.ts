@@ -43,9 +43,10 @@ import {
   unregisterCaptainChild,
   CAPTAIN_CHILD_DENIED_TOOLS,
 } from '../runtime/captainAgent.js';
-import { captainChildPersona } from '../prompts/captain.js';
+import { captainChildPersona } from '../prompts/spawn/captainChild.js';
+import { captainDispatchPrompt, dispatchAck } from '../prompts/steering/dispatch.js';
 import { findRosterMember, LEADER_NAME } from '../runtime/roster.js';
-import { composeCaptainPersona } from '../prompts/persona.js';
+import { composeCaptainPersona } from '../prompts/personas/captain.js';
 import { locks, teamLockKey } from '../state/lock.js';
 
 /** JSON-schema snippet helpers (mirror captainTools). */
@@ -108,20 +109,6 @@ async function persistCaptainChildId(
 }
 
 /**
- * 受理确认（dispatch 的工具结果）：告诉主会话转交已完成、后续问询与汇报
- * 如何到达。不再同步透传子代理的最终文本——持续子代理的汇报经 report
- * 通道随后送达。
- */
-function dispatchAck(childId: string): string {
-  const short = childId.slice(0, 8);
-  return [
-    `已转交持续领队子代理（会话 ${short}…）主持团队工作流。`,
-    '它将直接主持后续流程：问询会以 ask_user_question 弹窗出现在本对话（用户作答后领队继续）；',
-    '每轮汇报经子代理汇报消息送达本对话——到达后原样展示给用户，不要复述全文，也不要重复转交相同内容。',
-  ].join('\n');
-}
-
-/**
  * Create the dispatch tool. Registered on the root context beside the other
  * captain tools; members deny it at spawn (MEMBER_DENIED_TOOLS).
  */
@@ -164,13 +151,7 @@ export function createCaptainDispatchTool(
       const signal = exec.signal ?? new AbortController().signal;
       // 现状快照随派发现读（docs/26.2 状态驱动）：首轮快照给领队子代理建立
       // 团队上下文；持续子代理后续轮次在既有上下文上续步，快照只作对账。
-      const prompt = [
-        '【团队现状】',
-        JSON.stringify(teamView(env, team), null, 1),
-        '',
-        '【用户/主对话最新消息】',
-        args.message,
-      ].join('\n');
+      const prompt = captainDispatchPrompt(JSON.stringify(teamView(env, team), null, 1), args.message);
       const persona = captainPersonaOf(env, config);
       const previous = leaderRowOf(team)?.childSessionId ?? '';
       // 先试续聊（含宿主重启后的冷恢复）；失败（会话记录被回收/lineage 不

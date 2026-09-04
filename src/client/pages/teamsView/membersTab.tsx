@@ -13,7 +13,6 @@ import Dices from 'lucide-react/dist/esm/icons/dices.mjs';
 import MessageSquare from 'lucide-react/dist/esm/icons/message-square.mjs';
 import PenLine from 'lucide-react/dist/esm/icons/pen-line.mjs';
 import {
-  IconCheckOutline16,
   IconPlusOutline16,
   IconSparkle16,
   MarkdownText,
@@ -77,6 +76,17 @@ const ADD_MODE_CARD_CLASS =
 /** 方式选择卡图标底（品牌淡底圆牌，STEP_NUM_CLASS 同口径放大到 32px）。 */
 const ADD_MODE_ICON_CLASS =
   'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-business-tint text-primary';
+
+/**
+ * 随机头像对（用户迭代 2026-09-04：AI 草稿确认页 / 手动创建页补上「随机头像」
+ * 钮，与详情页同口径共用）——seed 0..996（hashName % 997）、salt 0..999。
+ */
+function rollAvatarPair(): { seed: number; salt: number } {
+  return {
+    seed: Math.floor(Math.random() * 997),
+    salt: Math.floor(Math.random() * 1000),
+  };
+}
 /** 原 styles.pagePill（分页计数 pill：D22e 中性 pill 口径 12px/20）。 */
 const PAGE_PILL_CLASS =
   'inline-flex w-fit items-center whitespace-nowrap rounded-full bg-[color:var(--eteams-pill-bg)] px-2.5 py-0.5 text-xs text-[color:var(--eteams-pill-ink)]';
@@ -119,7 +129,6 @@ export function MembersTab({
   const [view, setView] = useState<'list' | 'add' | 'detail'>('list');
   const [detailName, setDetailName] = useState<string | null>(null);
   const [name, setName] = useState('');
-  const [role, setRole] = useState('');
   const [personaMd, setPersonaMd] = useState('');
   // 新增方式（用户迭代 2026-09-03）：进入新增页先选「手动创建 / AI 创建」，
   // 不再默认把命令填进对话输入框——点「AI 创建」此刻才预填，手动创建直接
@@ -154,6 +163,11 @@ export function MembersTab({
   const [draftEdit, setDraftEdit] = useState<DraftEdit>(EMPTY_EDIT);
   const [confirming, setConfirming] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  // AI 草稿确认页「随机头像」（用户迭代 2026-09-04）：换过的头像对仅本地
+  // 预览——确认入库时随 payload 透传，未换过则沿用构建师定的原对。
+  const [draftAvatarRoll, setDraftAvatarRoll] = useState<{ seed: number; salt: number } | null>(
+    null,
+  );
   const seenSessionRef = useRef(0);
   const seenReviewRef = useRef(0);
   const draftInitRef = useRef(0);
@@ -189,6 +203,8 @@ export function MembersTab({
     ) {
       draftInitRef.current = build.updatedAt;
       setDraftEdit(fromBuildDraft(build.draft));
+      // 新草稿到达（或对话里调整后刷新）：换过的头像覆盖作废，回到构建师定的对。
+      setDraftAvatarRoll(null);
     }
   }, [build]);
   useEffect(() => {
@@ -257,10 +273,7 @@ export function MembersTab({
   };
   const rollDetailAvatar = (): void => {
     // 与宿主默认头像同口径：seed 0..996（hashName % 997）、salt 0..999。
-    setDetailDraftAvatar({
-      seed: Math.floor(Math.random() * 997),
-      salt: Math.floor(Math.random() * 1000),
-    });
+    setDetailDraftAvatar(rollAvatarPair());
   };
   const saveDetail = (): void => {
     if (detail === null || detailSaving) return;
@@ -338,11 +351,20 @@ export function MembersTab({
             .filter((r) => r !== ''),
           executionPrompt: draftEdit.executionPrompt,
           personaMd: draftEdit.personaMd,
-          ...(build !== null && build.draft?.avatar !== undefined
-            ? { avatar: build.draft.avatar }
-            : {}),
+          // 随机头像（用户迭代 2026-09-04）：换过发换后的，否则透传构建师
+          // 定的原对（宿主 /rolebuilder/confirm 校验 seed/salt 后落库）。
+          ...(draftAvatarRoll !== null
+            ? { avatar: draftAvatarRoll }
+            : build?.draft?.avatar !== undefined
+              ? { avatar: build.draft.avatar }
+              : {}),
         },
       });
+      // 已入库卡下线（用户迭代 2026-09-04）：确认成功即回「AI 创建 / 手动
+      // 创建」方式选择页——再建一个从方式卡走；预填状态一并清掉，上一轮
+      // 的「已填充到对话输入框」横幅不再残留。
+      setAddMode('choose');
+      setAiPrefill(null);
       onDeleted();
     } catch (e) {
       setFormError(e instanceof Error ? e.message : String(e));
@@ -436,9 +458,14 @@ export function MembersTab({
 
   // 手动创建（用户迭代 2026-09-03）：面板直连名册保存（`roster/saveRoster`
   // → POST /roster，与详情页 HandbookEditor 同一写路径），不再借对话命令
-  // 中转。personaMd 留空则只建名字+角色条目，手册随后可在详情页补写。
+  // 中转。角色不再单独收集（用户反馈：名字即身份）——host 要求非空 role，
+  // 随名回填；personaMd 留空则手册随后可在详情页补写。
   const [manualSaving, setManualSaving] = useState(false);
   const [manualError, setManualError] = useState<string | null>(null);
+  // 手动创建「随机头像」（用户迭代 2026-09-04）：换过的对仅本地预览——
+  // 保存时随 payload 透传；未换过则不发，宿主落库自动配一枚（hashName
+  // 种子 + 随机 salt，见 roster.ts upsert）。
+  const [manualAvatar, setManualAvatar] = useState<{ seed: number; salt: number } | null>(null);
   const saveManual = async (): Promise<void> => {
     const trimmed = name.trim();
     // 同名即覆盖（宿主 upsert 语义）——手动直存前先挡一手，避免误盖已有角色。
@@ -453,13 +480,15 @@ export function MembersTab({
         type: 'roster/saveRoster',
         payload: {
           name: trimmed,
-          role: role.trim(),
+          // 名字即身份：role 随名回填（host 契约要求非空，见 roster.ts upsert）。
+          role: trimmed,
           ...(personaMd.trim() !== '' ? { personaMd } : {}),
+          ...(manualAvatar !== null ? { avatar: manualAvatar } : {}),
         },
       });
       setName('');
-      setRole('');
       setPersonaMd('');
+      setManualAvatar(null);
       setAddMode('choose');
       onDeleted(); // 保存成功 → 父级重拉名册，翻回列表即见新角色
       setView('list');
@@ -479,8 +508,10 @@ export function MembersTab({
     detail === null ? null : (team?.members.find((m) => m.name === detail.name) ?? null);
 
   if (view === 'add') {
-    // 闭包内无法从外层条件继承窄化，这里先固化已入库草稿。
-    const confirmedDraft = build !== null && build.status === 'confirmed' ? build.draft : null;
+    // AI 草稿确认页生效头像（用户迭代 2026-09-04）：换过取换后的，否则取
+    // 构建师定的原对——页头小像与表单头像行同源，不会各显各的。
+    const draftAvatarPair =
+      draftAvatarRoll ?? (build !== null && build.draft !== null ? build.draft.avatar : undefined);
     // 访谈未答 = 阶段代理按设计已结束回合，此刻在等用户——显示「等你作答」
     // 而不是转圈的「工作中」，否则看起来像卡死（显示状态要诚实）。
     const interviewWaiting =
@@ -698,18 +729,44 @@ export function MembersTab({
           {build !== null && build.status === 'awaiting_confirmation' && build.draft !== null && (
             <div>
               <div className={cn('flex items-center gap-2', LINE_CLASS, 'font-semibold')}>
-                {build.draft.avatar !== undefined && (
+                {draftAvatarPair !== undefined && (
                   <Avatar
                     name={draftEdit.name.trim() !== '' ? draftEdit.name.trim() : build.draft.name}
-                    seed={build.draft.avatar.seed}
-                    salt={build.draft.avatar.salt}
+                    seed={draftAvatarPair.seed}
+                    salt={draftAvatarPair.salt}
                     size={30}
                   />
                 )}
                 草稿已就绪——可直接修改，确认后入库
               </div>
               {formError !== null && <FormErrorNote>{formError}</FormErrorNote>}
+              {/* 头像行（用户迭代 2026-09-04）：预览 + 随机换一枚，与下方
+              角色名/角色/手册同一表单节奏（label 在上、控件在下）。 */}
               <div className={cn(FORM_ROW_CLASS, 'mt-2')}>
+                <span className={FORM_LABEL_CLASS}>头像</span>
+                <div className="flex items-center gap-2.5">
+                  <div className="rounded-full border-2 border-solid p-0.5 leading-none border-business-tint">
+                    <Avatar
+                      name={draftEdit.name.trim() !== '' ? draftEdit.name.trim() : build.draft.name}
+                      seed={draftAvatarPair?.seed}
+                      salt={draftAvatarPair?.salt}
+                      size={40}
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 gap-1 px-1.5 text-xs text-muted-foreground"
+                    onClick={() => setDraftAvatarRoll(rollAvatarPair())}
+                    title="随机换一个头像"
+                  >
+                    <Dices className="h-3.5 w-3.5" />
+                    随机头像
+                  </Button>
+                </div>
+              </div>
+              <div className={FORM_ROW_CLASS}>
                 <span className={FORM_LABEL_CLASS}>角色名</span>
                 <Input
                   value={draftEdit.name}
@@ -755,46 +812,6 @@ export function MembersTab({
               </div>
             </div>
           )}
-          {confirmedDraft !== null && (
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="inline-flex text-success">
-                  <IconCheckOutline16 />
-                </span>
-                <div className={cn(LINE_CLASS, 'my-0 font-semibold')}>已入库</div>
-                <Pill tone="ok">角色列表已更新</Pill>
-              </div>
-              <div className="mt-2 flex items-center gap-2.5">
-                <Avatar name={confirmedDraft.name} size={40} />
-                <div>
-                  <div className="text-sm font-semibold text-foreground">{confirmedDraft.name}</div>
-                  <div className={MUTED_CLASS}>
-                    {confirmedDraft.role} · 已加入角色列表，到「团队」页拉进团队即可使用。
-                  </div>
-                </div>
-              </div>
-              <div className="mt-2.5 flex gap-2">
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    setDetailName(confirmedDraft.name);
-                    setView('detail');
-                  }}
-                >
-                  查看角色详情
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    setAiPrefill(onPrefillAddPeople());
-                    setAddMode('ai');
-                  }}
-                >
-                  再建一个
-                </Button>
-              </div>
-            </div>
-          )}
           {build !== null && build.status === 'cancelled' && (
             // 已放弃的构建：上下文（步骤/草稿/需求）都保存在会话里，
             // 「继续构建」唤醒后台代理从中断处接着跑（docs/19.16）。
@@ -812,7 +829,10 @@ export function MembersTab({
               </div>
             </Card>
           )}
-          {(build === null || build.status === 'cancelled') &&
+          {/* 已入库（用户迭代 2026-09-04）不再渲染回顾卡：确认成功在对话卡
+          与角色列表各有反馈，新增页回到「AI 创建 / 手动创建」方式选择——
+          再建一个从方式选择卡走，不再停留上一轮的已入库回顾。 */}
+          {(build === null || build.status === 'cancelled' || build.status === 'confirmed') &&
             (addMode === 'manual' ? (
               // 手动创建（用户迭代 2026-09-03）：直接进入角色手册编辑页，
               // 保存即入库（`roster/saveRoster` 直连），不经对话命令中转。
@@ -828,7 +848,33 @@ export function MembersTab({
                     返回
                   </Button>
                 </div>
+                {/* 头像行（用户迭代 2026-09-04）：预览 + 随机换一枚——未换过
+                显示名字首字兜底（宿主保存时自动配一枚），换过实时预览。 */}
                 <div className={cn(FORM_ROW_CLASS, 'mt-2.5')}>
+                  <span className={FORM_LABEL_CLASS}>头像</span>
+                  <div className="flex items-center gap-2.5">
+                    <div className="rounded-full border-2 border-solid p-0.5 leading-none border-business-tint">
+                      <Avatar
+                        name={name}
+                        seed={manualAvatar?.seed}
+                        salt={manualAvatar?.salt}
+                        size={40}
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 gap-1 px-1.5 text-xs text-muted-foreground"
+                      onClick={() => setManualAvatar(rollAvatarPair())}
+                      title="随机换一个头像"
+                    >
+                      <Dices className="h-3.5 w-3.5" />
+                      随机头像
+                    </Button>
+                  </div>
+                </div>
+                <div className={FORM_ROW_CLASS}>
                   <span className={FORM_LABEL_CLASS}>角色名</span>
                   <Input
                     value={name}
@@ -837,24 +883,16 @@ export function MembersTab({
                   />
                 </div>
                 <div className={FORM_ROW_CLASS}>
-                  <span className={FORM_LABEL_CLASS}>角色</span>
-                  <Input
-                    value={role}
-                    placeholder="角色：前端开发者 / 后端架构师 / UI 设计师 / 趣味注入师 / researcher / …"
-                    onChange={(e) => setRole(e.target.value)}
-                  />
-                </div>
-                <div className={FORM_ROW_CLASS}>
                   <span className={FORM_LABEL_CLASS}>
                     角色手册（Markdown：frontmatter + 身份/使命/规则/领域专章/沟通风格/交付标准）
                   </span>
-                  <MdEditor value={personaMd} onChange={setPersonaMd} minHeight={220} />
+                  <MdEditor value={personaMd} onChange={setPersonaMd} minHeight={300} />
                 </div>
                 {manualError !== null && <FormErrorNote>保存失败：{manualError}</FormErrorNote>}
                 <div className="mt-2 flex items-center gap-2">
                   <Button
                     size="sm"
-                    disabled={manualSaving || name.trim() === '' || role.trim() === ''}
+                    disabled={manualSaving || name.trim() === ''}
                     onClick={() => void saveManual()}
                   >
                     <IconPlusOutline16 />
@@ -959,6 +997,7 @@ export function MembersTab({
                     className={cn('eteams-role-row', ADD_MODE_CARD_CLASS)}
                     onClick={() => {
                       setAiPrefill(null);
+                      setManualAvatar(null); // 新一次手动创建：上次换的头像不带过来
                       setAddMode('manual');
                     }}
                   >

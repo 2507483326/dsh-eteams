@@ -40,13 +40,9 @@ import {
 import { insertEventInTx, insertMailInTx, parseJsonl } from './events.js';
 import { insertTaskMemberRow } from './store.js';
 import type { TeamTx } from './store.js';
-import {
-  defaultCaptainPersona,
-  defaultPersonaFor,
-  PERSONA_FRAMEWORK_VERSION,
-  PRESET_MEMBER_ROLES,
-  ROLE_TEMPLATES,
-} from '../prompts/persona.js';
+import { defaultCaptainPersona } from '../prompts/personas/captain.js';
+import { fallbackExecutionPrompt, PERSONA_FRAMEWORK_VERSION } from '../prompts/personas/framework.js';
+import { defaultPersonaFor, PRESET_MEMBER_ROLES, ROLE_TEMPLATES } from '../prompts/personas/presets.js';
 
 // --------------------------------------------------------------------------
 // 旧版文件模型（docs/05：13 态 + 文本号 + provider 路线）——仅导入用。
@@ -238,7 +234,7 @@ function personaFromFields(
   const executionPrompt =
     fields.executionPrompt !== undefined && fields.executionPrompt.trim() !== ''
       ? fields.executionPrompt
-      : `你是「${name}」，以 ${role} 的身份为团队交付。`;
+      : fallbackExecutionPrompt(name, role);
   return {
     frameworkVersion: PERSONA_FRAMEWORK_VERSION,
     role: fields.role ?? role,
