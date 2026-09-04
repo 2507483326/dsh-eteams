@@ -1,6 +1,6 @@
 # 27 SQLite 表结构设计（角色 / 团队 / 任务统一存储）
 
-> 状态：**设计稿（2026-09-04）——只设计，未实施**。本轮不建库、不写迁移代码、不改任何现有文件；`team.json` / `events.jsonl` / `roster.json` 仍是磁盘真相。
+> 状态：**定案（2026-09-04）——进入执行**。存储真相直接切 SQLite（不做投影过渡），首次启动把现有文件数据一次性导入；缺列已逐条与用户对完账，最终口径：**team 表零新增列（团队只是流程容器：不要目标/阶段/进展，工作目录归 task）；task 表补合同四数组 + idempotency_note + blocked_from + work_dir 七列；member 表是纯模板（无状态无会话），状态与会话锚点全在 task_members**。
 >
 > 字段基线：[src/host/model/types.ts](../src/host/model/types.ts)——表里每个字段都能在 types.ts 找到对应；两处有出入时以 types.ts 为准。
 >
@@ -8,7 +8,7 @@
 >
 > 表上不留外键、CHECK、UNIQUE、触发器——每张表只有列定义、主键、普通索引，规则全部由写入代码保证。
 >
-> 2026-09-04 用户改版定稿：表精简为 11 张（team / roles / member / task / task_members + attempts / events / mail_messages / decisions / task_status_changes + schema_meta）；**主键 = 每张表自己的编号列，统一整数自增**（team_id / role_id / member_id / task_id / task_member_id / attempt_id / decision_id / seq / change_id；schema_meta 例外，key 即主键）；**每张表最后两列固定 created_time / update_time**，时间相关列一律 `_time` 结尾；**工号 = member.member_id 自增**（显示补零成 0001）；**库文件放 `<workspace>/.eteams/db/` 子目录**。
+> 2026-09-04 用户改版定稿：表精简为 11 张（team / roles / member / task / task_members + attempts / events / mail_messages / decisions / task_status_changes + schema_meta）；**主键 = 每张表自己的编号列，统一整数自增**（team_id / role_id / member_id / task_id / task_member_id / attempt_id / decision_id / seq / change_id；schema_meta 例外，key 即主键）；**每张表最后两列固定 created_time / update_time**，时间相关列一律 `_time` 结尾；**工号 = member.employee_id 列，数据库递增发号**（显示补零，1 → 0001，即 ET-0001）；**库文件放 `<workspace>/.eteams/db/` 子目录**。
 
 ## 27.1 为什么引入 SQLite
 
@@ -73,8 +73,8 @@
 
 - **库文件集中在 `db/` 子目录**：主库和 -wal/-shm 两个运行文件待在一起，不与 json/yaml 配置混放；杀软排除、备份、gitignore 都只针对这一个目录。原方案放 `.eteams/` 根下，改为独立子目录。
 - **单库 per workspace（而非 per team）**：成员库、跨团队统计天然是工作区级的；跨团队查询要求单库。团队用 `team_id` 作分区键；量级（单团队 ≤500 任务）对 SQLite 毫无压力。放弃 per-team 库文件：跨团队聚合要 attach 多库，复杂且无收益。
-- **工号不再单独计数**：原来工作区有个 employee-seq.json 计数器文件，入库后工号直接用 member 表的自增主键 member_id（见 27.4「发号」），这个文件不再需要。
-- **共存语义**：文件仍是磁盘真相，SQLite 是规划中的新真相源。迁移完成前删除 `eteams.db` 不丢失任何数据（可随时从 team.json/events.jsonl 全量重建，见 27.8 阶段 1）。
+- **工号由数据库递增发号**：原来工作区有个 employee-seq.json 计数器文件，现在不再需要——工号列 `member.employee_id`（成员模板一人一行，插入时取 member 表最大工号 +1；task_members 行带同号副本，见 27.4「发号」）。
+- **切换语义（已定案）**：首次启动建库时把现有 team.json / events.jsonl / inbox / roster.json 的数据一次性导入；此后 **SQLite 是唯一真相**，原文件停读写、原样保留作备份。删除 `eteams.db` 不会自动找回数据，恢复靠备份或重新导入旧文件。
 - **版本约定**：DB 自带独立的 `db_schema_version`（`schema_meta` 表 + `PRAGMA user_version` 双写同值），**从 1 起步**；与 team.json 的结构版本互不相干；两者都遵循「前向兼容、只进不退」。
 - **gitignore**：建议把 `.eteams/` 整目录忽略；若只忽略部分文件，需补 `.eteams/db/`（含 -wal/-shm）。
 - **备份**：空闲时 `PRAGMA wal_checkpoint(TRUNCATE)` 后拷贝 `db/eteams.db` 即一致快照；本轮不需要（文件仍是真相）。
@@ -96,7 +96,7 @@ PRAGMA busy_timeout = 3000;    -- 杀软/索引器短暂持锁时等待而非立
 | 命名 | 表/列 snake_case；**时间相关列一律 `_time` 结尾**（created_time / update_time / completed_time / read_time…） |
 | 表尾两列 | 每张表最后统一是 `created_time INTEGER NOT NULL`（创建时间）和 `update_time INTEGER NOT NULL`（更新时间） |
 | 时间 | Unix 毫秒 INTEGER |
-| ID 类型 | **统一 INTEGER 自增**：每张表自己的编号列就是主键——team_id / role_id / member_id / task_id / task_member_id / attempt_id / decision_id / events.seq / mail.seq / change_id 全部 `INTEGER PRIMARY KEY AUTOINCREMENT`（自增、删行不复用）。所有引用列（parent_id / current_member_id / main_task_id / now_task_id / role_id / attempt_id 等）随之统一为整数 |
+| ID 类型 | **统一 INTEGER 自增**：每张表自己的编号列就是主键——team_id / role_id / member_id / task_id / task_member_id / attempt_id / decision_id / events.event_id / mail_messages.mail_message_id / change_id 全部 `INTEGER PRIMARY KEY AUTOINCREMENT`（自增、删行不复用）。所有引用列（parent_id / current_member_id / main_task_id / now_task_id / role_id / attempt_id 等）随之统一为整数 |
 | 例外 | `schema_meta` 是键值元数据表，主键就是 `key`（TEXT，全库唯一，写入代码查重）——唯一不用自增的表 |
 | 枚举 | TEXT 存枚举字符串，**合法值写在列注释里**，合法性由写入代码校验。表上不放 CHECK：改枚举值不用动表结构 |
 | JSON | TEXT 列存 JSON 字符串，格式由写入代码保证（不用 `json_valid()`）；数组字段默认**整体序列化**，仅 attempts 拆表（理由见 27.6.2） |
@@ -104,7 +104,7 @@ PRAGMA busy_timeout = 3000;    -- 杀软/索引器短暂持锁时等待而非立
 | 唯一性 | 表上不放 UNIQUE：编号列靠自增天然不重；成员名、角色名、schema_meta key 由写入代码查重；邮箱幂等投递按 message_id 查重 |
 | 校验 | 一切规则（枚举合法、JSON 格式、大任务守卫、查重、幂等）都在写入代码里做——与现在 JSON 实现的校验方式同构，表上不留硬约束 |
 | append-only | `events` 只插入、不改写（纠错 = 追加补偿事件，不改历史），由写代码纪律保证 |
-| 发号 | **全部由数据库自增，写入代码不再发号**：任务号、尝试号、决策号、事件号、邮件序号都是自增主键；工号 = member.member_id 自增，显示时补零（1 → 0001） |
+| 发号 | **编号全部由数据库发，写入代码不再自造计数器**：任务号、尝试号、决策号、事件号、邮件号都是自增主键（取号 = 读该表自增计数 +1）；**工号 = member.employee_id**，插入成员模板时取 member 表当前最大工号 +1（task_members 行带同号副本），显示时补零（1 → 0001，带前缀即 ET-0001） |
 | 写事务 | 一律 `BEGIN IMMEDIATE`（写锁前置）；面板只读连接不加锁 |
 
 ## 27.5 完整建表 DDL
@@ -136,7 +136,7 @@ CREATE TABLE schema_meta (
 CREATE TABLE team (
   team_id        INTEGER PRIMARY KEY AUTOINCREMENT,  -- 团队 ID，自增（展示名见 team_name）
   team_name      TEXT NOT NULL,                -- 展示名（原文本团队 ID 转为普通列，由写入代码查重）
-  has_leader     INTEGER NOT NULL DEFAULT 0,   -- 是否有领队（0/1）
+  has_leader     INTEGER NOT NULL DEFAULT 0,   -- 是否包含领队（0/1）；领队会话锚点在 task_members 的领队行上
   created_time   INTEGER NOT NULL,             -- 创建时间
   update_time    INTEGER NOT NULL              -- 更新时间
 );
@@ -159,15 +159,17 @@ CREATE TABLE roles (
 );
 
 -- ---------------------------------------------------------------------
--- 3. member —— 团队成员（一个团队里每个成员一行）
+-- 3. member —— 成员模板（一人一行，纯模板：无状态、无会话锚点；
+--    执行实例（状态/会话/当前任务）在 task_members）
 -- ---------------------------------------------------------------------
 CREATE TABLE member (
-  member_id        INTEGER PRIMARY KEY AUTOINCREMENT,  -- 自增主键，即工号（显示补零：1 → 0001）
-  team_id          INTEGER NOT NULL,      -- 属于哪个团队（team.team_id）
+  member_id        INTEGER PRIMARY KEY AUTOINCREMENT,  -- 自增主键（行号；工号见 employee_id）
+  team_id          INTEGER,               -- 属于哪个团队（team.team_id）；NULL=工作区公共成员模板
   role_id          INTEGER,               -- 角色 ID（roles.role_id，松引用）
   role_name        TEXT NOT NULL,         -- 成员名就是角色名
-  persona_md       TEXT,                  -- 完整角色手册（Markdown 全文）
-  model            TEXT,                  -- 采用的模型
+  employee_id      INTEGER,               -- 工号：独立发号（插入成员模板时取 member 表最大工号 +1），同人跨团队同号；显示补零 1 → 0001
+  persona_md       TEXT,                  -- 完整角色手册（Markdown 全文；duty/style/skills 等结构字段不单独存，写入时烘进手册）
+  model            TEXT,                  -- 采用的模型；NULL=跟随（派发时子会话继承领队会话模型），有值=覆盖（provider 派发时按配置解析）
   reasoning_effort TEXT,                  -- 模型思考强度
   avatar           TEXT,                  -- 头像
   created_time     INTEGER NOT NULL,      -- 创建时间
@@ -194,11 +196,17 @@ CREATE TABLE task (
   current_member    TEXT,                -- 当前执行成员名（松引用：成员移除也不影响这列）
   current_member_id INTEGER,             -- 当前执行成员 ID（member.member_id）
   retry_count       INTEGER NOT NULL DEFAULT 0,  -- 当前执行人连续失败次数（换人清零）
-  status_note       TEXT,                -- 当前状态说明
+  status_note       TEXT,                -- 当前状态说明（挂起原因等也并在这列）
+  acceptance        TEXT,                -- 验收标准（JSON 字符串数组，如 ["登录返回 200 和 token"]）
+  in_scope          TEXT,                -- 范围内（JSON 字符串数组，如 ["src/api/login.ts 及其测试"]）
+  out_of_scope      TEXT,                -- 范围外（JSON 字符串数组，防越界）
+  deliverables      TEXT,                -- 交付物（JSON 字符串数组）
+  idempotency_note  TEXT,                -- 幂等说明（重跑安全的前提，派发提示词渲染）
+  blocked_from      TEXT,                -- 阻塞前的状态（10 态之一）；解除阻塞时还原到它，NULL=未阻塞
+  work_dir          TEXT,                -- 任务工作目录（相对工作区；建任务时分配，分配后固定——撞名 -N 后缀有状态，不可重推导）
   completed_time    INTEGER,             -- 完成时间
   created_time      INTEGER NOT NULL,    -- 创建时间
-  update_time       INTEGER NOT NULL,    -- 更新时间
-  PRIMARY KEY (task_id)
+  update_time       INTEGER NOT NULL     -- 更新时间（主键 task_id 已在列级声明，表上不再写 PRIMARY KEY）
   -- 大任务（parent_id 为空）不带执行链/依赖：由写入代码校验
 );
 
@@ -208,27 +216,30 @@ CREATE INDEX idx_task_current ON task (team_id, current_member) WHERE current_me
 CREATE INDEX idx_task_update  ON task (team_id, update_time DESC);
 
 -- ---------------------------------------------------------------------
--- 5. task_members —— 任务成员（参与任务的成员，带会话锚点与执行状态）
+-- 5. task_members —— 任务成员（执行实例：有状态、有会话锚点；模板本体在 member）
+--    领队也是一行：name='项目牧羊人'、main_task_id 为空（团队级主持行）。
 -- ---------------------------------------------------------------------
 CREATE TABLE task_members (
   task_member_id   INTEGER PRIMARY KEY AUTOINCREMENT,  -- 自增主键
-  main_task_id     INTEGER,             -- 主任务 ID（task.task_id）
+  team_id          INTEGER NOT NULL,    -- 属于哪个团队（team.team_id，写入代码维护；领队行也带，删除/统计/领队行定位都按它过滤）
+  main_task_id     INTEGER,             -- 实例行所属大任务 ID（task.task_id；独立无链任务=自身 id）；NULL=团队级行（领队主持行）
   now_task_id      INTEGER,             -- 当前执行任务 ID（task.task_id）
-  name             TEXT NOT NULL,       -- 成员名（全库唯一，写入代码查重）
-  employee_id      TEXT,                -- 工号（= member.member_id 补零）
-  main_session_id  TEXT NOT NULL DEFAULT '',  -- 主代理会话 ID；还没启动时是空串
+  name             TEXT NOT NULL,       -- 成员名（与 member.role_name 同名，写入代码查重）
+  employee_id      INTEGER,             -- 工号（引用 member.employee_id，松引用）
+  main_session_id  TEXT NOT NULL DEFAULT '',  -- 主代理会话 ID；还没启动时是空串（领队行存领队会话）
   child_session_id TEXT NOT NULL DEFAULT '',  -- 子代理会话 ID；还没启动时是空串
   role_id          INTEGER,             -- 角色 ID（roles.role_id，松引用）
   status           TEXT NOT NULL DEFAULT 'staged',
                    -- 成员状态：staged / ready / working / paused / removed
-  persona_md       TEXT,                -- 完整角色手册（在此编辑）
-  model            TEXT,                -- 采用的模型
+  persona_md       TEXT,                -- 执行时的人设手册（沿用 member 模板的手册，可按任务微调）
+  model            TEXT,                -- 执行时采用的模型（沿用模板值；NULL=跟随）
   reasoning_effort TEXT,                -- 模型思考强度
   avatar           TEXT,                -- 头像
   created_time     INTEGER NOT NULL,    -- 创建时间
   update_time      INTEGER NOT NULL     -- 更新时间
 );
 
+CREATE INDEX idx_task_members_team ON task_members (team_id);
 CREATE INDEX idx_task_members_main ON task_members (main_task_id);
 
 -- ---------------------------------------------------------------------
@@ -278,8 +289,8 @@ CREATE TABLE events (
 );
 
 CREATE INDEX idx_events_time ON events (team_id, event_time DESC);
-CREATE INDEX idx_events_type ON events (team_id, type, seq);
-CREATE INDEX idx_events_task ON events (team_id, task_id, seq) WHERE task_id IS NOT NULL;
+CREATE INDEX idx_events_type ON events (team_id, type, event_id);
+CREATE INDEX idx_events_task ON events (team_id, task_id, event_id) WHERE task_id IS NOT NULL;
 
 -- ---------------------------------------------------------------------
 -- 8. mail_messages —— 邮箱消息（按收件箱分箱；至少一次投递）
@@ -302,7 +313,7 @@ CREATE TABLE mail_messages (
   update_time  INTEGER NOT NULL      -- 更新时间
 );
 
-CREATE INDEX idx_mail_unread     ON mail_messages (team_id, box_key, seq) WHERE read_time IS NULL;
+CREATE INDEX idx_mail_unread     ON mail_messages (team_id, box_key, mail_message_id) WHERE read_time IS NULL;
 CREATE INDEX idx_mail_message_id ON mail_messages (team_id, box_key, message_id);
 
 -- ---------------------------------------------------------------------
@@ -348,16 +359,17 @@ CREATE INDEX idx_status_changes_time ON task_status_changes (team_id, change_tim
 
 **删除规则（由代码在一个事务里按顺序执行，表上不设级联）**：
 
-- **删团队**：先记下该团队全部任务 ID，然后一个事务里逐表清——task / attempts / events / mail_messages / decisions / task_status_changes 按 `team_id` 删，task_members 按 `main_task_id` 属于这些任务删，member 按 `team_id` 删，最后删 team 行。要么全删要么全留。
-- **删大任务（parent_id 为空）**：先删它名下的小任务及其 attempts/decisions，再删大任务行；关联的 task_members 一并清。
+- **删团队**：一个事务里逐表清——task / attempts / events / mail_messages / decisions / task_status_changes / task_members（**含领队行**）按 `team_id` 删，member 里 `team_id` 指向该团队的班底模板行删（工作区公共模板行 NULL 不动），最后删 team 行。要么全删要么全留。
+- **删大任务（parent_id 为空）**：先删它名下的小任务及其 attempts/decisions，再删大任务行；关联的 task_members（实例行）一并清。
 - **删单个任务**：同时删它的 attempts/decisions；events 和 mail_messages 里指向它的行**保留**（审计和邮箱历史不跟着任务蒸发）。
-- **成员一般不删行**：status 置 removed，行保留供查历史。
+- **task_members 实例行一般不删**：status 置 removed，行保留供查历史。
+- **member 模板行**：从成员库移除成员 = 删行（工号已发出不重发，AUTOINCREMENT 主键不受影响）。
 
 要点：
 
 - **11 张表**：`schema_meta`、`team`、`roles`、`member`、`task`、`task_members`、`attempts`、`events`、`mail_messages`、`decisions`、`task_status_changes`。每张表只有列定义、自增主键、普通索引——没有外键、CHECK、UNIQUE、触发器。
-- **主键 = 表自己的编号列，统一整数自增**：team_id / role_id / member_id / task_id / task_member_id / attempt_id / decision_id / events.seq / mail.seq / change_id 都是 `INTEGER PRIMARY KEY AUTOINCREMENT`（删行不复用）；`schema_meta` 是唯一例外，`key` 即主键。所有引用列随之统一为整数。
-- **工号 = member.member_id**：自增、删行不复用、显示补零成 0001；不再需要计数器文件，也没有单独的工号列。
+- **主键 = 表自己的编号列，统一整数自增**：team_id / role_id / member_id / task_id / task_member_id / attempt_id / decision_id / events.event_id / mail_messages.mail_message_id / change_id 都是 `INTEGER PRIMARY KEY AUTOINCREMENT`（删行不复用）；`schema_meta` 是唯一例外，`key` 即主键。所有引用列随之统一为整数。
+- **工号 = member.employee_id**：独立发号（插入成员模板时取 member 表最大工号 +1）、显示补零（1 → 0001，即 ET-0001）、同人跨团队同号；member_id 只是行号。不再需要计数器文件。
 - **不再需要发号器**：任务号/尝试号/决策号/事件号/邮件序号全部数据库自增——写入代码只负责成员名/角色名查重和邮箱幂等键生成（message_id 是内容键，不是计数器）。
 - 引用完整性（小任务挂在存在的大任务下、成员名/角色名存在）同样由写入代码保证——和现在 JSON 实现的校验方式一样，表上不留硬约束。
 - 索引为查询场景（27.7）反推：前缀列一律 `team_id`，时间列 DESC 支持最新优先；三处**部分索引**（未读邮件、进行中尝试、已派任务）覆盖高频读路径。
@@ -368,19 +380,22 @@ CREATE INDEX idx_status_changes_time ON task_status_changes (team_id, change_tim
 
 | 代码（types.ts） | 去向 |
 |---|---|
-| TeamState 的 id / name | `team.team_id`（**本库改为自增整数**，原文本 id 转 `team_name` 之外的普通列由代码查重）/ `team_name` |
-| 领队是否在团队名册 | `team.has_leader` |
-| 成员名 / 人设手册 / 模型路线 / 头像 | `member.role_name / persona_md / model + reasoning_effort / avatar` |
-| 成员的会话锚点与执行状态 | `task_members.main_session_id / child_session_id / status` |
-| 工号（employeeId） | `member.member_id` 自增即工号，显示补零——不再需要 employee-seq.json |
-| TaskRecord 的任务号/父子/标题/正文/依赖/执行链/状态/执行人/重试/完成时间 | `task` 表同名列（任务号 task_id 为自增整数；depend_tasks 数组存任务 ID） |
-| TaskRecord 的合同数组（acceptance/inScope/outOfScope/deliverables 等） | **本版暂不入库**（继续由 team.json 承担，见 27.9-4） |
-| `attempts[]` | `attempts` 表一行一次尝试 |
-| `pendingDecisions[]` | `decisions` 表 |
-| 预置角色模板 + 角色构建师确认的新角色 | `roles` 表（首次启动写入预置；确认构建时写入新角色） |
-| `roster.json`（工作区成员库） | `task_members`（工号/会话锚点/人设/模型/状态） |
-| `events.jsonl` | `events` 表；actor 拍平 `actor_kind / actor_name`，seq 改全库自增 |
-| `inbox/*.jsonl` | `mail_messages` 表；from/to 拍平四列 + `box_key` 分箱，seq 改全库自增 |
+| TeamState 的 id / name | `team.team_id`（自增整数）/ `team_name`（文本目录名不入库，目录映射由写入代码按 team_name 推导查重） |
+| TeamState 的 goal / phase / planReviewState | **砍掉**（定案：团队只是流程容器，不要目标/阶段/进展；「批准后开跑」是对话内确认，不落团队级状态） |
+| TeamState 的 captainSessionId / captainChildId | **砍掉**——领队会话锚点在 task_members 领队行（`name='项目牧羊人'`、`main_task_id` 为空）的 `main_session_id / child_session_id` 上，重启后去 task_members 找；team 表只留 `has_leader` |
+| TeamState 的 leaderModelRoute / maxRetries / activeSwitch | **砍掉**：领队默认模型功能取消（成员 model 空=子会话继承领队会话模型）；重试上限用全局配置；activeSwitch 是死字段 |
+| TeamState 的 workDir | **`task.work_dir`**（定案：工作目录归任务，逐任务分配） |
+| TeamState 的 leaderRemoved / version / taskSeq·attemptSeq·mailSeq | `has_leader`；version 不存（进程锁 + 事务已够）；三个序号被自增主键取代，删 |
+| MemberRecord（成员模板） | `member` 表：name / employeeId / role / persona（手册全文）/ modelRoute（model + reasoning_effort）/ avatar → `role_name / employee_id / persona_md / model + reasoning_effort / avatar`；provider 不存（派发时按配置解析）；**status、子会话 id、当前尝试不在模板表** |
+| MemberRecord 的 status / id（子会话）/ currentAttemptId / removedAt | `task_members.status / child_session_id / now_task_id`；当前尝试反查 attempts；removedAt 用 update_time |
+| TaskRecord 任务号/父子/标题/正文/依赖/执行链/状态/执行人/重试/完成时间 | `task` 表同名列（编号整数自增；depend_tasks 存整数任务号） |
+| TaskRecord 合同（acceptance/inScope/outOfScope/deliverables/idempotencyNote） | `task` 表 `acceptance / in_scope / out_of_scope / deliverables`（JSON 数组）+ `idempotency_note`（已定补列） |
+| TaskRecord 的 blockedFrom / suspendNote / decisionId / currentAttemptId / outcome / kind / workDir | `blocked_from` 列；suspendNote 并入 status_note；decisionId / currentAttemptId 反查 decisions / attempts；outcome 反查 attempts 最新成功行；kind 由 parent_id 为空表达；`work_dir` 列 |
+| `attempts[]` / `pendingDecisions[]` | `attempts` / `decisions` 表 |
+| `roster.json`（工作区成员库） | `member` 表（模板行：`team_id` 空=工作区公共模板，非空=该团队班底） |
+| 预置角色模板 + 角色构建师产物 | `roles` 表（首次启动写预置；确认构建时写入） |
+| `events.jsonl` | `events` 表；actor 拍平 `actor_kind / actor_name`，事件号全库自增 |
+| `inbox/*.jsonl` | `mail_messages` 表；from/to 拍平四列 + `box_key` 分箱，邮件号全库自增 |
 
 ### 27.6.2 数组字段的存法
 
@@ -417,35 +432,36 @@ SELECT COUNT(*) AS total, COALESCE(SUM(status = 'completed'), 0) AS done
   FROM task
  WHERE team_id = ?1 AND parent_id = ?2;
 
--- Q4 看板按状态分列                                           (idx_task_status)
+-- Q4 看板按状态分列（五列：等待/执行/暂停/待决策/待用户）      (idx_task_status)
 SELECT task_id, subject, status, current_member, member_chain_list, chain_cursor, update_time
   FROM task
- WHERE team_id = ?1 AND status IN ('ready','wait','start','paused')
+ WHERE team_id = ?1 AND status IN ('wait','start','paused','wait_decision','wait_user')
  ORDER BY update_time DESC;
+-- ready（就绪待派）单列一栏，不进看板五列
 
--- Q5 成员待派统计（每成员当前承担的任务数）
+-- Q5 成员待派统计（每成员当前承担的任务数）                    (idx_task_members_team)
 SELECT tm.name, tm.status,
        (SELECT COUNT(*) FROM task t
          WHERE t.team_id = ?1 AND t.current_member = tm.name
            AND t.status IN ('wait','start','paused','wait_decision','wait_user')) AS active_tasks
   FROM task_members tm
- WHERE tm.status <> 'removed'
+ WHERE tm.team_id = ?1 AND tm.status <> 'removed'
  ORDER BY tm.name;
 
 -- Q6 收件箱补投未读（唤醒先补投）                             (idx_mail_unread)
-SELECT message_id, seq, created_time, from_kind, from_name, kind, task_id, attempt_id, content
+SELECT message_id, mail_message_id, created_time, from_kind, from_name, kind, task_id, attempt_id, content
   FROM mail_messages
  WHERE team_id = ?1 AND box_key = ?2 AND read_time IS NULL
- ORDER BY seq;
+ ORDER BY mail_message_id;
 
--- Q7 动态视图：最近事件流                                    (主键 seq 排序 + 团队过滤)
-SELECT * FROM events WHERE team_id = ?1 ORDER BY seq DESC LIMIT 50;
+-- Q7 动态视图：最近事件流                                    (主键 event_id 排序 + 团队过滤)
+SELECT * FROM events WHERE team_id = ?1 ORDER BY event_id DESC LIMIT 50;
 
 -- Q8 动态视图：单任务时间线                                  (idx_events_task)
 SELECT event_time, actor_kind, actor_name, type, payload
   FROM events
  WHERE team_id = ?1 AND task_id = ?2
- ORDER BY seq;
+ ORDER BY event_id;
 
 -- Q9 待决策横幅                                              (idx_decisions_open)
 SELECT decision_id, task_id, error, retry_count, created_time
@@ -475,28 +491,28 @@ UPDATE attempts SET status = 'running', claimed_time = ?3
  WHERE attempt_id = ?1 AND token = ?2 AND status = 'pending_accept';
 -- changes = 0 → token 失效 / 已被别人接取，调用方拒绝
 
--- 状态流转守卫：只有当前状态匹配才允许流转（防并发乱序）
+-- 状态流转守卫：只有当前状态匹配才允许流转（防并发乱序；本轮不上，多实例时启用）
 UPDATE task SET status = 'start', update_time = ?2
- WHERE task_id = ?1 AND status = 'ready';
+ WHERE task_id = ?1 AND status = 'wait';
 -- changes = 0 → 状态已被别人改过，拒绝写
 ```
 
-## 27.8 迁移路线（仅设计）
+## 27.8 切换路线（已定案：一步切换）
 
-三阶段切换，每阶段可独立回退；`db_schema_version` 从 1 起步，随表结构变更递增（`schema_meta` + `PRAGMA user_version` 双写，只进不退）。
+不做「只读投影 / 双写」过渡（用户定案 2026-09-04）：本轮直接把真相切到 SQLite。
 
-| 阶段 | 形态 | 说明 |
-|---|---|---|
-| 0（本轮） | 纯设计 | 不建库、不引依赖；文件是磁盘真相 |
-| 1 只读投影 | DB = 看板读模型 | 每次写完 team.json 后异步把数据投影进 DB（或启动时全量重建）；DB 随时可删可重建，真相仍是文件。看板聚合查询先落地（27.7 Q5） |
-| 2 双写 | 文件 + DB 同事务写 | 锁内顺序「事件 → 快照 → DB 事务」；DB 失败则回滚内存态 + 补偿事件 |
-| 3 切换真相 | DB-first | 写路径改为单 SQLite 事务（事件 + 状态 + 邮箱 + 决策同一事务，天然原子）；team.json / events.jsonl 降级为导出物（供人工检视与旧工具兼容）或停写 |
+| 步骤 | 内容 |
+|---|---|
+| 建库 | 首次启动：`db/eteams.db` 不存在（或缺 `db_schema_version`）时执行 DDL 建表 |
+| 一次性导入 | 同一事务把现有 team.json / events.jsonl / inbox/*.jsonl / roster.json 全部导入（见 27.6 映射）；文本号 `t1`/`a1` 换算成自增整数号；导入完成写 `db_schema_version = 1` |
+| 切真相 | 此后写路径全部是 SQLite：整个领队操作单元（改任务 + 发尝试 + 写邮箱 + 记事件）落在一个 `BEGIN IMMEDIATE … COMMIT` 内，崩溃要么整体回滚、要么整体生效，不再需要补偿事件 |
+| 旧文件 | 停读写、原样保留作导入备份；usage.jsonl / rolebuilder.json / captain-persona.yaml 继续按文件走（已定案不进库） |
 
-**事务边界与锁的演进**：
+**事务边界与锁**：
 
-- 现状：进程内 Promise 链锁 + 「先日志后快照」两步写 + 补偿事件。阶段 3 后，整个领队操作单元（如派任务：改任务 + 发尝试 + 写邮箱 + 记事件）落在一个 `BEGIN IMMEDIATE … COMMIT` 内，崩溃要么整体回滚，不再需要补偿语义。
+- 写形态是**整存整取**：`readTeam` 从 11 张表重装出内存里的 TeamState，`writeTeam` 在一个事务内把该团队数据整队重写（DELETE + 带原号 INSERT，编号不变）。单团队 ≤500 任务，重写毫秒级。并发安全由「进程锁串行 + 事务原子」共同保证——与现在 JSON 实现的校验方式同构，规则仍在写代码里。
 - WAL 下读者（面板 1 秒轮询）不被写事务阻塞——比现在「读快照也要等锁」更顺；单写者由数据库保证而非约定。
-- **乐观版本**：本版 team 表没有 version 列；阶段 2 双写前需补一列，用 `UPDATE … WHERE team_id=? AND version=?` 把跨进程冲突检测变成一行条件更新（`changes = 0` 即「状态被别人改了」）。
+- **乐观版本**：team 表要不要补 `version` 列（`UPDATE … WHERE version=?` 检测跨进程冲突）在确认清单里定；单进程单写者场景下进程锁已够。
 - **Windows 注意**：`-wal/-shm` 在 `.eteams/db/` 子目录，与 team.json 不同目录，受杀软/索引器/OneDrive 同类干扰的面更小；`busy_timeout` + 空闲时定期 `wal_checkpoint(TRUNCATE)` 缓解。若后续用 `backup()`，同样按 Node 版本验证。
 
 **schemaVersion 管理**：每次**表结构**变更（加列、加表、加索引）= 新版本号 + 编号迁移脚本（`migrations/0002_add_xxx.sql`），启动时按 `schema_meta` 里的版本号顺序执行。**表上没有 CHECK，改枚举值不需要动表结构**——这是把校验放应用层换来的直接好处。
@@ -506,13 +522,13 @@ UPDATE task SET status = 'start', update_time = ?2
 1. **token 记账——已定案（2026-09-04）**：采集点 = 会话事件流（插件收到全进程所有会话的事件），存储 = 工作区下 usage.jsonl 逐条追加、读取时聚合、不落日汇总。本库不设 token 表；若以后要做 token 投影表，行模型必须按事件行对齐，不得回退日聚合表。
 2. **「天」的时区口径——已定案**：token 记账的 day 在记录时按宿主本地日界折算（与用户日历一致）；本库无 day 列。
 3. **枚举校验放哪——已定案（2026-09-04 用户定案）**：表上不放 CHECK，枚举合法性由写入代码校验，改枚举值零迁移。
-4. **本版精简未入库的字段**：团队阶段/目标/计划审阅、领队会话锚点、乐观版本号、任务合同数组、归档时间、成员人设细分字段（rules/execution_prompt 等）暂不入库，继续由 team.json 承担；阶段 2 双写前按 types.ts 补列。
+4. **暂未入库的代码字段——已定案（2026-09-04 逐条对账）**：goal / phase / planReviewState / captainSessionId / captainChildId / leaderModelRoute 砍掉（审批转对话内确认、领队锚点转 task_members、成员模型空=继承领队会话）；activeSwitch 删；maxRetries 用全局配置；version 不存；workDir 归 `task.work_dir`；task 补合同四数组（acceptance/in_scope/out_of_scope/deliverables）+ idempotency_note + blocked_from；suspendNote 并入 status_note；decisionId / currentAttemptId / outcome 反查 attempts / decisions；member 模板化（状态/会话在 task_members）。
 5. **depend_tasks / member_chain_list 是否拆表**：现在写入代码查环够用；若任务页要 SQL 级 DAG 查询（上游阻塞传播、关键路径），再拆依赖边表与链站点表。
-6. **events 表与 events.jsonl 的最终关系**：阶段 3 后 events.jsonl 是停写（表为唯一真相）还是继续并存（文件供人工审计）？影响恢复重放是否改为 SQL 重放。
-7. **归档形态**：本版 team 表没有归档列；要支持「删团队默认先归档」时补 `archived_time` 列（面板只读），还是归档行迁独立表，待定。
+6. **events.jsonl / inbox 的最终关系——已定案**：停写（表为唯一真相），原文件保留作导入备份。
+7. **归档形态——已定案（2026-09-04）**：归档下线。archiveTeam 与面板归档页删除，删团队走对话内确认 + 数据库事务删除；archive/ 目录不导入。
 8. **角色/人设配置的入库范围——部分定案**：预置角色模板与角色构建师产物进 `roles` 表（已定）；领队人设覆盖（captain-persona.yaml）是否入库待定。
-9. **邮箱序号——已定案**：seq 全库自增（数据库发号），箱内顺序按 seq 排；message_id 只做幂等键。
-10. **member 与 task_members 的分工**：两张表都存人设/模型列——member 是团队名册行，task_members 是任务参与行；同名成员在两边的一致性同步口径待定。
-11. **docs/05 与 types.ts 的字段漂移**：任务文档里的 createdBy/cancelReason 字段、邮件类型清单、尝试类型（含 resume）与 types.ts 对不上；建表前先统一，口径按 types.ts。
-12. **多实例并发**：两个进程打开同一工作区时，WAL 允许多连接但写互斥——乐观 version（补列后）够不够，还是需要进程级文件锁兜底。
+9. **邮箱序号——已定案**：邮件号（mail_message_id）全库自增（数据库发号），箱内顺序按它排；message_id 只做幂等键。
+10. **member 与 task_members 的分工——已定案**：member = 成员模板（一人一行，无状态无会话，`team_id` 空=工作区公共模板、非空=该团队班底，工号在此发号）；task_members = 任务成员执行实例（状态/会话锚点/当前任务都在这），**按大任务粒度建行（同一人每条大任务一行、各绑一个子会话，用户定案）**，领队也是一行（`name='项目牧羊人'`、`main_task_id` 空）。实例行的人设/模型沿用模板值；模板编辑是否回填存量实例行默认不回填。
+11. **任务状态枚举——已定案（10 态 + 映射方案 A）**：draft / ready / wait / start / paused / wait_decision / wait_user / completed / failed / cancelled；代码从 13 态收敛：assigned→wait、in_progress→start、retrying→wait（重试=重新排队）、suspended→paused（原因进 status_note）、blocked→wait（记 blocked_from，解除时还原）。**毒化集随收敛更新：paused / failed / wait_decision / wait_user 毒化下游依赖任务（旧 suspended 毒化、paused 不毒化，合并后 paused 也毒化——用户定案）**。
+12. **多实例并发**：两个进程打开同一工作区时，WAL 允许多连接但写互斥——单写者场景进程锁已够；若将来多实例，再补乐观 version 列。
 13. **node:sqlite 稳定性**：仍标记实验性（Node 24 打警告）；个别 API（`backup()` 等）按目标 Node 版本验证。若遇 API 缺口，按 27.2 兜底换 better-sqlite3（同一份 DDL）。

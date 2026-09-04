@@ -58,7 +58,7 @@ export { ETeamsConfig };
 export { createCaptainTools } from './tools/captainTools.js';
 export { createCaptainDispatchTool } from './tools/captainDispatch.js';
 export { createMemberTools } from './tools/memberTools.js';
-export { approvePlan } from './runtime/teamOps.js';
+// eteams_approve_plan 已随审批环节重构下线（docs/35 §5#1），导出面随之撤销。
 export {
   assignTask,
   advanceTask,

@@ -20,8 +20,9 @@ const T0 = 1_000;
 
 function makeTask(overrides: Partial<TaskRecord> = {}): TaskRecord {
   return {
-    id: 't1',
+    id: 1,
     subject: '实现导出模块',
+    parentId: null,
     dependencies: [],
     chain: [],
     chainCursor: -1,
@@ -34,60 +35,67 @@ function makeTask(overrides: Partial<TaskRecord> = {}): TaskRecord {
   };
 }
 
-describe('task state machine edges', () => {
+describe('task state machine edges (10 态, docs/35 §4 映射方案 A)', () => {
   it('follows the happy staged path', () => {
     const task = makeTask({ status: 'draft' });
     applyTransition(task, 'ready', T0 + 1);
-    applyTransition(task, 'assigned', T0 + 2);
-    applyTransition(task, 'in_progress', T0 + 3);
+    applyTransition(task, 'wait', T0 + 2);
+    applyTransition(task, 'start', T0 + 3);
     applyTransition(task, 'completed', T0 + 4);
     expect(task.status).toBe('completed');
     expect(task.completedAt).toBe(T0 + 4);
   });
 
-  it('records stage_completed as in_progress -> ready', () => {
-    const task = makeTask({ status: 'in_progress' });
+  it('records a stage handoff as start -> ready', () => {
+    const task = makeTask({ status: 'start' });
     applyTransition(task, 'ready', T0 + 1);
     expect(task.status).toBe('ready');
   });
 
-  it('rejects illegal transitions with an actionable hint', () => {
-    const task = makeTask({ status: 'completed' });
-    expect(() => applyTransition(task, 'in_progress', T0 + 1)).toThrow(TransitionError);
-    const ready = makeTask({ status: 'ready' });
-    expect(() => applyTransition(ready, 'in_progress', T0 + 1)).toThrow(TransitionError);
+  it('lets a childless container jump ready -> completed (对话任务组收口)', () => {
+    const task = makeTask({ status: 'ready', parentId: null });
+    applyTransition(task, 'completed', T0 + 1);
+    expect(task.status).toBe('completed');
+    expect(task.completedAt).toBe(T0 + 1);
   });
 
-  it('bookkeeps blockedFrom on materialized blocked', () => {
-    const task = makeTask({ status: 'assigned' });
-    applyTransition(task, 'blocked', T0 + 1);
-    expect(task.blockedFrom).toBe('assigned');
+  it('rejects illegal transitions with an actionable hint', () => {
+    const task = makeTask({ status: 'completed' });
+    expect(() => applyTransition(task, 'start', T0 + 1)).toThrow(TransitionError);
+    const ready = makeTask({ status: 'ready' });
+    expect(() => applyTransition(ready, 'start', T0 + 1)).toThrow(TransitionError);
+  });
+
+  it('bookkeeps blockedFrom on materialized blocked and clears it on exit', () => {
+    const task = makeTask({ status: 'wait', blockedFrom: 'ready' });
     applyTransition(task, 'cancelled', T0 + 2);
+    expect(task.status).toBe('cancelled');
     expect(task.blockedFrom).toBeUndefined();
   });
 
   it('restoreBlocked returns to ready only when deps recovered', () => {
-    const task = makeTask({ status: 'ready', blockedFrom: 'ready' });
-    task.status = 'blocked';
-    expect(restoreBlocked(task, false, T0 + 1)).toBe('blocked');
+    const task = makeTask({ status: 'wait', blockedFrom: 'ready' });
+    expect(restoreBlocked(task, false, T0 + 1)).toBe('wait');
+    expect(task.blockedFrom).toBe('ready');
     expect(restoreBlocked(task, true, T0 + 2)).toBe('ready');
+    expect(task.blockedFrom).toBeUndefined();
   });
 });
 
 describe('dependency derivation', () => {
   it('unsatisfied dependencies list non-completed deps', () => {
-    const t1 = makeTask({ id: 't1', status: 'in_progress' });
-    const t2 = makeTask({ id: 't2', dependencies: ['t1'] });
-    expect(unsatisfiedDependencies([t1, t2], t2)).toEqual(['t1']);
+    const t1 = makeTask({ id: 1, status: 'start' });
+    const t2 = makeTask({ id: 2, dependencies: [1] });
+    expect(unsatisfiedDependencies([t1, t2], t2)).toEqual([1]);
     t1.status = 'completed';
     expect(dependenciesSatisfied([t1, t2], t2)).toBe(true);
   });
 
   it('refreshDependencyStatus materializes blocked and recovers it', () => {
-    const t1 = makeTask({ id: 't1', status: 'suspended' });
-    const t2 = makeTask({ id: 't2', dependencies: ['t1'], status: 'ready' });
+    const t1 = makeTask({ id: 1, status: 'paused' });
+    const t2 = makeTask({ id: 2, dependencies: [1], status: 'ready' });
     expect(refreshDependencyStatus([t1, t2], t2, T0 + 1)).toBe(true);
-    expect(t2.status).toBe('blocked');
+    expect(t2.status).toBe('wait');
     expect(t2.blockedFrom).toBe('ready');
     t1.status = 'completed';
     expect(refreshDependencyStatus([t1, t2], t2, T0 + 2)).toBe(true);
@@ -95,27 +103,27 @@ describe('dependency derivation', () => {
     expect(t2.blockedFrom).toBeUndefined();
   });
 
-  it('leaves captain-controlled waiting states alone', () => {
-    const t1 = makeTask({ id: 't1', status: 'suspended' });
-    const t2 = makeTask({ id: 't2', dependencies: ['t1'], status: 'paused' });
+  it('leaves dispatched/running tasks alone (只有 ready 物化)', () => {
+    const t1 = makeTask({ id: 1, status: 'paused' });
+    const t2 = makeTask({ id: 2, dependencies: [1], status: 'paused' });
     expect(refreshDependencyStatus([t1, t2], t2, T0 + 1)).toBe(false);
     expect(t2.status).toBe('paused');
-    const t3 = makeTask({ id: 't3', dependencies: ['t1'], status: 'assigned' });
+    const t3 = makeTask({ id: 3, dependencies: [1], status: 'wait' });
     expect(refreshDependencyStatus([t1, t3], t3, T0 + 1)).toBe(false);
-    expect(t3.status).toBe('assigned');
+    expect(t3.status).toBe('wait');
   });
 
   it('dependentsOf finds direct consumers', () => {
-    const t1 = makeTask({ id: 't1' });
-    const t2 = makeTask({ id: 't2', dependencies: ['t1'] });
-    expect(dependentsOf([t1, t2], 't1')).toEqual([t2]);
+    const t1 = makeTask({ id: 1 });
+    const t2 = makeTask({ id: 2, dependencies: [1] });
+    expect(dependentsOf([t1, t2], 1)).toEqual([t2]);
   });
 
   it('wouldCycle detects direct and transitive loops', () => {
-    const t1 = makeTask({ id: 't1', dependencies: ['t2'] });
-    const t2 = makeTask({ id: 't2' });
-    expect(wouldCycle([t1, t2], 't2', ['t1'])).toBe(true);
-    expect(wouldCycle([t1, t2], 't2', [])).toBe(false);
+    const t1 = makeTask({ id: 1, dependencies: [2] });
+    const t2 = makeTask({ id: 2 });
+    expect(wouldCycle([t1, t2], 2, [1])).toBe(true);
+    expect(wouldCycle([t1, t2], 2, [])).toBe(false);
   });
 });
 
@@ -153,7 +161,7 @@ describe('key helpers', () => {
     expect(sanitizeKey('Alpha Beta Gamma')).toBe('alpha-beta-gamma');
   });
 
-  it('taskSlug prefixes the task id', () => {
-    expect(taskSlug(makeTask({ id: 't3', subject: '实现导出模块' }))).toBe('t3-实现导出模块');
+  it('taskSlug prefixes the integer task id (docs/35 §5#7)', () => {
+    expect(taskSlug(makeTask({ id: 3, subject: '实现导出模块' }))).toBe('3-实现导出模块');
   });
 });

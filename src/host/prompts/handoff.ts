@@ -26,14 +26,14 @@ export function renderContract(task: TaskRecord): string {
   return lines.join('\n');
 }
 
-/** Assignment / stage-handoff mail body (docs/07.3.1 模板). */
+/** Assignment / stage-handoff mail body (docs/07.3.1 模板；attempt_id 整数号). */
 export function assignmentMail(
   task: TaskRecord,
   opts: {
     teamName: string;
     stageBrief?: string;
     handoff?: string;
-    attemptId: string;
+    attemptId: number;
     isStation: boolean;
     stationIndex?: number;
   },
@@ -65,7 +65,7 @@ export function reportCompletedMail(
   task: TaskRecord,
   opts: {
     member: string;
-    attemptId: string;
+    attemptId: number;
     isFinalStation: boolean;
     output: string;
     changedPaths?: string[];
@@ -96,7 +96,7 @@ export function reportFailedMail(
   task: TaskRecord,
   opts: {
     member: string;
-    attemptId: string;
+    attemptId: number;
     error: string;
     willRetry: boolean;
     retryCount: number;
@@ -109,7 +109,7 @@ export function reportFailedMail(
   return [
     `【失败·需决策】${opts.member} · 任务 ${task.id} ${task.subject}`,
     `障碍：${opts.error}`,
-    `重试已达上限（${opts.retryCount}/${opts.maxRetries}）。任务进入 awaiting_decision：请 eteams_reassign_task 换人、挂起待料，或向用户说明。`,
+    `重试已达上限（${opts.retryCount}/${opts.maxRetries}）。任务进入 wait_decision（待决策）：请 eteams_reassign_task 换人、挂起待料，或向用户说明。`,
     `（attempt ${opts.attemptId}）`,
   ].join('\n');
 }

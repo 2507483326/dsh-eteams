@@ -12,7 +12,6 @@ import type { ActivityState, PendingRouteEntry, RoutePatch, RouteTriple } from '
 /** 空快照：形状对齐迁移前 monitor.ts 的 EMPTY，store 初始态即此形状。 */
 const EMPTY: ActivityState = {
   teams: [],
-  archivedTeams: [],
   serverTime: 0,
   fetchedAt: 0,
   error: null,
@@ -21,12 +20,10 @@ const EMPTY: ActivityState = {
 };
 
 const routeKey = (teamId: string, target: RoutePatch['target']): string =>
-  target.kind === 'captain' ? `${teamId}|captain` : `${teamId}|member|${target.name}`;
+  `${teamId}|member|${target.name}`;
 
 const sameRoute = (a: RouteTriple, b: RouteTriple): boolean =>
-  a.provider === b.provider &&
-  a.model === b.model &&
-  (a.reasoningEffort ?? null) === (b.reasoningEffort ?? null);
+  a.model === b.model && (a.reasoningEffort ?? null) === (b.reasoningEffort ?? null);
 
 /** 读快照里目标路线；团队/成员不在（已删等）返回 null。 */
 const readRoute = (
@@ -36,20 +33,9 @@ const readRoute = (
 ): RouteTriple | null => {
   const team = snapshot.teams.find((t) => t.teamId === teamId);
   if (team === undefined) return null;
-  if (target.kind === 'captain') {
-    return {
-      provider: team.captain.provider,
-      model: team.captain.model,
-      reasoningEffort: team.captain.reasoningEffort,
-    };
-  }
   const member = team.members.find((m) => m.name === target.name);
   if (member === undefined) return null;
-  return {
-    provider: member.provider,
-    model: member.model,
-    reasoningEffort: member.reasoningEffort,
-  };
+  return { model: member.model, reasoningEffort: member.reasoningEffort };
 };
 
 /** 不可变地写目标路线（沿途浅拷贝）；目标不在返回 null=无从写。 */
@@ -62,16 +48,13 @@ const writeRoute = (
   const at = snapshot.teams.findIndex((t) => t.teamId === teamId);
   const team = snapshot.teams[at];
   if (at === -1 || team === undefined) return null;
-  if (target.kind === 'captain') {
-    const teams = [...snapshot.teams];
-    teams[at] = { ...team, captain: { ...team.captain, ...route } };
-    return { ...snapshot, teams };
-  }
   if (!team.members.some((m) => m.name === target.name)) return null;
   const teams = [...snapshot.teams];
   teams[at] = {
     ...team,
-    members: team.members.map((m) => (m.name === target.name ? { ...m, ...route } : m)),
+    members: team.members.map((m) =>
+      m.name === target.name ? { ...m, model: route.model, reasoningEffort: route.reasoningEffort } : m,
+    ),
   };
   return { ...snapshot, teams };
 };
@@ -136,7 +119,7 @@ export const activityModel: DvaModel<ActivityState> = {
       return { ...(restored ?? state), pendingRoutes: pending };
     },
     // last good 快照语义（对齐迁移前 publish({ ...state, fetchedAt, error })）：
-    // 只更新 fetchedAt/error，teams/archivedTeams/serverTime 等旧值原样保留。
+    // 只更新 fetchedAt/error，teams/serverTime 等旧值原样保留。
     // payload 缺键/缺省时沿用当前值（dva action 运行时不校验 payload 形状）。
     setError: (state, action) => {
       const payload = (action.payload ?? {}) as Partial<ActivityState>;

@@ -4,14 +4,14 @@
  * (user iteration 2026-09-03「主窗口发问题不合适——由领队子代理完成主持」);
  * it relays via eteams_dispatch_captain and shows the child's report.
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import { resolveCaller } from '../src/host/tools/identity';
-import { writeTeam } from '../src/host/state/store';
-import type { RuntimeEnv } from '../src/host/runtime/base';
+import { insertTeamRow, writeTeam, withTeamTx } from '../src/host/state/store';
+import { joinPath, type RuntimeEnv } from '../src/host/runtime/base';
 import {
   clearSessionTeam,
   getSessionTeamId,
@@ -23,18 +23,22 @@ import {
   registerCaptainChild,
   unregisterCaptainChild,
 } from '../src/host/runtime/captainAgent';
-import type { TeamState } from '../src/host/model/types';
+import { LEADER_NAME } from '../src/host/state/db';
+import { cleanupTempWorkspace } from './support/tmpWorkspace';
+import type { TaskMemberRecord, TeamState } from '../src/host/model/types';
 
 let ws: string;
 let root: string;
 
 beforeEach(() => {
   ws = mkdtempSync(join(tmpdir(), 'eteams-sessionteam-'));
-  root = join(ws, '.eteams');
+  // 状态根与 runtime 同口径（base.ts joinPath 的「/」拼法）——resolveCaller
+  // 里 stateRootOf 用的就是这把键；getDb 连接缓存按它做键，收尾才能关掉。
+  root = joinPath(ws, '.eteams');
 });
 
 afterEach(() => {
-  rmSync(ws, { recursive: true, force: true });
+  cleanupTempWorkspace(ws);
   clearSessionTeam('s-other');
   clearSessionTeam('s-creator');
   clearSessionTeam('s-x');
@@ -44,23 +48,33 @@ afterEach(() => {
 
 function team(overrides: Partial<TeamState> = {}): TeamState {
   return {
-    schemaVersion: 2,
-    id: 'demo',
+    id: 1,
     name: '演示团队',
-    goal: '目标',
-    captainSessionId: 's-creator',
-    phase: 'staged',
+    hasLeader: true,
     createdAt: 1,
     updatedAt: 1,
-    version: 0,
-    taskSeq: 0,
-    attemptSeq: 0,
-    mailSeq: 0,
-    maxRetries: 3,
+    taskMembers: [],
     members: [],
     tasks: [],
     pendingDecisions: [],
     ...overrides,
+  };
+}
+
+/** 领队实例行（task_members 领队行 mainSessionId 即领队会话锚点）。 */
+function leaderRow(teamId: number, mainSessionId: string): TaskMemberRecord {
+  return {
+    id: 0,
+    teamId,
+    mainTaskId: null,
+    nowTaskId: null,
+    name: LEADER_NAME,
+    employeeId: null,
+    mainSessionId,
+    childSessionId: '',
+    roleId: null,
+    status: 'ready',
+    createdAt: 1,
   };
 }
 
@@ -105,10 +119,11 @@ describe('sessionTeamSection branches', () => {
 
   it('is the same relay band whether or not the leader was removed', () => {
     // leaderRemoved once switched the main session into self-hosting; the
-    // relay split makes the roster entry irrelevant to the band.
+    // relay split makes the roster entry irrelevant to the band（领队移出
+    // 现在只落在 task_members 领队行的 status 上，band 不读它）.
     setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
     const kept = sessionTeamSection('s-other', () => team());
-    const removed = sessionTeamSection('s-other', () => team({ leaderRemoved: true }));
+    const removed = sessionTeamSection('s-other', () => team({ hasLeader: false }));
     expect(removed).toBe(kept);
     expect(removed).not.toContain('由你（本会话）充当领队');
   });
@@ -156,29 +171,50 @@ describe('resolveCaller 绑定优先 (binding-first identity)', () => {
     return { id } as unknown as Agent;
   }
 
+  /** SQLite 契约建队：team 行 + 领队实例行（mainSessionId 即领队锚点）。 */
+  async function seedTeam(name: string, leaderSession?: string): Promise<TeamState> {
+    let teamId = 0;
+    withTeamTx(root, undefined, (tx) => {
+      teamId = insertTeamRow(tx, name, leaderSession !== undefined, tx.now);
+    });
+    const state: TeamState = {
+      id: teamId,
+      name,
+      hasLeader: leaderSession !== undefined,
+      createdAt: 1,
+      updatedAt: 1,
+      taskMembers: leaderSession !== undefined ? [leaderRow(teamId, leaderSession)] : [],
+      members: [],
+      tasks: [],
+      pendingDecisions: [],
+    };
+    await writeTeam(root, state);
+    return state;
+  }
+
   it('resolves a bound non-captain session as the bound team captain', async () => {
-    await writeTeam(root, team());
-    setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
+    const seeded = await seedTeam('演示团队', 's-creator');
+    setSessionTeam('s-other', { teamId: String(seeded.id), name: seeded.name, boundAt: 1 });
     const caller = await resolveCaller(envFor(ws), agentOf('s-other'));
     expect(caller.kind).toBe('captain');
-    if (caller.kind === 'captain') expect(caller.team.id).toBe('demo');
+    if (caller.kind === 'captain') expect(caller.team.id).toBe(seeded.id);
   });
 
   it('resolves a registered captain child as its team captain (领队子代理)', async () => {
     // docs/26 用户迭代 2026-09-03: the dispatch-spawned child acts as the
     // team captain for every eteams_* call it makes.
-    await writeTeam(root, team({ captainSessionId: 's-creator' }));
-    registerCaptainChild('s-child', 'demo');
+    const seeded = await seedTeam('演示团队', 's-creator');
+    registerCaptainChild('s-child', String(seeded.id));
     const caller = await resolveCaller(envFor(ws), agentOf('s-child'));
     expect(caller.kind).toBe('captain');
-    if (caller.kind === 'captain') expect(caller.team.id).toBe('demo');
-    expect(captainChildTeamOf('s-child')).toBe('demo');
+    if (caller.kind === 'captain') expect(caller.team.id).toBe(seeded.id);
+    expect(captainChildTeamOf('s-child')).toBe(String(seeded.id));
   });
 
   it('captain-child registration beats neither binding nor falls to members', async () => {
     // A stranger id with a stale registration for a missing team falls
     // through to the normal not-in-team error.
-    await writeTeam(root, team());
+    await seedTeam('演示团队', 's-creator');
     registerCaptainChild('s-stranger', 'ghost-team');
     await expect(resolveCaller(envFor(ws), agentOf('s-stranger'))).rejects.toThrow(
       '当前会话不在任何 eteams 团队中',
@@ -186,31 +222,31 @@ describe('resolveCaller 绑定优先 (binding-first identity)', () => {
   });
 
   it('binding wins over the session own captaincy', async () => {
-    await writeTeam(root, team({ id: 'team-a', captainSessionId: 's-x' }));
-    await writeTeam(root, team({ id: 'team-b', name: '乙队' }));
-    setSessionTeam('s-x', { teamId: 'team-b', name: '乙队', boundAt: 1 });
+    await seedTeam('甲队', 's-x');
+    const teamB = await seedTeam('乙队');
+    setSessionTeam('s-x', { teamId: String(teamB.id), name: teamB.name, boundAt: 1 });
     const caller = await resolveCaller(envFor(ws), agentOf('s-x'));
-    if (caller.kind === 'captain') expect(caller.team.id).toBe('team-b');
+    if (caller.kind === 'captain') expect(caller.team.id).toBe(teamB.id);
     else throw new Error('expected captain caller');
   });
 
   it('creator captaincy still resolves without a binding', async () => {
-    await writeTeam(root, team());
+    const seeded = await seedTeam('演示团队', 's-creator');
     const caller = await resolveCaller(envFor(ws), agentOf('s-creator'));
     expect(caller.kind).toBe('captain');
-    if (caller.kind === 'captain') expect(caller.team.id).toBe('demo');
+    if (caller.kind === 'captain') expect(caller.team.id).toBe(seeded.id);
   });
 
   it('falls through when the bound team no longer exists', async () => {
-    await writeTeam(root, team({ id: 'team-a', captainSessionId: 's-x' }));
+    const teamA = await seedTeam('甲队', 's-x');
     setSessionTeam('s-x', { teamId: 'ghost', name: '幽灵', boundAt: 1 });
     const caller = await resolveCaller(envFor(ws), agentOf('s-x'));
-    if (caller.kind === 'captain') expect(caller.team.id).toBe('team-a');
+    if (caller.kind === 'captain') expect(caller.team.id).toBe(teamA.id);
     else throw new Error('expected captain caller');
   });
 
   it('still rejects a session with no binding, captaincy, or membership', async () => {
-    await writeTeam(root, team());
+    await seedTeam('演示团队', 's-creator');
     await expect(resolveCaller(envFor(ws), agentOf('s-stranger2'))).rejects.toThrow(
       '当前会话不在任何 eteams 团队中',
     );

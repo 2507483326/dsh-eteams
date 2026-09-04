@@ -11,18 +11,18 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { ETeamsResolvedConfig } from '../config.js';
 import type {
   EventRecord,
   MemberRecord,
-  MemberStatus,
   TaskRecord,
   TaskStatus,
   TeamState,
 } from '../model/types.js';
-import { archiveRoot, readEventsSync, readMailboxSync } from '../state/events.js';
+import { readEventsSync, readMailboxSync } from '../state/events.js';
+import { boardOverview } from '../state/queries.js';
 import { listTeamIds, readTeamSync } from '../state/store.js';
 import { joinPath, type RuntimeContext, type RuntimeEnv } from './base.js';
 import { taskDirRel } from './docs.js';
@@ -31,6 +31,7 @@ import {
   avatarSeedFor,
   ensurePresetMembers,
   findRosterMember,
+  formatEmployeeId,
   LEADER_NAME,
   readRoster,
   removeRosterMember,
@@ -38,18 +39,17 @@ import {
 } from './roster.js';
 import {
   addMember,
-  approvePlan,
   createTeam,
   deleteTeam,
   removeMember,
-  setLeaderModel,
   setLeaderRemoved,
   setMemberModel,
   syncMemberToRoster,
   updateMember,
 } from './teamOps.js';
-import { createTask, deleteTask, updateTask } from './assignment.js';
-import { notifyCaptain } from './notifier.js';
+import { createTask, deleteTask, taskOutcome, updateTask } from './assignment.js';
+import { leaderRowOf, latestInstanceRow, memberStatusOf } from './notifier.js';
+import { stationProgress } from '../model/taskMachine.js';
 import {
   answerBuildInterview,
   cancelBuildSession,
@@ -91,15 +91,8 @@ export interface StationView {
   stationStatus: 'done' | 'current' | 'pending';
 }
 
-/** Terminal + in-flight statuses that count a task as "busy" for progress. */
-const ACTIVE_STATUSES: TaskStatus[] = [
-  'assigned',
-  'in_progress',
-  'retrying',
-  'paused',
-  'awaiting_decision',
-  'needs_user',
-];
+/** 看板「进行中」五态（docs/27 §27.9#11 十态收敛；ready 是待派单列不算进行中）。 */
+const ACTIVE_STATUSES: TaskStatus[] = ['wait', 'start', 'paused', 'wait_decision', 'wait_user'];
 
 /** Station status for chain index `i` given the task state. */
 function stationStatusOf(
@@ -115,15 +108,18 @@ function stationStatusOf(
   return 'pending';
 }
 
-/** Per-member view row (docs/12.2; avatar/persona editors land in M6/M5). */
+/** Per-member view row (docs/12.2; avatar/persona editors land in M6/M5).
+ * 模板行承载人设/路线（docs/35 §3#5），状态与会话锚点按名聚合实例行
+ * （§5#12：同一人每条大任务一行实例行，行数不当人数）。 */
 function memberView(team: TeamState, m: MemberRecord) {
   const currentTask = team.tasks.find(
     (t) => t.assignee === m.name && ACTIVE_STATUSES.includes(t.status),
   );
+  const row = latestInstanceRow(team, m.name);
   return {
     name: m.name,
-    /** 工号 (docs/21); null for legacy members created before the field. */
-    employeeId: m.employeeId ?? null,
+    /** 工号 (docs/21)：格式化显示串（ET-0001）；null for legacy members. */
+    employeeId: m.employeeId !== undefined ? formatEmployeeId(m.employeeId) : null,
     role: m.role,
     // 成员详情（用户迭代 2026-09 四）：成员自己的角色手册副本——加入团队时
     // 从角色库复制，之后与角色详情各自独立；/persona 改写、/sync-roster 同步
@@ -134,40 +130,62 @@ function memberView(team: TeamState, m: MemberRecord) {
     skills: m.persona.skills,
     rules: m.persona.rules,
     executionPrompt: m.persona.executionPrompt,
-    status: m.status as MemberStatus,
-    provider: m.modelRoute.provider,
+    status: memberStatusOf(team, m.name),
     model: m.modelRoute.model,
     reasoningEffort: m.modelRoute.reasoningEffort ?? null,
     currentTaskId: currentTask?.id ?? null,
-    currentAttemptId: m.currentAttemptId ?? null,
-    childId: m.id || null,
-    removed: m.status === 'removed',
+    childId: row?.childSessionId ? row.childSessionId : null,
+    removed: false,
     avatar: m.avatar ?? null,
   };
 }
 
-/** Per-task view row with chain station marks and a compact attempt summary. */
-function taskView(t: TaskRecord, team: TeamState) {
+/** Per-task view row with chain station marks and a compact attempt summary.
+ * @param groupOutcomes 组容器的收口产出（docs/26）：组自身没有 attempts，
+ * 产出由 completeGroupIfDoneInTx 聚合进 task.completed 事件
+ * （payload.via='subtasks.completed'）——面板按事件反查，小任务仍走
+ * attempts 反查（docs/35 §5#10 产出不落列）。 */
+function taskView(t: TaskRecord, team: TeamState, groupOutcomes?: Map<number, string>) {
+  const station = stationProgress(t);
+  // 末站完成即 completed（chainCursor 不再推进，docs/35 §5#10）——完成态
+  // 按满进度口径显示站点。
+  const stationStatus = (i: number): StationView['stationStatus'] =>
+    t.status === 'completed'
+      ? 'done'
+      : stationStatusOf(t.status, t.chain.length, t.chainCursor, i);
   return {
     taskId: t.id,
     subject: t.subject,
-    kind: t.kind ?? 'task',
+    // 任务单（group 容器）判据：无父且有子任务（旧 kind 列已砍，docs/35 §3）。
+    kind: t.parentId === null && team.tasks.some((x) => x.parentId === t.id) ? 'group' : 'task',
     parentId: t.parentId ?? null,
-    folder: team.workDir ? taskDirRel(team, t) : null,
+    folder: taskDirRel(team, t),
     description: t.description ?? null,
+    // 合同四数组 + 幂等说明（docs/35 §3#7：任务补合同四数组）。
+    acceptance: t.acceptance ?? [],
+    inScope: t.inScope ?? [],
+    outOfScope: t.outOfScope ?? [],
+    deliverables: t.deliverables ?? [],
+    idempotencyNote: t.idempotencyNote ?? null,
+    // 阻塞徽标（docs/36 建议 1）：wait + blockedFrom 非空 = 物化阻塞。
+    blocked: t.blockedFrom !== undefined,
+    blockedFrom: t.blockedFrom ?? null,
+    statusNote: t.statusNote ?? null,
+    workDir: t.workDir ?? null,
     status: t.status,
     assignee: t.assignee ?? null,
     dependencies: t.dependencies,
     chain: t.chain.map((s, i): StationView => ({
       member: s.member,
       stageBrief: s.stageBrief,
-      stationStatus: stationStatusOf(t.status, t.chain.length, t.chainCursor, i),
+      stationStatus: stationStatus(i),
     })),
     chainCursor: t.chainCursor,
     chainLength: t.chain.length,
     retryCount: t.retryCount,
-    currentAttemptId: t.currentAttemptId ?? null,
-    outcome: t.status === 'completed' ? (t.outcome ?? null) : null,
+    // 产出不落列（docs/35 §5#10）：反查 attempts 最新成功行。
+    currentAttemptId: t.attempts.at(-1)?.id ?? null,
+    outcome: taskOutcome(t) ?? groupOutcomes?.get(t.id) ?? null,
     attemptSummary: t.attempts.slice(-3).map((a) => ({
       id: a.id,
       member: a.member,
@@ -178,7 +196,7 @@ function taskView(t: TaskRecord, team: TeamState) {
       lastEventText: a.progress.at(-1)?.text ?? a.error ?? a.result?.output ?? null,
       eventCount: a.progress.length,
     })),
-    updatedAt: t.attempts.at(-1)?.endedAt ?? t.attempts.at(-1)?.createdAt ?? t.createdAt,
+    updatedAt: t.updatedAt,
   };
 }
 
@@ -196,20 +214,27 @@ export function teamSnapshot(
   const rosterLeader = readRoster(joinPath(workspacePath, config.stateDir)).find(
     (m) => m.name === LEADER_NAME,
   );
+  const leader = leaderRowOf(team);
+  // 组收口产出（docs/26）：task.completed 事件 payload.via='subtasks.completed'
+  // 的聚合文本按 taskId 收敛，同任务多次收口取最新一条（Map 覆盖写）。
+  const events = readEventsSync(joinPath(workspacePath, config.stateDir), team.id);
+  const groupOutcomes = new Map<number, string>();
+  for (const e of events) {
+    if (e.type !== 'task.completed' || e.taskId === undefined) continue;
+    const payload = (e.payload ?? {}) as Record<string, unknown>;
+    if (payload.via !== 'subtasks.completed' || typeof payload.outcome !== 'string') continue;
+    groupOutcomes.set(e.taskId, payload.outcome);
+  }
   return {
     teamId: team.id,
     name: team.name,
-    goal: team.goal,
-    phase: team.phase,
-    planReviewState: team.planReviewState ?? null,
-    captainSessionId: team.captainSessionId,
-    version: team.version,
-    leaderRemoved: team.leaderRemoved === true,
-    // docs/26：staged 团队提交对话任务后 workDir 已提前分配——有值即展示。
-    workDir: team.workDir ?? null,
+    // 领队锚点（docs/35 §3）：领队行 main_session_id；移出/回团即行 status。
+    leaderRemoved: leader?.status === 'removed',
+    // docs/27 §27.9#4：goal / phase / planReviewState / version / workDir /
+    // leaderModelRoute 已随审批重构与成员模型收敛砍掉——面板不再消费。
     // docs/26：任务单（group 容器）不计入进度——进度只反映真实小任务。
     progress: (() => {
-      const real = team.tasks.filter((t) => t.kind !== 'group');
+      const real = team.tasks.filter((t) => !team.tasks.some((x) => x.parentId === t.id));
       return {
         completed: real.filter((t) => t.status === 'completed').length,
         total: real.length,
@@ -219,7 +244,8 @@ export function teamSnapshot(
     })(),
     captain: {
       name: '项目牧羊人',
-      employeeId: rosterLeader?.employeeId ?? 'ET-0001',
+      // 工号格式化显示串（ET-0001；roster 未读时按 1 号兜底）。
+      employeeId: formatEmployeeId(rosterLeader?.employeeId ?? 1),
       role: captainPersona.role,
       duty: captainPersona.duty,
       style: captainPersona.style,
@@ -228,14 +254,15 @@ export function teamSnapshot(
       // 头像（用户迭代 2026-09-03）：优先名册领队条目——面板「随机头像」
       // 换脸后团队页领队卡同步；缺省回落固定 (hashName, 7)。
       avatar: rosterLeader?.avatar ?? { seed: avatarSeedFor('项目牧羊人'), salt: 7 },
-      // 领队模型路线（用户迭代 2026-09）：flat 投影与 memberView 同构；
-      // 'inherit' = 会话默认。成员「跟随领队」spawn 时解析到这条 override。
-      provider: team.leaderModelRoute?.provider ?? 'inherit',
-      model: team.leaderModelRoute?.model ?? 'inherit',
-      reasoningEffort: team.leaderModelRoute?.reasoningEffort ?? null,
     },
-    members: team.members.filter((m) => m.status !== 'removed').map((m) => memberView(team, m)),
-    tasks: team.tasks.map((t) => taskView(t, team)),
+    // 成员 = 班底模板行（实例行全部 removed 的成员不再展示，docs/35 §5#12）。
+    members: team.members
+      .filter((m) => {
+        const rows = team.taskMembers.filter((r) => r.name === m.name);
+        return rows.length === 0 || rows.some((r) => r.status !== 'removed');
+      })
+      .map((m) => memberView(team, m)),
+    tasks: team.tasks.map((t) => taskView(t, team, groupOutcomes)),
     pendingDecisions: team.pendingDecisions
       .filter((d) => d.status === 'open')
       .map((d) => ({
@@ -245,7 +272,7 @@ export function teamSnapshot(
         retryCount: d.retryCount,
         createdAt: d.createdAt,
       })),
-    latestEvents: readEventsSync(joinPath(workspacePath, config.stateDir), team.id)
+    latestEvents: events
       .slice(-30)
       .map((e) => ({
         seq: e.seq,
@@ -262,14 +289,12 @@ export function teamSnapshot(
 /** One-line human summary of an event for the 动态 view. */
 export function summarizeEvent(e: EventRecord): string {
   const p = (e.payload ?? {}) as Record<string, unknown>;
-  const task = typeof p.taskId === 'string' ? p.taskId : (e.taskId ?? '');
+  const task = e.taskId !== undefined ? `#${e.taskId}` : '';
   switch (e.type) {
     case 'team.created':
       return `创建团队「${String(p.name ?? '')}」`;
     case 'plan.questionnaire':
       return `问询完成（${String(p.count ?? '?')} 问）`;
-    case 'plan.approved':
-      return '计划已批准，团队启动';
     case 'member.added':
       return `成员「${String(p.name ?? '')}」加入`;
     case 'member.removed':
@@ -331,38 +356,6 @@ async function collectTeams(
     }
   }
   return snapshots;
-}
-
-/** Archived team summaries (post-delete review, read-only). */
-function collectArchivedTeams(
-  ctx: Context,
-  config: ETeamsResolvedConfig,
-): Record<string, unknown>[] {
-  const registry = workspaceRegistryOf(ctx);
-  if (!registry) return [];
-  const summaries: Record<string, unknown>[] = [];
-  for (const workspace of registry.list()) {
-    const root = joinPath(workspace.path, config.stateDir);
-    const archive = archiveRoot(root);
-    let ids: string[];
-    try {
-      ids = readdirSync(archive);
-    } catch {
-      continue;
-    }
-    for (const teamId of ids) {
-      const team = readTeamSync(archive, teamId);
-      if (!team) continue;
-      summaries.push({
-        teamId: team.id,
-        name: team.name,
-        goal: team.goal,
-        phase: team.phase,
-        workDir: team.workDir ?? null,
-      });
-    }
-  }
-  return summaries;
 }
 
 // ---------- lazy route installation ----------
@@ -681,7 +674,6 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                     ? { executionPrompt: str(body.executionPrompt) }
                     : {}),
                   ...(body.personaMd !== undefined ? { personaMd: str(body.personaMd) } : {}),
-                  ...(body.provider !== undefined ? { provider: str(body.provider) } : {}),
                   ...(body.model !== undefined ? { model: str(body.model) } : {}),
                   ...(body.reasoningEffort !== undefined
                     ? { reasoningEffort: str(body.reasoningEffort) }
@@ -701,17 +693,13 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                 sendError(res, 400, 'name / sessionId 均不能为空');
                 return;
               }
-              // Panel-created teams may omit the goal (name-only creation);
-              // the captain refines it in conversation afterwards.
-              const goal = str(body.goal, '') || '（待完善：与领队在对话中确认目标）';
+              // 建队即生效（docs/35 §5#1：审批环节下线，目标在对话中确认）。
               const workspace = writeWorkspacePath(ctx, config);
               const team = await createTeam(envFor(ctx, config, workspace), agentFor(sessionId), {
                 name,
-                goal,
-                approval: 'required',
                 via: 'panel',
               });
-              sendJson(res, 200, { ok: true, teamId: team.id, name: team.name, phase: team.phase });
+              sendJson(res, 200, { ok: true, teamId: team.id, name: team.name });
               return;
             }
             if (
@@ -744,7 +732,7 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               try {
                 result = await addMember(
                   envFor(ctx, config, workspacePath),
-                  agentFor(team.captainSessionId),
+                  captainAgentOf(team),
                   {
                     name,
                     role: str(body.role, entry?.role ?? 'member'),
@@ -781,13 +769,13 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                     ...(str(body.employeeId, '') !== ''
                       ? { employeeId: str(body.employeeId) }
                       : entry?.employeeId !== undefined
-                        ? { employeeId: entry.employeeId }
+                        ? { employeeId: String(entry.employeeId) }
                         : {}),
                     ...(entry?.avatar !== undefined ? { avatar: entry.avatar } : {}),
-                    ...(body.provider !== undefined && body.model !== undefined
-                      ? { provider: str(body.provider), model: str(body.model) }
-                      : entry?.provider !== undefined && entry.model !== undefined
-                        ? { provider: entry.provider, model: entry.model }
+                    ...(str(body.model, '') !== ''
+                      ? { model: str(body.model) }
+                      : entry?.model !== undefined
+                        ? { model: entry.model }
                         : {}),
                     ...(body.reasoningEffort !== undefined
                       ? { reasoningEffort: str(body.reasoningEffort) }
@@ -807,7 +795,7 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                 member: {
                   name: result.member.name,
                   role: result.member.role,
-                  status: result.member.status,
+                  employeeId: result.member.employeeId ?? null,
                 },
               });
               return;
@@ -849,7 +837,7 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               try {
                 await removeMember(
                   envFor(ctx, config, workspacePath),
-                  agentFor(team.captainSessionId),
+                  captainAgentOf(team),
                   segments[3]!,
                   team.id,
                 );
@@ -880,11 +868,10 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               try {
                 await setMemberModel(
                   envFor(ctx, config, workspacePath),
-                  agentFor(team.captainSessionId),
+                  captainAgentOf(team),
                   {
                     teamId: team.id,
                     name: decodeURIComponent(segments[3]!),
-                    ...(str(body.provider, '') !== '' ? { provider: str(body.provider) } : {}),
                     ...(str(body.model, '') !== '' ? { model: str(body.model) } : {}),
                     ...(str(body.reasoningEffort, '') !== ''
                       ? { reasoningEffort: str(body.reasoningEffort) }
@@ -923,7 +910,7 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               try {
                 await updateMember(
                   envFor(ctx, config, workspacePath),
-                  agentFor(team.captainSessionId),
+                  captainAgentOf(team),
                   { teamId: team.id, name: decodeURIComponent(segments[3]!), personaMd },
                 );
               } catch (e) {
@@ -953,7 +940,7 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               try {
                 await syncMemberToRoster(
                   envFor(ctx, config, workspacePath),
-                  agentFor(team.captainSessionId),
+                  captainAgentOf(team),
                   {
                     teamId: team.id,
                     name: decodeURIComponent(segments[3]!),
@@ -986,7 +973,7 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               try {
                 await setLeaderRemoved(
                   envFor(ctx, config, workspacePath),
-                  agentFor(team.captainSessionId),
+                  captainAgentOf(team),
                   {
                     teamId: team.id,
                     removed: segments[3] === 'remove',
@@ -999,48 +986,12 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               sendJson(res, 200, { ok: true });
               return;
             }
-            // POST /team/<id>/leader/model - set the leader's model route
-            // (user iteration 2026-09: the leader picks a model). The leader
-            // is the panel session itself; this route is the team default
-            // that members on 跟随领队 resolve to at spawn. Empty body clears.
-            if (
-              req.method === 'POST' &&
-              segments[0] === 'team' &&
-              segments.length === 4 &&
-              segments[2] === 'leader' &&
-              segments[3] === 'model'
-            ) {
-              const body = parseJsonObject(await readBody(req));
-              const located = locateTeam(ctx, config, segments[1]!);
-              if (!located) {
-                sendError(res, 404, '团队 ' + segments[1] + ' 不存在');
-                return;
-              }
-              const { team, workspacePath } = located;
-              try {
-                await setLeaderModel(
-                  envFor(ctx, config, workspacePath),
-                  agentFor(team.captainSessionId),
-                  {
-                    teamId: team.id,
-                    ...(str(body.provider, '') !== '' ? { provider: str(body.provider) } : {}),
-                    ...(str(body.model, '') !== '' ? { model: str(body.model) } : {}),
-                    ...(str(body.reasoningEffort, '') !== ''
-                      ? { reasoningEffort: str(body.reasoningEffort) }
-                      : {}),
-                  },
-                );
-              } catch (e) {
-                sendError(res, 400, e instanceof Error ? e.message : String(e));
-                return;
-              }
-              sendJson(res, 200, { ok: true });
-              return;
-            }
+            // docs/36 建议 5：领队模型路线（/team/<id>/leader/model）随审批
+            // 重构下线——成员「跟随」在派发时解析到领队会话路线，无团队级
+            // 覆盖项可设。
             // POST /team/<id>/delete — permanently remove a team directory
-            // (deleteTeam allows staged/completed/halted only; running teams
-            // must cancel tasks first). 团队列表小卡片「删除」按钮（用户迭代
-            // 2026-09 七）。
+            // (deleteTeam rejects teams with active tasks; cancel or finish
+            // them first). 团队列表小卡片「删除」按钮（用户迭代 2026-09 七）。
             if (
               req.method === 'POST' &&
               segments[0] === 'team' &&
@@ -1056,7 +1007,7 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               try {
                 await deleteTeam(
                   envFor(ctx, config, workspacePath),
-                  agentFor(team.captainSessionId),
+                  captainAgentOf(team),
                   team.id,
                 );
               } catch (e) {
@@ -1089,6 +1040,11 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               }
               const { team, workspacePath } = located;
               const chain = readChainParam(body.chain);
+              const parentTaskIdRaw = str(body.parentTaskId, '');
+              const parentTaskId =
+                parentTaskIdRaw !== '' && Number.isFinite(Number(parentTaskIdRaw))
+                  ? Number(parentTaskIdRaw)
+                  : undefined;
               try {
                 const task = await createTask(
                   envFor(ctx, config, workspacePath),
@@ -1098,9 +1054,7 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                     ...(body.description !== undefined
                       ? { description: str(body.description) }
                       : {}),
-                    ...(str(body.parentTaskId, '') !== ''
-                      ? { parentTaskId: str(body.parentTaskId) }
-                      : {}),
+                    ...(parentTaskId !== undefined ? { parentTaskId } : {}),
                     ...(chain !== undefined ? { chain } : {}),
                   },
                 );
@@ -1127,12 +1081,13 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               }
               const { team, workspacePath } = located;
               const chain = readChainParam(body.chain);
+              const taskId = Number.parseInt(segments[3] ?? '', 10);
               try {
                 const task = await updateTask(
                   envFor(ctx, config, workspacePath),
                   { teamId: team.id, actor: { kind: 'user', name: '用户' } },
                   {
-                    taskId: segments[3]!,
+                    taskId,
                     ...(str(body.subject, '') !== '' ? { subject: str(body.subject) } : {}),
                     ...(body.description !== undefined
                       ? { description: str(body.description) }
@@ -1161,11 +1116,16 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                 return;
               }
               const { team, workspacePath } = located;
+              const deleteTaskId = Number.parseInt(segments[3] ?? '', 10);
+              if (!Number.isFinite(deleteTaskId)) {
+                sendError(res, 400, `任务号无效：${segments[3]}`);
+                return;
+              }
               try {
                 await deleteTask(
                   envFor(ctx, config, workspacePath),
                   { teamId: team.id, actor: { kind: 'user', name: '用户' } },
-                  segments[3]!,
+                  deleteTaskId,
                 );
               } catch (e) {
                 sendError(res, 400, e instanceof Error ? e.message : String(e));
@@ -1174,43 +1134,9 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               sendJson(res, 200, { ok: true });
               return;
             }
-            // POST /team/<id>/approve — the panel 批准计划 button (docs/26):
-            // the user's approval gate; reuses approvePlan（workDir 幂等分配、
-            // draft→ready、全员 spawn、phase→running）.
-            if (
-              req.method === 'POST' &&
-              segments[0] === 'team' &&
-              segments.length === 3 &&
-              segments[2] === 'approve'
-            ) {
-              const located = locateTeam(ctx, config, segments[1]!);
-              if (!located) {
-                sendError(res, 404, `团队 ${segments[1]} 不存在`);
-                return;
-              }
-              const { team, workspacePath } = located;
-              try {
-                await approvePlan(
-                  envFor(ctx, config, workspacePath),
-                  agentFor(team.captainSessionId),
-                  team.id,
-                );
-              } catch (e) {
-                sendError(res, 400, e instanceof Error ? e.message : String(e));
-                return;
-              }
-              sendJson(res, 200, { ok: true });
-              // 批准后执行衔接（docs/26 用户迭代 2026-09-03）：执行期指派由
-              // 领队子代理接管——唤醒领队会话转交；会话不在线时邮件滞留
-              // 邮箱、下次唤醒补投（notifier 已有语义）。best-effort，
-              // 不影响已成功的批准响应。
-              void notifyCaptain(
-                envFor(ctx, config, workspacePath),
-                team,
-                '计划已批准——请转交领队按链指派执行',
-              ).catch(() => undefined);
-              return;
-            }
+            // docs/35 §5#1：批准环节下线（POST /team/<id>/approve 路由与
+            // 'plan.approved' 事件分支随之删除）——计划在对话内确认，任务
+            // 就绪后由领队直接指派执行。
             // ---------- role-builder build session (docs/19.6, D18) ----------
             // GET /rolebuilder — the single build-session slot; {empty:true}
             // when no session exists yet.
@@ -1246,7 +1172,6 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                   : {}),
                 ...(body.personaMd !== undefined ? { personaMd: str(body.personaMd) } : {}),
                 ...(isAvatarPair(body.avatar) ? { avatar: body.avatar } : {}),
-                ...(body.provider !== undefined ? { provider: str(body.provider) } : {}),
                 ...(body.model !== undefined ? { model: str(body.model) } : {}),
                 ...(body.reasoningEffort !== undefined
                   ? { reasoningEffort: str(body.reasoningEffort) }
@@ -1478,10 +1403,28 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               sendJson(res, 200, { members: readRoster(rootForWrites(ctx, config)) });
               return;
             }
+            if (segments[0] === 'board' && segments.length === 1) {
+              // 跨团队聚合面板（docs/35 §6：Q1/Q3/Q4/Q5/Q9，纯只读 SQL）。
+              const registry = workspaceRegistryOf(ctx);
+              const teams: unknown[] = [];
+              if (registry) {
+                for (const workspace of registry.list()) {
+                  try {
+                    teams.push(...boardOverview(joinPath(workspace.path, config.stateDir)));
+                  } catch (e) {
+                    const logger = (ctx as unknown as { logger?: { warn?: (m: string) => void } })
+                      .logger;
+                    if (typeof logger?.warn === 'function')
+                      logger.warn(`eteams: board aggregation skipped a workspace: ${String(e)}`);
+                  }
+                }
+              }
+              sendJson(res, 200, { teams, serverTime: Date.now() });
+              return;
+            }
             if (segments[0] === 'state' && segments.length === 1) {
               sendJson(res, 200, {
                 teams: await collectTeams(ctx, config),
-                archivedTeams: collectArchivedTeams(ctx, config),
                 maxMembers: config.maxMembers,
                 serverTime: Date.now(),
               });
@@ -1508,16 +1451,18 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               }
               // GET /team/<id>/agentactivity — member subagent activity dots
               // (docs/20.4 P4): feature-detected listChildren; empty on older
-              // runtimes (panel renders no dots then).
+              // runtimes (panel renders no dots then). 锚点是领队行
+              // main_session_id（docs/35 §3）——领队不在线时无活动可报。
               if (segments[2] === 'agentactivity') {
                 const list = (ctx as unknown as RuntimeContext).subagents?.listChildren;
-                if (list === undefined) {
+                const leaderSessionId = leaderRowOf(team)?.mainSessionId ?? '';
+                if (list === undefined || leaderSessionId === '') {
                   sendJson(res, 200, { activity: {} });
                   return;
                 }
                 const entries = await list.call(
                   (ctx as unknown as RuntimeContext).subagents,
-                  team.captainSessionId as never,
+                  leaderSessionId as never,
                 );
                 const activity: Record<string, string> = {};
                 for (const entry of entries) {
@@ -1529,9 +1474,12 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                 return;
               }
               if (segments[2] === 'task' && segments[4] === 'track') {
-                const task = team.tasks.find((t) => t.id === segments[3]);
+                const taskId = Number.parseInt(segments[3] ?? '', 10);
+                const task = Number.isFinite(taskId)
+                  ? team.tasks.find((t) => t.id === taskId)
+                  : undefined;
                 if (!task) {
-                  sendError(res, 404, `任务 ${segments[3]} 不存在`);
+                  sendError(res, 404, `任务 #${segments[3]} 不存在`);
                   return;
                 }
                 const decision =
@@ -1540,10 +1488,16 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                   taskId: task.id,
                   attempts: task.attempts,
                   decision,
+                  // 产出不落列（docs/35 §5#10）：反查 attempts 最新成功行。
+                  outcome: taskOutcome(task) ?? null,
                   contract: {
                     subject: task.subject,
                     description: task.description ?? null,
                     acceptance: task.acceptance ?? [],
+                    inScope: task.inScope ?? [],
+                    outOfScope: task.outOfScope ?? [],
+                    deliverables: task.deliverables ?? [],
+                    idempotencyNote: task.idempotencyNote ?? null,
                     chain: task.chain,
                   },
                 });
@@ -1551,13 +1505,15 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               }
               if (segments[2] === 'member' && segments[4] === 'dialog') {
                 const name = segments[3]!;
-                const member = team.members.find((m) => m.name === name);
-                if (!member) {
+                const known =
+                  team.members.some((m) => m.name === name) ||
+                  team.taskMembers.some((r) => r.name === name && r.status !== 'removed');
+                if (!known) {
                   sendError(res, 404, `成员 ${name} 不存在`);
                   return;
                 }
                 const after = Number(url.searchParams.get('after') ?? '0') || 0;
-                sendJson(res, 200, memberDialog(root, team, member, after));
+                sendJson(res, 200, memberDialog(root, team, name, after));
                 return;
               }
               // GET /team/<id>/usage/calendar?year=<y> — 每日 Token 消耗日历
@@ -1573,7 +1529,7 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                   sendError(res, 400, `year 参数无效（需 2000-2999 的整数）：${String(yearParam)}`);
                   return;
                 }
-                const calendar = readUsageCalendar(root, team.id, year);
+                const calendar = readUsageCalendar(root, String(team.id), year);
                 sendJson(res, 200, {
                   teamId: team.id,
                   year,
@@ -1630,6 +1586,11 @@ function envFor(ctx: Context, config: ETeamsResolvedConfig, workspace: string): 
 /** Synthesize the captain Agent identity from a session id (staged ops only need id). */
 function agentFor(sessionId: string): Agent {
   return { id: sessionId } as unknown as Agent;
+}
+
+/** 领队身份锚点（docs/35 §3）：面板写操作统一以领队行 main_session_id 充当队长代理。 */
+function captainAgentOf(team: TeamState): Agent {
+  return agentFor(leaderRowOf(team)?.mainSessionId ?? '');
 }
 
 /**
@@ -1689,16 +1650,18 @@ function readAvatarPair(value: unknown): { seed: number; salt: number } | undefi
   return { seed, salt };
 }
 
-/** Member dialog timeline (D15 read-only): mailbox rows + member events merged. */
+/** Member dialog timeline (D15 read-only): mailbox rows + member events merged.
+ * 成员是模板行（docs/35 §3#5）：状态按实例行聚合（memberStatusOf），当前
+ * 任务按 assignee 查活跃五态；聚合不按实例行行数当人数（§5#12）。 */
 function memberDialog(
   root: string,
   team: TeamState,
-  member: MemberRecord,
+  memberName: string,
   after: number,
 ): Record<string, unknown> {
-  type Item = { at: number; kind: string; text: string; taskId?: string; from?: string };
+  type Item = { at: number; kind: string; text: string; taskId?: number; from?: string };
   const items: Item[] = [];
-  for (const m of readMailboxSync(root, team.id, member.name)) {
+  for (const m of readMailboxSync(root, team.id, memberName)) {
     if (m.seq <= after) continue;
     items.push({
       at: m.at,
@@ -1710,7 +1673,7 @@ function memberDialog(
   }
   for (const task of team.tasks) {
     for (const attempt of task.attempts) {
-      if (attempt.member !== member.name) continue;
+      if (attempt.member !== memberName) continue;
       for (const note of attempt.progress) {
         if (note.at <= after) continue;
         items.push({
@@ -1718,17 +1681,17 @@ function memberDialog(
           kind: 'progress',
           text: note.text,
           taskId: task.id,
-          from: member.name,
+          from: memberName,
         });
       }
     }
   }
   items.sort((a, b) => a.at - b.at);
   const currentTask = team.tasks.find(
-    (t) => t.assignee === member.name && ACTIVE_STATUSES.includes(t.status),
+    (t) => t.assignee === memberName && ACTIVE_STATUSES.includes(t.status),
   );
   return {
-    memberStatus: member.status,
+    memberStatus: memberStatusOf(team, memberName),
     currentTaskId: currentTask?.id ?? null,
     items,
     serverTime: Date.now(),

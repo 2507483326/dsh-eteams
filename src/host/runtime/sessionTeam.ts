@@ -86,9 +86,7 @@ export function sessionTeamSection(
   }
   return [
     '【eteams 团队绑定·生效中】',
-    `本会话绑定团队「${neutralizeInterpolation(team.name)}」（目标：${neutralizeInterpolation(
-      team.goal || '（待完善）',
-    )} · 状态：${team.phase}）。`,
+    `本会话绑定团队「${neutralizeInterpolation(team.name)}」（${team.tasks.length} 个任务在案）。`,
     // 用户迭代 2026-09-03「选择团队然后使用团队开始任务，主对话直接开始完成
     // 任务」：实测模型看到 band 仍以「消息没点名团队」为由自己动手（把触发
     // 条件当成显式短语匹配）。改为绑定即意图：选中团队 = 本对话的任务都

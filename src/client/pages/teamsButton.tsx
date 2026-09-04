@@ -61,7 +61,6 @@ import { writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives';
 // lucide 深层图标导入（dialog.tsx 先例：深层 .mjs 只进用到的图标）。
 import Plus from 'lucide-react/dist/esm/icons/plus.mjs';
 import { ADD_PEOPLE_TEMPLATE, prefillComposer } from '../lib/addPeople';
-import { PHASE_LABELS } from '../lib/phaseLabels';
 import { ClientErrorBoundary, recordClientDiag } from '../lib/diagnostics';
 import { enterTeamsPanel } from './teamsPanel';
 import {
@@ -659,15 +658,14 @@ function TeamsPopup(props: {
                       onClick={() => onSelectTeam({ teamId: t.teamId, name: t.name })}
                       // Static title（防闪烁）：切换选中时 title 不变，原生 tooltip
                       // 不会在指针下重弹。
-                      title={`${t.name} · ${t.goal}`}
+                      title={t.name}
                     >
                       <span className={ROW_NAME_CLASS}>{t.name}</span>
                       {isTeamSelected ? (
                         <span className={ROW_META_CLASS}>已选</span>
                       ) : (
                         <span className={ROW_META_CLASS}>
-                          {PHASE_LABELS[t.phase] ?? t.phase} · {t.progress.completed}/
-                          {t.progress.total}
+                          {t.progress.completed}/{t.progress.total} 完成
                         </span>
                       )}
                     </button>

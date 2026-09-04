@@ -1,27 +1,3 @@
-{"at":1787921408873,"version":"v0.2.0","entry":{"at":1787921406870,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787922054850,"version":"v0.2.0","entry":{"at":1787922052191,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787922170715,"version":"v0.2.0","entry":{"at":1787922168652,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787922829246,"version":"v0.2.0","entry":{"at":1787922827237,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787922959409,"version":"v0.2.0","entry":{"at":1787922957256,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787923218403,"version":"v0.2.0","entry":{"at":1787922957256,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787923218403,"version":"v0.2.0","entry":{"at":1787923216389,"kind":"error","message":"Uncaught ReferenceError: exports is not defined","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=9bf3098a8af7:1:23"}}
-{"at":1787923219092,"version":"v0.2.0","entry":{"at":1787923217083,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787924065750,"version":"v0.2.0","entry":{"at":1787924063612,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787924706846,"version":"v0.2.0","entry":{"at":1787924704177,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787925530717,"version":"v0.2.0","entry":{"at":1787925528579,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787926408260,"version":"v0.2.0","entry":{"at":1787925528579,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787926408260,"version":"v0.2.0","entry":{"at":1787926406245,"kind":"error","message":"Uncaught ReferenceError: exports is not defined","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=2c661421dc91:1:23"}}
-{"at":1787926409007,"version":"v0.2.0","entry":{"at":1787926407002,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787926586239,"version":"v0.2.0","entry":{"at":1787926584216,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787926963744,"version":"v0.2.0","entry":{"at":1787926961736,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787927071755,"version":"v0.2.0","entry":{"at":1787927069528,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787927660687,"version":"v0.2.0","entry":{"at":1787927658679,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787927832484,"version":"v0.2.0","entry":{"at":1787927830266,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787928217742,"version":"v0.2.0","entry":{"at":1787928215736,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787928294818,"version":"v0.2.0","entry":{"at":1787927830266,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787928294818,"version":"v0.2.0","entry":{"at":1787928291953,"kind":"error","message":"Uncaught ReferenceError: exports is not defined","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=ad4f8f884bfa:1:23"}}
-{"at":1787928294841,"version":"v0.2.0","entry":{"at":1787928215736,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787928294841,"version":"v0.2.0","entry":{"at":1787928291954,"kind":"error","message":"Uncaught ReferenceError: exports is not defined","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=ad4f8f884bfa:1:23"}}
 {"at":1787928294856,"version":"v0.2.0","entry":{"at":1787928292762,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
 {"at":1787928522126,"version":"v0.2.0","entry":{"at":1787928520045,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
 {"at":1787976708523,"version":"v0.2.0","entry":{"at":1787976706503,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
@@ -398,3 +374,27 @@
 {"at":1788502556074,"version":"v0.2.12","entry":{"at":1788502554064,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
 {"at":1788502558524,"version":"v0.2.12","entry":{"at":1788502554064,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
 {"at":1788502558524,"version":"v0.2.12","entry":{"at":1788502556521,"kind":"backdrop-geom","message":"canvas=1577x951 attr=position: absolute; top: 0px; left: 0px; width: 100%; height: 951px; opacity: 1; root=1577x951 scroll=1577x1041"}}
+{"at":1788503322488,"version":"v0.2.12","entry":{"at":1788503320469,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788503325199,"version":"v0.2.12","entry":{"at":1788503320469,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788503325199,"version":"v0.2.12","entry":{"at":1788503323193,"kind":"backdrop-geom","message":"canvas=1333x951 attr=position: absolute; top: 0px; left: 0px; width: 100%; height: 951px; opacity: 1; root=1333x951 scroll=1333x1041"}}
+{"at":1788504627680,"version":"v0.2.12","entry":{"at":1788504625667,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788504630123,"version":"v0.2.12","entry":{"at":1788504625667,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788504630123,"version":"v0.2.12","entry":{"at":1788504628120,"kind":"backdrop-geom","message":"canvas=1333x951 attr=position: absolute; top: 0px; left: 0px; width: 100%; height: 951px; opacity: 1; root=1333x951 scroll=1333x1041"}}
+{"at":1788504672103,"version":"v0.2.12","entry":{"at":1788504669589,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788504674118,"version":"v0.2.12","entry":{"at":1788504669589,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788504674118,"version":"v0.2.12","entry":{"at":1788504672101,"kind":"backdrop-geom","message":"canvas=1333x945 attr=position: absolute; top: 0px; left: 0px; width: 100%; height: 945px; opacity: 1; root=1333x945 scroll=1333x1041"}}
+{"at":1788508625102,"version":"v0.2.12","entry":{"at":1788508622798,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788508627103,"version":"v0.2.12","entry":{"at":1788508622798,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788508627103,"version":"v0.2.12","entry":{"at":1788508625099,"kind":"backdrop-geom","message":"canvas=1333x945 attr=position: absolute; top: 0px; left: 0px; width: 100%; height: 945px; opacity: 1; root=1333x945 scroll=1333x1041"}}
+{"at":1788508796096,"version":"v0.2.12","entry":{"at":1788508793897,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788508798112,"version":"v0.2.12","entry":{"at":1788508793897,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788508798112,"version":"v0.2.12","entry":{"at":1788508796095,"kind":"backdrop-geom","message":"canvas=1333x945 attr=position: absolute; top: 0px; left: 0px; width: 100%; height: 945px; opacity: 1; root=1333x945 scroll=1333x1041"}}
+{"at":1788509593094,"version":"v0.2.12","entry":{"at":1788509590299,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788509595109,"version":"v0.2.12","entry":{"at":1788509590299,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788509595109,"version":"v0.2.12","entry":{"at":1788509593093,"kind":"backdrop-geom","message":"canvas=1333x945 attr=position: absolute; top: 0px; left: 0px; width: 100%; height: 945px; opacity: 1; root=1333x945 scroll=1333x1041"}}
+{"at":1788518764095,"version":"v0.2.12","entry":{"at":1788518761712,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788518767099,"version":"v0.2.12","entry":{"at":1788518761712,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788518767099,"version":"v0.2.12","entry":{"at":1788518764094,"kind":"backdrop-geom","message":"canvas=1333x945 attr=position: absolute; top: 0px; left: 0px; width: 100%; height: 945px; opacity: 1; root=1333x945 scroll=1333x1041"}}
+{"at":1788519223092,"version":"v0.2.12","entry":{"at":1788519220632,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788519225103,"version":"v0.2.12","entry":{"at":1788519220632,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788519225103,"version":"v0.2.12","entry":{"at":1788519223091,"kind":"backdrop-geom","message":"canvas=1333x945 attr=position: absolute; top: 0px; left: 0px; width: 100%; height: 945px; opacity: 1; root=1333x945 scroll=1333x1041"}}

@@ -13,15 +13,15 @@ const API_BASE = '/eteams-api';
 /** One reusable member definition in the workspace roster (D16). */
 export interface RosterMember {
   name: string;
-  /** 工号 (docs/21): host-allocated `ET-0001` style id; stable across teams. */
-  employeeId?: string;
+  /** 工号 (docs/21): host 发整数工号（显示补零走 host 快照的格式化串）。 */
+  employeeId?: number;
   role: string;
   duty?: string;
   style?: string;
   skills?: string;
   rules?: string[];
   executionPrompt?: string;
-  provider?: string;
+  /** Optional per-member model route（docs/35 §3#5：provider 已砍）。 */
   model?: string;
   reasoningEffort?: string;
   /** Pre-generated avatar pair (docs/14); host assigns one when absent. */
@@ -44,8 +44,7 @@ export interface NewMemberInput {
   personaMd?: string;
   /** Pre-generated avatar pair（详情页「随机头像」透传，用户迭代 2026-09-03）. */
   avatar?: { seed: number; salt: number };
-  /** Preserved fields re-sent by the role-detail save (host replaces the entry). */
-  provider?: string;
+  /** Optional model route re-sent by the role-detail save (host replaces the entry). */
   model?: string;
   reasoningEffort?: string;
 }
@@ -84,25 +83,21 @@ export async function saveRosterMember(member: NewMemberInput): Promise<void> {
 }
 
 /**
- * Create a staged team bound to the current session (panel flow). Returns
- * the created teamId so the panel can select the new team immediately.
+ * Create a team bound to the current session (panel flow). Returns the
+ * created teamId so the panel can select the new team immediately.
+ * docs/35 §5#1：审批环节下线——建队即生效，不再有 goal 字段。
  */
 export async function createTeamViaPanel(
   sessionId: string,
   name: string,
-  goal?: string,
 ): Promise<{ teamId: string; name: string }> {
   const body = (await requestJson(`${API_BASE}/team`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      name,
-      sessionId,
-      ...(goal !== undefined && goal.trim() !== '' ? { goal: goal.trim() } : {}),
-    }),
+    body: JSON.stringify({ name, sessionId }),
   })) as { teamId?: unknown };
   return {
-    teamId: typeof body.teamId === 'string' ? body.teamId : '',
+    teamId: typeof body.teamId === 'number' ? String(body.teamId) : String(body.teamId ?? ''),
     name,
   };
 }
@@ -134,12 +129,14 @@ export async function addTeamMember(
 
 /**
  * Set one member's model route（成员卡右侧模型选择）：model 为空 = 重置为
- * 继承领队路线。运行中的成员在下次启动时生效（staged 成员启动即生效）。
+ * 跟随（继承领队会话模型）。运行中的成员在下次启动时生效（staged 成员启动
+ * 即生效）。docs/35 §3#5：body 只收 {model, reasoningEffort}，provider 由
+ * host 按配置解析。
  */
 export async function setMemberModel(
   teamId: string,
   name: string,
-  model: { provider?: string; model?: string; reasoningEffort?: string },
+  model: { model?: string; reasoningEffort?: string },
 ): Promise<void> {
   await requestJson(
     `${API_BASE}/team/${encodeURIComponent(teamId)}/member/${encodeURIComponent(name)}/model`,
@@ -200,22 +197,6 @@ export async function setTeamLeaderRemoved(teamId: string, removed: boolean): Pr
       body: JSON.stringify({}),
     },
   );
-}
-
-/**
- * Set the leader's model route（领队卡右侧模型选择，用户迭代 2026-09）：model
- * 为空 = 重置为会话默认。领队即面板会话，自身模型不由插件切换——此路线是
- * 团队默认，成员选「跟随领队」时启动即按它下发。
- */
-export async function setLeaderModel(
-  teamId: string,
-  model: { provider?: string; model?: string; reasoningEffort?: string },
-): Promise<void> {
-  await requestJson(`${API_BASE}/team/${encodeURIComponent(teamId)}/leader/model`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(model),
-  });
 }
 
 /** Delete one roster member. The leader (项目牧羊人) is rejected by the host. */
@@ -322,10 +303,10 @@ export async function createTeamTask(
   payload: {
     subject: string;
     description?: string;
-    parentTaskId?: string;
+    parentTaskId?: number;
     chain?: TaskSlotInput[];
   },
-): Promise<{ taskId: string }> {
+): Promise<{ taskId: number }> {
   const body = (await requestJson(`${API_BASE}/team/${encodeURIComponent(teamId)}/task`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -336,17 +317,17 @@ export async function createTeamTask(
       ...(payload.chain !== undefined ? { chain: payload.chain } : {}),
     }),
   })) as { taskId?: unknown };
-  return { taskId: typeof body.taskId === 'string' ? body.taskId : '' };
+  return { taskId: typeof body.taskId === 'number' ? body.taskId : Number(body.taskId ?? 0) };
 }
 
 /** Update an unclaimed task (subject/description/成员槽). */
 export async function updateTeamTask(
   teamId: string,
-  taskId: string,
+  taskId: number,
   payload: { subject?: string; description?: string; chain?: TaskSlotInput[] },
 ): Promise<void> {
   await requestJson(
-    `${API_BASE}/team/${encodeURIComponent(teamId)}/task/${encodeURIComponent(taskId)}/update`,
+    `${API_BASE}/team/${encodeURIComponent(teamId)}/task/${taskId}/update`,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -360,20 +341,11 @@ export async function updateTeamTask(
 }
 
 /** Delete an unclaimed task (主任务级联删除全部小任务). */
-export async function deleteTeamTask(teamId: string, taskId: string): Promise<void> {
+export async function deleteTeamTask(teamId: string, taskId: number): Promise<void> {
   await requestJson(
-    `${API_BASE}/team/${encodeURIComponent(teamId)}/task/${encodeURIComponent(taskId)}/delete`,
+    `${API_BASE}/team/${encodeURIComponent(teamId)}/task/${taskId}/delete`,
     { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) },
   );
-}
-
-/** 批准计划 (docs/26): staged → running, drafts → ready, all members spawn. */
-export async function approveTeamPlan(teamId: string): Promise<void> {
-  await requestJson(`${API_BASE}/team/${encodeURIComponent(teamId)}/approve`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({}),
-  });
 }
 
 // ---------- role-builder build session (docs/19.6, D18) ----------
@@ -388,9 +360,6 @@ export interface BuildDraft {
   rules?: string[];
   executionPrompt?: string;
   personaMd?: string;
-  provider?: string;
-  model?: string;
-  reasoningEffort?: string;
   /** Pre-assigned avatar pair — stable face from first preview through confirm. */
   avatar?: { seed: number; salt: number };
 }

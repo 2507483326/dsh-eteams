@@ -13,7 +13,6 @@ import {
   createTeamViaPanel,
   deleteTeam,
   removeTeamMember,
-  setLeaderModel,
   setMemberModel,
   setTeamLeaderRemoved,
   type RosterMember,
@@ -26,8 +25,7 @@ import {
   type RouteTriple,
   type TeamSnapshot,
 } from '../../lib/monitor';
-import { catalogRow, useModelCatalog } from '../../lib/modelCatalog';
-import { PHASE_LABELS } from '../../lib/phaseLabels';
+import { catalogRow, catalogRowByModel, useModelCatalog } from '../../lib/modelCatalog';
 import { cn } from '../../lib/cn';
 import { Avatar } from '../../features/avatar/avatar';
 import { Button } from '../../components/ui/button';
@@ -51,8 +49,6 @@ import {
   MUTED_CLASS,
   PageHeader,
   PANEL_CARD_CLASS,
-  PHASE_TONES,
-  dotClass,
 } from './shared';
 
 /** 原 styles.memberGrid（成员卡片栅格，最小 230px 自适应列）。 */
@@ -64,13 +60,6 @@ const MEMBER_LIST_CLASS = 'flex flex-col gap-2.5';
  * 「详情/删除」。整卡可点进详情；底色/边框/悬停仍由
  * .eteams-team-card 样式表接管，p-3.5 = 卡内呼吸感。 */
 const TEAM_CARD_CLASS = 'flex min-w-0 cursor-pointer flex-col gap-2 rounded-xl p-3.5';
-/** 面板无目标建团时 host 写入的目标占位（webui.ts 建团路由）——小卡片不再
- * 展示该占位与空目标：目标行只在有真目标时出现（用户迭代 2026-09 九）。 */
-const TEAM_GOAL_PLACEHOLDER = '（待完善：与领队在对话中确认目标）';
-/** 原 styles.phasePill（团队卡片阶段徽标：D22e 中性圆 pill + 彩色 6px dot
- * ——dot 由使用位按 PHASE_TONES 插入，状态彩底全撤）。 */
-const PHASE_PILL_CLASS =
-  'inline-flex w-fit shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-[color:var(--eteams-pill-bg)] px-2.5 py-0.5 text-xs font-medium text-[color:var(--eteams-pill-ink)]';
 
 /**
  * 团队：新增团队（弹窗，名称即建）+ 团队列表/详情两级视图（用户迭代
@@ -121,7 +110,6 @@ export function TeamTab({
     { kind: 'captain' } | { kind: 'member'; name: string } | null
   >(null);
   const [modelSavingName, setModelSavingName] = useState<string | null>(null);
-  const [leaderModelSaving, setLeaderModelSaving] = useState(false);
   // 删除团队（用户迭代 2026-09 七）：小卡片「删除」按钮 → 确认弹窗。null =
   // 收起；deleting 提交中防连点；错误就地显示在弹窗内。
   const [deleteTarget, setDeleteTarget] = useState<{ teamId: string; name: string } | null>(null);
@@ -186,29 +174,30 @@ export function TeamTab({
   // 2026-09：模型选择与对话一致）：行 id 为 `provider/model`；换模型取该
   // 模型目录默认强度（model.reasoning.defaultEffort——对话 /model 弹层的
   // selectionOf 同款）；同一路线重选由菜单自行关闭不上送（对话 choose()
-  // 同款）。目录查不到的旧路线原样保留 provider/model 与已存强度。
-  // 'inherit' = 清 override（会话默认，用户迭代 2026-09 七：成员与领队统一
-  // 文案；宿主侧 inherit 解析到团队默认路线）。null = 非法行值（防御）。
+  // 同款）。目录查不到的旧路线按裸模型 id 下发（host 按配置解析 provider）。
+  // 'inherit' = 清 override（跟随：docs/35 §3#5——model 空串=继承领队会话
+  // 模型，host 空 body 即重置为跟随）。null = 非法行值（防御）。
   const routeBody = (
     value: string,
-    stored: { provider: string; model: string; reasoningEffort: string | null },
-  ): { provider?: string; model?: string; reasoningEffort?: string } | null => {
+    stored: RouteTriple,
+  ): { model?: string; reasoningEffort?: string } | null => {
     if (value === 'inherit') return {};
     const slash = value.indexOf('/');
     if (slash === -1) {
-      // 目录缺失时的静态回退选项（旧版裸模型 id）：沿用旧语义按 DeepSeek 下发。
-      return { provider: 'deepseek', model: value };
+      // 目录缺失时的静态回退选项（旧版裸模型 id）：按裸模型 id 下发。
+      return { model: value };
     }
     if (slash <= 0 || slash === value.length - 1) return null;
     const provider = value.slice(0, slash);
     const model = value.slice(slash + 1);
     const row = catalogRow(modelCatalog.catalog, provider, model);
+    // 同模型跨提供方时以目录行核对 provider；反查不到的旧路线按裸 model 下发
+    // （stored.provider 已随快照瘦身砍掉，provider 由目录反推）。
     const effort =
-      stored.provider === provider && stored.model === model
+      stored.model === model && catalogRowByModel(modelCatalog.catalog, stored.model) !== null
         ? (stored.reasoningEffort ?? row?.model.reasoning?.defaultEffort)
         : row?.model.reasoning?.defaultEffort;
     return {
-      provider,
       model,
       ...(effort !== undefined && effort !== '' ? { reasoningEffort: effort } : {}),
     };
@@ -219,7 +208,6 @@ export function TeamTab({
     const member = detailTeam.members.find((m) => m.name === memberName);
     if (member === undefined) return;
     const previous: RouteTriple = {
-      provider: member.provider,
       model: member.model,
       reasoningEffort: member.reasoningEffort,
     };
@@ -233,14 +221,10 @@ export function TeamTab({
     const patch: RoutePatch = {
       teamId: detailTeam.teamId,
       target: { kind: 'member', name: memberName },
-      route: {
-        provider: body.provider ?? 'inherit',
-        model: body.model ?? 'inherit',
-        reasoningEffort: body.reasoningEffort ?? null,
-      },
+      route: { model: body.model ?? '', reasoningEffort: body.reasoningEffort ?? null },
     };
     applyRoutePatch(patch);
-    // inherit = 会话默认（清 override）；其余按会话模型目录（与对话一致）下发。
+    // inherit = 跟随（host 空 body = 重置）；其余按会话模型目录（与对话一致）。
     void setMemberModel(detailTeam.teamId, memberName, body)
       .then(() => refreshActivitySoon())
       .catch((e) => {
@@ -253,17 +237,16 @@ export function TeamTab({
   // 推理等级（与对话「推理等级」二级菜单同一词汇表）：只对已有具体路线的
   // 成员生效——整条路线重发（host 每次整路由写入）。effort 为 null = 提供方
   // 默认（对话 chooseEffort 的 provider-default 项同款）：重发时省略
-  // reasoningEffort，host 即无强度 override。
+  // reasoningEffort，host 即无强度 override。跟随中（model 空串）不可单独改。
   const changeMemberEffort = (memberName: string, effort: string | null): void => {
     if (detailTeam === null) return;
     const member = detailTeam.members.find((m) => m.name === memberName);
-    if (member === undefined || member.provider === 'inherit' || member.model === 'inherit') {
+    if (member === undefined || member.model === '') {
       return;
     }
     setDetailError(null);
     setModelSavingName(memberName);
     const previous: RouteTriple = {
-      provider: member.provider,
       model: member.model,
       reasoningEffort: member.reasoningEffort,
     };
@@ -275,7 +258,6 @@ export function TeamTab({
     };
     applyRoutePatch(patch);
     void setMemberModel(detailTeam.teamId, memberName, {
-      provider: member.provider,
       model: member.model,
       ...(effort !== null && effort !== '' ? { reasoningEffort: effort } : {}),
     })
@@ -301,74 +283,6 @@ export function TeamTab({
     void setTeamLeaderRemoved(detailTeam.teamId, true).catch((e) =>
       setDetailError(memberOpError(e)),
     );
-  };
-
-  // 领队模型选择（用户迭代 2026-09：领队也选模型；2026-09 模型选择与对话
-  // 一致）：领队卡右侧下拉——这是「团队默认模型」，成员选「会话默认」时
-  // 启动即按它下发；领队自身（面板会话）模型不受影响。行值语义同 changeModel。
-  const changeLeaderModel = (value: string): void => {
-    if (detailTeam === null) return;
-    const previous: RouteTriple = {
-      provider: detailTeam.captain.provider,
-      model: detailTeam.captain.model,
-      reasoningEffort: detailTeam.captain.reasoningEffort,
-    };
-    const body = routeBody(value, previous);
-    if (body === null) return;
-    setDetailError(null);
-    setLeaderModelSaving(true);
-    // 同 changeModel：乐观补丁即时生效，POST 确认/回滚（目标 = 领队）。
-    const patch: RoutePatch = {
-      teamId: detailTeam.teamId,
-      target: { kind: 'captain' },
-      route: {
-        provider: body.provider ?? 'inherit',
-        model: body.model ?? 'inherit',
-        reasoningEffort: body.reasoningEffort ?? null,
-      },
-    };
-    applyRoutePatch(patch);
-    void setLeaderModel(detailTeam.teamId, body)
-      .then(() => refreshActivitySoon())
-      .catch((e) => {
-        revertRoutePatch(patch, previous);
-        setDetailError(memberOpError(e));
-      })
-      .finally(() => setLeaderModelSaving(false));
-  };
-
-  // 领队推理等级（与对话「推理等级」二级菜单同一词汇表）：只对领队已选具体
-  // 路线时生效；跟随会话默认（inherit）时强度随会话，不可单独改。null =
-  // 提供方默认（重发时省略 reasoningEffort）。
-  const changeLeaderEffort = (effort: string | null): void => {
-    if (detailTeam === null) return;
-    const captain = detailTeam.captain;
-    if (captain.provider === 'inherit' || captain.model === 'inherit') return;
-    setDetailError(null);
-    setLeaderModelSaving(true);
-    const previous: RouteTriple = {
-      provider: captain.provider,
-      model: captain.model,
-      reasoningEffort: captain.reasoningEffort,
-    };
-    // 同 changeModel：乐观补丁即时生效，POST 确认/回滚（目标 = 领队）。
-    const patch: RoutePatch = {
-      teamId: detailTeam.teamId,
-      target: { kind: 'captain' },
-      route: { ...previous, reasoningEffort: effort },
-    };
-    applyRoutePatch(patch);
-    void setLeaderModel(detailTeam.teamId, {
-      provider: captain.provider,
-      model: captain.model,
-      ...(effort !== null && effort !== '' ? { reasoningEffort: effort } : {}),
-    })
-      .then(() => refreshActivitySoon())
-      .catch((e) => {
-        revertRoutePatch(patch, previous);
-        setDetailError(memberOpError(e));
-      })
-      .finally(() => setLeaderModelSaving(false));
   };
 
   return (
@@ -399,7 +313,7 @@ export function TeamTab({
             <DialogTitle>新增团队</DialogTitle>
             <DialogDescription className={MUTED_CLASS}>
               {canCreate
-                ? '只需名称即可创建（草案阶段）；目标可在看板中与领队继续完善。'
+                ? '只需名称即可创建——目标与任务在对话中与领队继续完善。'
                 : '当前还没有进行中的对话——开始对话后才能创建团队。'}
             </DialogDescription>
           </DialogHeader>
@@ -498,9 +412,6 @@ export function TeamTab({
               // 移出后只剩成员）——与详情页/添加弹窗同口径。
               const headcount = t.members.length + (t.leaderRemoved ? 0 : 1);
               const faces = t.leaderRemoved ? t.members : [t.captain, ...t.members];
-              // 目标行：空目标或建团占位（host 无目标建团时写入的「待完善」
-              // 提示）都不渲染，卡片保持干净（用户迭代 2026-09 九）。
-              const goalLine = t.goal === TEAM_GOAL_PLACEHOLDER ? '' : t.goal;
               return (
                 <div
                   key={t.teamId}
@@ -518,9 +429,13 @@ export function TeamTab({
                     </span>
                     <span className={LIST_COUNT_CLASS}>{headcount} 人</span>
                   </div>
-                  {/* 目标一行（截断）：卡片有了「身体」，排版不再扁长。 */}
-                  {goalLine !== '' && (
-                    <p className="truncate text-xs text-muted-foreground">{goalLine}</p>
+                  {/* 进度一行（docs/35 §3：goal 字段已砍——小卡片身体改为任务
+                  进度；无任务时留空保持三段式排版）。 */}
+                  {t.progress.total > 0 && (
+                    <p className="truncate text-xs text-muted-foreground">
+                      任务 {t.progress.completed}/{t.progress.total} 完成
+                      {t.progress.active > 0 ? ` · ${t.progress.active} 进行中` : ''}
+                    </p>
                   )}
                   {/* 底栏（上边框分区）：成员略缩图（领队 + 成员头像最多 3 个，
                   超出 +N；小号头像负间距叠放，滑过整组间距松开、滑过单个放大
@@ -629,9 +544,8 @@ export function TeamTab({
             <span className="text-lg font-semibold tracking-tight text-foreground">
               {detailTeam.name}
             </span>
-            <span className={PHASE_PILL_CLASS}>
-              <span className={dotClass(PHASE_TONES[detailTeam.phase] ?? 'muted')} />
-              {PHASE_LABELS[detailTeam.phase] ?? detailTeam.phase}
+            <span className={LIST_COUNT_CLASS}>
+              任务 {detailTeam.progress.completed}/{detailTeam.progress.total} 完成
             </span>
           </div>
 
@@ -665,11 +579,7 @@ export function TeamTab({
               {!detailTeam.leaderRemoved && (
                 <LeaderCard
                   captain={detailTeam.captain}
-                  catalog={modelCatalog}
                   onRemove={removeLeader}
-                  onModelChange={changeLeaderModel}
-                  onEffortChange={changeLeaderEffort}
-                  modelSaving={leaderModelSaving}
                   onOpenDetail={() => setMemberDetail({ kind: 'captain' })}
                 />
               )}

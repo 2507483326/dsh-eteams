@@ -35,15 +35,15 @@ export interface StationView {
 /** Member row of the state snapshot. */
 export interface MemberView {
   name: string;
-  /** 工号 (docs/21): `ET-0001` style; null for legacy members. */
+  /** 工号 (docs/21): host 发格式化显示串（`ET-0001` style）；null for legacy. */
   employeeId: string | null;
   role: string;
   status: string;
-  provider: string;
+  /** 模型路线（docs/35 §3#5）：空串 = 跟随（继承领队会话模型）。 */
   model: string;
   reasoningEffort: string | null;
-  currentTaskId: string | null;
-  currentAttemptId: string | null;
+  currentTaskId: number | null;
+  currentAttemptId: number | null;
   childId: string | null;
   removed: boolean;
   /** Pre-generated avatar pair (docs/14); null for legacy members. */
@@ -63,7 +63,7 @@ export interface MemberView {
 
 /** One attempt summary row (compact; full line via the track route). */
 export interface AttemptSummary {
-  id: string;
+  id: number;
   member: string;
   kind: string;
   status: string;
@@ -75,7 +75,7 @@ export interface AttemptSummary {
 
 /** Task row of the state snapshot. */
 export interface TaskView {
-  taskId: string;
+  taskId: number;
   subject: string;
   /**
    * 任务角色（docs/26）：'group' = 对话提交的主任务（任务单容器）；'task' =
@@ -83,19 +83,31 @@ export interface TaskView {
    */
   kind: string;
   /** 父主任务 id（docs/26 拆解的小任务）；null = 顶层。 */
-  parentId: string | null;
+  parentId: number | null;
   /** 专属任务文件夹（相对工作区）；null = 团队工作目录尚未分配。 */
   folder: string | null;
   /** 任务说明/合同摘要（docs/26 面板编辑弹窗回填）；null = 无。旧运行时缺省 null。 */
   description: string | null;
+  /** 合同四数组（docs/35 §3#7）：验收标准/范围内/范围外/交付物。 */
+  acceptance: string[];
+  inScope: string[];
+  outOfScope: string[];
+  deliverables: string[];
+  /** 幂等说明（重复执行的界定）；null = 无。 */
+  idempotencyNote: string | null;
+  /** 物化阻塞（docs/36 建议 1）：wait + blockedFrom 非空 = 被前置任务阻塞。 */
+  blocked: boolean;
+  blockedFrom: number | null;
+  /** 领队写回的状态说明；null = 无。 */
+  statusNote: string | null;
   status: string;
   assignee: string | null;
-  dependencies: string[];
+  dependencies: number[];
   chain: StationView[];
   chainCursor: number;
   chainLength: number;
   retryCount: number;
-  currentAttemptId: string | null;
+  currentAttemptId: number | null;
   outcome: string | null;
   attemptSummary: AttemptSummary[];
   updatedAt: number;
@@ -108,14 +120,14 @@ export interface EventView {
   actor: string;
   actorKind: string;
   type: string;
-  taskId: string | null;
+  taskId: number | null;
   text: string;
 }
 
 /** The team leader (项目牧羊人) as projected by the host — not a roster member. */
 export interface CaptainView {
   name: string;
-  /** 工号 (docs/21); host falls back to 'ET-0001' for an unseeded roster. */
+  /** 工号 (docs/21): host 发格式化显示串（roster 未读兜底 ET-0001）。 */
   employeeId: string;
   role: string;
   duty: string;
@@ -123,22 +135,12 @@ export interface CaptainView {
   skills: string;
   personaMd: string | null;
   avatar: { seed: number; salt: number };
-  /** 领队模型路线（用户迭代 2026-09）：'inherit' = 会话默认；成员「跟随领队」spawn 时解析到它。 */
-  provider: string;
-  model: string;
-  reasoningEffort: string | null;
 }
 
 /** Full team snapshot served by /state. */
 export interface TeamSnapshot {
   teamId: string;
   name: string;
-  goal: string;
-  phase: string;
-  planReviewState: string | null;
-  captainSessionId: string;
-  version: number;
-  workDir: string | null;
   progress: { completed: number; total: number; cancelled: number; active: number };
   /** 领队已移出团队（用户迭代 2026-09：领队可删除、可经添加成员弹窗加回）。 */
   leaderRemoved: boolean;
@@ -146,8 +148,8 @@ export interface TeamSnapshot {
   members: MemberView[];
   tasks: TaskView[];
   pendingDecisions: {
-    id: string;
-    taskId: string;
+    id: number;
+    taskId: number;
     error: string;
     retryCount: number;
     createdAt: number;
@@ -158,13 +160,6 @@ export interface TeamSnapshot {
 /** The store snapshot published to React. */
 export interface ActivityState {
   teams: TeamSnapshot[];
-  archivedTeams: {
-    teamId: string;
-    name: string;
-    goal: string;
-    phase: string;
-    workDir: string | null;
-  }[];
   serverTime: number;
   /** 每队成员上限（host maxMembers 配置，用户迭代 2026-09：每队最多 10 人）。 */
   maxMembers: number;
@@ -178,17 +173,17 @@ export interface ActivityState {
   pendingRoutes?: Record<string, PendingRouteEntry>;
 }
 
-/** 路线三元组（成员/领队模型路线的本地口径，与 /state 快照字段一致）。 */
+/** 成员模型路线二元组（docs/35 §3#5：provider 随审批重构砍掉，路线=model
+ * + effort；model 空串 = 跟随领队会话模型）。 */
 export interface RouteTriple {
-  provider: string;
   model: string;
   reasoningEffort: string | null;
 }
 
-/** 乐观路线补丁：定位一队的一条路线并整体替换（对话 choose() 的本地即时性）。 */
+/** 乐观路线补丁：定位一队成员的一条路线并整体替换（对话 choose() 的本地即时性）。 */
 export interface RoutePatch {
   teamId: string;
-  target: { kind: 'captain' } | { kind: 'member'; name: string };
+  target: { kind: 'member'; name: string };
   route: RouteTriple;
 }
 
@@ -221,17 +216,18 @@ async function fetchState(): Promise<void> {
   try {
     const res = await fetch(STATE_URL, { cache: 'no-store' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    // docs/27：host 快照 teamId 是库内整数 id；客户端口径 teamId 一律 string
+    // （路由段天然字符串，host selectTeamRow 兼容整数串与团队名）——此处归一。
     const body = (await res.json()) as {
-      teams?: TeamSnapshot[];
-      archivedTeams?: ActivityState['archivedTeams'];
+      teams?: (Omit<TeamSnapshot, 'teamId'> & { teamId: number })[];
       maxMembers?: number;
       serverTime?: number;
     };
+    const teams = (body.teams ?? []).map((t) => ({ ...t, teamId: String(t.teamId) }));
     store.dispatch({
       type: 'activity/set',
       payload: {
-        teams: body.teams ?? [],
-        archivedTeams: body.archivedTeams ?? [],
+        teams,
         maxMembers:
           typeof body.maxMembers === 'number' && body.maxMembers > 0 ? body.maxMembers : 10,
         serverTime: body.serverTime ?? Date.now(),
@@ -327,9 +323,10 @@ export function useActivityMonitor(): ActivityState {
 }
 
 /**
- * 乐观路线补丁（用户迭代 2026-09「选择即变」）：把成员/领队模型路线即时写进
+ * 乐观路线补丁（用户迭代 2026-09「选择即变」）：把成员模型路线即时写进
  * 本地快照 + 记 pending 覆盖层——选择不等 POST + 轮询（对话 choose() 的本地
- * 即时性同款）。POST 失败由调用方 revertRoutePatch 回滚。
+ * 即时性同款；路线只对成员存在，领队默认模型已随 docs/27 取消）。POST 失败
+ * 由调用方 revertRoutePatch 回滚。
  */
 export function applyRoutePatch(patch: RoutePatch): void {
   getApp().store.dispatch({ type: 'activity/patchRoute', payload: patch });

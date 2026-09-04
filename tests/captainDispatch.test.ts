@@ -3,17 +3,17 @@
  * hands a conversation task to the 持续领队子代理 (persistent continuable
  * child) — captain-only gate, first-dispatch spawn contract
  * (label/persona+leader handbook/deny/prompt snapshot) with the durable
- * child id persisted on the team, followup continuation on later dispatches,
- * fallback to a fresh child when the lineage no longer matches, and the
- * subagent-service guard.
+ * child id persisted on the task_members 领队行, followup continuation on
+ * later dispatches, fallback to a fresh child when the lineage no longer
+ * matches, and the subagent-service guard. Plus the 团队现状精简 teamView.
  */
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
-import { ETeamsConfig, type ETeamsResolvedConfig } from '../src/host/config';
+import { resolveConfig, type ETeamsResolvedConfig } from '../src/host/config';
 import { createCaptainDispatchTool } from '../src/host/tools/captainDispatch';
 import { captainChildPersona } from '../src/host/prompts/captain';
 import { composeCaptainPersona } from '../src/host/prompts/persona';
@@ -24,11 +24,13 @@ import {
   unregisterCaptainChild,
 } from '../src/host/runtime/captainAgent';
 import { resolveCaller } from '../src/host/tools/identity';
-import { readTeam, writeTeam } from '../src/host/state/store';
+import { insertTeamRow, readTeamSync, withTeamTx, writeTeamInTx } from '../src/host/state/store';
+import { appendMail } from '../src/host/state/events';
 import { teamView } from '../src/host/runtime/teamOps';
-import { deliverMail } from '../src/host/runtime/notifier';
-import type { RuntimeEnv } from '../src/host/runtime/base';
-import type { MailMessage, TeamState } from '../src/host/model/types';
+import { findRosterMember, LEADER_NAME } from '../src/host/runtime/roster';
+import { joinPath, type RuntimeEnv } from '../src/host/runtime/base';
+import type { MailMessage, TaskMemberRecord, TeamState } from '../src/host/model/types';
+import { cleanupTempWorkspace } from './support/tmpWorkspace';
 
 // ---------- fake runtime (subagents surface used by the dispatch tool) ----
 
@@ -76,31 +78,67 @@ function fakeRuntime() {
 }
 
 let ws: string;
+let root: string;
 let config: ETeamsResolvedConfig;
 let runtime: ReturnType<typeof fakeRuntime>;
 let captain: Agent;
 let tool: ReturnType<typeof createCaptainDispatchTool>;
 
-function team(overrides: Partial<TeamState> = {}): TeamState {
+function leaderRow(teamId: number, mainSessionId: string, childSessionId = ''): TaskMemberRecord {
   return {
-    schemaVersion: 2,
-    id: 'demo',
-    name: '演示团队',
-    goal: '为应用实现数据导出',
-    captainSessionId: 'cap-1',
-    phase: 'staged',
+    id: 0,
+    teamId,
+    mainTaskId: null,
+    nowTaskId: null,
+    name: LEADER_NAME,
+    employeeId: null,
+    mainSessionId,
+    childSessionId,
+    roleId: null,
+    status: 'ready',
+    createdAt: 1,
+  };
+}
+
+function memberRow(teamId: number, childSessionId: string): TaskMemberRecord {
+  return {
+    id: 0,
+    teamId,
+    mainTaskId: null,
+    nowTaskId: null,
+    name: '甲',
+    employeeId: null,
+    mainSessionId: '',
+    childSessionId,
+    roleId: null,
+    status: 'ready',
+    createdAt: 1,
+  };
+}
+
+/** SQLite 契约播种（team.json 已退场）：team 行 + 领队实例行（可预置持久
+ * 子会话 id）+ 可选成员实例行。 */
+function seedTeam(opts: { memberChild?: string; leaderChild?: string } = {}): TeamState {
+  const name = '演示团队';
+  let teamId = 0;
+  withTeamTx(root, undefined, (tx) => {
+    teamId = insertTeamRow(tx, name, true, 1);
+  });
+  const taskMembers: TaskMemberRecord[] = [leaderRow(teamId, 'cap-1', opts.leaderChild ?? '')];
+  if (opts.memberChild !== undefined) taskMembers.push(memberRow(teamId, opts.memberChild));
+  const state: TeamState = {
+    id: teamId,
+    name,
+    hasLeader: true,
     createdAt: 1,
     updatedAt: 1,
-    version: 0,
-    taskSeq: 0,
-    attemptSeq: 0,
-    mailSeq: 0,
-    maxRetries: 3,
+    taskMembers,
     members: [],
     tasks: [],
     pendingDecisions: [],
-    ...overrides,
   };
+  withTeamTx(root, teamId, (tx) => writeTeamInTx(tx, state));
+  return state;
 }
 
 function agentOf(id: string, cwd?: string): Agent {
@@ -117,14 +155,18 @@ function envFor(workspace: string): RuntimeEnv {
 
 beforeEach(() => {
   ws = mkdtempSync(join(tmpdir(), 'eteams-dispatch-'));
-  config = ETeamsConfig({}) as ETeamsResolvedConfig;
+  // 状态根与 runtime 同口径（base.ts joinPath 的「/」拼法）——getDb 连接缓存
+  // 按它做键，afterEach 收尾才能关掉连接再删目录。
+  root = joinPath(ws, '.eteams');
+  config = resolveConfig({ stateDir: '.eteams' });
   runtime = fakeRuntime();
   captain = agentOf('cap-1');
   tool = createCaptainDispatchTool(config, runtime.ctx);
 });
 
 afterEach(() => {
-  rmSync(ws, { recursive: true, force: true });
+  // 先关 SQLite 连接再退避删目录——tests/support/tmpWorkspace。
+  cleanupTempWorkspace(ws);
   unregisterCaptainChild('sess-stale');
   unregisterCaptainChild('sess-child-1');
   unregisterCaptainChild('sess-child-2');
@@ -132,7 +174,7 @@ afterEach(() => {
 
 describe('eteams_dispatch_captain', () => {
   it('starts a persistent continuable child on first dispatch', async () => {
-    await writeTeam(join(ws, '.eteams'), team());
+    const seeded = seedTeam();
     const out = (await tool.execute(
       { message: '帮我做一个导出功能' } as never,
       { agent: captain, signal: undefined } as never,
@@ -144,9 +186,11 @@ describe('eteams_dispatch_captain', () => {
     // Spawn contract: continuable, leader persona + handbook, deny, snapshot.
     const spec = runtime.starts[0]!;
     expect(spec.provider).toBe(config.memberProvider);
-    expect(spec.label).toBe('eteams-captain:demo');
+    expect(spec.label).toBe(`eteams-captain:${seeded.id}`);
+    // 人设 = roster 领队手册（缺省回退内置手册）+ 子代理纪律。
+    const fromRoster = findRosterMember(root, LEADER_NAME)?.personaMd;
     const fallbackMd = composeCaptainPersona(ws, '.eteams').personaMd;
-    expect(spec.request.persona).toBe(captainChildPersona(fallbackMd));
+    expect(spec.request.persona).toBe(captainChildPersona(fromRoster ?? fallbackMd));
     expect(spec.request.persona).toContain('角色手册（领队 · 项目牧羊人）');
     expect(spec.request.toolFilter?.deny).toEqual([...CAPTAIN_CHILD_DENIED_TOOLS]);
     expect(spec.request.parent).toBe(captain);
@@ -157,18 +201,20 @@ describe('eteams_dispatch_captain', () => {
     expect(promptText).toContain('【用户/主对话最新消息】');
     expect(promptText).toContain('帮我做一个导出功能');
 
-    // Identity registry + durable child id persisted on the team.
-    expect(captainChildTeamOf('sess-child-1')).toBe('demo');
-    const persisted = await readTeam(join(ws, '.eteams'), 'demo');
-    expect(persisted?.captainChildId).toBe('sess-child-1');
+    // Identity registry + durable child id persisted on the 领队行.
+    expect(captainChildTeamOf('sess-child-1')).toBe(String(seeded.id));
+    const persisted = readTeamSync(root, seeded.id);
+    expect(persisted?.taskMembers.find((r) => r.mainTaskId === null)?.childSessionId).toBe(
+      'sess-child-1',
+    );
     // The child's eteams_* calls resolve as this team's captain.
     const caller = await resolveCaller(envFor(ws), agentOf('sess-child-1'));
     expect(caller.kind).toBe('captain');
-    if (caller.kind === 'captain') expect(caller.team.id).toBe('demo');
+    if (caller.kind === 'captain') expect(caller.team.id).toBe(seeded.id);
   });
 
   it('continues the same child via followup on later dispatches', async () => {
-    await writeTeam(join(ws, '.eteams'), team({ captainChildId: 'sess-child-1' }));
+    const seeded = seedTeam({ leaderChild: 'sess-child-1' });
     const out = (await tool.execute(
       { message: '改成导出 Excel' } as never,
       { agent: captain, signal: undefined } as never,
@@ -180,18 +226,20 @@ describe('eteams_dispatch_captain', () => {
     expect(runtime.followups[0]!.childId).toBe('sess-child-1');
     expect(runtime.followups[0]!.text).toContain('改成导出 Excel');
     expect(runtime.followups[0]!.text).toContain('【团队现状】');
-    expect(captainChildTeamOf('sess-child-1')).toBe('demo');
-    const persisted = await readTeam(join(ws, '.eteams'), 'demo');
-    expect(persisted?.captainChildId).toBe('sess-child-1');
+    expect(captainChildTeamOf('sess-child-1')).toBe(String(seeded.id));
+    const persisted = readTeamSync(root, seeded.id);
+    expect(persisted?.taskMembers.find((r) => r.mainTaskId === null)?.childSessionId).toBe(
+      'sess-child-1',
+    );
   });
 
   it('falls back to a fresh child when the stored child is unavailable', async () => {
     // The registry still holds the live entry for the old child (written by
     // the dispatch that created it); the followup failure drops it and the
     // fresh spawn re-registers under the new id.
-    registerCaptainChild('sess-stale', 'demo');
+    const seeded = seedTeam({ leaderChild: 'sess-stale' });
+    registerCaptainChild('sess-stale', String(seeded.id));
     runtime.failingFollowups.add('sess-stale');
-    await writeTeam(join(ws, '.eteams'), team({ captainChildId: 'sess-stale' }));
     const out = (await tool.execute(
       { message: '继续' } as never,
       { agent: captain, signal: undefined } as never,
@@ -202,25 +250,13 @@ describe('eteams_dispatch_captain', () => {
     expect(runtime.starts).toHaveLength(1);
     const freshId = runtime.spawnedIds[0]!;
     expect(captainChildTeamOf('sess-stale')).toBeUndefined();
-    expect(captainChildTeamOf(freshId)).toBe('demo');
-    const persisted = await readTeam(join(ws, '.eteams'), 'demo');
-    expect(persisted?.captainChildId).toBe(freshId);
+    expect(captainChildTeamOf(freshId)).toBe(String(seeded.id));
+    const persisted = readTeamSync(root, seeded.id);
+    expect(persisted?.taskMembers.find((r) => r.mainTaskId === null)?.childSessionId).toBe(freshId);
   });
 
   it('rejects a member caller (只有团队领队会话可以转交)', async () => {
-    await writeTeam(
-      join(ws, '.eteams'),
-      team({
-        members: [
-          {
-            id: 'm-1',
-            name: '甲',
-            status: 'active',
-            persona: { executionPrompt: 'p' },
-          } as TeamState['members'][0],
-        ],
-      }),
-    );
+    seedTeam({ memberChild: 'm-1' });
     await expect(
       tool.execute(
         { message: 'hi' } as never,
@@ -231,7 +267,7 @@ describe('eteams_dispatch_captain', () => {
   });
 
   it('errors when the subagent service is unavailable', async () => {
-    await writeTeam(join(ws, '.eteams'), team());
+    seedTeam();
     const bare = createCaptainDispatchTool(config, {
       logger: { info: () => undefined, warn: () => undefined },
     } as unknown as Context);
@@ -247,28 +283,49 @@ describe('eteams_dispatch_captain', () => {
 describe('teamView 团队现状精简 (用户迭代 2026-09-03)', () => {
   it('members keep only 工号/角色/状态 and the mailbox is trimmed', async () => {
     const env = envFor(ws);
-    const base = team({
+    const seeded = seedTeam();
+    // 角色标签走 roles 表松引用：先补一条「前端」角色行，模板行的角色才能
+    // 在 round-trip 里解析回「前端」（role_name 存的是成员名）。
+    withTeamTx(root, undefined, (tx) => {
+      tx.db
+        .prepare(
+          'INSERT INTO roles (role_name, persona_md, source, created_time, update_time) ' +
+            'VALUES (?, NULL, ?, ?, ?)',
+        )
+        .run('前端', 'user', 1, 1);
+    });
+    // 班底模板行（teamView.members 的来源）+ 一条 ready 实例行（聚合状态）。
+    const withTemplate: TeamState = {
+      ...seeded,
       members: [
         {
-          id: 'm-1',
+          // member 表 member_id 与预置公共模板行（项目牧羊人/角色构建师）
+          // 共用一个主键空间——测试行用高位号避开。
+          memberId: 900,
           name: '甲',
-          employeeId: 'ET-0001',
+          employeeId: 1,
           role: '前端',
-          status: 'active',
-          persona: { executionPrompt: 'p' },
-          modelRoute: { primary: 'x' },
-          avatar: {},
+          persona: {
+            frameworkVersion: 1,
+            role: '前端',
+            duty: '',
+            style: '',
+            skills: '',
+            rules: [],
+            executionPrompt: 'p',
+          },
+          modelRoute: { model: '' },
+          avatar: { seed: 1, salt: 1 },
           createdAt: 1,
-        } as TeamState['members'][0],
-        { id: 'm-2', name: '乙', role: '后端', status: 'removed' } as TeamState['members'][0],
+        },
       ],
-    });
+      taskMembers: [...seeded.taskMembers, memberRow(seeded.id, 'm-1')],
+    };
+    withTeamTx(root, seeded.id, (tx) => writeTeamInTx(tx, withTemplate));
     // Seven captain mails → only the last five reach the snapshot; one is
-    // longer than the 300-char cap. (appendMail expects the team inbox to
-    // exist — production creates it with the team.)
-    mkdirSync(join(ws, '.eteams', 'demo', 'inbox'), { recursive: true });
+    // longer than the 300-char cap.（邮件随团队快照同库落存。）
     for (let i = 0; i < 7; i++) {
-      await deliverMail(env, base, 'captain', {
+      await appendMail(root, seeded.id, 'captain', {
         id: `m${i}`,
         seq: 0,
         at: i,
@@ -279,10 +336,8 @@ describe('teamView 团队现状精简 (用户迭代 2026-09-03)', () => {
       } as MailMessage);
     }
 
-    const view = teamView(env, base);
-    expect(view.members).toEqual([
-      { name: '甲', employeeId: 'ET-0001', role: '前端', status: 'active' },
-    ]);
+    const view = teamView(env, readTeamSync(root, seeded.id)!);
+    expect(view.members).toEqual([{ name: '甲', employeeId: 1, role: '前端', status: 'ready' }]);
     // Member persona/route never leak into the snapshot.
     const json = JSON.stringify(view);
     expect(json).not.toContain('modelRoute');

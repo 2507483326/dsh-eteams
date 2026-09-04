@@ -47,20 +47,6 @@ export const TONE_CLASS: Record<Tone, string> = {
   muted: 'text-muted-foreground',
 };
 
-/**
- * 团队阶段→Tone（对齐 STATUS_GROUPS 既有语义：running 对齐「执行中」→info、
- * paused 对齐「已挂起」→warn、completed 对齐「已完成」→ok；staged 的计划
- * 待批准对齐「待决策」→warn；halted 对齐失败→err；archived 中性→muted）。
- */
-export const PHASE_TONES: Record<string, Tone> = {
-  staged: 'warn',
-  running: 'info',
-  paused: 'warn',
-  halted: 'err',
-  completed: 'ok',
-  archived: 'muted',
-};
-
 /** D22e 官网式圆 pill 底座：中性半透明底 + 12px medium 字；状态彩底全撤
  * （五档 tone 只进 6px dot，见 DOT_TONE_CLASS）——底/字统一中性 token
  * （--eteams-pill-bg/--eteams-pill-ink，亮暗由 eteams.css 定值）。 */

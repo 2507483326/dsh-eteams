@@ -216,3 +216,21 @@ export function catalogRow(
   }
   return null;
 }
+
+/**
+ * 反查目录行（docs/35 §3#5：快照路线只剩 {model, reasoningEffort}，provider
+ * 由 model 经目录反推——同 id 模型跨提供方极少见，取目录首命中）。目录缺失
+ * 或查不到（旧路线/静态回退）返回 null，调用方按裸模型 id 口径渲染。
+ */
+export function catalogRowByModel(
+  catalog: ModelCatalog | null,
+  model: string,
+): { group: CatalogGroup; model: CatalogModel } | null {
+  if (catalog === null || model === '') return null;
+  for (const group of catalog.groups) {
+    for (const row of group.models) {
+      if (row.id === model) return { group, model: row };
+    }
+  }
+  return null;
+}

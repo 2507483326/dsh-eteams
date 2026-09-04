@@ -7,7 +7,7 @@
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { SessionId } from '@deepseek-ai/dsh-session';
 import type { ETeamsResolvedConfig } from '../config.js';
-import type { Actor, MemberRecord, TeamState } from '../model/types.js';
+import type { Actor, TeamState } from '../model/types.js';
 import { locks } from '../state/lock.js';
 import { teamDir } from '../state/store.js';
 
@@ -125,8 +125,12 @@ export interface SubagentChildEntry {
   label?: string;
 }
 
-/** Actor record for one member. */
-export function memberActor(member: MemberRecord): Actor {
+/**
+ * Actor record for one member. 参数放宽为「带名字的最小形状」：成员模板行
+ * （MemberRecord）与执行实例行（TaskMemberRecord）都能直接传入——docs/35
+ * §5#12 之后成员身份落在 task_members 实例行上。
+ */
+export function memberActor(member: { name: string }): Actor {
   return { kind: 'member', name: member.name };
 }
 

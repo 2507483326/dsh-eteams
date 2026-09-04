@@ -19,8 +19,8 @@
  *   badge/button 先例的 color-mix() 任意值；类名一律完整字面量（21.5.1
  *   content 扫描纪律，禁拼接）。
  * 行为与降级路径（installCard 的 events 判空、parse 函数群、
- * activateETeamsTab）与迁移前逐字一致；PHASE_LABELS 已合并至
- * phaseLabels.ts（S14 死代码清理，本文件改从单一事实源导入）。
+ * activateETeamsTab）与迁移前逐字一致。docs/35 §5：goal 随建队审批重构砍掉
+ * （create 工具参数只剩 {name, questionnaire?}），徽标改任务进度文案。
  *
  * @module dsh-eteams/client/card
  */
@@ -35,13 +35,11 @@ import { Card } from '../components/ui/card';
 import { Progress } from '../components/ui/progress';
 import { ClientErrorBoundary } from '../lib/diagnostics';
 import { useActivityState, type TeamSnapshot } from '../lib/monitor';
-import { PHASE_LABELS } from '../lib/phaseLabels';
 import { getApp } from '../store/app';
 
 /** Card state folded from the create-team tool events. */
 interface CardState {
   name: string;
-  goal: string;
   teamId: string | null;
   accepted: boolean;
 }
@@ -59,14 +57,15 @@ interface ToolResultBlock {
   isError?: boolean;
 }
 
-function parseCreateArgs(raw: unknown): { name: string; goal: string } | undefined {
+/** docs/35 §5#1：create 工具参数只剩 {name, questionnaire?}——只要 name。
+ * 不带 name 的调用（老版本/异常载荷）不渲染卡片。 */
+function parseCreateArgs(raw: unknown): { name: string } | undefined {
   try {
     const args =
       typeof raw === 'string'
         ? (JSON.parse(raw) as Record<string, unknown>)
         : (raw as Record<string, unknown>);
-    if (typeof args.name === 'string' && typeof args.goal === 'string')
-      return { name: args.name, goal: args.goal };
+    if (typeof args.name === 'string') return { name: args.name };
   } catch {
     // unparseable arguments: no card
   }
@@ -78,6 +77,8 @@ function parseTeamIdFromResult(blocks: unknown): string | null {
     if (block.type !== 'tool-result' || typeof block.text !== 'string') continue;
     try {
       const parsed = JSON.parse(block.text) as { teamId?: unknown };
+      // docs/27：库内整数 id（数字）——客户端口径归一 string。
+      if (typeof parsed.teamId === 'number') return String(parsed.teamId);
       if (typeof parsed.teamId === 'string') return parsed.teamId;
     } catch {
       // not our JSON payload
@@ -149,7 +150,6 @@ const eteamsCardDefinition = {
       data: {
         teamId: context.state.teamId,
         teamName: context.state.name,
-        goal: context.state.goal,
       },
     };
   },
@@ -183,7 +183,7 @@ export function ETeamsCard({ node }: { node: { data: unknown } }): ReactNode {
 /** Card body — mounted inside the Provider (see {@link ETeamsCard}). */
 function ETeamsCardBody({ node }: { node: { data: unknown } }): ReactNode {
   const state = useActivityState();
-  const data = node.data as { teamId: string | null; teamName: string; goal?: string };
+  const data = node.data as { teamId: string | null; teamName: string };
   const team = findTeam(state, data);
   return (
     /* 表面根（D19b）：.eteams-ui 作用域根，工具类经后代选择器作用于子树。 */
@@ -199,7 +199,9 @@ function ETeamsCardBody({ node }: { node: { data: unknown } }): ReactNode {
             variant="outline"
             className="rounded-full border-solid px-2 py-px text-xs font-normal"
           >
-            {team !== undefined ? (PHASE_LABELS[team.phase] ?? team.phase) : '连接中…'}
+            {team !== undefined
+              ? `${team.progress.completed}/${team.progress.total} 完成`
+              : '连接中…'}
           </Badge>
           {team !== undefined && team.pendingDecisions.length > 0 && (
             <Badge
@@ -251,7 +253,7 @@ function ETeamsCardBody({ node }: { node: { data: unknown } }): ReactNode {
             </div>
           </>
         ) : (
-          <div className="my-1.5 text-xs text-muted-foreground">{data.goal ?? ''}</div>
+          <div className="my-1.5 text-xs text-muted-foreground">等待面板同步…</div>
         )}
         <Button
           type="button"

@@ -53,9 +53,9 @@ import {
 const TASK_ROW_CLASS = `cursor-pointer rounded-[8px] border-b border-solid px-2 py-2.5 ${BORDER_L1_CLASS}`;
 
 /** 展示态徽标（docs/29 B.3 渲染位）：中性 pill（Badge secondary + 6px dot，
- * tone 按展示态逐格对表——29-M3 同桶异色）+ 13 态差异 detail 小字（重试 n/
- * 待决策/已挂起…）。TaskDrawer 与任务详情**保留 13 态精确文案**（STATUS_
- * LABELS），展示态只用于任务行/组卡/分组头。 */
+ * tone 按展示态逐格对表——29-M3 同桶异色）+ 重试计数 detail 小字。TaskDrawer
+ * 与任务详情**保留任务态精确文案**（STATUS_LABELS），展示态只用于任务行/
+ * 组卡/分组头。 */
 function DisplayStatusPill({
   status,
   retryCount = 0,
@@ -70,6 +70,15 @@ function DisplayStatusPill({
     <span className={cn('inline-flex items-baseline gap-1.5 whitespace-nowrap', className)}>
       <Pill tone={d.tone}>{d.label}</Pill>
       {d.detail !== '' && <span className={MUTED_CLASS}>{d.detail}</span>}
+    </span>
+  );
+}
+
+/** 阻塞徽标（docs/36 建议 1）：wait + blockedFrom 非空的物化阻塞行内标记。 */
+function BlockedPill({ blockedFrom }: { blockedFrom: number | null }): ReactNode {
+  return (
+    <span className="ml-1 inline-flex items-baseline whitespace-nowrap">
+      <Pill tone="warn">阻塞中{blockedFrom !== null ? ` · 前置 #${blockedFrom}` : ''}</Pill>
     </span>
   );
 }
@@ -121,8 +130,8 @@ export function TasksTab({
 }: {
   team: TeamSnapshot;
   now: number;
-  expandedTask: string | null;
-  setExpandedTask: (id: string | null) => void;
+  expandedTask: number | null;
+  setExpandedTask: (id: number | null) => void;
 }): ReactNode {
   const [editTarget, setEditTarget] = useState<TaskEditTarget | null>(null);
   const [editSubject, setEditSubject] = useState('');
@@ -135,8 +144,8 @@ export function TasksTab({
   const [deleteError, setDeleteError] = useState<string | null>(null);
   // docs/29 拖拽指派瞬态（对齐 editBusy/editError 模式）：busy 按小任务
   // taskId 定位（框禁用 + 透明度），error 单槽记录受影响小任务（行内展示）。
-  const [assignBusy, setAssignBusy] = useState<string | null>(null);
-  const [assignError, setAssignError] = useState<{ taskId: string; message: string } | null>(null);
+  const [assignBusy, setAssignBusy] = useState<number | null>(null);
+  const [assignError, setAssignError] = useState<{ taskId: number; message: string } | null>(null);
   const editingTask = editTarget !== null && editTarget.task !== null ? editTarget.task : null;
 
   const openEdit = (group: TaskView, task: TaskView | null): void => {
@@ -202,7 +211,7 @@ export function TasksTab({
   // 拖拽指派提交（DA10/A.4）：新链由 TaskAssignDropBox 在 drop 时刻以最新
   // 快照的 chain 现算（不缓存旧链），这里只整链重发 updateTeamTask——
   // 非乐观更新，成功后 refreshActivitySoon 立即回拉；失败行内就地显示。
-  const submitAssignChain = async (taskId: string, chain: TaskSlotInput[]): Promise<void> => {
+  const submitAssignChain = async (taskId: number, chain: TaskSlotInput[]): Promise<void> => {
     setAssignBusy(taskId);
     setAssignError((cur) => (cur !== null && cur.taskId === taskId ? null : cur));
     try {
@@ -252,7 +261,7 @@ export function TasksTab({
                   )}
                 >
                   <div>
-                    <strong>{group.taskId}</strong> {group.subject}
+                    <strong>#{group.taskId}</strong> {group.subject}
                     <DisplayStatusPill status={group.status} className="ml-1" />
                     <span className={cn(MUTED_CLASS, 'ml-1')}>· {progressText}</span>
                     {summary !== null && <GroupSummaryChip summary={summary} />}
@@ -287,8 +296,9 @@ export function TasksTab({
                         >
                           <div className="flex items-start justify-between gap-2">
                             <div>
-                              <strong>{t.taskId}</strong> {t.subject}
+                              <strong>#{t.taskId}</strong> {t.subject}
                               <DisplayStatusPill status={t.status} className="ml-1" />
+                              {t.blocked && <BlockedPill blockedFrom={t.blockedFrom} />}
                               {t.assignee !== null && (
                                 <span className={cn(MUTED_CLASS, 'ml-1')}>· {t.assignee}</span>
                               )}
@@ -378,7 +388,7 @@ export function TasksTab({
                     onClick={() => setExpandedTask(expandedTask === t.taskId ? null : t.taskId)}
                   >
                     <div>
-                      <strong>{t.taskId}</strong> {t.subject}
+                      <strong>#{t.taskId}</strong> {t.subject}
                       {/* docs/29 B.3：展示态 pill（retryCount 并入 detail，
                     顶层行既有「重试 n」标记并入）；assignee 小字保留。 */}
                       <DisplayStatusPill
@@ -386,6 +396,7 @@ export function TasksTab({
                         retryCount={t.retryCount}
                         className="ml-1"
                       />
+                      {t.blocked && <BlockedPill blockedFrom={t.blockedFrom} />}
                       {t.assignee !== null && (
                         <span className={cn(MUTED_CLASS, 'ml-1')}>· {t.assignee}</span>
                       )}
@@ -432,10 +443,10 @@ export function TasksTab({
           <DialogContent className="max-w-md">
             <DialogHeader className="space-y-1 text-left">
               <DialogTitle>
-                {editingTask !== null ? `修改 ${editingTask.taskId}` : '新增小任务'}
+                {editingTask !== null ? `修改 #${editingTask.taskId}` : '新增小任务'}
               </DialogTitle>
               <DialogDescription className={MUTED_CLASS}>
-                挂靠任务单 {editTarget?.group.taskId ?? ''}（{editTarget?.group.subject ?? ''}）；
+                挂靠任务单 #{editTarget?.group.taskId ?? ''}（{editTarget?.group.subject ?? ''}）；
                 成员槽按序接力，站点留空可跳过。
               </DialogDescription>
             </DialogHeader>
@@ -551,7 +562,7 @@ export function TasksTab({
             <DialogHeader className="space-y-1 text-left">
               <DialogTitle>删除小任务</DialogTitle>
               <DialogDescription className={MUTED_CLASS}>
-                确定删除「{deleteTarget?.taskId ?? ''} {deleteTarget?.subject ?? ''}」？未领取的
+                确定删除「#{deleteTarget?.taskId ?? ''} {deleteTarget?.subject ?? ''}」？未领取的
                 任务删除后不可恢复。
               </DialogDescription>
             </DialogHeader>

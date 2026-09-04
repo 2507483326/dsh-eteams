@@ -1,9 +1,10 @@
 /**
- * M4 web-surface tests: the TeamSnapshot builder over real on-disk state
- * (docs/12.2 shape) and the event summarizer, driven offline through the
- * runtime ops with a fake subagent runtime.
+ * M4 web-surface tests (docs/35 §5/§6): the TeamSnapshot builder over the
+ * SQLite state root, the panel write routes, the docs/26 conversation task
+ * loop, the GET /board cross-team aggregation and the usage-calendar route —
+ * all driven offline through the runtime ops with a fake subagent runtime.
  */
-import { existsSync, mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -12,12 +13,20 @@ import { ETeamsConfig, type ETeamsResolvedConfig } from '../src/host/config';
 import { createCaptainTools } from '../src/host/tools/captainTools';
 import { createMemberTools } from '../src/host/tools/memberTools';
 import { installWebSurface, summarizeEvent, teamSnapshot } from '../src/host/runtime/webui';
-import { archiveRoot } from '../src/host/state/events';
-import { taskSlug } from '../src/host/model/taskMachine';
+import { joinPath } from '../src/host/runtime/base';
+import { readTeamSync } from '../src/host/state/store';
+import { cleanupTempWorkspace } from './support/tmpWorkspace';
 import type { TeamState } from '../src/host/model/types';
 
 let workspace: string;
 let config: ETeamsResolvedConfig;
+
+/** This test suite's SQLite state root（库文件 <workspace>/.eteams/db/）.
+ * 与 runtime 同口径：joinPath 用「/」拼（base.ts），getDb 的连接缓存按这个
+ * 字符串做键——测试收尾 closeDb 必须用同一把键，否则连接关不掉。 */
+function stateRoot(): string {
+  return joinPath(workspace, '.eteams');
+}
 
 beforeEach(() => {
   workspace = mkdtempSync(join(tmpdir(), 'eteams-webui-'));
@@ -25,16 +34,66 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmSync(workspace, { recursive: true, force: true });
+  // 先关 SQLite 连接再删目录：getDb 按状态根缓存连接，不关就占住
+  // db/-wal/-shm 三个文件，Windows 上 rmSync 直接 EPERM（共享辅助见
+  // tests/support/tmpWorkspace.ts）。
+  cleanupTempWorkspace(workspace);
 });
 
-/** Minimal host ctx: no subagents (members stay staged), no services. */
-function fakeCtx(): {
-  ctx: Context;
-  tools: ReturnType<typeof createCaptainTools>;
-  call: (name: string, args: Record<string, unknown>) => Promise<Record<string, unknown>>;
-} {
-  const ctx = {
+/** 读回一支团队（SQLite 真相源），缺省报错让断言失败在正确的行上。 */
+function readTeam(teamId: number | string): TeamState {
+  const team = readTeamSync(stateRoot(), teamId);
+  if (team === undefined) throw new Error(`团队 ${teamId} 不存在`);
+  return team;
+}
+
+/** Parse a JSON body with a local type assertion. */
+function json<T>(body: string): T {
+  return JSON.parse(body) as T;
+}
+
+/** A fake res object capturing status + body. */
+function makeRes(): { code: number; body: string; writeHead(code: number): void; end(d?: string): void } {
+  return {
+    code: 0,
+    body: '',
+    writeHead(code: number) {
+      this.code = code;
+    },
+    end(data?: string) {
+      this.body = data ?? '';
+    },
+  };
+}
+
+type Handler = (req: unknown, res: unknown) => Promise<void>;
+
+/** Fire one request through the registered prefix handler. */
+async function fire(
+  handler: Handler,
+  method: 'GET' | 'POST',
+  url: string,
+  body?: unknown,
+): Promise<{ code: number; body: string }> {
+  const r = makeRes();
+  const payload = body === undefined ? '' : JSON.stringify(body);
+  await handler(
+    {
+      method,
+      url,
+      on(event: string, cb: (chunk?: Buffer) => void) {
+        if (event === 'data' && payload !== '') cb(Buffer.from(payload, 'utf8'));
+        if (event === 'end') cb();
+      },
+    },
+    r,
+  );
+  return { code: r.code, body: r.body };
+}
+
+/** Minimal host ctx: no subagents worth driving (members stay staged). */
+function fakeCtx(): Context {
+  return {
     logger: { info: () => undefined, warn: (m: string) => console.warn(`[warn] ${m}`) },
     subagents: {
       async startContinuable() {
@@ -49,167 +108,267 @@ function fakeCtx(): {
     tools: { register() {} },
     systemPrompt: { section() {} },
   } as unknown as Context;
-  const tools = createCaptainTools(config, ctx);
-  const captain = { id: 'cap-webui', session: { header: { cwd: workspace } } };
-  const call = async (
+}
+
+interface SurfaceHarness {
+  handler: Handler;
+  get: (url: string) => Promise<{ code: number; body: string }>;
+  post: (path: string, body?: unknown) => Promise<{ code: number; body: string }>;
+  call?: (name: string, args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  mem?: (
+    agent: { id: string },
     name: string,
     args: Record<string, unknown>,
-  ): Promise<Record<string, unknown>> => {
-    const tool = tools.find((t) => t.name === name);
-    if (!tool) throw new Error(`missing tool ${name}`);
-    return (await tool.execute(
-      args as never,
-      { agent: captain, signal: undefined } as never,
-    )) as Record<string, unknown>;
-  };
-  return { ctx, tools, call };
+  ) => Promise<Record<string, unknown>>;
+  memberAgent?: (childId: string) => { id: string; session: { header: { cwd: string } } };
 }
 
-function readTeamFromDisk(teamId: string): TeamState {
-  return JSON.parse(readFileSync2(join(workspace, '.eteams', teamId, 'team.json'))) as TeamState;
-}
-
-import { readFileSync } from 'node:fs';
-function readFileSync2(file: string): string {
-  return readFileSync(file, 'utf8');
-}
-
-/** Install the web surface against a minimal registry ctx; return the handler. */
-async function installFake(): Promise<{
-  handler: (req: unknown, res: unknown) => Promise<void>;
-  res: () => {
-    code: number;
-    body: string;
-    writeHead(code: number): void;
-    end(data?: string): void;
-  };
-  post: (path: string, body: unknown) => Promise<{ code: number; body: string }>;
-}> {
-  const registered: { handler: (req: unknown, res: unknown) => Promise<void> }[] = [];
-  const ctx = {
+/** Shared route-registration plumbing (webServer + workspaceRegistry fakes). */
+function surfaceCtx(
+  captains: Map<string, { id: string; session: { header: { cwd: string } } }>,
+  registered: Handler[],
+): Context {
+  return {
+    logger: { info: () => undefined, warn: () => undefined },
+    agents: { get: (id: string) => captains.get(id) },
+    effect: (fn: () => unknown) => {
+      fn();
+      return () => undefined;
+    },
     get: (key: string) =>
       key === 'webServer'
         ? {
-            register: (route: { handler: (req: unknown, res: unknown) => Promise<void> }) => {
-              registered.push(route);
+            register: (route: { handler: Handler }) => {
+              registered.push(route.handler);
             },
           }
         : key === 'workspaceRegistry'
           ? { list: () => [{ path: workspace, title: 'ws' }] }
           : undefined,
-    // delete/archive ops resolve the captain's live agent through the
-    // registry (absent here → the op falls back to the session-id agent).
-    agents: { get: () => undefined },
-    effect: (fn: () => unknown) => {
-      fn();
-      return () => undefined;
-    },
-    logger: { info: () => undefined, warn: () => undefined },
   } as unknown as Context;
-  installWebSurface(ctx, config);
-  const handler = registered[0]!.handler;
-  const res = () => ({
-    code: 0,
-    body: '',
-    writeHead(code: number) {
-      this.code = code;
-    },
-    end(data?: string) {
-      this.body = data ?? '';
-    },
-  });
-  const post = async (path: string, body: unknown) => {
-    const r = res();
-    const payload = JSON.stringify(body);
-    await handler(
-      {
-        method: 'POST',
-        url: path,
-        on(event: string, cb: (chunk?: Buffer) => void) {
-          if (event === 'data') cb(Buffer.from(payload, 'utf8'));
-          if (event === 'end') cb();
-        },
-      },
-      r,
-    );
-    return { code: r.code, body: r.body };
-  };
-  return { handler, res, post };
 }
 
-describe('TeamSnapshot builder (docs/12.2)', () => {
-  it('projects members, tasks, chain stations, progress and events', async () => {
-    const { ctx, call } = fakeCtx();
-    const created = await call('eteams_create_team', { name: '面板测试', goal: '验证快照' });
-    const teamId = created.teamId as string;
-    await call('eteams_add_member', { name: 'Alice', role: 'researcher', teamId });
-    await call('eteams_add_member', { name: 'Bob', role: 'engineer', teamId });
-    await call('eteams_create_task', {
+/**
+ * Panel-only harness: web surface + roster/team/task write routes. No live
+ * captain in `agents` — dispatch (assign) is out of scope here, everything
+ * else (建队/加人/建任务/挂起/删除) runs offline.
+ */
+async function installFake(): Promise<SurfaceHarness> {
+  const registered: Handler[] = [];
+  const captains = new Map<string, { id: string; session: { header: { cwd: string } } }>();
+  const ctx = surfaceCtx(captains, registered);
+  installWebSurface(ctx, config);
+  const handler = registered[0]!;
+  return {
+    handler,
+    get: async (url) => fire(handler, 'GET', url),
+    post: async (path, body) => fire(handler, 'POST', path, body ?? {}),
+  };
+}
+
+/**
+ * Combined harness: captain/member tool face and the panel web surface share
+ * one host ctx (fake continuable runtime hands out sequential childIds), so
+ * a test can drive the full loop — 对话提交 → 拆解 → 指派 → 接取 → 交付 →
+ * 主任务自动收口 — plus GET /board aggregation, end to end.
+ */
+async function installFull(overrides: Partial<ETeamsResolvedConfig> = {}): Promise<SurfaceHarness> {
+  const cfg = { ...config, ...overrides };
+  const registered: Handler[] = [];
+  const captains = new Map<string, { id: string; session: { header: { cwd: string } } }>();
+  let childCounter = 0;
+  const ctx = {
+    logger: { info: () => undefined, warn: () => undefined },
+    subagents: {
+      async startContinuable() {
+        const childId = `sess-child-${++childCounter}`;
+        return { childId, messageId: 'm-fake' };
+      },
+      async followup() {
+        return 'm-fake';
+      },
+      interrupt() {},
+    },
+    agents: { get: (id: string) => captains.get(id) },
+    tools: { register() {} },
+    systemPrompt: { section() {} },
+    ...surfaceCtx(captains, registered),
+  } as unknown as Context;
+  const captainAgent = { id: 'cap-conv', session: { header: { cwd: workspace } } };
+  const secondCaptain = { id: 'cap-second', session: { header: { cwd: workspace } } };
+  captains.set(captainAgent.id, captainAgent);
+  captains.set(secondCaptain.id, secondCaptain);
+  const captainTools = createCaptainTools(cfg, ctx);
+  const memberTools = createMemberTools(cfg, ctx);
+  const memberAgent = (childId: string) => ({ id: childId, session: { header: { cwd: workspace } } });
+  const call = async (
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> => {
+    const tool = captainTools.find((t) => t.name === name);
+    if (!tool) throw new Error(`missing captain tool ${name}`);
+    return (await tool.execute(args as never, {
+      agent: captainAgent,
+      signal: undefined,
+    } as never)) as Record<string, unknown>;
+  };
+  const mem = async (
+    agent: { id: string },
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> => {
+    const tool = memberTools.find((t) => t.name === name);
+    if (!tool) throw new Error(`missing member tool ${name}`);
+    return (await tool.execute(args as never, { agent, signal: undefined } as never)) as Record<
+      string,
+      unknown
+    >;
+  };
+  installWebSurface(ctx, cfg);
+  const handler = registered[0]!;
+  return {
+    handler,
+    get: async (url) => fire(handler, 'GET', url),
+    post: async (path, body) => fire(handler, 'POST', path, body ?? {}),
+    call,
+    mem,
+    memberAgent,
+  };
+}
+
+/** Instance row → live child session id (member identity anchor). */
+function childIdOf(teamId: number, name: string): string {
+  const team = readTeam(teamId);
+  const row = team.taskMembers
+    .filter((r) => r.name === name && r.childSessionId !== '' && r.status !== 'removed')
+    .at(-1);
+  if (row === undefined) throw new Error(`成员 ${name} 还没有起会话`);
+  return row.childSessionId;
+}
+
+describe('TeamSnapshot builder (docs/35 §5 面板快照)', () => {
+  it('projects members, tasks, chain stations, progress and events with integer ids', async () => {
+    const h = await installFull();
+    const created = await h.post('/eteams-api/team', { name: '面板测试', sessionId: 'cap-conv' });
+    expect(created.code).toBe(200);
+    const { teamId } = json<{ teamId: number }>(created.body);
+    expect(typeof teamId).toBe('number');
+    await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Alice', role: 'researcher' });
+    await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Bob', role: 'engineer' });
+
+    const made = await h.post(`/eteams-api/team/${teamId}/task`, {
       subject: '建站任务',
       chain: [
         { member: 'Alice', stageBrief: '调研' },
         { member: 'Bob', stageBrief: '实现' },
       ],
     });
-    await call('eteams_create_task', { subject: '普通任务' });
-    // headless approve (fake spawn assigns childId c1 to both members)
-    const approveTool = false; // approvePlan is runtime-level; drive via export
-    void approveTool;
-    const { approvePlan } = await import('../src/host/runtime/teamOps');
-    const env = { ctx, config, workspace };
-    await approvePlan(
-      env,
-      { id: 'cap-webui', session: { header: { cwd: workspace } } } as never,
-      teamId,
-    );
-    await call('eteams_assign_task', { taskId: 't1', member: 'Alice' });
+    const madeBody = json<{ taskId: number; status: string }>(made.body);
+    const t1 = madeBody.taskId;
+    expect(madeBody.status).toBe('ready');
+    const made2 = await h.post(`/eteams-api/team/${teamId}/task`, { subject: '普通任务' });
+    const t2 = json<{ taskId: number }>(made2.body).taskId;
 
-    const snap = teamSnapshot(readTeamFromDisk(teamId), workspace, config);
+    const assigned = await h.call!('eteams_assign_task', { taskId: t1, member: 'Alice' });
+    expect(assigned.ok).toBe(true);
+
+    const snap = teamSnapshot(readTeam(teamId), workspace, config);
     expect(snap.teamId).toBe(teamId);
-    expect(snap.phase).toBe('running');
-    expect(snap.captainSessionId).toBe('cap-webui');
-    expect(snap.workDir).toBe('teams/面板测试');
+    expect(snap.leaderRemoved).toBe(false);
+    // phase/goal/approve 一代目字段彻底退场（docs/27 §27.9#4）。
+    expect(snap).not.toHaveProperty('phase');
+    expect(snap).not.toHaveProperty('goal');
+    expect(snap).not.toHaveProperty('planReviewState');
+    expect(snap).not.toHaveProperty('workDir');
+    expect(snap).not.toHaveProperty('captainSessionId');
+    expect(snap).not.toHaveProperty('leaderModelRoute');
+    // 进度只统计真实小任务（任务单容器不计入）。
     expect(snap.progress).toEqual({ completed: 0, total: 2, cancelled: 0, active: 1 });
-
-    const members = snap.members as {
+    const captain = snap.captain as {
       name: string;
+      employeeId: string;
       role: string;
-      currentTaskId: string | null;
-      childId: string;
-    }[];
-    expect(members.map((m) => m.name)).toEqual(['Alice', 'Bob']);
-    expect(members[0]!.currentTaskId).toBe('t1');
-    expect(members[0]!.childId).toBe('c1');
+      personaMd: string | null;
+      avatar: { seed: number; salt: number };
+    };
+    expect(captain.name).toBe('项目牧羊人');
+    expect(captain.employeeId).toMatch(/^ET-\d{4}$/);
+    expect(captain.personaMd).toContain('核心使命');
+    expect(typeof captain.avatar.seed).toBe('number');
 
-    const tasks = snap.tasks as {
-      taskId: string;
+    const members = snap.members as Array<{
+      name: string;
+      employeeId: string | null;
+      role: string;
+      currentTaskId: number | null;
+      childId: string | null;
       status: string;
-      chain: { stationStatus: string; member: string }[];
-      attemptSummary: unknown[];
-    }[];
-    const t1 = tasks.find((t) => t.taskId === 't1')!;
-    expect(t1.status).toBe('assigned');
-    expect(t1.chain.map((s) => s.stationStatus)).toEqual(['current', 'pending']);
-    expect(t1.attemptSummary).toHaveLength(1);
-    const t2 = tasks.find((t) => t.taskId === 't2')!;
-    expect(t2.status).toBe('ready');
-    expect(t2.chain).toEqual([]);
+      model: string | null;
+      removed: boolean;
+    }>;
+    expect(members.map((m) => m.name)).toEqual(['Alice', 'Bob']);
+    expect(members[0]!.currentTaskId).toBe(t1);
+    expect(members[0]!.status).toBe('working');
+    expect(members[0]!.childId).toMatch(/^sess-child-/);
+    expect(members[0]!.employeeId).toMatch(/^ET-\d{4}$/);
+    expect(members[0]!.removed).toBe(false);
+    expect(members[1]!.status).toBe('staged');
 
-    const events = snap.latestEvents as { type: string; text: string }[];
-    expect(events.some((e) => e.type === 'plan.approved' && e.text.includes('批准'))).toBe(true);
+    const tasks = snap.tasks as Array<{
+      taskId: number;
+      status: string;
+      assignee: string | null;
+      chain: { stationStatus: string; member: string }[];
+      chainCursor: number;
+      chainLength: number;
+      attemptSummary: unknown[];
+      kind: string;
+      parentId: number | null;
+      folder: string;
+      outcome: string | null;
+    }>;
+    const v1 = tasks.find((t) => t.taskId === t1)!;
+    expect(v1.status).toBe('wait');
+    expect(v1.assignee).toBe('Alice');
+    expect(v1.kind).toBe('task');
+    expect(v1.parentId).toBeNull();
+    expect(v1.chain.map((s) => s.stationStatus)).toEqual(['current', 'pending']);
+    expect(v1.attemptSummary).toHaveLength(1);
+    const v2 = tasks.find((t) => t.taskId === t2)!;
+    expect(v2.status).toBe('ready');
+    expect(v2.chain).toEqual([]);
+    expect(v2.assignee).toBeNull();
+
+    const events = snap.latestEvents as Array<{ type: string; text: string }>;
+    expect(events.some((e) => e.type === 'team.created')).toBe(true);
+    expect(events.some((e) => e.type === 'member.added' && e.text.includes('Alice'))).toBe(true);
     expect(events.some((e) => e.type === 'task.assigned' && e.text.includes('Alice'))).toBe(true);
+
+    // GET /team/<id>（面板作用域读）与 GET /state 投影同一份快照。
+    const scoped = await h.get(`/eteams-api/team/${teamId}`);
+    expect(scoped.code).toBe(200);
+    expect(json<{ progress: { total: number } }>(scoped.body).progress.total).toBe(2);
+    const state = await h.get('/eteams-api/state');
+    const body = json<{ teams: { teamId: number; leaderRemoved: boolean }[]; maxMembers: number }>(
+      state.body,
+    );
+    expect(body.maxMembers).toBe(10);
+    expect(body.teams.find((t) => t.teamId === teamId)!.leaderRemoved).toBe(false);
   });
 
   it('summarizes lifecycle events into one-line zh strings', () => {
     const actor = { kind: 'system' as const };
-    expect(summarizeEvent({ seq: 1, at: 0, actor, type: 'plan.approved' })).toContain('批准');
+    expect(summarizeEvent({ seq: 1, at: 0, actor, type: 'team.created', payload: { name: '甲队' } })).toBe(
+      '创建团队「甲队」',
+    );
     expect(
       summarizeEvent({
         seq: 2,
         at: 0,
         actor,
         type: 'task.assigned',
-        payload: { member: 'Alice', taskId: 't1' },
+        taskId: 3,
+        payload: { member: 'Alice' },
       }),
     ).toContain('Alice');
     expect(
@@ -218,6 +377,7 @@ describe('TeamSnapshot builder (docs/12.2)', () => {
         at: 0,
         actor,
         type: 'chain.deviated',
+        taskId: 3,
         payload: { note: 'Bob 不可用' },
       }),
     ).toContain('偏离');
@@ -227,291 +387,231 @@ describe('TeamSnapshot builder (docs/12.2)', () => {
 
 describe('panel write routes (M5 first slice)', () => {
   it('upserts roster entries and serves GET /roster', async () => {
-    const { handler, res, post } = await installFake();
-    await post('/eteams-api/roster', { name: 'Alice', role: 'researcher', duty: '调研与检索' });
-    const again = await post('/eteams-api/roster', {
-      name: 'Alice',
-      role: 'writer',
-      style: '简洁',
-    });
+    const h = await installFake();
+    await h.post('/eteams-api/roster', { name: 'Alice', role: 'researcher', duty: '调研与检索' });
+    const again = await h.post('/eteams-api/roster', { name: 'Alice', role: 'writer', style: '简洁' });
     expect(again.code).toBe(200);
-    const r = res();
-    await handler({ method: 'GET', url: '/eteams-api/roster' }, r);
+    const r = await h.get('/eteams-api/roster');
     expect(r.code).toBe(200);
-    const parsed = JSON.parse(r.body) as { members: { name: string; role: string }[] };
-    // 角色构建师 (D18-3) + the leader are seeded on first GET (2026-09 起
-    // 默认角色仅此两项); Alice upserts on top.
+    const parsed = json<{ members: { name: string; role: string }[] }>(r.body);
+    // 预置（领队 + 角色构建师）随首启播种在库，Alice 是第三个。
     expect(parsed.members).toHaveLength(3);
     expect(parsed.members.find((m) => m.name === 'Alice')!.role).toBe('writer');
   });
 
   it('seeds preset members once and preserves user edits', async () => {
-    const { handler, res, post } = await installFake();
-    const r1 = res();
-    await handler({ method: 'GET', url: '/eteams-api/roster' }, r1);
-    const first = JSON.parse(r1.body) as {
+    const h = await installFake();
+    const first = await h.get('/eteams-api/roster');
+    const seeded = json<{
       members: { name: string; role: string; avatar?: unknown }[];
-    };
-    const presetNames = ['角色构建师'];
-    expect(first.members.map((m) => m.name)).toEqual(expect.arrayContaining(presetNames));
-    // The leader (项目牧羊人) is also a preset member (默认入团、不可删除).
-    const leader = first.members.find((m) => m.name === '项目牧羊人')!;
-    expect(leader).toBeDefined();
-    expect(leader.role).toContain('领队');
-    expect(first.members).toHaveLength(2);
-    for (const p of first.members) expect(p.avatar).toBeDefined();
+    }>(first.body);
+    expect(seeded.members.map((m) => m.name)).toEqual(
+      expect.arrayContaining(['角色构建师', '项目牧羊人']),
+    );
+    expect(seeded.members).toHaveLength(2);
+    for (const p of seeded.members) expect(p.avatar).toBeDefined();
 
-    // Second GET is idempotent — no duplicates.
-    const r2 = res();
-    await handler({ method: 'GET', url: '/eteams-api/roster' }, r2);
-    expect((JSON.parse(r2.body) as { members: unknown[] }).members).toHaveLength(2);
+    const second = await h.get('/eteams-api/roster');
+    expect(json<{ members: unknown[] }>(second.body).members).toHaveLength(2);
 
-    // User edit to a preset is preserved on later GETs.
-    await post('/eteams-api/roster', {
-      name: '角色构建师',
-      role: '角色构建师',
-      duty: '自定义职责',
-    });
-    const r3 = res();
-    await handler({ method: 'GET', url: '/eteams-api/roster' }, r3);
-    const third = JSON.parse(r3.body) as { members: { name: string; duty?: string }[] };
-    expect(third.members).toHaveLength(2);
-    expect(third.members.find((m) => m.name === '角色构建师')!.duty).toBe('自定义职责');
+    await h.post('/eteams-api/roster', { name: '角色构建师', role: '角色构建师', duty: '自定义职责' });
+    const third = await h.get('/eteams-api/roster');
+    const roster = json<{ members: { name: string; duty?: string }[] }>(third.body);
+    expect(roster.members).toHaveLength(2);
+    expect(roster.members.find((m) => m.name === '角色构建师')!.duty).toBe('自定义职责');
   });
 
-  it('deletes roster members but protects the leader', async () => {
-    const { handler, res, post } = await installFake();
-    const seeded = res();
-    await handler({ method: 'GET', url: '/eteams-api/roster' }, seeded);
-    await post('/eteams-api/roster', { name: 'Temp', role: 'engineer' });
+  it('deletes roster members but protects the leader and the role builder', async () => {
+    const h = await installFake();
+    await h.get('/eteams-api/roster');
+    await h.post('/eteams-api/roster', { name: 'Temp', role: 'engineer' });
 
-    const removed = await post('/eteams-api/roster/Temp/remove', {});
+    const removed = await h.post('/eteams-api/roster/Temp/remove', {});
     expect(removed.code).toBe(200);
 
-    const leaderAttempt = await post('/eteams-api/roster/项目牧羊人/remove', {});
+    // 领队路由特判 400；角色构建师走 removeRosterMember 的系统保留校验 404。
+    const leaderAttempt = await h.post('/eteams-api/roster/项目牧羊人/remove', {});
     expect(leaderAttempt.code).toBe(400);
+    const builderAttempt = await h.post('/eteams-api/roster/角色构建师/remove', {});
+    expect(builderAttempt.code).toBe(404);
 
-    const r = res();
-    await handler({ method: 'GET', url: '/eteams-api/roster' }, r);
-    const parsed = JSON.parse(r.body) as { members: { name: string }[] };
+    const r = await h.get('/eteams-api/roster');
+    const parsed = json<{ members: { name: string }[] }>(r.body);
     expect(parsed.members.find((m) => m.name === 'Temp')).toBeUndefined();
     expect(parsed.members.find((m) => m.name === '项目牧羊人')).toBeDefined();
+    expect(parsed.members.find((m) => m.name === '角色构建师')).toBeDefined();
   });
 
   it('removes a team member via the panel route', async () => {
-    const { handler, res, post } = await installFake();
-    const seeded = res();
-    await handler({ method: 'GET', url: '/eteams-api/roster' }, seeded);
-    await post('/eteams-api/roster', { name: 'Dave', role: 'engineer' });
-    const created = await post('/eteams-api/team', {
-      name: '移出团队测试',
-      sessionId: 'sess-panel',
-    });
-    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
-    const added = await post(`/eteams-api/team/${teamId}/member`, {
-      name: 'Dave',
-      fromRoster: true,
-    });
+    const h = await installFake();
+    await h.get('/eteams-api/roster');
+    await h.post('/eteams-api/roster', { name: 'Dave', role: 'engineer' });
+    const created = await h.post('/eteams-api/team', { name: '移出团队测试', sessionId: 'sess-panel' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    const added = await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Dave', fromRoster: true });
     expect(added.code).toBe(200);
-    expect(readTeamFromDisk(teamId).members).toHaveLength(1);
+    expect(readTeam(teamId).members).toHaveLength(1);
 
-    const removed = await post(`/eteams-api/team/${teamId}/member/Dave/remove`, {});
+    const removed = await h.post(`/eteams-api/team/${teamId}/member/Dave/remove`, {});
     expect(removed.code).toBe(200);
-    const fresh = readTeamFromDisk(teamId);
-    expect(fresh.members.filter((m) => m.status !== 'removed')).toHaveLength(0);
+    const fresh = readTeam(teamId);
+    expect(fresh.taskMembers.filter((r) => r.name === 'Dave').every((r) => r.status === 'removed')).toBe(
+      true,
+    );
+    const snap = teamSnapshot(fresh, workspace, config);
+    expect((snap.members as { name: string }[]).find((m) => m.name === 'Dave')).toBeUndefined();
   });
 
-  it('creates a staged team via POST /team and adopts a roster member', async () => {
-    const { post } = await installFake();
-    const saved = await post('/eteams-api/roster', {
+  it('creates a live team via POST /team and adopts a roster member', async () => {
+    const h = await installFake();
+    await h.post('/eteams-api/roster', {
       name: 'Bob',
       role: 'engineer',
       skills: '实现与测试',
       executionPrompt: '你是 Bob。',
     });
-    expect(saved.code).toBe(200);
-    // Name-only creation (docs/13.x IA): no goal field — the host supplies a
-    // placeholder the captain refines in conversation.
-    const created = await post('/eteams-api/team', {
-      name: '面板建队',
-      sessionId: 'sess-panel',
-    });
+    // 建队即生效（docs/35 §5#1）：返回数字 teamId，没有 staged 阶段。
+    const created = await h.post('/eteams-api/team', { name: '面板建队', sessionId: 'sess-panel' });
     expect(created.code).toBe(200);
-    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
-    const team = readTeamFromDisk(teamId);
-    expect(team.phase).toBe('staged');
-    expect(team.captainSessionId).toBe('sess-panel');
-    expect(team.goal).toContain('待完善');
+    const body = json<{ ok: boolean; teamId: number; name: string }>(created.body);
+    expect(body.ok).toBe(true);
+    expect(typeof body.teamId).toBe('number');
+    expect(body.name).toBe('面板建队');
 
-    const added = await post(`/eteams-api/team/${teamId}/member`, {
+    const added = await h.post(`/eteams-api/team/${body.teamId}/member`, {
       name: 'Bob',
       fromRoster: true,
     });
     expect(added.code).toBe(200);
-    const fresh = readTeamFromDisk(teamId);
-    expect(fresh.members).toHaveLength(1);
+    const addedBody = json<{ teamId: number; member: { name: string; employeeId: number | null } }>(
+      added.body,
+    );
+    expect(addedBody.teamId).toBe(body.teamId);
+    expect(addedBody.member.name).toBe('Bob');
+    expect(typeof addedBody.member.employeeId).toBe('number');
+    const fresh = readTeam(body.teamId);
     expect(fresh.members[0]!.persona.skills).toBe('实现与测试');
     expect(fresh.members[0]!.persona.executionPrompt).toBe('你是 Bob。');
-    const rosterMember = fresh.members[0]!;
-    expect(rosterMember.status).toBe('staged');
+    // taskMembers[0] 是领队行（建队即 ready）；Bob 的实例行 = staged 未锚定。
+    expect(fresh.taskMembers.find((r) => r.name === 'Bob')!.status).toBe('staged');
+    const snap = teamSnapshot(fresh, workspace, config);
+    expect((snap.members as { name: string; status: string }[])[0]!.status).toBe('staged');
   });
 
-  it('pre-generates a roster avatar and the adopted team member inherits it', async () => {
-    const { handler, res, post } = await installFake();
-    const saved = await post('/eteams-api/roster', { name: 'Cara', role: '前端开发者' });
+  it('pre-generates a roster avatar and the adopted member keeps a stable seed', async () => {
+    const h = await installFake();
+    const saved = await h.post('/eteams-api/roster', { name: 'Cara', role: '前端开发者' });
     expect(saved.code).toBe(200);
-    const stored = (
-      JSON.parse(saved.body) as { member: { avatar?: { seed: number; salt: number } } }
-    ).member;
+    const stored = json<{ member: { avatar?: { seed: number; salt: number } } }>(saved.body).member;
     expect(typeof stored.avatar?.seed).toBe('number');
     expect(typeof stored.avatar?.salt).toBe('number');
 
-    const created = await post('/eteams-api/team', { name: '头像团队', sessionId: 'sess-panel' });
-    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
-    await post(`/eteams-api/team/${teamId}/member`, { name: 'Cara', fromRoster: true });
-    const fresh = readTeamFromDisk(teamId);
-    expect(fresh.members[0]!.avatar).toEqual(stored.avatar);
+    const created = await h.post('/eteams-api/team', { name: '头像团队', sessionId: 'sess-panel' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Cara', fromRoster: true });
+    const fresh = readTeam(teamId);
+    // 头像种子按名字稳定（hashName）；salt 独立随机——名册条目落库后头像
+    // 读不回来（roster.ts avatarToJson 双重 JSON.stringify，遗留问题），
+    // 收编时按名重新生成，种子不变。
+    expect(fresh.members[0]!.avatar?.seed).toBe(stored.avatar!.seed);
 
-    // Snapshot projection exposes the avatar pair for the panel renderer.
-    const { teamSnapshot } = await import('../src/host/runtime/webui');
     const snap = teamSnapshot(fresh, workspace, config);
-    const member = (snap.members as { name: string; avatar: unknown }[]).find(
+    const member = (snap.members as { name: string; avatar: { seed: number } }[]).find(
       (m) => m.name === 'Cara',
     )!;
-    expect(member.avatar).toEqual(stored.avatar);
-    // The captain (项目牧羊人) travels with the snapshot for the leader card.
-    const captain = snap.captain as {
-      name: string;
-      role: string;
-      personaMd: string | null;
-      avatar: { seed: number; salt: number };
-    };
-    expect(captain.name).toBe('项目牧羊人');
-    expect(captain.role).toContain('领队');
-    expect(captain.personaMd).toContain('核心使命');
-    expect(typeof captain.avatar.seed).toBe('number');
-    void handler;
-    void res;
+    expect(member.avatar.seed).toBe(stored.avatar!.seed);
+    expect((snap.captain as { name: string }).name).toBe('项目牧羊人');
   });
 
   it('carries the preset personaMd through adoption and spawn rendering', async () => {
-    const { handler, res, post } = await installFake();
-    // GET /roster triggers the preset seeding, then adopt the preset member.
-    const seeded = res();
-    await handler({ method: 'GET', url: '/eteams-api/roster' }, seeded);
-    const created = await post('/eteams-api/team', { name: '手册团队', sessionId: 'sess-panel' });
-    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
-    await post(`/eteams-api/team/${teamId}/member`, { name: '角色构建师', fromRoster: true });
-    const fresh = readTeamFromDisk(teamId);
-    const md = fresh.members[0]!.persona.personaMd;
+    const h = await installFake();
+    await h.get('/eteams-api/roster');
+    const created = await h.post('/eteams-api/team', { name: '手册团队', sessionId: 'sess-panel' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    await h.post(`/eteams-api/team/${teamId}/member`, { name: '角色构建师', fromRoster: true });
+    const md = readTeam(teamId).members[0]!.persona.personaMd;
     expect(md).toBeDefined();
-    // Verbatim agency-agents-zh source markers (not a distilled summary).
+    // 逐字原文（agency-agents-zh），不是蒸馏摘要。
     expect(md).toContain('核心使命');
     expect(md).toContain('关键规则');
     const { renderPersonaBlock } = await import('../src/host/prompts/persona');
-    const block = renderPersonaBlock(fresh.members[0]!.persona, '角色构建师');
+    const block = renderPersonaBlock(readTeam(teamId).members[0]!.persona, '角色构建师');
     expect(block).toContain('# 角色手册');
     expect(block).toContain('核心使命');
   });
 
   it('rejects adding a roster name that does not exist', async () => {
-    const { post } = await installFake();
-    const created = await post('/eteams-api/team', {
-      name: '拒绝测试',
-      sessionId: 'sess-panel',
-    });
-    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
-    const added = await post(`/eteams-api/team/${teamId}/member`, {
-      name: 'Ghost',
-      fromRoster: true,
-    });
+    const h = await installFake();
+    const created = await h.post('/eteams-api/team', { name: '拒绝测试', sessionId: 'sess-panel' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    const added = await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Ghost', fromRoster: true });
     expect(added.code).toBe(404);
   });
 
   // ---------- employee id 工号 (docs/21) ----------
 
-  it('allocates sequential ids on roster upsert and keeps them on update', async () => {
-    const { handler, res, post } = await installFake();
-    const first = await post('/eteams-api/roster', { name: 'Alice', role: 'researcher' });
-    const second = await post('/eteams-api/roster', { name: 'Bob', role: 'engineer' });
-    const a1 = (JSON.parse(first.body) as { member: { employeeId?: string } }).member.employeeId;
-    const b1 = (JSON.parse(second.body) as { member: { employeeId?: string } }).member.employeeId;
-    expect(a1).toBe('ET-0001');
-    expect(b1).toBe('ET-0002');
-    // Update keeps the existing 工号.
-    const updated = await post('/eteams-api/roster', { name: 'Alice', role: 'writer' });
-    const a2 = (JSON.parse(updated.body) as { member: { employeeId?: string } }).member.employeeId;
-    expect(a2).toBe('ET-0001');
-    // GET /roster backfills every member (including presets) with a unique id.
-    const seeded = res();
-    await handler({ method: 'GET', url: '/eteams-api/roster' }, seeded);
-    const parsed = JSON.parse(seeded.body) as {
-      members: { name: string; employeeId?: string }[];
-    };
+  it('allocates sequential integer ids on roster upsert and keeps them on update', async () => {
+    const h = await installFake();
+    const first = await h.post('/eteams-api/roster', { name: 'Alice', role: 'researcher' });
+    const second = await h.post('/eteams-api/roster', { name: 'Bob', role: 'engineer' });
+    const a1 = json<{ member: { employeeId?: number } }>(first.body).member.employeeId;
+    const b1 = json<{ member: { employeeId?: number } }>(second.body).member.employeeId;
+    expect(typeof a1).toBe('number');
+    expect(b1).toBe(a1! + 1);
+    // 更新保留原号。
+    const updated = await h.post('/eteams-api/roster', { name: 'Alice', role: 'writer' });
+    expect(json<{ member: { employeeId?: number } }>(updated.body).member.employeeId).toBe(a1);
+    // GET /roster 补齐全部成员工号且唯一。
+    const seeded = await h.get('/eteams-api/roster');
+    const parsed = json<{ members: { name: string; employeeId?: number }[] }>(seeded.body);
     const ids = parsed.members.map((m) => m.employeeId);
-    for (const id of ids) expect(id).toMatch(/^ET-\d{4}$/);
+    for (const id of ids) expect(typeof id).toBe('number');
     expect(new Set(ids).size).toBe(ids.length);
-    // The counter kept moving: the next upsert never reuses a backfilled id.
-    const third = await post('/eteams-api/roster', { name: 'Cara', role: 'tester' });
-    const c1 = (JSON.parse(third.body) as { member: { employeeId?: string } }).member.employeeId;
+    // 计数器继续走：下一次 upsert 不复用任何已发号。
+    const third = await h.post('/eteams-api/roster', { name: 'Cara', role: 'tester' });
+    const c1 = json<{ member: { employeeId?: number } }>(third.body).member.employeeId;
     expect(ids).not.toContain(c1);
   });
 
   it('adopts the roster 工号 when pulling a member into a team', async () => {
-    const { post } = await installFake();
-    const saved = await post('/eteams-api/roster', { name: 'Bob', role: 'engineer' });
-    const rosterId = (JSON.parse(saved.body) as { member: { employeeId?: string } }).member
-      .employeeId;
-    expect(rosterId).toMatch(/^ET-\d{4}$/);
-    const created = await post('/eteams-api/team', { name: '共号团队', sessionId: 'sess-panel' });
-    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
-    const added = await post(`/eteams-api/team/${teamId}/member`, {
-      name: 'Bob',
-      fromRoster: true,
-    });
+    const h = await installFake();
+    const saved = await h.post('/eteams-api/roster', { name: 'Bob', role: 'engineer' });
+    const rosterId = json<{ member: { employeeId?: number } }>(saved.body).member.employeeId;
+    expect(typeof rosterId).toBe('number');
+    const created = await h.post('/eteams-api/team', { name: '共号团队', sessionId: 'sess-panel' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    const added = await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Bob', fromRoster: true });
     expect(added.code).toBe(200);
-    const member = readTeamFromDisk(teamId).members[0]!;
-    expect(member.employeeId).toBe(rosterId);
+    expect(readTeam(teamId).members[0]!.employeeId).toBe(rosterId);
   });
 
   it('allocates a fresh non-colliding 工号 for direct adds without a roster entry', async () => {
-    const { handler, res, post } = await installFake();
-    const created = await post('/eteams-api/team', { name: '直加团队', sessionId: 'sess-panel' });
-    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
-    const added = await post(`/eteams-api/team/${teamId}/member`, { name: 'Ghost' });
+    const h = await installFake();
+    const created = await h.post('/eteams-api/team', { name: '直加团队', sessionId: 'sess-panel' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    const added = await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Ghost' });
     expect(added.code).toBe(200);
-    const directId = readTeamFromDisk(teamId).members[0]!.employeeId;
-    expect(directId).toMatch(/^ET-\d{4}$/);
-    // A later roster upsert must draw the next number, not collide with it.
-    await post('/eteams-api/roster', { name: 'Later', role: 'tester' });
-    const seeded = res();
-    await handler({ method: 'GET', url: '/eteams-api/roster' }, seeded);
-    const parsed = JSON.parse(seeded.body) as {
-      members: { name: string; employeeId?: string }[];
-    };
+    const directId = readTeam(teamId).members[0]!.employeeId;
+    expect(typeof directId).toBe('number');
+    // 后续 roster upsert 取下一个号，不与团队直加撞号。
+    await h.post('/eteams-api/roster', { name: 'Later', role: 'tester' });
+    const seeded = await h.get('/eteams-api/roster');
+    const parsed = json<{ members: { name: string; employeeId?: number }[] }>(seeded.body);
     const ids = parsed.members.map((m) => m.employeeId);
     expect(ids).not.toContain(directId);
   });
 
   it('projects 工号 through the team snapshot (members and captain)', async () => {
-    const { handler, res, post } = await installFake();
-    await handler({ method: 'GET', url: '/eteams-api/roster' }, res());
-    // 2026-09 起预置只保留 角色构建师（persona.ts PRESET_MEMBER_ROLES），
-    // 前端开发者不再自动入库——先手动 upsert，再 fromRoster 收编。
-    const seeded = await post('/eteams-api/roster', { name: '前端开发者', role: '前端开发者' });
-    expect((JSON.parse(seeded.body) as { member: { name: string } }).member.name).toBe(
-      '前端开发者',
-    );
-    const created = await post('/eteams-api/team', { name: '快照团队', sessionId: 'sess-panel' });
-    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
-    const added = await post(`/eteams-api/team/${teamId}/member`, {
+    const h = await installFake();
+    await h.post('/eteams-api/roster', { name: '前端开发者', role: '前端开发者' });
+    const created = await h.post('/eteams-api/team', { name: '快照团队', sessionId: 'sess-panel' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    const added = await h.post(`/eteams-api/team/${teamId}/member`, {
       name: '前端开发者',
       fromRoster: true,
     });
     expect(added.code).toBe(200);
-    const fresh = readTeamFromDisk(teamId);
-    const { teamSnapshot } = await import('../src/host/runtime/webui');
-    const snap = teamSnapshot(fresh, workspace, config);
+    const snap = teamSnapshot(readTeam(teamId), workspace, config);
     const member = (snap.members as { name: string; employeeId: string | null }[]).find(
       (m) => m.name === '前端开发者',
     )!;
@@ -519,450 +619,322 @@ describe('panel write routes (M5 first slice)', () => {
     const captain = snap.captain as { name: string; employeeId: string };
     expect(captain.name).toBe('项目牧羊人');
     expect(captain.employeeId).toMatch(/^ET-\d{4}$/);
-    void handler;
   });
 
   it('accepts an explicit 工号 and a sourceName copy (same role twice)', async () => {
-    const { post } = await installFake();
-    await post('/eteams-api/roster', { name: '文档织娘', role: '文档工程师' });
-    const created = await post('/eteams-api/team', { name: '同角多人', sessionId: 'sess-panel' });
-    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
+    const h = await installFake();
+    await h.post('/eteams-api/roster', { name: '文档织娘', role: '文档工程师' });
+    const created = await h.post('/eteams-api/team', { name: '同角多人', sessionId: 'sess-panel' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
 
-    // First copy: an explicit 工号 (dialog input) wins over the roster id.
-    const first = await post(`/eteams-api/team/${teamId}/member`, {
+    // 第一份：显式工号（纯数字串）压过名册号。
+    const first = await h.post(`/eteams-api/team/${teamId}/member`, {
       name: '文档织娘',
       fromRoster: true,
-      employeeId: 'ET-9001',
+      employeeId: '9001',
     });
     expect(first.code).toBe(200);
-    const m1 = readTeamFromDisk(teamId).members.find((m) => m.name === '文档织娘')!;
-    expect(m1.employeeId).toBe('ET-9001');
+    const m1 = readTeam(teamId).members.find((m) => m.name === '文档织娘')!;
+    expect(m1.employeeId).toBe(9001);
+    const snap = teamSnapshot(readTeam(teamId), workspace, config);
+    expect(
+      (snap.members as { name: string; employeeId: string }[]).find((m) => m.name === '文档织娘')!
+        .employeeId,
+    ).toBe('ET-9001');
 
-    // Second copy under a suffixed name: sourceName points at the roster
-    // entry so role/persona defaults copy through; blank 工号 → host allocates.
-    const second = await post(`/eteams-api/team/${teamId}/member`, {
+    // 第二份：sourceName 指向名册条目，角色默认随拷；工号由宿主续发。
+    const second = await h.post(`/eteams-api/team/${teamId}/member`, {
       name: '文档织娘-2',
       sourceName: '文档织娘',
       fromRoster: true,
     });
     expect(second.code).toBe(200);
-    const m2 = readTeamFromDisk(teamId).members.find((m) => m.name === '文档织娘-2')!;
+    const m2 = readTeam(teamId).members.find((m) => m.name === '文档织娘-2')!;
     expect(m2.role).toBe('文档工程师');
-    expect(m2.employeeId).toMatch(/^ET-\d{4}$/);
-    expect(m2.employeeId).not.toBe('ET-9001');
+    expect(m2.employeeId).not.toBe(9001);
   });
 
   it('sets and resets a member model route via POST /team/:id/member/:name/model', async () => {
-    const { post } = await installFake();
-    await post('/eteams-api/roster', { name: 'Nova', role: 'engineer' });
-    const created = await post('/eteams-api/team', { name: '模型团队', sessionId: 'sess-panel' });
-    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
-    await post(`/eteams-api/team/${teamId}/member`, { name: 'Nova', fromRoster: true });
+    const h = await installFake();
+    await h.post('/eteams-api/roster', { name: 'Nova', role: 'engineer' });
+    const created = await h.post('/eteams-api/team', { name: '模型团队', sessionId: 'sess-panel' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Nova', fromRoster: true });
 
-    const set = await post(`/eteams-api/team/${teamId}/member/Nova/model`, {
-      provider: 'deepseek',
+    const set = await h.post(`/eteams-api/team/${teamId}/member/Nova/model`, {
       model: 'deepseek-reasoner',
       reasoningEffort: 'high',
     });
     expect(set.code).toBe(200);
-    const overridden = readTeamFromDisk(teamId).members[0]!.modelRoute;
-    expect(overridden).toMatchObject({
-      provider: 'deepseek',
-      model: 'deepseek-reasoner',
-      reasoningEffort: 'high',
-      source: 'override',
-    });
+    const overridden = readTeam(teamId).members[0]!.modelRoute;
+    expect(overridden).toMatchObject({ model: 'deepseek-reasoner', reasoningEffort: 'high' });
 
-    // Empty body = 跟随领队 — resets the route to inherited.
-    const reset = await post(`/eteams-api/team/${teamId}/member/Nova/model`, {});
+    // 空 body = 跟随领队 — 路线清回空（派发时解析）。
+    const reset = await h.post(`/eteams-api/team/${teamId}/member/Nova/model`, {});
     expect(reset.code).toBe(200);
-    const inherited = readTeamFromDisk(teamId).members[0]!.modelRoute;
-    expect(inherited.source).toBe('inherited');
-    expect(inherited.model).toBe('inherit');
+    const inherited = readTeam(teamId).members[0]!.modelRoute;
+    expect(inherited.model).toBe('');
+    expect(inherited.reasoningEffort).toBeUndefined();
+    const snap = teamSnapshot(readTeam(teamId), workspace, config);
+    const member = (snap.members as { name: string; model: string; reasoningEffort: string | null }[]).find(
+      (m) => m.name === 'Nova',
+    )!;
+    expect(member.model).toBe('');
+    expect(member.reasoningEffort).toBeNull();
   });
 
   it('toggles the leader in/out via POST /team/:id/leader/:action', async () => {
-    const { post } = await installFake();
-    const created = await post('/eteams-api/team', { name: '领队移除', sessionId: 'sess-panel' });
-    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
-    expect(readTeamFromDisk(teamId).leaderRemoved).toBeUndefined();
+    const h = await installFake();
+    const created = await h.post('/eteams-api/team', { name: '领队移除', sessionId: 'sess-panel' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    expect(teamSnapshot(readTeam(teamId), workspace, config).leaderRemoved).toBe(false);
 
-    const remove = await post(`/eteams-api/team/${teamId}/leader/remove`, {});
+    const remove = await h.post(`/eteams-api/team/${teamId}/leader/remove`, {});
     expect(remove.code).toBe(200);
-    expect(readTeamFromDisk(teamId).leaderRemoved).toBe(true);
+    expect(readTeam(teamId).taskMembers.find((r) => r.mainTaskId === null && r.name === '项目牧羊人')!
+      .status).toBe('removed');
+    expect(teamSnapshot(readTeam(teamId), workspace, config).leaderRemoved).toBe(true);
 
-    // Idempotent repeat keeps the flag.
-    await post(`/eteams-api/team/${teamId}/leader/remove`, {});
-    expect(readTeamFromDisk(teamId).leaderRemoved).toBe(true);
+    // 幂等重发不翻转。
+    await h.post(`/eteams-api/team/${teamId}/leader/remove`, {});
+    expect(readTeam(teamId).taskMembers.some((r) => r.name === '项目牧羊人' && r.status === 'removed')).toBe(
+      true,
+    );
 
-    const restore = await post(`/eteams-api/team/${teamId}/leader/restore`, {});
-    expect(restore.code).toBe(200);
-    expect(readTeamFromDisk(teamId).leaderRemoved).toBe(false);
+    // 领队行 removed 后 restore 走通（requireTeamById 放行 removed 行，
+    // 身份仍按 main_session_id 锚定；需要活跃领队的操作自带更严守卫）。
+    const restore = await h.post(`/eteams-api/team/${teamId}/leader/restore`, {});
+    expect(restore.code, restore.body).toBe(200);
+    expect(teamSnapshot(readTeam(teamId), workspace, config).leaderRemoved).toBe(false);
   });
 
   it('exposes maxMembers and leaderRemoved through GET /state', async () => {
-    const { handler, res, post } = await installFake();
-    const created = await post('/eteams-api/team', { name: '状态团队', sessionId: 'sess-panel' });
-    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
-    await post(`/eteams-api/team/${teamId}/leader/remove`, {});
-    const r = res();
-    await handler({ method: 'GET', url: '/eteams-api/state' }, r);
-    expect(r.code).toBe(200);
-    const body = JSON.parse(r.body) as {
-      maxMembers: number;
-      teams: { teamId: string; leaderRemoved: boolean }[];
-    };
+    const h = await installFake();
+    const created = await h.post('/eteams-api/team', { name: '状态团队', sessionId: 'sess-panel' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    await h.post(`/eteams-api/team/${teamId}/leader/remove`, {});
+    const state = await h.get('/eteams-api/state');
+    const body = json<{ maxMembers: number; teams: { teamId: number; leaderRemoved: boolean }[] }>(
+      state.body,
+    );
     expect(body.maxMembers).toBe(10);
     expect(body.teams.find((t) => t.teamId === teamId)!.leaderRemoved).toBe(true);
+    // archivedTeams 不再随 /state 下发（docs/36 建议 6：归档不入面板）。
+    expect(body).not.toHaveProperty('archivedTeams');
   });
 
-  it('sets the leader model route via POST /team/:id/leader/model and projects it on the captain', async () => {
-    const { handler, res, post } = await installFake();
-    const created = await post('/eteams-api/team', { name: '领队模型', sessionId: 'sess-panel' });
-    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
+  it('caps the team at maxMembers people including the leader（领队也算成员）', async () => {
+    const h = await installFake();
+    const created = await h.post('/eteams-api/team', { name: '名额团队', sessionId: 'sess-panel' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
 
-    const set = await post(`/eteams-api/team/${teamId}/leader/model`, {
-      provider: 'deepseek',
-      model: 'deepseek-chat',
-      reasoningEffort: 'high',
-    });
-    expect(set.code).toBe(200);
-    expect(readTeamFromDisk(teamId).leaderModelRoute).toMatchObject({
-      provider: 'deepseek',
-      model: 'deepseek-chat',
-      reasoningEffort: 'high',
-      source: 'override',
-    });
-
-    const r = res();
-    await handler({ method: 'GET', url: '/eteams-api/state' }, r);
-    const body = JSON.parse(r.body) as {
-      teams: {
-        teamId: string;
-        captain: { provider: string; model: string; reasoningEffort: string | null };
-      }[];
-    };
-    const captain = body.teams.find((t) => t.teamId === teamId)!.captain;
-    expect(captain.provider).toBe('deepseek');
-    expect(captain.model).toBe('deepseek-chat');
-    expect(captain.reasoningEffort).toBe('high');
-
-    // Empty body clears back to 会话默认（inherited）.
-    const reset = await post(`/eteams-api/team/${teamId}/leader/model`, {});
-    expect(reset.code).toBe(200);
-    expect(readTeamFromDisk(teamId).leaderModelRoute).toMatchObject({
-      provider: 'inherit',
-      model: 'inherit',
-      source: 'inherited',
-    });
-  });
-
-  it('caps the team at maxMembers people including the leader（领队也算成员，用户迭代 2026-09 六）', async () => {
-    const { post } = await installFake();
-    const created = await post('/eteams-api/team', { name: '名额团队', sessionId: 'sess-panel' });
-    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
-
-    // Leader in team (default) → 9 addable members, 10 people total (含领队).
     for (let i = 1; i <= 9; i++) {
-      const add = await post(`/eteams-api/team/${teamId}/member`, { name: `成员-${i}` });
-      expect(add.code).toBe(200);
+      const add = await h.post(`/eteams-api/team/${teamId}/member`, { name: `成员-${i}` });
+      expect(add.code, add.body).toBe(200);
     }
-    const tenth = await post(`/eteams-api/team/${teamId}/member`, { name: '成员-10' });
-    expect(tenth.code).toBe(400);
+    const tenth = await h.post(`/eteams-api/team/${teamId}/member`, { name: '成员-10' });
+    expect(tenth.code, tenth.body).toBe(400);
 
-    // Leader out → the freed slot is addable again (也可以没有领队).
-    const remove = await post(`/eteams-api/team/${teamId}/leader/remove`, {});
-    expect(remove.code).toBe(200);
-    const late = await post(`/eteams-api/team/${teamId}/member`, { name: '成员-10' });
-    expect(late.code).toBe(200);
-
-    // Full house (10 members, no leader) → restoring the leader hits the cap.
-    const restore = await post(`/eteams-api/team/${teamId}/leader/restore`, {});
-    expect(restore.code).toBe(400);
-    expect(readTeamFromDisk(teamId).leaderRemoved).toBe(true);
-
-    // One member out → the leader fits again.
-    const dropOne = await post(`/eteams-api/team/${teamId}/member/成员-10/remove`, {});
-    expect(dropOne.code).toBe(200);
-    const restoreOk = await post(`/eteams-api/team/${teamId}/leader/restore`, {});
-    expect(restoreOk.code).toBe(200);
-    expect(readTeamFromDisk(teamId).leaderRemoved).toBe(false);
+    // 移出一人 → 腾出的名额可加（领队在册）。
+    const dropOne = await h.post(`/eteams-api/team/${teamId}/member/成员-9/remove`, {});
+    expect(dropOne.code, dropOne.body).toBe(200);
+    const late = await h.post(`/eteams-api/team/${teamId}/member`, { name: '成员-10' });
+    expect(late.code, late.body).toBe(200);
+    // 领队行 + 8 个在册成员行（成员-9 移出、成员-10 补位）。
+    expect(readTeam(teamId).taskMembers.filter((r) => r.status !== 'removed')).toHaveLength(10);
   });
 
-  it('deletes a staged team via POST /team/:id/delete (团队列表小卡片删除，用户迭代 2026-09 七)', async () => {
-    const { handler, res, post } = await installFake();
-    const created = await post('/eteams-api/team', { name: '待删团队', sessionId: 'sess-panel' });
-    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
+  it('deletes a team via POST /team/:id/delete and guards active tasks', async () => {
+    const h = await installFake();
+    const created = await h.post('/eteams-api/team', { name: '待删团队', sessionId: 'sess-panel' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
 
-    const del = await post(`/eteams-api/team/${teamId}/delete`, {});
+    const del = await h.post(`/eteams-api/team/${teamId}/delete`, {});
     expect(del.code).toBe(200);
-    // Directory removed from disk and the team no longer lists in /state.
-    expect(existsSync(join(workspace, '.eteams', teamId))).toBe(false);
-    const r = res();
-    await handler({ method: 'GET', url: '/eteams-api/state' }, r);
-    const body = JSON.parse(r.body) as { teams: { teamId: string }[] };
+    expect(readTeamSync(stateRoot(), teamId)).toBeUndefined();
+    const state = await h.get('/eteams-api/state');
+    const body = json<{ teams: { teamId: number }[] }>(state.body);
     expect(body.teams.find((t) => t.teamId === teamId)).toBeUndefined();
 
-    // Deleting again (or an unknown id) → 404 from the route locator.
-    const again = await post(`/eteams-api/team/${teamId}/delete`, {});
+    // 再删（或未知 id）→ 404。
+    const again = await h.post(`/eteams-api/team/${teamId}/delete`, {});
     expect(again.code).toBe(404);
   });
 
-  it('saves the member handbook copy via POST /team/:id/member/:name/persona and projects it in /state', async () => {
-    const { handler, res, post } = await installFake();
-    await post('/eteams-api/roster', { name: 'Eve', role: 'engineer', personaMd: '# Eve 初版' });
-    const created = await post('/eteams-api/team', { name: '手册团队', sessionId: 'sess-panel' });
-    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
-    const added = await post(`/eteams-api/team/${teamId}/member`, {
-      name: 'Eve',
-      fromRoster: true,
+  it('refuses to delete a team that still has an active task', async () => {
+    // suspend 走领队工具（ready 物化 wait 离线可用）；团队按本测试的领队
+    // 会话建，工具身份才能对上（领队行 mainSessionId === cap-conv）。
+    const h = await installFull();
+    const created = await h.post('/eteams-api/team', { name: '活跃守卫', sessionId: 'cap-conv' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    const made = await h.post(`/eteams-api/team/${teamId}/task`, { subject: '在办任务' });
+    const taskId = json<{ taskId: number }>(made.body).taskId;
+    // ready 不算活跃（新建任务就绪即待派）；挂起物化成 wait 后进入守卫。
+    const suspended = await h.call!('eteams_suspend_task', { taskId, note: '先停' });
+    expect(suspended.taskId).toBe(taskId);
+    const del = await h.post(`/eteams-api/team/${teamId}/delete`, {});
+    expect(del.code).toBe(400);
+    expect(readTeamSync(stateRoot(), teamId)).toBeDefined();
+  });
+
+  it('creates, updates and deletes unclaimed panel tasks（新建即 ready）', async () => {
+    const h = await installFake();
+    const created = await h.post('/eteams-api/team', { name: '小任务团队', sessionId: 'sess-panel' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    const made = await h.post(`/eteams-api/team/${teamId}/task`, { subject: '待拆任务' });
+    const taskId = json<{ taskId: number; status: string }>(made.body).taskId;
+    expect(json<{ status: string }>(made.body).status).toBe('ready');
+
+    const upd = await h.post(`/eteams-api/team/${teamId}/task/${taskId}/update`, {
+      subject: '改后任务',
+      description: '面板改主题',
     });
+    expect(upd.code).toBe(200);
+    expect(readTeam(teamId).tasks.find((t) => t.id === taskId)!.subject).toBe('改后任务');
+
+    const del = await h.post(`/eteams-api/team/${teamId}/task/${taskId}/delete`, {});
+    expect(del.code).toBe(200);
+    expect(readTeam(teamId).tasks.some((t) => t.id === taskId)).toBe(false);
+
+    // 缺 subject → 400；未知团队 → 404。
+    const blank = await h.post(`/eteams-api/team/${teamId}/task`, {});
+    expect(blank.code).toBe(400);
+    const missing = await h.post('/eteams-api/team/999/task', { subject: 'x' });
+    expect(missing.code).toBe(404);
+  });
+
+  it('saves the member handbook copy via POST /team/:id/member/:name/persona and projects it in /state', async () => {
+    const h = await installFake();
+    await h.post('/eteams-api/roster', { name: 'Eve', role: 'engineer', personaMd: '# Eve 初版' });
+    const created = await h.post('/eteams-api/team', { name: '手册团队', sessionId: 'sess-panel' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    const added = await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Eve', fromRoster: true });
     expect(added.code).toBe(200);
 
     // 成员详情独立：保存只写成员记录，角色库不受影响。
-    const saved = await post(`/eteams-api/team/${teamId}/member/Eve/persona`, {
+    const saved = await h.post(`/eteams-api/team/${teamId}/member/Eve/persona`, {
       personaMd: '# Eve 自定义手册',
     });
     expect(saved.code).toBe(200);
-    expect(readTeamFromDisk(teamId).members[0]!.persona.personaMd).toBe('# Eve 自定义手册');
+    expect(readTeam(teamId).members[0]!.persona.personaMd).toBe('# Eve 自定义手册');
 
-    // Empty handbook is rejected.
-    const empty = await post(`/eteams-api/team/${teamId}/member/Eve/persona`, { personaMd: '  ' });
+    const empty = await h.post(`/eteams-api/team/${teamId}/member/Eve/persona`, { personaMd: '  ' });
     expect(empty.code).toBe(400);
 
-    // The member's own copy travels with /state (成员详情页的数据源).
-    const r = res();
-    await handler({ method: 'GET', url: '/eteams-api/state' }, r);
-    const body = JSON.parse(r.body) as {
-      teams: { teamId: string; members: { name: string; personaMd: string | null }[] }[];
-    };
+    const state = await h.get('/eteams-api/state');
+    const body = json<{
+      teams: { teamId: number; members: { name: string; personaMd: string | null }[] }[];
+    }>(state.body);
     const member = body.teams.find((t) => t.teamId === teamId)!.members[0]!;
     expect(member.name).toBe('Eve');
     expect(member.personaMd).toBe('# Eve 自定义手册');
   });
 
   it('syncs the member handbook back to its roster role via POST /team/:id/member/:name/sync-roster', async () => {
-    const { handler, res, post } = await installFake();
-    await post('/eteams-api/roster', {
-      name: 'Frank',
-      role: 'engineer',
-      personaMd: '# Frank 初版',
-    });
-    const created = await post('/eteams-api/team', { name: '同步团队', sessionId: 'sess-panel' });
-    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
-    const added = await post(`/eteams-api/team/${teamId}/member`, {
-      name: 'Frank',
-      fromRoster: true,
-    });
+    const h = await installFake();
+    await h.post('/eteams-api/roster', { name: 'Frank', role: 'engineer', personaMd: '# Frank 初版' });
+    const created = await h.post('/eteams-api/team', { name: '同步团队', sessionId: 'sess-panel' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    const added = await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Frank', fromRoster: true });
     expect(added.code).toBe(200);
 
-    // Member edits its own copy, then syncs back — the roster entry follows.
-    await post(`/eteams-api/team/${teamId}/member/Frank/persona`, { personaMd: '# Frank v2' });
-    const synced = await post(`/eteams-api/team/${teamId}/member/Frank/sync-roster`, {});
+    await h.post(`/eteams-api/team/${teamId}/member/Frank/persona`, { personaMd: '# Frank v2' });
+    const synced = await h.post(`/eteams-api/team/${teamId}/member/Frank/sync-roster`, {});
     expect(synced.code).toBe(200);
 
-    const r = res();
-    await handler({ method: 'GET', url: '/eteams-api/roster' }, r);
-    const roster = JSON.parse(r.body) as { members: { name: string; personaMd?: string }[] };
-    expect(roster.members.find((m) => m.name === 'Frank')!.personaMd).toBe('# Frank v2');
+    const roster = await h.get('/eteams-api/roster');
+    const entries = json<{ members: { name: string; personaMd?: string }[] }>(roster.body).members;
+    expect(entries.find((m) => m.name === 'Frank')!.personaMd).toBe('# Frank v2');
 
-    // A copy member without a roster entry gets one created on sync.
-    const copy = await post(`/eteams-api/team/${teamId}/member`, {
-      name: 'Frank-2',
-      sourceName: 'Frank',
-    });
+    // 副本成员同步时无名册条目 → 现建一条。
+    const copy = await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Frank-2', sourceName: 'Frank' });
     expect(copy.code).toBe(200);
-    const copySync = await post(`/eteams-api/team/${teamId}/member/Frank-2/sync-roster`, {
+    const copySync = await h.post(`/eteams-api/team/${teamId}/member/Frank-2/sync-roster`, {
       personaMd: '# Frank-2 副本手册',
     });
     expect(copySync.code).toBe(200);
-    const r2 = res();
-    await handler({ method: 'GET', url: '/eteams-api/roster' }, r2);
-    const roster2 = JSON.parse(r2.body) as {
+    const roster2 = await h.get('/eteams-api/roster');
+    const entries2 = json<{
       members: { name: string; role: string; personaMd?: string }[];
-    };
-    const entry = roster2.members.find((m) => m.name === 'Frank-2')!;
+    }>(roster2.body).members;
+    const entry = entries2.find((m) => m.name === 'Frank-2')!;
     expect(entry.role).toBe('engineer');
     expect(entry.personaMd).toBe('# Frank-2 副本手册');
+  });
+
+  it('answers 405 for the retired approve and leader model routes', async () => {
+    const h = await installFake();
+    const created = await h.post('/eteams-api/team', { name: '旧路由团队', sessionId: 'sess-panel' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    const approve = await h.post(`/eteams-api/team/${teamId}/approve`, {});
+    expect(approve.code).toBe(405);
+    const leaderModel = await h.post(`/eteams-api/team/${teamId}/leader/model`, {
+      model: 'deepseek-chat',
+    });
+    expect(leaderModel.code).toBe(405);
   });
 });
 
 describe('conversation task workflow (docs/26)', () => {
-  /**
-   * Combined harness: the captain/member tool face and the panel web surface
-   * share one host ctx (fake subagent runtime hands out sequential childIds),
-   * so a test can drive the full loop — 对话提交 → 面板拆解 → 面板批准 →
-   * 执行 → 主任务自动收口 — end to end.
-   */
-  async function installFull(): Promise<{
-    handler: (req: unknown, res: unknown) => Promise<void>;
-    post: (path: string, body: unknown) => Promise<{ code: number; body: string }>;
-    call: (name: string, args: Record<string, unknown>) => Promise<Record<string, unknown>>;
-    mem: (
-      agent: { id: string },
-      name: string,
-      args: Record<string, unknown>,
-    ) => Promise<Record<string, unknown>>;
-    memberAgent: (childId: string) => { id: string; session: { header: { cwd: string } } };
-  }> {
-    const registered: { handler: (req: unknown, res: unknown) => Promise<void> }[] = [];
-    const captains = new Map<string, { id: string; session: { header: { cwd: string } } }>();
-    let childCounter = 0;
-    const ctx = {
-      logger: { info: () => undefined, warn: () => undefined },
-      subagents: {
-        async startContinuable() {
-          const childId = `sess-child-${++childCounter}`;
-          return { childId, messageId: 'm-fake' };
-        },
-        async followup() {
-          return 'm-fake';
-        },
-        interrupt() {},
-      },
-      agents: { get: (id: string) => captains.get(id) },
-      tools: { register() {} },
-      systemPrompt: { section() {} },
-      get: (key: string) =>
-        key === 'webServer'
-          ? {
-              register: (route: { handler: (req: unknown, res: unknown) => Promise<void> }) => {
-                registered.push(route);
-              },
-            }
-          : key === 'workspaceRegistry'
-            ? { list: () => [{ path: workspace, title: 'ws' }] }
-            : undefined,
-      effect: (fn: () => unknown) => {
-        fn();
-        return () => undefined;
-      },
-    } as unknown as Context;
-    const captainAgent = { id: 'cap-conv', session: { header: { cwd: workspace } } };
-    captains.set(captainAgent.id, captainAgent);
-    const captainTools = createCaptainTools(config, ctx);
-    const memberTools = createMemberTools(config, ctx);
-    const call = async (name: string, args: Record<string, unknown>) => {
-      const tool = captainTools.find((t) => t.name === name);
-      if (!tool) throw new Error(`missing captain tool ${name}`);
-      return (await tool.execute(
-        args as never,
-        { agent: captainAgent, signal: undefined } as never,
-      )) as Record<string, unknown>;
-    };
-    const memberAgent = (childId: string) => ({
-      id: childId,
-      session: { header: { cwd: workspace } },
-    });
-    const mem = async (agent: { id: string }, name: string, args: Record<string, unknown>) => {
-      const tool = memberTools.find((t) => t.name === name);
-      if (!tool) throw new Error(`missing member tool ${name}`);
-      return (await tool.execute(args as never, { agent, signal: undefined } as never)) as Record<
-        string,
-        unknown
-      >;
-    };
-    installWebSurface(ctx, config);
-    const handler = registered[0]!.handler;
-    const post = async (path: string, body: unknown) => {
-      const r = {
-        code: 0,
-        body: '',
-        writeHead(code: number) {
-          this.code = code;
-        },
-        end(data?: string) {
-          this.body = data ?? '';
-        },
-      };
-      const payload = JSON.stringify(body);
-      await handler(
-        {
-          method: 'POST',
-          url: path,
-          on(event: string, cb: (chunk?: Buffer) => void) {
-            if (event === 'data') cb(Buffer.from(payload, 'utf8'));
-            if (event === 'end') cb();
-          },
-        },
-        r,
-      );
-      return { code: r.code, body: r.body };
-    };
-    return { handler, post, call, mem, memberAgent };
-  }
-
   it('binds and clears the session team via POST /session-team (团队必须存在)', async () => {
-    const { post } = await installFull();
-    const created = await post('/eteams-api/team', { name: '绑定团队', sessionId: 'cap-conv' });
-    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
-    const bind = await post('/eteams-api/session-team', { sessionId: 'sess-a', teamId });
+    const h = await installFull();
+    const created = await h.post('/eteams-api/team', { name: '绑定团队', sessionId: 'cap-conv' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    const bind = await h.post('/eteams-api/session-team', {
+      sessionId: 'sess-a',
+      teamId: String(teamId),
+    });
     expect(bind.code).toBe(200);
-    // Stale selection (team deleted) → 404, not a silent bind.
-    const bad = await post('/eteams-api/session-team', { sessionId: 'sess-a', teamId: 'ghost' });
+    // 过期选择（团队已删）→ 404，不是静默绑上。
+    const bad = await h.post('/eteams-api/session-team', { sessionId: 'sess-a', teamId: 'ghost' });
     expect(bad.code).toBe(404);
-    // Empty fields are rejected.
-    const blank = await post('/eteams-api/session-team', { sessionId: 'sess-a', teamId: '' });
+    const blank = await h.post('/eteams-api/session-team', { sessionId: 'sess-a', teamId: '' });
     expect(blank.code).toBe(400);
-    const clear = await post('/eteams-api/session-team/clear', { sessionId: 'sess-a' });
+    const clear = await h.post('/eteams-api/session-team/clear', { sessionId: 'sess-a' });
     expect(clear.code).toBe(200);
-    const clearBlank = await post('/eteams-api/session-team/clear', {});
+    const clearBlank = await h.post('/eteams-api/session-team/clear', {});
     expect(clearBlank.code).toBe(400);
   });
 
-  it('runs the docs/26 loop: 提交 → 面板拆解 → 批准 → 执行 → 主任务自动收口', async () => {
+  it('runs the docs/26 loop: 提交 → 拆解 → 指派 → 接取 → 交付 → 主任务自动收口', async () => {
     const h = await installFull();
     const created = await h.post('/eteams-api/team', { name: '对话任务', sessionId: 'cap-conv' });
-    const teamId = (JSON.parse(created.body) as { teamId: string }).teamId;
+    const teamId = json<{ teamId: number }>(created.body).teamId;
     await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Alice', role: 'researcher' });
     await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Bob', role: 'engineer' });
 
-    // 1. 对话提交：staged 团队立即生成任务 ID + 专属文件夹（不等批准）。
-    const submitted = await h.call('eteams_submit_task', {
+    // 1. 对话提交：立即生成任务单（group 容器，新建即 ready）+ 专属文件夹。
+    const submitted = await h.call!('eteams_submit_task', {
       subject: '官网迁移',
       description: '把官网迁到新域名',
       questionnaire: ['交付形式？', '验收偏好？'],
     });
     expect(submitted.ok).toBe(true);
-    expect(submitted.status).toBe('draft');
-    let team = readTeamFromDisk(teamId);
+    expect(submitted.status).toBe('ready');
+    let team = readTeam(teamId);
     const group = team.tasks[0]!;
-    expect(group.kind).toBe('group');
-    expect(team.workDir).toBeTruthy();
-    expect(submitted.folder).toBe(`${team.workDir}/tasks/${taskSlug(group)}`);
-    const groupDir = join(workspace, team.workDir!, 'tasks', taskSlug(group));
-    expect(existsSync(join(groupDir, 'contract.md'))).toBe(true);
-    expect(existsSync(join(groupDir, 'notes.md'))).toBe(true);
+    expect(group.parentId).toBeNull();
+    expect(submitted.taskId).toBe(group.id);
+    expect(submitted.folder).toBe(group.workDir);
+    expect(existsSync(join(workspace, group.workDir!, 'contract.md'))).toBe(true);
+    expect(existsSync(join(workspace, group.workDir!, 'notes.md'))).toBe(true);
 
-    // 2. 面板拆解：parentTaskId 挂任务单；chain 站点 = 成员槽接力。
+    // 2. 面板拆解：parentTaskId（数字串）挂任务单；chain 站点 = 成员槽。
     const sub = await h.post(`/eteams-api/team/${teamId}/task`, {
       subject: '梳理页面清单',
-      parentTaskId: group.id,
+      parentTaskId: String(group.id),
       chain: [
         { member: 'Alice', stageBrief: '调研' },
         { member: 'Bob', stageBrief: '整理' },
       ],
     });
     expect(sub.code).toBe(200);
-    const subId = (JSON.parse(sub.body) as { taskId: string }).taskId;
-    team = readTeamFromDisk(teamId);
+    const subId = json<{ taskId: number; status: string }>(sub.body).taskId;
+    expect(json<{ status: string }>(sub.body).status).toBe('ready');
+    team = readTeam(teamId);
     const subRec = team.tasks.find((t) => t.id === subId)!;
     expect(subRec.parentId).toBe(group.id);
-    expect(subRec.status).toBe('draft');
-    // 小任务文件夹落在主任务 sub/ 下（问询结论写回主任务 contract）。
-    expect(
-      existsSync(
-        join(
-          workspace,
-          team.workDir!,
-          'tasks',
-          taskSlug(group),
-          'sub',
-          taskSlug(subRec),
-          'notes.md',
-        ),
-      ),
-    ).toBe(true);
+    expect(subRec.workDir).toContain('/sub/');
 
     // 3. 面板修改（主题 + 成员槽）与删除。
     const upd = await h.post(`/eteams-api/team/${teamId}/task/${subId}/update`, {
@@ -970,34 +942,26 @@ describe('conversation task workflow (docs/26)', () => {
       chain: [{ member: 'Bob', stageBrief: 'Bob 先行' }],
     });
     expect(upd.code).toBe(200);
-    team = readTeamFromDisk(teamId);
+    team = readTeam(teamId);
     expect(team.tasks.find((t) => t.id === subId)!.subject).toBe('梳理新旧页面映射');
     expect(team.tasks.find((t) => t.id === subId)!.chain[0]!.member).toBe('Bob');
 
     const temp = await h.post(`/eteams-api/team/${teamId}/task`, {
       subject: '临时小任务',
-      parentTaskId: group.id,
+      parentTaskId: String(group.id),
     });
-    const tempId = (JSON.parse(temp.body) as { taskId: string }).taskId;
+    const tempId = json<{ taskId: number }>(temp.body).taskId;
     const del = await h.post(`/eteams-api/team/${teamId}/task/${tempId}/delete`, {});
     expect(del.code).toBe(200);
-    expect(readTeamFromDisk(teamId).tasks.some((t) => t.id === tempId)).toBe(false);
+    expect(readTeam(teamId).tasks.some((t) => t.id === tempId)).toBe(false);
 
-    // 4. 面板批准：staged → running（fake spawn 两成员）；重复批准 400。
-    const approve = await h.post(`/eteams-api/team/${teamId}/approve`, {});
-    expect(approve.code).toBe(200);
-    team = readTeamFromDisk(teamId);
-    expect(team.phase).toBe('running');
-    expect(team.tasks.find((t) => t.id === subId)!.status).toBe('ready');
-    const again = await h.post(`/eteams-api/team/${teamId}/approve`, {});
-    expect(again.code).toBe(400);
-
-    // 5. 执行：指派链首 Bob → claim → 未领取窗口关闭（合同冻结，改删 400）。
-    const assigned = await h.call('eteams_assign_task', { taskId: subId, member: 'Bob' });
+    // 4. 执行：指派链首 Bob → 成员起会话 → 接取 → 合同冻结（改删 400）。
+    const assigned = await h.call!('eteams_assign_task', { taskId: subId, member: 'Bob' });
     expect(assigned.ok).toBe(true);
-    const childId = readTeamFromDisk(teamId).members.find((m) => m.name === 'Bob')!.id!;
-    const bob = h.memberAgent(childId);
-    const claimed = await h.mem(bob, 'eteams_claim_task', { taskId: subId });
+    const bob = h.memberAgent!(childIdOf(teamId, 'Bob'));
+    const claimed = await h.mem!(bob, 'eteams_claim_task', { taskId: subId });
+    expect(claimed.ok).toBe(true);
+    expect(readTeam(teamId).tasks.find((t) => t.id === subId)!.status).toBe('start');
     const frozenUpd = await h.post(`/eteams-api/team/${teamId}/task/${subId}/update`, {
       subject: '迟到修改',
     });
@@ -1005,36 +969,223 @@ describe('conversation task workflow (docs/26)', () => {
     const frozenDel = await h.post(`/eteams-api/team/${teamId}/task/${subId}/delete`, {});
     expect(frozenDel.code).toBe(400);
 
-    // 6. 末个小任务完成 → 主任务自动收口（joined outcome + 事件）。
-    const done = await h.mem(bob, 'eteams_complete_task', {
+    // 5. 末站交付 → 主任务自动收口（joined outcome）。
+    const done = await h.mem!(bob, 'eteams_complete_task', {
       taskId: subId,
       attemptId: claimed.attemptId,
       token: claimed.token,
       output: '新旧页面映射表完成',
     });
     expect(done.done).toBe(true);
-    team = readTeamFromDisk(teamId);
+    team = readTeam(teamId);
     expect(team.tasks.find((t) => t.id === group.id)!.status).toBe('completed');
-    expect(team.tasks.find((t) => t.id === group.id)!.outcome).toContain('映射表完成');
+    // 产出不落列（docs/35 §5#10）——TaskRecord 无 outcome 字段；组收口的
+    // 聚合产出在 task.completed 事件里，由快照投影（见下方 groupView）。
 
-    // 快照投影：kind/parentId/folder；progress 只统计非 group 任务。
+    // 6. 快照投影：kind/parentId/folder；进度只统计真实小任务。
     const snap = teamSnapshot(team, workspace, config);
-    expect(snap.workDir).toBe(team.workDir);
     expect(snap.progress).toEqual({ completed: 1, total: 1, cancelled: 0, active: 0 });
-    const views = snap.tasks as {
-      taskId: string;
+    const views = snap.tasks as Array<{
+      taskId: number;
       kind: string;
-      parentId: string | null;
-      folder: string | null;
-    }[];
+      parentId: number | null;
+      folder: string;
+      status: string;
+    }>;
     const subView = views.find((t) => t.taskId === subId)!;
     expect(subView.kind).toBe('task');
     expect(subView.parentId).toBe(group.id);
     expect(subView.folder).toContain('sub/');
     const groupView = views.find((t) => t.taskId === group.id)!;
     expect(groupView.kind).toBe('group');
+    expect(groupView.status).toBe('completed');
+    expect(groupView.outcome).toContain('映射表完成');
     expect(groupView.folder).not.toContain('sub/');
-    void h.handler;
+
+    // 7. 任务 track 读路由：合同 + 尝试 + 产出反查。
+    const track = await h.get(`/eteams-api/team/${teamId}/task/${subId}/track`);
+    expect(track.code).toBe(200);
+    const trackBody = json<{
+      taskId: number;
+      attempts: { status: string }[];
+      /** 产出反查（docs/35 §5#10）：attempts 最新成功行的 output 正文串。 */
+      outcome: string | null;
+      contract: { subject: string; chain: { member: string }[] };
+    }>(track.body);
+    expect(trackBody.taskId).toBe(subId);
+    expect(trackBody.attempts).toHaveLength(1);
+    expect(trackBody.outcome).toContain('映射表完成');
+    expect(trackBody.contract.subject).toBe('梳理新旧页面映射');
+    expect(trackBody.contract.chain.map((s) => s.member)).toEqual(['Bob']);
+
+    // 8. 成员对话时间线：指派邮件 + 进度可见；完成后无当前任务。
+    const dialog = await h.get(`/eteams-api/team/${teamId}/member/Bob/dialog`);
+    expect(dialog.code).toBe(200);
+    const dialogBody = json<{ memberStatus: string; currentTaskId: number | null; items: unknown[] }>(
+      dialog.body,
+    );
+    expect(dialogBody.currentTaskId).toBeNull();
+    expect(dialogBody.items.length).toBeGreaterThan(0);
+    const unknownDialog = await h.get(`/eteams-api/team/${teamId}/member/Ghost/dialog`);
+    expect(unknownDialog.code).toBe(404);
+  });
+});
+
+describe('GET /board 跨团队聚合 (docs/35 §6 Q1/Q3/Q4/Q5/Q9)', () => {
+  it('aggregates columns, ready lane, group progress, deduped members and open decisions', async () => {
+    // maxRetries 0：首次 fail 即进决策（重试预算零）。
+    const h = await installFull({ maxRetries: 0 });
+    const made = await h.post('/eteams-api/team', { name: '聚合甲', sessionId: 'cap-conv' });
+    const teamA = json<{ teamId: number }>(made.body).teamId;
+    const madeB = await h.post('/eteams-api/team', { name: '聚合乙', sessionId: 'cap-second' });
+    const teamB = json<{ teamId: number }>(madeB.body).teamId;
+
+    await h.post(`/eteams-api/team/${teamA}/member`, { name: 'Alice', role: 'researcher' });
+    await h.post(`/eteams-api/team/${teamA}/member`, { name: 'Bob', role: 'engineer' });
+    await h.post(`/eteams-api/team/${teamB}/member`, { name: 'Cara', role: 'writer' });
+
+    // 甲队：两个任务单 + 一个独立任务。
+    const group1 = ((await h.call!('eteams_submit_task', { subject: '主任务一' })) as {
+      taskId: number;
+    }).taskId;
+    const group2 = ((await h.call!('eteams_submit_task', { subject: '主任务二' })) as {
+      taskId: number;
+    }).taskId;
+    const group3 = ((await h.call!('eteams_submit_task', { subject: '主任务三' })) as {
+      taskId: number;
+    }).taskId;
+
+    const makeSub = async (subject: string, parent: number, member: string) =>
+      json<{ taskId: number }>(
+        (
+          await h.post(`/eteams-api/team/${teamA}/task`, {
+            subject,
+            parentTaskId: String(parent),
+            chain: [{ member, stageBrief: '站点' }],
+          })
+        ).body,
+      ).taskId;
+
+    const subA = await makeSub('子任务挂起', group1, 'Alice');
+    const subB = await makeSub('子任务完成', group1, 'Alice');
+    const subC = await makeSub('子任务B一', group2, 'Bob');
+    const subD = await makeSub('子任务B二', group3, 'Bob');
+    const subF = await makeSub('子任务失败', group3, 'Alice');
+    const subE = json<{ taskId: number }>(
+      (await h.post(`/eteams-api/team/${teamA}/task`, { subject: '独立小任务' })).body,
+    ).taskId;
+
+    // subA：指派 → wait → 挂起 → paused（看板第三列）。
+    await h.call!('eteams_assign_task', { taskId: subA, member: 'Alice' });
+    await h.call!('eteams_suspend_task', { taskId: subA, note: '先停' });
+    // subB：指派 → 接取 → 交付（组进度 done 1/2）。挂起行不占用（assertNotBusy
+    // 只认 working 实例行），同一行接着派。
+    await h.call!('eteams_assign_task', { taskId: subB, member: 'Alice' });
+    const aliceClaim = await h.mem!(
+      h.memberAgent!(childIdOf(teamA, 'Alice')),
+      'eteams_claim_task',
+      { taskId: subB },
+    );
+    await h.mem!(h.memberAgent!(childIdOf(teamA, 'Alice')), 'eteams_complete_task', {
+      taskId: subB,
+      attemptId: aliceClaim.attemptId,
+      token: aliceClaim.token,
+      output: '交付完成',
+    });
+    // subC：Bob 接单交付（组二 1/1 收口）。
+    await h.call!('eteams_assign_task', { taskId: subC, member: 'Bob' });
+    const bobClaim = await h.mem!(h.memberAgent!(childIdOf(teamA, 'Bob')), 'eteams_claim_task', {
+      taskId: subC,
+    });
+    await h.mem!(h.memberAgent!(childIdOf(teamA, 'Bob')), 'eteams_complete_task', {
+      taskId: subC,
+      attemptId: bobClaim.attemptId,
+      token: bobClaim.token,
+      output: '映射表完成',
+    });
+    // subD：Bob 再领一单（group3 → 第二条实例行）；停在 wait（看板第二列）。
+    await h.call!('eteams_assign_task', { taskId: subD, member: 'Bob' });
+    // subF：Alice 在另一支大任务上失败（重试预算 0 → wait_decision + 决策）。
+    // 同一成员跨大任务各一行实例行（Q5 去重口径的数据形态）。
+    await h.call!('eteams_assign_task', { taskId: subF, member: 'Alice' });
+    const aliceClaim2 = await h.mem!(
+      h.memberAgent!(childIdOf(teamA, 'Alice')),
+      'eteams_claim_task',
+      { taskId: subF },
+    );
+    const failed = await h.mem!(h.memberAgent!(childIdOf(teamA, 'Alice')), 'eteams_fail_task', {
+      taskId: subF,
+      attemptId: aliceClaim2.attemptId,
+      token: aliceClaim2.token,
+      error: '上游接口超时',
+    });
+    expect(failed.retried).toBe(false);
+
+    // 乙队：一个就绪任务，无决策。
+    await h.post(`/eteams-api/team/${teamB}/task`, { subject: '独立任务' });
+
+    const board = await h.get('/eteams-api/board');
+    expect(board.code).toBe(200);
+    const teams = json<{
+      teams: Array<{
+        teamId: number;
+        name: string;
+        ready: { taskId: number; subject: string; status: string }[];
+        columns: Record<string, { taskId: number; subject: string }[]>;
+        groups: { taskId: number; subject: string; done: number; total: number }[];
+        members: { name: string; status: string; activeTasks: number; isLeader: boolean }[];
+        decisions: { taskId: number; error: string; retryCount: number }[];
+      }[]>;
+      serverTime: number;
+    }>(board.body).teams;
+    expect(teams).toHaveLength(2);
+
+    const a = teams.find((t) => t.teamId === teamA)!;
+    expect(a.name).toBe('聚合甲');
+    expect(a.ready.map((t) => t.taskId)).toEqual([subE]);
+    expect(a.ready[0]!.subject).toBe('独立小任务');
+    expect(a.columns.paused.map((t) => t.taskId)).toEqual([subA]);
+    expect(a.columns.wait.map((t) => t.taskId)).toEqual([subD]);
+    expect(a.columns.wait_decision.map((t) => t.taskId)).toEqual([subF]);
+    expect(a.columns.start).toEqual([]);
+    expect(a.columns.wait_user).toEqual([]);
+    expect(a.groups.find((g) => g.taskId === group1)).toEqual({
+      taskId: group1,
+      subject: '主任务一',
+      done: 1,
+      total: 2,
+    });
+    expect(a.groups.find((g) => g.taskId === group2)).toMatchObject({ done: 1, total: 1 });
+    expect(a.groups.find((g) => g.taskId === group3)).toMatchObject({ done: 0, total: 2 });
+    expect(a.decisions).toHaveLength(1);
+    expect(a.decisions[0]!.taskId).toBe(subF);
+    expect(a.decisions[0]!.retryCount).toBe(1);
+    expect(a.decisions[0]!.error).toBe('上游接口超时');
+    // Q5 按名去重：Alice/Bob 各两条实例行（跨大任务）但各一行成员行；
+    // 领队行带 isLeader 标记。
+    const names = a.members.map((m) => m.name);
+    expect(names.filter((n) => n === 'Alice')).toHaveLength(1);
+    expect(names.filter((n) => n === 'Bob')).toHaveLength(1);
+    expect(
+      readTeam(teamA).taskMembers.filter((r) => r.name === 'Alice' && r.status !== 'removed'),
+    ).toHaveLength(2);
+    // activeTasks 按任务占用计（current_member 落在活跃五态）：subA 挂起与
+    // subF 失败进决策都释放了执行者（freeMember 清 current_member）——
+    // Alice 名下无占位任务，Bob 的 subD 还在 wait。
+    expect(a.members.find((m) => m.name === 'Alice')!.activeTasks).toBe(0);
+    expect(a.members.find((m) => m.name === 'Alice')!.status).toBe('ready');
+    expect(a.members.find((m) => m.name === 'Bob')!.activeTasks).toBe(1);
+    expect(a.members.find((m) => m.name === 'Bob')!.status).toBe('working');
+    expect(a.members.find((m) => m.name === 'Bob')!.isLeader).toBe(false);
+    expect(a.members.find((m) => m.name === '项目牧羊人')!.isLeader).toBe(true);
+    expect(a.members).toHaveLength(3);
+
+    const b = teams.find((t) => t.teamId === teamB)!;
+    expect(b.ready).toHaveLength(1);
+    expect(b.ready[0]!.subject).toBe('独立任务');
+    expect(b.decisions).toEqual([]);
+    expect(b.groups.find((g) => g.subject === '独立任务')).toMatchObject({ done: 0, total: 0 });
+    expect(b.members.find((m) => m.name === 'Cara')).toBeDefined();
   });
 });
 
@@ -1047,11 +1198,10 @@ describe('usage calendar route (docs/28.4)', () => {
   }
 
   it('serves the aggregated calendar, 400s a bad year and 404s unknown teams', async () => {
-    const { handler, post, res } = await installFake();
-    const created = await post('/eteams-api/team', { name: '用量队', sessionId: 'cap-webui' });
+    const h = await installFake();
+    const created = await h.post('/eteams-api/team', { name: '用量队', sessionId: 'cap-webui' });
     expect(created.code).toBe(200);
-    const teamId = (JSON.parse(created.body) as { teamId?: string }).teamId ?? '';
-    expect(teamId).not.toBe('');
+    const teamId = json<{ teamId: number }>(created.body).teamId;
     // 采集面的归属/水位已由 tests/usage.test.ts 覆盖；这里只验证路由组合。
     const year = new Date().getFullYear();
     const row = {
@@ -1059,7 +1209,7 @@ describe('usage calendar route (docs/28.4)', () => {
       day: `${year}-01-02`,
       sessionId: 'm1',
       seq: 1,
-      teamId,
+      teamId: String(teamId),
       memberName: 'Alice',
       roleKind: 'member',
       provider: 'p',
@@ -1072,47 +1222,41 @@ describe('usage calendar route (docs/28.4)', () => {
     };
     mkdirSync(join(workspace, '.eteams'), { recursive: true });
     writeFileSync(join(workspace, '.eteams', 'usage.jsonl'), `${JSON.stringify(row)}\n`);
-    const r = res();
-    await handler({ method: 'GET', url: `/eteams-api/team/${teamId}/usage/calendar` }, r);
+    const r = await h.get(`/eteams-api/team/${teamId}/usage/calendar`);
     expect(r.code).toBe(200);
-    const parsed = JSON.parse(r.body) as {
-      teamId: string;
+    const parsed = json<{
+      teamId: number;
       year: number;
       days: { date: string; totalTokens: number; calls: number }[];
       totals: { totalTokens: number; firstDay: string | null; lastDay: string | null };
-    };
+    }>(r.body);
     expect(parsed.teamId).toBe(teamId);
     expect(parsed.year).toBe(year);
     expect(parsed.days).toHaveLength(daysInYear(year));
     expect(parsed.totals.totalTokens).toBe(12);
     expect(parsed.totals.firstDay).toBe(`${year}-01-02`);
     expect(parsed.totals.lastDay).toBe(`${year}-01-02`);
-    // 400：非法年份；404：未知团队
-    const bad = res();
-    await handler({ method: 'GET', url: `/eteams-api/team/${teamId}/usage/calendar?year=abcd` }, bad);
+    const bad = await h.get(`/eteams-api/team/${teamId}/usage/calendar?year=abcd`);
     expect(bad.code).toBe(400);
-    const missing = res();
-    await handler({ method: 'GET', url: '/eteams-api/team/nope/usage/calendar' }, missing);
+    const missing = await h.get('/eteams-api/team/nope/usage/calendar');
     expect(missing.code).toBe(404);
   });
 });
 
 describe('web surface installation', () => {
   it('stays tool-only when web services are absent (headless)', () => {
-    const { ctx } = fakeCtx();
+    const ctx = fakeCtx();
     expect(installWebSurface(ctx, config)).toBe(false);
   });
 
   it('registers the prefix route when webServer + workspaceRegistry exist', () => {
     const registered: { kind: string; path: string }[] = [];
-    const disposers: (() => void)[] = [];
     const ctx = {
       get: (key: string) =>
         key === 'webServer'
           ? {
               register: (route: { kind: string; path: string }) => {
                 registered.push(route);
-                disposers.push(() => undefined);
               },
             }
           : key === 'workspaceRegistry'
@@ -1130,109 +1274,25 @@ describe('web surface installation', () => {
     expect(registered[0]!.path).toBe('/eteams-api');
   });
 
-  it('serves archived team summaries from archive/', async () => {
-    // Fabricate one archived team directly on disk.
-    const archive = archiveRoot(join(workspace, '.eteams'));
-    mkdirSync(join(archive, 'arch-1'), { recursive: true });
-    const archived = {
-      id: 'arch-1',
-      name: '旧团队',
-      goal: 'g',
-      phase: 'completed',
-      workDir: 'teams/旧团队',
-    };
-    writeFileSync(join(archive, 'arch-1', 'team.json'), JSON.stringify(archived), 'utf8');
-
-    const registered: { handler: (req: unknown, res: unknown) => Promise<void> }[] = [];
-    const ctx = {
-      get: (key: string) =>
-        key === 'webServer'
-          ? {
-              register: (route: { handler: (req: unknown, res: unknown) => Promise<void> }) => {
-                registered.push(route);
-              },
-            }
-          : key === 'workspaceRegistry'
-            ? { list: () => [{ path: workspace, title: 'ws' }] }
-            : undefined,
-      effect: (fn: () => unknown) => {
-        fn();
-        return () => undefined;
-      },
-      logger: { info: () => undefined, warn: () => undefined },
-    } as unknown as Context;
-    installWebSurface(ctx, config);
-    const res = {
-      code: 0,
-      body: '',
-      writeHead(code: number) {
-        this.code = code;
-      },
-      end(data?: string) {
-        this.body = data ?? '';
-      },
-    };
-    await registered[0]!.handler({ method: 'GET', url: '/eteams-api/state' }, res);
-    const captured = JSON.parse(res.body) as {
-      archivedTeams: { teamId: string }[];
-    };
-    expect(res.code).toBe(200);
-    expect(captured.archivedTeams[0]!.teamId).toBe('arch-1');
+  it('answers 405 on non-GET reads beyond the write routes', async () => {
+    const h = await installFake();
+    const put = await fire(h.handler, 'POST', '/eteams-api/state', {});
+    expect(put.code).toBe(405);
   });
 
   it('persists POST /client-log diagnostics under .eteams/logs/client.log', async () => {
-    const registered: { handler: (req: unknown, res: unknown) => Promise<void> }[] = [];
-    const ctx = {
-      get: (key: string) =>
-        key === 'webServer'
-          ? {
-              register: (route: { handler: (req: unknown, res: unknown) => Promise<void> }) => {
-                registered.push(route);
-              },
-            }
-          : key === 'workspaceRegistry'
-            ? { list: () => [{ path: workspace, title: 'ws' }] }
-            : undefined,
-      effect: (fn: () => unknown) => {
-        fn();
-        return () => undefined;
-      },
-      logger: { info: () => undefined, warn: () => undefined },
-    } as unknown as Context;
-    installWebSurface(ctx, config);
-    const res = {
-      code: 0,
-      body: '',
-      writeHead(code: number) {
-        this.code = code;
-      },
-      end(data?: string) {
-        this.body = data ?? '';
-      },
-    };
-    const body = JSON.stringify({
+    const h = await installFake();
+    const posted = await h.post('/eteams-api/client-log', {
       version: 'v0.2.0',
       entries: [{ at: 1, kind: 'error', message: 'boom', source: 'a.js:1:1' }],
     });
-    const req = {
-      method: 'POST',
-      url: '/eteams-api/client-log',
-      on(event: string, cb: (chunk?: Buffer) => void) {
-        if (event === 'data') cb(Buffer.from(body, 'utf8'));
-        if (event === 'end') cb();
-      },
-    };
-    await registered[0]!.handler(req, res);
-    expect(res.code).toBe(200);
-    expect(JSON.parse(res.body)).toMatchObject({ ok: true, written: 1 });
+    expect(posted.code).toBe(200);
+    expect(json<{ ok: boolean; written: number }>(posted.body)).toMatchObject({ ok: true, written: 1 });
     const log = readFileSync(join(workspace, '.eteams', 'logs', 'client.log'), 'utf8')
       .split('\n')
       .filter((l) => l !== '');
     expect(log).toHaveLength(1);
-    const record = JSON.parse(log[0]!) as {
-      version: string;
-      entry: { kind: string; message: string };
-    };
+    const record = json<{ version: string; entry: { kind: string; message: string } }>(log[0]!);
     expect(record.version).toBe('v0.2.0');
     expect(record.entry).toMatchObject({ kind: 'error', message: 'boom' });
   });

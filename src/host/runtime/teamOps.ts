@@ -1,54 +1,80 @@
 /**
- * Team-level operations (docs/07.2): create → plan → approve → run, member
- * roster management, mailbox messaging, and read-only views. Every mutation
- * runs inside the team lock with events-then-snapshot ordering (docs/09.2).
+ * Team-level operations (docs/07.2): create → run（审批环节随 docs/35 §5#1
+ * 下线，建队即可用）、成员班底管理、私信与只读视图。每个变更在团队锁内，
+ * 且在一个同步事务里连同事件/邮件整存整取（docs/35 §3#14）；起会话/唤醒/
+ * 文档渲染是异步 I/O，一律放在 COMMIT 之后（事务体内不得 await）。
  *
  * @module dsh-eteams/runtime/teamOps
  */
-import { existsSync, mkdirSync, readdirSync, renameSync, rmdirSync, unlinkSync } from 'node:fs';
+import { existsSync, readdirSync, rmdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { JsonValue } from '@deepseek-ai/dsh-session';
 import { mergePersona, defaultPersonaFor } from '../prompts/persona.js';
-import type { Actor, MemberRecord, ModelRouteSnapshot, TeamState } from '../model/types.js';
+import { createUserMessage } from '@deepseek-ai/dsh-llm';
+import type {
+  Actor,
+  MemberRecord,
+  ModelRouteSnapshot,
+  PersonaRecord,
+  TaskMemberRecord,
+  TaskRecord,
+  TeamState,
+} from '../model/types.js';
 import { locks, teamLockKey } from '../state/lock.js';
 import {
   readTeam,
-  writeTeam,
-  allocateTeamDir,
+  readTeamSync,
+  writeTeamInTx,
+  insertTeamRow,
+  insertTaskMemberRow,
+  withTeamTx,
   findTeamByCaptain,
-  listTeams,
+  type TeamKey,
+  type TeamTx,
 } from '../state/store.js';
-import { recordEvent } from '../state/events.js';
-import { sanitizeKey } from '../model/taskMachine.js';
+import { hashName, LEADER_NAME, nextAutoincrementId, nextEmployeeId } from '../state/db.js';
+import { insertEventInTx, insertMailInTx } from '../state/events.js';
+import { applyTransition, sanitizeKey, taskSlug } from '../model/taskMachine.js';
 import { ETeamsError, captainActor, memberActor, stateRootOf, type RuntimeEnv } from './base.js';
 import { clearSessionTeam } from './sessionTeam.js';
 import { renderTeamDocs, teamWorkDirRel } from './docs.js';
+import { findRosterMember, ROLE_BUILDER_NAME, upsertRosterMember } from './roster.js';
+import { interruptMember, drainMembers } from './members.js';
 import {
-  allocateEmployeeId,
-  findRosterMember,
-  LEADER_NAME,
-  ROLE_BUILDER_NAME,
-  upsertRosterMember,
-} from './roster.js';
-import { spawnTeamMembers, interruptMember, drainMembers } from './members.js';
-import { deliverMail, notifyCaptain, readBox, requireMember, wakeMember } from './notifier.js';
+  leaderRowOf,
+  latestInstanceRow,
+  makeMail,
+  memberStatusOf,
+  notifyCaptain,
+  readBox,
+  requireMember,
+  wakeMember,
+} from './notifier.js';
 
-/** Read one team under its lock and hand it to `fn` for mutation. */
+/**
+ * 团队变更帧（docs/35 §3#14）：锁内读快照 → 同步事务内执行 `fn`（状态、
+ * 事件、邮件同事务）→ 事务尾整存整取快照。`fn` 同步执行、不得 await；异步
+ * 收尾（起会话/唤醒/文档渲染）由调用方在提交后处理。非变更路径不要走这里。
+ */
 export async function withTeam<T>(
   env: RuntimeEnv,
-  teamId: string,
-  fn: (team: TeamState, root: string) => Promise<T>,
+  teamId: TeamKey,
+  fn: (team: TeamState, root: string, tx: TeamTx) => T,
 ): Promise<T> {
   const root = stateRootOf(env);
-  return locks.withLock(teamLockKey(root, teamId), async () => {
-    const team = await readTeam(root, teamId);
+  return locks.withLock(teamLockKey(root, String(teamId)), async () => {
+    const team = readTeamSync(root, teamId);
     if (!team)
       throw new ETeamsError(
-        `团队「${teamId}」不存在`,
+        `团队「${String(teamId)}」不存在`,
         '用 eteams_team_status 查看当前团队，或先 eteams_create_team',
       );
-    return fn(team, root);
+    return withTeamTx(root, team.id, (tx) => {
+      const result = fn(team, root, tx);
+      writeTeamInTx(tx, team);
+      return result;
+    });
   });
 }
 
@@ -61,141 +87,119 @@ export async function requireCaptainTeam(env: RuntimeEnv, captain: Agent): Promi
   return team;
 }
 
-/** Create a team (docs/07.2 step 1-2). approval=automatic skips staging. */
+/** Create a team (docs/07.2 step 1-2；建队即可用，docs/35 §5#1). */
 export async function createTeam(
   env: RuntimeEnv,
   captain: Agent,
   params: {
     name: string;
-    goal: string;
-    approval?: 'required' | 'automatic';
     questionnaire?: string[];
-    maxRetries?: number;
     /** Origin marker for events (tool / panel). */
     via?: string;
   },
 ): Promise<TeamState> {
   const root = stateRootOf(env);
-  return locks.withLock(`captain:${root}:${String(captain.id)}`, async () => {
-    const existing = await findTeamByCaptain(root, String(captain.id));
-    if (existing && existing.phase !== 'completed' && existing.phase !== 'halted') {
+  const captainId = String(captain.id);
+  const name = params.name.trim();
+  return locks.withLock(`captain:${root}:${captainId}`, async () => {
+    const existing = await findTeamByCaptain(root, captainId);
+    if (existing) {
       throw new ETeamsError(
-        `你已领队「${existing.name}」（${existing.phase}）`,
-        '一个领队同时只带一个团队；先完成或归档现有团队',
+        `你已领队「${existing.name}」`,
+        '一个领队同时只带一个团队；完成或删除现有团队后再建新队',
       );
     }
-    const id = await allocateTeamDir(root, params.name);
     const now = Date.now();
-    const team: TeamState = {
-      schemaVersion: 2,
-      id,
-      name: params.name.trim(),
-      goal: params.goal.trim(),
-      captainSessionId: String(captain.id),
-      phase: 'staged',
-      planReviewState: 'awaiting_review',
-      createdAt: now,
-      updatedAt: now,
-      version: 0,
-      taskSeq: 0,
-      attemptSeq: 0,
-      mailSeq: 0,
-      maxRetries: params.maxRetries ?? env.config.maxRetries,
-      members: [],
-      tasks: [],
-      pendingDecisions: [],
-    };
-    await recordEvent(root, id, captainActor(team), 'team.created', {
-      payload: {
-        name: team.name,
-        goal: team.goal,
-        approval: params.approval ?? 'required',
-        ...(params.via !== undefined ? { via: params.via } : {}),
-      },
-    });
-    if (params.questionnaire && params.questionnaire.length > 0) {
-      await recordEvent(root, id, captainActor(team), 'plan.questionnaire', {
-        payload: { questions: params.questionnaire },
+    let teamId: number | undefined;
+    withTeamTx(root, undefined, (tx) => {
+      teamId = insertTeamRow(tx, name, true, now);
+      // 领队行（docs/35 §5#12 / docs/36 建议 3）：领队锚点在 task_members——
+      // name=项目牧羊人、main_task_id 为空、main_session_id=本会话；工号与
+      // 手册沿公共模板行（项目牧羊人预设，import.ts 播种）。
+      const template = tx.db
+        .prepare(
+          'SELECT employee_id, persona_md FROM member WHERE team_id IS NULL AND role_name = ? LIMIT 1',
+        )
+        .get(LEADER_NAME) as { employee_id: number | null; persona_md: string | null } | undefined;
+      const row: TaskMemberRecord = {
+        id: 0,
+        teamId,
+        mainTaskId: null,
+        nowTaskId: null,
+        name: LEADER_NAME,
+        employeeId: template?.employee_id ?? null,
+        mainSessionId: captainId,
+        childSessionId: '',
+        roleId: null,
+        status: 'ready',
+        ...(template?.persona_md ? { personaMd: template.persona_md } : {}),
+        createdAt: now,
+      };
+      insertTaskMemberRow(tx, row);
+      insertEventInTx(tx, teamId, {
+        seq: 0,
+        at: now,
+        actor: captainActor(),
+        type: 'team.created',
+        payload: { name, ...(params.via !== undefined ? { via: params.via } : {}) },
       });
-    }
-    await writeTeam(root, team);
+      if (params.questionnaire && params.questionnaire.length > 0) {
+        insertEventInTx(tx, teamId, {
+          seq: 0,
+          at: now,
+          actor: captainActor(),
+          type: 'plan.questionnaire',
+          payload: { questions: params.questionnaire },
+        });
+      }
+    });
     // 绑定让位（docs/26 绑定即可驱动）：resolveCaller 绑定优先——刚建的
     // 新队以本会话为领队，若本会话还绑着旧团队，旧绑定会遮蔽新队（工具
     // 全落到旧队上）。建队成功即清除本会话的旧绑定。
-    clearSessionTeam(String(captain.id));
-    if (params.approval === 'automatic') {
-      const fresh = await readTeam(root, id);
-      if (fresh) return approvePlan(env, captain, fresh.id);
-    }
-    return (await readTeam(root, id))!;
+    clearSessionTeam(captainId);
+    const team = readTeamSync(root, teamId!);
+    if (!team) throw new ETeamsError(`建队失败：团队行写入后读取为空（${name}）`);
+    return team;
   });
 }
 
 /**
- * 幂等分配团队工作目录（D12, docs/26）：已分配则原样复用；未分配时与其他
- * 团队的工作目录消歧（目录名冲突/已存在即加 -2、-3 后缀）。approvePlan 与
- * 对话提交路径共用（staged 团队首次提交任务即物化目录树）；调用方负责把
- * 返回值写回 team.workDir。
+ * 幂等分配任务工作目录（docs/35 §3#8，work_dir 归任务）：父任务下挂
+ * `<父 work_dir>/sub/<任务号>-<slug>`，顶层任务在 `teams/<团队>/tasks/`
+ * 之下。撞名（对比集 = 其他任务的 work_dir + 目录已存在）在叶子段加
+ * -2、-3 后缀保留。只算路径不建目录——目录随文档渲染物化。
  */
-export async function ensureWorkDir(env: RuntimeEnv, team: TeamState): Promise<string> {
-  if (team.workDir) return team.workDir;
-  const root = stateRootOf(env);
-  const base = teamWorkDirRel(team);
-  const others = await listTeams(root);
-  const taken = new Set(others.filter((t) => t.id !== team.id).map((t) => t.workDir));
+export function ensureTaskWorkDir(env: RuntimeEnv, team: TeamState, task: TaskRecord): string {
+  if (task.workDir !== undefined) return task.workDir;
+  const leaf = taskSlug(task);
+  const parentDir =
+    task.parentId !== null
+      ? team.tasks.find((t) => t.id === task.parentId)?.workDir
+      : undefined;
+  const base =
+    parentDir !== undefined
+      ? `${parentDir}/sub/${leaf}`
+      : `${teamWorkDirRel(team)}/tasks/${leaf}`;
+  const taken = new Set<string>();
+  for (const other of team.tasks) {
+    if (other.id === task.id || other.workDir === undefined) continue;
+    taken.add(other.workDir);
+  }
   let workDir = base;
   if (taken.has(workDir) || existsSync(join(env.workspace, workDir))) {
     let n = 2;
-    while (taken.has(`${base}-${n}`)) n++;
+    while (taken.has(`${base}-${n}`) || existsSync(join(env.workspace, `${base}-${n}`))) n++;
     workDir = `${base}-${n}`;
   }
   return workDir;
 }
 
-/** Approve a staged plan (user/panel action; NEVER a captain tool, docs/11). */
-export async function approvePlan(
-  env: RuntimeEnv,
-  captain: Agent,
-  teamId: string,
-): Promise<TeamState> {
-  return withTeam(env, teamId, async (team, root) => {
-    if (team.captainSessionId !== String(captain.id))
-      throw new ETeamsError('只有该团队的领队会话可以批准');
-    if (team.phase !== 'staged') throw new ETeamsError(`团队处于 ${team.phase}，无需批准`);
-    // Work dir allocation (D12/26): idempotent allocation — a staged team that
-    // already materialized a dir via submitted conversation tasks reuses it.
-    team.workDir = await ensureWorkDir(env, team);
-    // Tasks: draft → ready (docs/06.2 approve edge).
-    const now = Date.now();
-    for (const task of team.tasks) {
-      if (task.status === 'draft') {
-        task.status = 'ready';
-        task.updatedAt = now;
-        await recordEvent(root, team.id, captainActor(team), 'task.ready', {
-          taskId: task.id,
-          payload: { via: 'plan.approved' },
-        });
-      }
-    }
-    await recordEvent(root, team.id, captainActor(team), 'plan.approved', {
-      payload: { workDir: team.workDir },
-    });
-    // Spawn all staged members atomically (rollback keeps them staged).
-    await spawnTeamMembers(env, team, captain);
-    team.phase = 'running';
-    team.planReviewState = 'approved';
-    await writeTeam(root, team);
-    renderTeamDocs(env.workspace, team, (msg) => env.ctx.logger.warn(msg));
-    return team;
-  });
-}
-
-/** Add one member (staged plan or running team, FR-15). */
+/** Add one member（班底模板行 + staged 实例行；不立即起会话，docs/35 §5#12）. */
 export async function addMember(
   env: RuntimeEnv,
   captain: Agent,
   params: {
-    teamId?: string;
+    teamId?: TeamKey;
     name: string;
     role: string;
     executionPrompt?: string;
@@ -206,122 +210,164 @@ export async function addMember(
     rules?: string[];
     /** Full Markdown role playbook (agency-agents-zh style). */
     personaMd?: string;
-    provider?: string;
     model?: string;
     reasoningEffort?: string;
     /** Pre-generated avatar (docs/14); generated from the name when absent. */
     avatar?: { seed: number; salt: number };
     /**
      * 工号 (docs/21). Callers that already resolved a roster entry pass its
-     * 工号 through; otherwise one is adopted from the roster, freshly
-     * allocated, or (for entry-less adds) allocated new.
+     * 工号 through; otherwise one is adopted from the roster or the 班底
+     * template, or freshly allocated in-transaction.
      */
     employeeId?: string;
     /** Origin marker for events (tool / panel). */
     via?: string;
   },
 ): Promise<{ team: TeamState; member: MemberRecord }> {
-  const resolve = async (): Promise<TeamState> => {
-    if (params.teamId) {
-      const t = await readTeam(stateRootOf(env), params.teamId);
-      if (!t) throw new ETeamsError(`团队「${params.teamId}」不存在`);
-      if (t.captainSessionId !== String(captain.id))
-        throw new ETeamsError('只有该团队的领队可以添加成员');
-      return t;
-    }
-    return requireCaptainTeam(env, captain);
-  };
-  const team = await resolve();
-  return withTeam(env, team.id, async (fresh, root) => {
-    if (fresh.captainSessionId !== String(captain.id))
+  const team =
+    params.teamId !== undefined
+      ? await requireTeamById(env, captain, params.teamId)
+      : await requireCaptainTeam(env, captain);
+  const root = stateRootOf(env);
+  const rosterEntry = findRosterMember(root, params.name.trim());
+  const { team: fresh, member } = await withTeam(env, team.id, (teamNow, _root, tx) => {
+    const leader = leaderRowOf(teamNow);
+    if (!leader || leader.status === 'removed' || leader.mainSessionId !== String(captain.id)) {
       throw new ETeamsError('只有该团队的领队可以添加成员');
+    }
     const name = params.name.trim();
     if (name === '') throw new ETeamsError('成员名不能为空');
-    if (fresh.members.some((m) => m.name === name && m.status !== 'removed')) {
+    if (name === LEADER_NAME) {
+      throw new ETeamsError('领队由建队自动入册，不能作为成员添加');
+    }
+    // 查重按实例行（docs/35 §5#12）：存在非 removed 实例行即已入职。
+    if (teamNow.taskMembers.some((r) => r.name === name && r.status !== 'removed')) {
       throw new ETeamsError(`成员「${name}」已在团队中`);
     }
-    const active = fresh.members.filter((m) => m.status !== 'removed');
-    // 团队上限（用户迭代 2026-09 六：领队也算成员）——「一个团队 10 个人」
-    // 含领队：领队初始化时默认拉进团、占 1 个名额；移出领队（leaderRemoved）
-    // 空出的名额可以补成员。看板/团队页/添加弹窗的计数同口径。
-    const leaderTaken = fresh.leaderRemoved === true ? 0 : 1;
-    if (active.length + leaderTaken >= env.config.maxMembers) {
+    // 团队上限（用户迭代 2026-09 六：领队也算成员）——按非 removed 实例行
+    // 去重名计数（同一人多条大任务行只算一人），领队行占 1 个名额。
+    const activeNames = new Set(
+      teamNow.taskMembers
+        .filter((r) => r.status !== 'removed' && r.name !== LEADER_NAME)
+        .map((r) => r.name),
+    );
+    const leaderTaken = 1; // 领队在册（removed 已在上方拒绝）——占 1 个名额
+    if (activeNames.size + leaderTaken >= env.config.maxMembers) {
       throw new ETeamsError(
         `团队人数已达上限（${env.config.maxMembers}，含领队）`,
         '先 eteams_remove_member 再添加，或调整配置 maxMembers',
       );
     }
-    const route: ModelRouteSnapshot =
-      params.provider && params.model
-        ? {
-            provider: params.provider,
-            model: params.model,
-            ...(params.reasoningEffort ? { reasoningEffort: params.reasoningEffort } : {}),
-            source: 'override',
-          }
-        : { provider: 'inherit', model: 'inherit', source: 'inherited' };
-    // 工号（docs/21）：显式传入 > 角色库同号采纳 > 新分配。角色库条目缺号时
-    //（旧版数据）分配后回填角色库，保证同名成员在角色库与各团队共号。
-    const rosterEntry = findRosterMember(root, name);
-    let employeeId = params.employeeId ?? rosterEntry?.employeeId;
-    if (employeeId === undefined || employeeId === '') {
-      employeeId = await allocateEmployeeId(root);
-      if (rosterEntry !== undefined && name !== LEADER_NAME && name !== ROLE_BUILDER_NAME) {
-        await upsertRosterMember(root, { ...rosterEntry, employeeId }).catch(() => undefined);
-      }
+    const now = tx.now;
+    const employeeIdParam = Number.parseInt(params.employeeId ?? '', 10);
+    // 模板行：同名班底模板复用（不重开）；否则新建（memberId 事务内发号，
+    // writeTeamInTx 按显式 member_id 重插）。
+    let member: MemberRecord | undefined = teamNow.members.find((m) => m.name === name);
+    if (member === undefined) {
+      const created: MemberRecord = {
+        memberId: nextAutoincrementId(tx.db, 'member'),
+        name,
+        employeeId: undefined,
+        role: params.role.trim() || 'member',
+        persona: mergePersona(defaultPersonaFor(name, params.role, params.executionPrompt), {
+          ...(params.duty !== undefined ? { duty: params.duty } : {}),
+          ...(params.style !== undefined ? { style: params.style } : {}),
+          ...(params.skills !== undefined ? { skills: params.skills } : {}),
+          ...(params.rules !== undefined ? { rules: params.rules } : {}),
+          ...(params.personaMd !== undefined ? { personaMd: params.personaMd } : {}),
+        }),
+        modelRoute: routeFromParams(params.model, params.reasoningEffort),
+        avatar: params.avatar ?? { seed: hashName(name), salt: Math.floor(Math.random() * 1000) },
+        createdAt: now,
+      };
+      teamNow.members.push(created);
+      member = created;
+    } else if (params.role !== undefined && params.role.trim() !== '') {
+      member.role = params.role.trim();
     }
-    const member: MemberRecord = {
-      id: '',
+    // 工号（docs/21）：显式 > 班底模板行 > 公共角色库 > 事务内新分配。
+    const employeeId =
+      (Number.isFinite(employeeIdParam) && employeeIdParam > 0 ? employeeIdParam : undefined) ??
+      member.employeeId ??
+      rosterEntry?.employeeId;
+    member.employeeId = employeeId ?? nextEmployeeId(tx.db);
+    const route = member.modelRoute;
+    // 执行实例行：staged（未起会话），团队级未锚定（main_task_id 为空），
+    // 首派时才锚定到大任务并起子会话（assignment.ts 首派按链起人）。
+    const row: TaskMemberRecord = {
+      id: 0,
+      teamId: teamNow.id,
+      mainTaskId: null,
+      nowTaskId: null,
       name,
-      employeeId,
-      role: params.role.trim() || 'member',
-      persona: mergePersona(defaultPersonaFor(name, params.role, params.executionPrompt), {
-        ...(params.duty !== undefined ? { duty: params.duty } : {}),
-        ...(params.style !== undefined ? { style: params.style } : {}),
-        ...(params.skills !== undefined ? { skills: params.skills } : {}),
-        ...(params.rules !== undefined ? { rules: params.rules } : {}),
-        ...(params.personaMd !== undefined ? { personaMd: params.personaMd } : {}),
-      }),
-      modelRoute: route,
+      employeeId: member.employeeId ?? null,
+      mainSessionId: '',
+      childSessionId: '',
+      roleId: null,
       status: 'staged',
-      avatar: params.avatar ?? { seed: hashName(name), salt: Math.floor(Math.random() * 1000) },
-      createdAt: Date.now(),
+      ...(member.persona.personaMd !== undefined && member.persona.personaMd !== ''
+        ? { personaMd: member.persona.personaMd }
+        : {}),
+      ...(route.model !== '' ? { model: route.model } : {}),
+      ...(route.reasoningEffort !== undefined && route.reasoningEffort !== ''
+        ? { reasoningEffort: route.reasoningEffort }
+        : {}),
+      avatar: member.avatar,
+      createdAt: now,
     };
-    fresh.members.push(member);
-    await recordEvent(root, fresh.id, captainActor(fresh), 'member.added', {
+    teamNow.taskMembers.push(row);
+    insertEventInTx(tx, teamNow.id, {
+      seq: 0,
+      at: now,
+      actor: captainActor(teamNow),
+      type: 'member.added',
       payload: {
         name,
         role: member.role,
-        route,
+        memberId: member.memberId,
         ...(params.via !== undefined ? { via: params.via } : {}),
       },
     });
-    if (fresh.phase === 'running') {
-      // FR-15 mid-run addition: spawn immediately.
-      const captainAgent = env.ctx.agents.get(fresh.captainSessionId) ?? captain;
-      await spawnTeamMembers(env, fresh, captainAgent);
-      await recordEvent(root, fresh.id, captainActor(fresh), 'member.spawned', {
-        payload: { name, childId: member.id },
-      });
-    }
-    await writeTeam(root, fresh);
-    renderTeamDocs(env.workspace, fresh, (msg) => env.ctx.logger.warn(msg));
-    return { team: fresh, member };
+    return { team: teamNow, member };
   });
+  // 事务外（独立事务，最佳努力）：角色库同号回填——同名公共模板缺号时把
+  // 刚分配的工号写回，保证同名成员在角色库与各团队共号（docs/21）。
+  if (rosterEntry !== undefined && rosterEntry.employeeId === undefined) {
+    await upsertRosterMember(root, { ...rosterEntry, employeeId: member.employeeId }).catch(
+      () => undefined,
+    );
+  }
+  renderTeamDocs(env.workspace, fresh, (msg) => env.ctx.logger.warn(msg));
+  return { team: fresh, member };
 }
 
-function hashName(name: string): number {
-  let h = 0;
-  for (const ch of name) h = (h * 31 + ch.codePointAt(0)!) | 0;
-  return Math.abs(h) % 997;
+/** 参数路线 → ModelRouteSnapshot（docs/35 §3#5：只挑模型，provider 派发时定）。 */
+function routeFromParams(
+  model: string | undefined,
+  effort: string | undefined,
+): ModelRouteSnapshot {
+  const trimmedModel = model?.trim() ?? '';
+  const trimmedEffort = effort?.trim() ?? '';
+  return {
+    model: trimmedModel,
+    ...(trimmedModel !== '' && trimmedEffort !== '' ? { reasoningEffort: trimmedEffort } : {}),
+  };
 }
 
-/** Update a member's persona fields (docs/11.2). */
+/** 同名班底模板行（team.members）；缺省报「成员不存在」。 */
+function requireMemberTemplate(team: TeamState, name: string): MemberRecord {
+  const member = team.members.find((m) => m.name === name);
+  if (!member)
+    throw new ETeamsError(`成员「${name}」不存在`, '用 eteams_team_status 查看在册成员');
+  return member;
+}
+
+/** Update a member's persona fields (docs/11.2；写班底模板行). */
 export async function updateMember(
   env: RuntimeEnv,
   captain: Agent,
   params: {
-    teamId?: string;
+    teamId?: TeamKey;
     name: string;
     role?: string;
     duty?: string;
@@ -332,11 +378,12 @@ export async function updateMember(
     personaMd?: string;
   },
 ): Promise<TeamState> {
-  const team = params.teamId
-    ? await requireTeamById(env, captain, params.teamId)
-    : await requireCaptainTeam(env, captain);
-  return withTeam(env, team.id, async (fresh, root) => {
-    const member = requireMember(fresh, params.name);
+  const team =
+    params.teamId !== undefined
+      ? await requireTeamById(env, captain, params.teamId)
+      : await requireCaptainTeam(env, captain);
+  const fresh = await withTeam(env, team.id, (teamNow, _root, tx) => {
+    const member = requireMemberTemplate(teamNow, params.name);
     if (params.role !== undefined) member.role = params.role.trim() || member.role;
     member.persona = mergePersona(member.persona, {
       duty: params.duty,
@@ -346,59 +393,77 @@ export async function updateMember(
       executionPrompt: params.executionPrompt,
       personaMd: params.personaMd,
     });
-    await recordEvent(root, fresh.id, captainActor(fresh), 'member.updated', {
+    // 模板手册变化同步到该成员未锚定的 staged 实例行（执行时的人设副本）。
+    const row = teamNow.taskMembers.find(
+      (r) => r.name === params.name && r.status === 'staged' && r.mainTaskId === null,
+    );
+    if (
+      row !== undefined &&
+      member.persona.personaMd !== undefined &&
+      member.persona.personaMd !== ''
+    ) {
+      row.personaMd = member.persona.personaMd;
+    }
+    insertEventInTx(tx, teamNow.id, {
+      seq: 0,
+      at: tx.now,
+      actor: captainActor(teamNow),
+      type: 'member.updated',
       payload: { name: params.name },
     });
-    await writeTeam(root, fresh);
-    renderTeamDocs(env.workspace, fresh, (msg) => env.ctx.logger.warn(msg));
-    return fresh;
+    return teamNow;
   });
+  renderTeamDocs(env.workspace, fresh, (msg) => env.ctx.logger.warn(msg));
+  return fresh;
 }
 
 /**
  * Set one member's model route (user iteration 2026-09: per-member model
- * select on the member card). Empty provider/model resets to inherited;
- * otherwise stores an override - staged members adopt it at spawn, running
- * members on their next respawn.
+ * select on the member card). Empty model resets to 跟随（不带 agentOptions，
+ * 子会话继承领队会话模型）；有值即 override——provider 不再入档（docs/35
+ * §3#5），派发起会话时按 config.memberProvider 解析。写班底模板行，同时
+ * 同步到该成员 staged 实例行；已起会话的成员在下次起会话生效。
  */
 export async function setMemberModel(
   env: RuntimeEnv,
   captain: Agent,
   params: {
-    teamId?: string;
+    teamId?: TeamKey;
     name: string;
     provider?: string;
     model?: string;
     reasoningEffort?: string;
   },
 ): Promise<TeamState> {
-  const team = params.teamId
-    ? await requireTeamById(env, captain, params.teamId)
-    : await requireCaptainTeam(env, captain);
-  return withTeam(env, team.id, async (fresh, root) => {
-    const member = requireMember(fresh, params.name);
-    const route: ModelRouteSnapshot =
-      params.provider !== undefined &&
-      params.provider !== '' &&
-      params.model !== undefined &&
-      params.model !== ''
-        ? {
-            provider: params.provider,
-            model: params.model,
-            ...(params.reasoningEffort !== undefined && params.reasoningEffort !== ''
-              ? { reasoningEffort: params.reasoningEffort }
-              : {}),
-            source: 'override',
-          }
-        : { provider: 'inherit', model: 'inherit', source: 'inherited' };
-    member.modelRoute = route;
-    await recordEvent(root, fresh.id, captainActor(fresh), 'member.updated', {
-      payload: { name: params.name, route },
+  const team =
+    params.teamId !== undefined
+      ? await requireTeamById(env, captain, params.teamId)
+      : await requireCaptainTeam(env, captain);
+  const fresh = await withTeam(env, team.id, (teamNow, _root, tx) => {
+    const member = requireMemberTemplate(teamNow, params.name);
+    member.modelRoute = routeFromParams(params.model, params.reasoningEffort);
+    const row = teamNow.taskMembers.find(
+      (r) => r.name === params.name && r.status === 'staged' && r.mainTaskId === null,
+    );
+    if (row !== undefined) {
+      row.model = member.modelRoute.model;
+      if (member.modelRoute.reasoningEffort !== undefined) {
+        row.reasoningEffort = member.modelRoute.reasoningEffort;
+      } else {
+        delete row.reasoningEffort;
+      }
+    }
+    insertEventInTx(tx, teamNow.id, {
+      seq: 0,
+      at: tx.now,
+      actor: captainActor(teamNow),
+      type: 'member.updated',
+      payload: { name: params.name, route: member.modelRoute },
     });
-    await writeTeam(root, fresh);
-    renderTeamDocs(env.workspace, fresh, (msg) => env.ctx.logger.warn(msg));
-    return fresh;
+    return teamNow;
   });
+  renderTeamDocs(env.workspace, fresh, (msg) => env.ctx.logger.warn(msg));
+  return fresh;
 }
 
 /**
@@ -407,210 +472,219 @@ export async function setMemberModel(
  * 化；这里把成员当前手册写回角色库同名角色). An existing roster entry keeps
  * every other field (only personaMd is overwritten); a member without a
  * roster entry (e.g. -2 副本) gets one created from the member record. The
- * member's own copy is filled in when it was still empty (旧数据成员）。
+ * roster write is an independent transaction and runs after the team tx.
  */
 export async function syncMemberToRoster(
   env: RuntimeEnv,
   captain: Agent,
   params: {
-    teamId?: string;
+    teamId?: TeamKey;
     name: string;
     /** Sync payload; defaults to the member's own saved handbook copy. */
     personaMd?: string;
   },
 ): Promise<TeamState> {
-  const team = params.teamId
-    ? await requireTeamById(env, captain, params.teamId)
-    : await requireCaptainTeam(env, captain);
-  return withTeam(env, team.id, async (fresh, root) => {
-    const member = requireMember(fresh, params.name);
-    const text = (params.personaMd ?? member.persona.personaMd ?? '').trim();
-    if (text === '') {
+  const team =
+    params.teamId !== undefined
+      ? await requireTeamById(env, captain, params.teamId)
+      : await requireCaptainTeam(env, captain);
+  const root = stateRootOf(env);
+  let text: string | undefined;
+  const fresh = await withTeam(env, team.id, (teamNow, _root, tx) => {
+    const member = requireMemberTemplate(teamNow, params.name);
+    const value = (params.personaMd ?? member.persona.personaMd ?? '').trim();
+    if (value === '') {
       throw new ETeamsError('成员手册为空，先在成员详情里编辑保存');
     }
-    const existing = findRosterMember(root, member.name);
-    if (existing !== undefined) {
-      // 已有同名角色：只覆盖手册，其余字段（职责风格/工号/头像）原样保留。
-      // 用户迭代 2026-09-03：成员详情「同步到该角色」是显式用户动作，领队
-      // 同样放行（与角色详情编辑一致，allowLeader 语义见 roster.ts）。
-      await upsertRosterMember(root, { ...existing, personaMd: text }, { allowLeader: true });
-    } else if (member.name !== LEADER_NAME && member.name !== ROLE_BUILDER_NAME) {
-      // 无同名角色（副本成员等）：按成员记录新建角色库条目。
-      await upsertRosterMember(root, {
-        name: member.name,
-        role: member.role,
-        personaMd: text,
-        ...(member.avatar !== undefined ? { avatar: member.avatar } : {}),
-      });
-    } else {
-      throw new ETeamsError('系统保留角色不同步到角色库');
-    }
     // 成员自己还没有手册副本（旧数据）：同步即补齐，详情从此独立可改。
-    if (member.persona.personaMd !== text) {
-      member.persona = mergePersona(member.persona, { personaMd: text });
+    if (member.persona.personaMd !== value) {
+      member.persona = mergePersona(member.persona, { personaMd: value });
     }
-    await recordEvent(root, fresh.id, captainActor(fresh), 'member.synced_roster', {
+    text = value;
+    insertEventInTx(tx, teamNow.id, {
+      seq: 0,
+      at: tx.now,
+      actor: captainActor(teamNow),
+      type: 'member.synced_roster',
       payload: { name: member.name },
     });
-    await writeTeam(root, fresh);
-    renderTeamDocs(env.workspace, fresh, (msg) => env.ctx.logger.warn(msg));
-    return fresh;
+    return teamNow;
   });
+  // 事务外（独立事务）：写回角色库同名角色。
+  const existing = findRosterMember(root, params.name);
+  if (existing !== undefined) {
+    // 已有同名角色：只覆盖手册，其余字段（职责风格/工号/头像）原样保留。
+    // 用户迭代 2026-09-03：成员详情「同步到该角色」是显式用户动作，领队
+    // 同样放行（与角色详情编辑一致，allowLeader 语义见 roster.ts）。
+    await upsertRosterMember(root, { ...existing, personaMd: text ?? '' }, { allowLeader: true });
+  } else if (params.name !== LEADER_NAME && params.name !== ROLE_BUILDER_NAME) {
+    // 无同名角色（副本成员等）：按成员记录新建角色库条目。
+    const member = requireMemberTemplate(fresh, params.name);
+    await upsertRosterMember(root, {
+      name: member.name,
+      role: member.role,
+      personaMd: text ?? '',
+      ...(member.avatar !== undefined ? { avatar: member.avatar } : {}),
+    });
+  } else {
+    throw new ETeamsError('系统保留角色不同步到角色库');
+  }
+  renderTeamDocs(env.workspace, fresh, (msg) => env.ctx.logger.warn(msg));
+  return fresh;
 }
 
 /**
  * Move the leader (Project Shepherd) out of / back into the team's member
- * roster (user iteration 2026-09: the leader is deletable). The captain
- * session itself is untouched - this flag only controls whether the leader
- * card joins the member grid; re-add via the panel's add-member flow.
+ * roster (user iteration 2026-09: the leader is deletable)。docs/35 §5#12
+ * 之后领队状态落在领队行 status（removed↔ready）+ team.has_leader；领队
+ * 会话本身不动。restore 时行已删除则重建（保留原 main_session_id 缺省填
+ * 本会话）。
  */
 export async function setLeaderRemoved(
   env: RuntimeEnv,
   captain: Agent,
-  params: { teamId?: string; removed: boolean },
+  params: { teamId?: TeamKey; removed: boolean },
 ): Promise<TeamState> {
-  const team = params.teamId
-    ? await requireTeamById(env, captain, params.teamId)
-    : await requireCaptainTeam(env, captain);
-  return withTeam(env, team.id, async (fresh, root) => {
-    if (fresh.leaderRemoved === params.removed) return fresh;
-    // 加回领队同样占团队名额（用户迭代 2026-09 六：领队也算成员）：满员时
-    // 拒绝加回，先移出一名成员。
-    if (!params.removed) {
-      const active = fresh.members.filter((m) => m.status !== 'removed');
-      if (active.length + 1 > env.config.maxMembers) {
+  const team =
+    params.teamId !== undefined
+      ? await requireTeamById(env, captain, params.teamId)
+      : await requireCaptainTeam(env, captain);
+  const fresh = await withTeam(env, team.id, (teamNow, _root, tx) => {
+    let leader = leaderRowOf(teamNow);
+    if (leader === undefined) {
+      // 领队行缺失（异常路径/旧数据）：重建，主会话填本队长会话。
+      leader = {
+        id: 0,
+        teamId: teamNow.id,
+        mainTaskId: null,
+        nowTaskId: null,
+        name: LEADER_NAME,
+        employeeId: null,
+        mainSessionId: String(captain.id),
+        childSessionId: '',
+        roleId: null,
+        status: params.removed ? 'removed' : 'ready',
+        createdAt: tx.now,
+      };
+      teamNow.taskMembers.push(leader);
+    }
+    if (params.removed) {
+      if (leader.status === 'removed') return teamNow;
+      leader.status = 'removed';
+      teamNow.hasLeader = false;
+    } else {
+      // 加回领队同样占团队名额（用户迭代 2026-09 六：领队也算成员）：满员
+      // 时拒绝加回，先移出一名成员。
+      const activeNames = new Set(
+        teamNow.taskMembers
+          .filter((r) => r.status !== 'removed' && r.name !== LEADER_NAME)
+          .map((r) => r.name),
+      );
+      if (activeNames.size + 1 > env.config.maxMembers) {
         throw new ETeamsError(
           `团队人数已达上限（${env.config.maxMembers}，含领队）`,
           '先 eteams_remove_member 再加回领队，或调整配置 maxMembers',
         );
       }
+      if (leader.status !== 'removed') return teamNow;
+      leader.status = 'ready';
+      teamNow.hasLeader = true;
     }
-    fresh.leaderRemoved = params.removed;
-    await recordEvent(
-      root,
-      fresh.id,
-      captainActor(fresh),
-      'leader.' + (params.removed ? 'removed' : 'restored'),
-      {
-        payload: {},
-      },
-    );
-    await writeTeam(root, fresh);
-    renderTeamDocs(env.workspace, fresh, (msg) => env.ctx.logger.warn(msg));
-    return fresh;
+    insertEventInTx(tx, teamNow.id, {
+      seq: 0,
+      at: tx.now,
+      actor: captainActor(teamNow),
+      type: 'leader.' + (params.removed ? 'removed' : 'restored'),
+      payload: {},
+    });
+    return teamNow;
   });
+  renderTeamDocs(env.workspace, fresh, (msg) => env.ctx.logger.warn(msg));
+  return fresh;
 }
 
 /**
- * Set the leader's model route (user iteration 2026-09: the leader picks a
- * model too). The leader IS the panel session agent — its own session model
- * is never switched; this route is the team default that members running on
- * 「跟随领队」resolve to at spawn (unset → session default). Empty
- * provider/model clears the override back to inherited.
+ * Remove a member（docs/35 §5#12 实例行语义）：该成员全部实例行置 removed、
+ * 在办尝试吊销、任务回就绪池；提交后 interrupt/drain 其子会话。领队走
+ * setLeaderRemoved 的移除语义（行 status + has_leader）。
  */
-export async function setLeaderModel(
-  env: RuntimeEnv,
-  captain: Agent,
-  params: {
-    teamId?: string;
-    provider?: string;
-    model?: string;
-    reasoningEffort?: string;
-  },
-): Promise<TeamState> {
-  const team = params.teamId
-    ? await requireTeamById(env, captain, params.teamId)
-    : await requireCaptainTeam(env, captain);
-  return withTeam(env, team.id, async (fresh, root) => {
-    const route: ModelRouteSnapshot =
-      params.provider !== undefined &&
-      params.provider !== '' &&
-      params.model !== undefined &&
-      params.model !== ''
-        ? {
-            provider: params.provider,
-            model: params.model,
-            ...(params.reasoningEffort !== undefined && params.reasoningEffort !== ''
-              ? { reasoningEffort: params.reasoningEffort }
-              : {}),
-            source: 'override',
-          }
-        : { provider: 'inherit', model: 'inherit', source: 'inherited' };
-    fresh.leaderModelRoute = route;
-    await recordEvent(root, fresh.id, captainActor(fresh), 'leader.updated', {
-      payload: { route },
-    });
-    await writeTeam(root, fresh);
-    renderTeamDocs(env.workspace, fresh, (msg) => env.ctx.logger.warn(msg));
-    return fresh;
-  });
-}
-
-/** Remove a member: staged drop, or revoke work + interrupt when running. */
 export async function removeMember(
   env: RuntimeEnv,
   captain: Agent,
   name: string,
-  teamId?: string,
+  teamId?: TeamKey,
 ): Promise<TeamState> {
-  const team = teamId
-    ? await requireTeamById(env, captain, teamId)
-    : await requireCaptainTeam(env, captain);
-  return withTeam(env, team.id, async (fresh, root) => {
-    const member = requireMember(fresh, name);
-    const now = Date.now();
-    if (member.currentAttemptId) {
-      // Revoke open work (docs/06.4): attempt revoked, task back to ready.
-      const task = fresh.tasks.find((t) => t.currentAttemptId === member.currentAttemptId);
-      if (task) {
-        const attempt = task.attempts.find((a) => a.id === member.currentAttemptId);
-        if (attempt && (attempt.status === 'pending_accept' || attempt.status === 'running')) {
-          attempt.status = 'revoked';
-          attempt.endedAt = now;
-        }
-        if (
-          task.status === 'assigned' ||
-          task.status === 'in_progress' ||
-          task.status === 'retrying'
-        ) {
-          task.status = 'ready';
-          task.assignee = undefined;
-          task.currentAttemptId = undefined;
-          task.updatedAt = now;
-        }
-        await recordEvent(root, fresh.id, captainActor(fresh), 'task.unassigned', {
-          taskId: task.id,
-          attemptId: member.currentAttemptId,
-          payload: { reason: 'member.removed', member: name },
-        });
+  const team =
+    teamId !== undefined
+      ? await requireTeamById(env, captain, teamId)
+      : await requireCaptainTeam(env, captain);
+  if (name === LEADER_NAME) {
+    return setLeaderRemoved(env, captain, { teamId: team.id, removed: true });
+  }
+  const fresh = await withTeam(env, team.id, (teamNow, _root, tx) => {
+    const rows = teamNow.taskMembers.filter((r) => r.name === name && r.status !== 'removed');
+    if (rows.length === 0) {
+      throw new ETeamsError(`成员「${name}」不存在`, '用 eteams_team_status 查看在册成员');
+    }
+    const now = tx.now;
+    // 在办尝试吊销（docs/06.4）：pending_accept/running → revoked；任务
+    // 回就绪池（wait/start → ready，10 态边）。
+    for (const task of teamNow.tasks) {
+      const attempt = task.attempts.find(
+        (a) => a.member === name && (a.status === 'pending_accept' || a.status === 'running'),
+      );
+      if (attempt === undefined) continue;
+      attempt.status = 'revoked';
+      attempt.endedAt = now;
+      if (task.status === 'wait' || task.status === 'start') {
+        applyTransition(task, 'ready', now);
+        task.assignee = undefined;
       }
+      insertEventInTx(tx, teamNow.id, {
+        seq: 0,
+        at: now,
+        actor: captainActor(teamNow),
+        type: 'task.unassigned',
+        taskId: task.id,
+        attemptId: attempt.id,
+        payload: { reason: 'member.removed', member: name },
+      });
     }
-    if (member.status !== 'staged' && member.id) {
-      const captainAgent = env.ctx.agents.get(fresh.captainSessionId) ?? captain;
-      interruptMember(env, member, captainAgent);
-      // 回收驻留 Activation（docs/20.4 P2）：live 注册表立刻干净、不可再被
-      // 唤醒；持久记录随父会话回收。旧运行时无 drain API 时静默降级。
-      await drainMembers(env, captainAgent, [member.id]);
-    }
-    member.status = 'removed';
-    member.currentAttemptId = undefined;
-    member.removedAt = now;
-    await recordEvent(root, fresh.id, captainActor(fresh), 'member.removed', { payload: { name } });
-    await writeTeam(root, fresh);
-    renderTeamDocs(env.workspace, fresh, (msg) => env.ctx.logger.warn(msg));
-    return fresh;
+    for (const row of rows) row.status = 'removed';
+    insertEventInTx(tx, teamNow.id, {
+      seq: 0,
+      at: now,
+      actor: captainActor(teamNow),
+      type: 'member.removed',
+      payload: { name },
+    });
+    return teamNow;
   });
+  // 提交后：中断并回收该成员全部子会话（回收驻留 Activation，docs/20.4 P2）。
+  const leader = leaderRowOf(fresh);
+  const captainAgent = (leader ? env.ctx.agents.get(leader.mainSessionId) : undefined) ?? captain;
+  for (const row of fresh.taskMembers) {
+    if (row.name !== name || row.childSessionId === '') continue;
+    interruptMember(env, row, captainAgent);
+    await drainMembers(env, captainAgent, [row.childSessionId]);
+  }
+  renderTeamDocs(env.workspace, fresh, (msg) => env.ctx.logger.warn(msg));
+  return fresh;
 }
 
 async function requireTeamById(
   env: RuntimeEnv,
   captain: Agent,
-  teamId: string,
+  teamId: TeamKey,
 ): Promise<TeamState> {
   const team = await readTeam(stateRootOf(env), teamId);
-  if (!team) throw new ETeamsError(`团队「${teamId}」不存在`);
-  if (team.captainSessionId !== String(captain.id))
+  if (!team) throw new ETeamsError(`团队「${String(teamId)}」不存在`);
+  const leader = leaderRowOf(team);
+  // removed 行也放行（领队 remove 后「加回领队」/restore 要能走通，身份
+  // 仍按 main_session_id 锚定）；需要活跃领队的具体操作自带更严守卫。
+  if (!leader || leader.mainSessionId !== String(captain.id)) {
     throw new ETeamsError('只有该团队的领队可以执行此操作');
+  }
   return team;
 }
 
@@ -621,24 +695,21 @@ export async function sendMessage(
   from: Actor,
   to: string,
   content: string,
-  refs: { taskId?: string } = {},
+  refs: { taskId?: number } = {},
 ): Promise<void> {
-  return withTeam(env, team.id, async (fresh, root) => {
+  const wakes: Array<() => Promise<boolean>> = [];
+  await withTeam(env, team.id, (fresh, _root, tx) => {
     if (to === 'captain') {
-      const captainAgent = env.ctx.agents.get(fresh.captainSessionId);
-      await deliverMail(env, fresh, 'captain', {
-        id: `m${Date.now().toString(36)}`,
-        seq: readBox(env, fresh.id, 'captain').length + 1,
-        at: Date.now(),
-        from,
-        to: { kind: 'captain', name: '领队' },
-        kind: from.kind === 'user' ? 'user_message' : 'report',
-        taskId: refs.taskId,
-        content,
-      });
+      insertMailInTx(
+        tx,
+        fresh.id,
+        'captain',
+        makeMail(from, { kind: 'captain', name: '领队' }, from.kind === 'user' ? 'user_message' : 'report', content, refs),
+      );
+      const leader = leaderRowOf(fresh);
+      const captainAgent = leader ? env.ctx.agents.get(leader.mainSessionId) : undefined;
       if (captainAgent) {
         try {
-          const { createUserMessage } = await import('@deepseek-ai/dsh-llm');
           captainAgent.followup(
             createUserMessage({
               content: [{ type: 'text', text: `[来自 ${from.name ?? from.kind}] ${content}` }],
@@ -650,24 +721,30 @@ export async function sendMessage(
         }
       }
     } else {
-      const member = requireMember(fresh, to);
-      await deliverMail(env, fresh, member.name, {
-        id: `m${Date.now().toString(36)}`,
-        seq: readBox(env, fresh.id, member.name).length + 1,
-        at: Date.now(),
-        from,
-        to: { kind: 'member', name: member.name },
-        kind: 'notice',
-        taskId: refs.taskId,
-        content,
-      });
-      await wakeMember(env, fresh, member, `[来自 ${from.name ?? from.kind}] ${content}`);
+      requireMember(fresh, to);
+      insertMailInTx(
+        tx,
+        fresh.id,
+        to,
+        makeMail(from, { kind: 'member', name: to }, 'notice', content, refs),
+      );
+      const row = latestInstanceRow(fresh, to);
+      if (row !== undefined) {
+        wakes.push(() => wakeMember(env, fresh, row, `[来自 ${from.name ?? from.kind}] ${content}`));
+      }
     }
-    await recordEvent(root, fresh.id, from, 'message.sent', {
-      taskId: refs.taskId,
+    insertEventInTx(tx, fresh.id, {
+      seq: 0,
+      at: tx.now,
+      actor: from,
+      type: 'message.sent',
+      ...(refs.taskId !== undefined ? { taskId: refs.taskId } : {}),
       payload: { to, length: content.length },
     });
+    return undefined;
   });
+  // 提交后：最佳努力唤醒。
+  for (const wake of wakes) await wake();
 }
 
 /** Read-only team view used by both tool faces (JSON-safe for tool output). */
@@ -675,22 +752,18 @@ export function teamView(env: RuntimeEnv, team: TeamState): Record<string, JsonV
   return {
     id: team.id,
     name: team.name,
-    goal: team.goal,
-    phase: team.phase,
-    planReviewState: team.planReviewState ?? null,
-    workDir: team.workDir ?? null,
+    hasLeader: team.hasLeader,
     members: team.members
-      .filter((m) => m.status !== 'removed')
-      // 团队现状精简（用户迭代 2026-09-03「团队现状太繁杂了，目前只需要
-      // 知道工号和角色和状态就行」）：成员只带 工号/角色/状态，route 与
-      // currentTask 去掉——currentTask 可从 tasks 的 assignee+status 读出，
-      // 模型路线属于派发细节，不进领队快照。name 保留：eteams_* 工具按
-      // 成员名指派，没有名字工号无法落地。
+      .filter((m) => m.name !== LEADER_NAME)
+      // 团队现状精简（用户迭代 2026-09-03「团队现状太繁杂了」）：成员只带
+      // 工号/角色/聚合状态；状态取实例行聚合口径（docs/35 §5#12），currentTask
+      // 可从 tasks 的 assignee+status 读出，模型路线属于派发细节。name 保留：
+      // eteams_* 工具按成员名指派，没有名字工号无法落地。
       .map((m): JsonValue => ({
         name: m.name,
         employeeId: m.employeeId ?? null,
         role: m.role,
-        status: m.status,
+        status: memberStatusOf(team, m.name),
       })),
     tasks: team.tasks.map((t): JsonValue => ({
       id: t.id,
@@ -699,7 +772,6 @@ export function teamView(env: RuntimeEnv, team: TeamState): Record<string, JsonV
       assignee: t.assignee ?? null,
       chain: t.chain.length,
       cursor: t.chainCursor,
-      kind: t.kind ?? 'task',
       parent: t.parentId ?? null,
     })),
     pendingDecisions: team.pendingDecisions
@@ -721,35 +793,6 @@ export function teamView(env: RuntimeEnv, team: TeamState): Record<string, JsonV
   };
 }
 
-/** Archive a completed/halted team (docs/09.1 archive/<id>). */
-export async function archiveTeam(
-  env: RuntimeEnv,
-  captain: Agent,
-  teamId: string,
-): Promise<string> {
-  const team = await requireTeamById(env, captain, teamId);
-  return withTeam(env, team.id, async (fresh, root) => {
-    if (fresh.phase !== 'completed' && fresh.phase !== 'halted') {
-      throw new ETeamsError('只能归档 completed/halted 团队', '先取消全部任务或等待团队完成');
-    }
-    // 回收全部成员的驻留 Activation（docs/20.4 P2）：完结团队不应有可唤醒
-    // 的成员留在 live 注册表；持久记录随父对话回收。旧运行时静默降级。
-    const captainAgent = env.ctx.agents.get(fresh.captainSessionId) ?? captain;
-    await drainMembers(
-      env,
-      captainAgent,
-      fresh.members.map((m) => m.id),
-    );
-    await recordEvent(root, fresh.id, captainActor(fresh), 'team.archived', {});
-    const dest = join(root, 'archive');
-    mkdirSync(dest, { recursive: true });
-    const target = join(dest, fresh.id);
-    if (existsSync(target)) throw new ETeamsError(`归档目录 ${target} 已存在`);
-    renameSync(join(root, fresh.id), target);
-    return target;
-  });
-}
-
 /**
  * 递归删除目录树：node:fs 的 rmSync 在本机（Node 24 / Win32）对非 ASCII
  * 路径会静默失败（unlinkSync/rmdirSync/renameSync 均正常）——团队 id 多为
@@ -768,20 +811,57 @@ export function rmTree(target: string): void {
   rmdirSync(target);
 }
 
-/** Delete a staged/completed team directory permanently. */
-export async function deleteTeam(env: RuntimeEnv, captain: Agent, teamId: string): Promise<void> {
+/**
+ * Delete a team permanently（docs/27 删除规则）：库事务里逐表按 team_id 删
+ * （含领队行；member 只删本队班底行，公共模板行不动）。归档已随 docs/35
+ * §3#7 下线；对话内确认放在工具层（波次 3）。存在未收尾任务的团队拒绝删除。
+ */
+export async function deleteTeam(env: RuntimeEnv, captain: Agent, teamId: TeamKey): Promise<void> {
   const team = await requireTeamById(env, captain, teamId);
-  return withTeam(env, team.id, async (fresh, root) => {
-    if (!['staged', 'completed', 'halted'].includes(fresh.phase)) {
-      throw new ETeamsError('running 团队不能直接删除', '先取消任务（cancel_task）或停止团队');
-    }
-    const captainAgent = env.ctx.agents.get(fresh.captainSessionId) ?? captain;
-    await drainMembers(
-      env,
-      captainAgent,
-      fresh.members.map((m) => m.id),
+  const root = stateRootOf(env);
+  await locks.withLock(teamLockKey(root, String(team.id)), async () => {
+    const fresh = readTeamSync(root, team.id);
+    if (!fresh) throw new ETeamsError(`团队「${String(teamId)}」不存在`);
+    // 运行中任务守卫（等价旧 phase 门控）：派发/执行/挂起/待决策中的任务
+    // 先取消，再删队。
+    const active = fresh.tasks.filter(
+      (t) =>
+        t.status === 'wait' ||
+        t.status === 'start' ||
+        t.status === 'paused' ||
+        t.status === 'wait_decision' ||
+        t.status === 'wait_user',
     );
-    rmTree(join(root, fresh.id));
+    if (active.length > 0) {
+      throw new ETeamsError(
+        `存在未收尾的任务（${active.map((t) => `#${t.id}`).join('、')}），不能直接删除`,
+        '先 eteams_cancel_task 取消任务，再删除团队',
+      );
+    }
+    const childIds = fresh.taskMembers
+      .filter((r) => r.status !== 'removed')
+      .map((r) => r.childSessionId);
+    withTeamTx(root, fresh.id, (tx) => {
+      for (const table of [
+        'task',
+        'attempts',
+        'decisions',
+        'events',
+        'mail_messages',
+        'task_status_changes',
+        'task_members',
+      ]) {
+        tx.db.prepare(`DELETE FROM ${table} WHERE team_id = ?`).run(fresh.id);
+      }
+      // 班底模板行只删本队（team_id 非空）；工作区公共模板行（team_id 为
+      // 空）不属于任何团队，保留。
+      tx.db.prepare('DELETE FROM member WHERE team_id = ?').run(fresh.id);
+      tx.db.prepare('DELETE FROM team WHERE team_id = ?').run(fresh.id);
+    });
+    // 提交后：回收成员子代理驻留（子会话已随团队删除，只能尽量清场）。
+    const leader = leaderRowOf(fresh);
+    const captainAgent = (leader ? env.ctx.agents.get(leader.mainSessionId) : undefined) ?? captain;
+    await drainMembers(env, captainAgent, childIds);
   });
 }
 

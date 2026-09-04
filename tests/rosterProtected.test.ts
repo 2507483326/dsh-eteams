@@ -6,7 +6,7 @@
  *
  * @module dsh-eteams/tests/rosterProtected
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -19,6 +19,7 @@ import {
   ROLE_BUILDER_NAME,
   upsertRosterMember,
 } from '../src/host/runtime/roster.js';
+import { cleanupTempWorkspace } from './support/tmpWorkspace';
 
 let root = '';
 
@@ -27,7 +28,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmSync(root, { recursive: true, force: true });
+  cleanupTempWorkspace(root);
 });
 
 describe('protected system members', () => {
@@ -78,7 +79,9 @@ describe('protected system members', () => {
     expect(stored.personaMd).toBe('# 领队手册（面板编辑）');
     const entry = readRoster(root).find((m) => m.name === LEADER_NAME);
     expect(entry?.personaMd).toBe('# 领队手册（面板编辑）');
-    // 未传 avatar 沿用预设脸（seed = hashName(领队名)，salt 固定 7）。
+    // 未传 avatar 沿用预设脸（seed = hashName(领队名)，salt 固定 7）——
+    // 落库（avatar 列 JSON）后读回应原样保留。
+    expect(stored.avatar).toEqual({ seed: avatarSeedFor(LEADER_NAME), salt: 7 });
     expect(entry?.avatar).toEqual({ seed: avatarSeedFor(LEADER_NAME), salt: 7 });
   });
 });

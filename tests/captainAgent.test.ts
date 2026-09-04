@@ -59,10 +59,16 @@ describe('CAPTAIN_CHILD_DENIED_TOOLS loud-deny contract', () => {
     'eteams_dispatch_captain',
   ]);
 
-  it('denies only registered tool names', () => {
+  it('denies only registered tool names (spawn-abort footgun)', () => {
+    // 归档功能随 docs/35 §3#7 下线，`eteams_archive_team` 已无注册点；
+    // deny 名单里每一条都必须是注册工具名（MEMBER_DENIED_TOOLS 同口径）。
     for (const name of CAPTAIN_CHILD_DENIED_TOOLS) {
       expect(registered.has(name), `deny entry not registered: ${name}`).toBe(true);
     }
+  });
+
+  it('never denies the dropped archive tool (spawn-abort footgun)', () => {
+    expect(CAPTAIN_CHILD_DENIED_TOOLS).not.toContain('eteams_archive_team');
   });
 
   it('never denies the unregistered approve tool (spawn-abort footgun)', () => {

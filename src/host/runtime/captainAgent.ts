@@ -74,7 +74,6 @@ export function unregisterCaptainChild(childId: string): void {
  */
 export const CAPTAIN_CHILD_DENIED_TOOLS: readonly string[] = [
   'eteams_create_team',
-  'eteams_archive_team',
   'eteams_delete_team',
   'eteams_dispatch_captain',
   'eteams_build_dispatch',

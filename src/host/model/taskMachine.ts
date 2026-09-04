@@ -1,5 +1,6 @@
 /**
- * Task state machine (docs/06.2) — pure functions, no I/O, no cordis.
+ * Task state machine (docs/06.2；10 态收敛见 docs/27 §27.9.11 / docs/35 §4)
+ * — pure functions, no I/O, no cordis.
  * Illegal transitions throw `TransitionError`; the tool layer converts them
  * into actionable Chinese error text.
  *
@@ -17,56 +18,53 @@ export class TransitionError extends Error {
   }
 }
 
-/** Allowed outgoing edges per status (docs/06.2). */
+/**
+ * Allowed outgoing edges per status (docs/27 §27.9.11：10 态收敛；docs/35 §4
+ * 映射方案 A)。旧 13 态的合并：assigned/retrying/blocked → wait，
+ * in_progress → start，awaiting_decision → wait_decision，
+ * needs_user → wait_user，suspended → paused。「阻塞」不再是独立状态——
+ * 物化阻塞 = `wait + blockedFrom 非空`，恢复走 restoreBlocked()。
+ */
 const EDGES: Record<TaskStatus, readonly TaskStatus[]> = {
   draft: ['ready', 'cancelled'],
-  ready: ['assigned', 'blocked', 'cancelled'],
-  assigned: ['in_progress', 'ready', 'assigned', 'blocked', 'paused', 'cancelled'],
-  in_progress: [
-    'retrying',
-    'completed',
-    'ready',
-    'awaiting_decision',
-    'paused',
-    'assigned',
-    'cancelled',
-  ],
-  retrying: ['in_progress', 'assigned', 'cancelled'],
-  paused: ['in_progress', 'assigned', 'cancelled'],
-  awaiting_decision: ['assigned', 'suspended', 'needs_user', 'cancelled'],
-  needs_user: ['assigned', 'failed', 'cancelled'],
-  suspended: ['ready', 'failed', 'cancelled'],
-  blocked: ['cancelled'], // restore-edge handled by restoreBlocked()
+  // ready → wait 双义：正常派发（无 blockedFrom）与依赖毒化物化（恢复目标
+  // 记进 blockedFrom，见 refreshDependencyStatus）共用同一条边。
+  ready: ['wait', 'cancelled'],
+  wait: ['start', 'ready', 'wait', 'paused', 'cancelled'],
+  start: ['wait', 'completed', 'ready', 'wait_decision', 'paused', 'cancelled'],
+  paused: ['start', 'wait', 'ready', 'failed', 'cancelled'],
+  wait_decision: ['wait', 'paused', 'wait_user', 'cancelled'],
+  wait_user: ['wait', 'failed', 'cancelled'],
   completed: [],
   failed: [],
   cancelled: [],
 };
 
-/** Whether the raw edge exists (blocked's restore edge is separate). */
+/** Whether the raw edge exists (blocked-state restore is separate). */
 export function canTransition(from: TaskStatus, to: TaskStatus): boolean {
-  if (from === 'blocked') return to === 'cancelled' || from === to;
   return EDGES[from].includes(to);
 }
 
 /**
  * Apply one status move in place. Bookkeeping:
- * - entering `blocked` records `blockedFrom` (restore target);
- * - leaving `blocked` for any reason clears it (restore uses restoreBlocked).
+ * - 任何离开物化阻塞态（wait + blockedFrom 非空）的转移都清掉恢复目标
+ *   （正常恢复走 restoreBlocked；这里兜底取消等旁路）；
+ * - 物化本体（ready → wait + blockedFrom）由 refreshDependencyStatus 落笔，
+ *   普通派发的 ready → wait 不得带上 blockedFrom。
  */
 export function applyTransition(task: TaskRecord, to: TaskStatus, now: number): void {
   if (task.status === to) return;
   // 对话任务组（docs/26）：group 任务不经执行链，全部小任务完成时由插件
-  // 直接 ready→completed（标准边没有这条，这里单独放行）。
-  if (task.kind === 'group' && task.status === 'ready' && to === 'completed') {
+  // 直接 ready→completed（标准边没有这条，这里单独放行）。docs/27 定案
+  // kind 不落库，容器判据换成结构：parent_id 为空 = 大任务（容器）。
+  if (task.parentId === null && task.status === 'ready' && to === 'completed') {
     task.completedAt = now;
     task.status = to;
     task.updatedAt = now;
     return;
   }
   if (!canTransition(task.status, to)) throw new TransitionError(task.status, to);
-  if (to === 'blocked') {
-    task.blockedFrom = task.status;
-  } else if (task.status === 'blocked') {
+  if (task.status === 'wait' && task.blockedFrom !== undefined) {
     task.blockedFrom = undefined;
   }
   if (to === 'completed') task.completedAt = now;
@@ -75,40 +73,42 @@ export function applyTransition(task: TaskRecord, to: TaskStatus, now: number): 
 }
 
 /**
- * Restore a materialized `blocked` task to its pre-block status, re-checking
- * that dependencies actually recovered (docs/05.9: blocked is materialized
- * but its exit re-derives from live dependency statuses).
+ * Restore a materialized blocked task (wait + blockedFrom) to its pre-block
+ * status, re-checking that dependencies actually recovered (docs/05.9: the
+ * blocked state is materialized but its exit re-derives from live dependency
+ * statuses). 入口判据 = blockedFrom 非空（docs/35 §5#11），恢复目标取
+ * blockedFrom 本身，解除即清空。
  */
 export function restoreBlocked(
   task: TaskRecord,
   dependenciesSatisfied: boolean,
   now: number,
 ): TaskStatus {
-  if (task.status !== 'blocked') return task.status;
-  const target: TaskStatus = task.blockedFrom ?? 'ready';
+  if (task.blockedFrom === undefined) return task.status;
+  const target: TaskStatus = task.blockedFrom;
   if (target === 'ready' && !dependenciesSatisfied) return task.status;
-  task.blockedFrom = undefined;
   task.status = target;
+  task.blockedFrom = undefined;
   task.updatedAt = now;
   return target;
 }
 
-/** Dependency statuses that poison downstream tasks (docs/05.9). */
+/** Dependency statuses that poison downstream tasks (docs/35 §3#12 定案集). */
 const POISON: ReadonlySet<TaskStatus> = new Set([
-  'suspended',
+  'paused',
   'failed',
-  'awaiting_decision',
-  'needs_user',
+  'wait_decision',
+  'wait_user',
 ]);
 
 /** Un-satisfied dependency ids of one task against the task list. */
-export function unsatisfiedDependencies(tasks: readonly TaskRecord[], task: TaskRecord): string[] {
+export function unsatisfiedDependencies(tasks: readonly TaskRecord[], task: TaskRecord): number[] {
   const byId = new Map(tasks.map((t) => [t.id, t]));
   return task.dependencies.filter((depId) => byId.get(depId)?.status !== 'completed');
 }
 
 /** Poisoning dependency ids (any non-terminal bad status) of one task. */
-export function poisoningDependencies(tasks: readonly TaskRecord[], task: TaskRecord): string[] {
+export function poisoningDependencies(tasks: readonly TaskRecord[], task: TaskRecord): number[] {
   const byId = new Map(tasks.map((t) => [t.id, t]));
   return task.dependencies.filter((depId) => {
     const status = byId.get(depId)?.status;
@@ -122,10 +122,10 @@ export function dependenciesSatisfied(tasks: readonly TaskRecord[], task: TaskRe
 }
 
 /**
- * Refresh one task's dependency-derived status in place (docs/05.9: blocked
- * is materialized; recovery refreshes back). Only `ready` tasks materialize
- * into `blocked`: completed dependencies are terminal, so a task that is
- * already assigned/in_progress cannot regress through dependency poisoning.
+ * Refresh one task's dependency-derived status in place (docs/05.9 + docs/35
+ * §5#11)：ready 任务被依赖毒化时物化为 wait + blockedFrom='ready'；物化态
+ * （blockedFrom 非空）在依赖恢复后还原。只有 ready 物化：已派发/执行中的
+ * 任务不因依赖毒化回退（依赖 completed 即终态）。
  * @returns whether the status changed.
  */
 export function refreshDependencyStatus(
@@ -135,12 +135,13 @@ export function refreshDependencyStatus(
 ): boolean {
   if (task.status === 'ready') {
     if (poisoningDependencies(tasks, task).length > 0) {
-      applyTransition(task, 'blocked', now);
+      applyTransition(task, 'wait', now);
+      task.blockedFrom = 'ready';
       return true;
     }
     return false;
   }
-  if (task.status === 'blocked') {
+  if (task.blockedFrom !== undefined) {
     const before = task.status;
     restoreBlocked(task, dependenciesSatisfied(tasks, task), now);
     return before !== task.status;
@@ -174,7 +175,7 @@ export function sanitizeKey(name: string): string {
   return key === '' ? 'team' : key.slice(0, 64);
 }
 
-/** Filesystem slug for a task folder: `t3-login-service`. */
+/** Filesystem slug for a task folder: `3-login-service`（整数任务号，docs/35 §5#7）. */
 export function taskSlug(task: TaskRecord): string {
   const slug = sanitizeKey(task.subject).slice(0, 40);
   return `${task.id}-${slug}`;
@@ -183,11 +184,11 @@ export function taskSlug(task: TaskRecord): string {
 /** Detect a dependency cycle if `dependencies` were added to `taskId`. */
 export function wouldCycle(
   tasks: readonly TaskRecord[],
-  taskId: string,
-  dependencies: readonly string[],
+  taskId: number,
+  dependencies: readonly number[],
 ): boolean {
   const byId = new Map(tasks.map((t) => [t.id, t]));
-  const seen = new Set<string>([taskId]);
+  const seen = new Set<number>([taskId]);
   const stack = [...dependencies];
   while (stack.length > 0) {
     const id = stack.pop();
@@ -202,6 +203,6 @@ export function wouldCycle(
 }
 
 /** Downstream tasks that directly depend on `taskId`. */
-export function dependentsOf(tasks: readonly TaskRecord[], taskId: string): TaskRecord[] {
+export function dependentsOf(tasks: readonly TaskRecord[], taskId: number): TaskRecord[] {
   return tasks.filter((t) => t.dependencies.includes(taskId));
 }

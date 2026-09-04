@@ -14,11 +14,13 @@
  *
  * @module dsh-eteams/host/runtime/workspaces
  */
-import { readdirSync } from 'node:fs';
+import { getDb } from '../state/db.js';
+import { ensureWorkspaceReady } from '../state/import.js';
 import { joinPath } from './base.js';
 import { readTeamSync } from '../state/store.js';
 import type { TeamState } from '../model/types.js';
 import type { ETeamsResolvedConfig } from '../config.js';
+import { leaderRowOf } from './notifier.js';
 
 /** Workspace registry service key candidates, newest first (mirror webui). */
 const WORKSPACE_KEYS = ['workspaceRegistry', 'workspace'] as const;
@@ -47,17 +49,17 @@ export interface LocatedTeam {
   readonly workspacePath: string;
 }
 
-/** Live team ids under one state root (sync mirror of store.listTeamIds). */
-function listTeamIdsSync(stateRoot: string): string[] {
-  let entries: { name: string; isDirectory(): boolean }[];
+/** Live team ids under one state root（team 表自增号升序，docs/27）。 */
+function listTeamIdsSync(stateRoot: string): number[] {
   try {
-    entries = readdirSync(stateRoot, { withFileTypes: true });
+    const db = getDb(stateRoot);
+    ensureWorkspaceReady(stateRoot, db);
+    return (
+      db.prepare('SELECT team_id FROM team ORDER BY team_id').all() as Array<{ team_id: number }>
+    ).map((r) => r.team_id);
   } catch {
     return [];
   }
-  return entries
-    .filter((e) => e.isDirectory() && e.name !== 'archive' && e.name !== 'corrupt')
-    .map((e) => e.name);
 }
 
 /** Deduplicated probe order: the caller's own workspace first, then the rest. */
@@ -120,7 +122,8 @@ export function locateTeamAcrossWorkspaces(
 /**
  * Resolve one agent's team identity across workspaces, keeping the tool
  * layer's documented priority (resolveCaller / docs/05.8):
- * 绑定团队 → 领队（captainSessionId）→ 成员（durable child session id）。
+ * 绑定团队 → 领队（task_members 领队行 main_session_id，docs/36 建议 3）→
+ * 成员（task_members 实例行 child_session_id）。
  * The caller's own workspace probes first so same-workspace teams resolve
  * without touching the registry; other registered workspaces follow.
  */
@@ -139,11 +142,15 @@ export function locateAgentTeam(
     const bound = teamByIdIn(workspaces, config, boundTeamId);
     if (bound) return bound;
   }
-  // 2. 领队身份（建队会话 / 面板建队的主持会话）。
-  const asCaptain = teamMatchingIn(workspaces, config, (team) => team.captainSessionId === agentId);
+  // 2. 领队身份：领队行 main_session_id 即建队/主持会话（removed 行同样
+  //    是该会话的归属，身份判定不看你行状态）。
+  const asCaptain = teamMatchingIn(workspaces, config, (team) => {
+    const leader = leaderRowOf(team);
+    return leader !== undefined && leader.mainSessionId === agentId;
+  });
   if (asCaptain) return asCaptain;
-  // 3. 成员身份（成员子会话 id === member.id，跨工作区同样成立）。
+  // 3. 成员身份（实例行 child_session_id === 本会话，跨工作区同样成立）。
   return teamMatchingIn(workspaces, config, (team) =>
-    team.members.some((m) => m.id === agentId && m.status !== 'removed'),
+    team.taskMembers.some((r) => r.childSessionId === agentId && r.status !== 'removed'),
   );
 }

@@ -5,22 +5,25 @@
  * re-pointed to the team's workspace (user iteration 2026-09-03: band showed
  * 「生效中」 while tools reported 「当前会话不在任何 eteams 团队中」).
  */
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import { envForAgent } from '../src/host/tools/identity';
 import { locateAgentTeam } from '../src/host/runtime/workspaces';
-import type { RuntimeEnv } from '../src/host/runtime/base';
+import { joinPath, type RuntimeEnv } from '../src/host/runtime/base';
+import { insertTeamRow, withTeamTx, writeTeamInTx } from '../src/host/state/store';
+import { LEADER_NAME } from '../src/host/state/db';
 import { clearSessionTeam, setSessionTeam } from '../src/host/runtime/sessionTeam';
 import {
   captainChildTeamOf,
   registerCaptainChild,
   unregisterCaptainChild,
 } from '../src/host/runtime/captainAgent';
+import { cleanupTempWorkspace } from './support/tmpWorkspace';
 import type { ETeamsResolvedConfig } from '../src/host/config';
-import type { TeamState } from '../src/host/model/types';
+import type { TaskMemberRecord, TeamState } from '../src/host/model/types';
 
 let base: string;
 let wsA: string;
@@ -34,36 +37,86 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // 团队现在落 SQLite（<ws>/.eteams），先关两个工作区的连接再删目录。
+  cleanupTempWorkspace(wsA);
+  cleanupTempWorkspace(wsB);
   rmSync(base, { recursive: true, force: true });
   clearSessionTeam('s-driver');
+  clearSessionTeam('s-other');
+  clearSessionTeam('s-x');
   unregisterCaptainChild('s-child');
 });
 
-function putTeam(ws: string, team: TeamState): void {
-  mkdirSync(join(ws, '.eteams', team.id), { recursive: true });
-  writeFileSync(join(ws, '.eteams', team.id, 'team.json'), JSON.stringify(team));
+function leaderRow(teamId: number, mainSessionId: string): TaskMemberRecord {
+  return {
+    id: 0,
+    teamId,
+    mainTaskId: null,
+    nowTaskId: null,
+    name: LEADER_NAME,
+    employeeId: null,
+    mainSessionId,
+    childSessionId: '',
+    roleId: null,
+    status: 'ready',
+    createdAt: 1,
+  };
 }
 
-function team(overrides: Partial<TeamState> = {}): TeamState {
+function memberRow(
+  teamId: number,
+  childSessionId: string,
+  status: TaskMemberRecord['status'],
+): TaskMemberRecord {
   return {
-    schemaVersion: 2,
-    id: 'demo',
-    name: '演示团队',
-    goal: '目标',
-    captainSessionId: 's-creator',
-    phase: 'staged',
+    id: 0,
+    teamId,
+    mainTaskId: null,
+    nowTaskId: null,
+    name: '甲',
+    employeeId: null,
+    mainSessionId: '',
+    childSessionId,
+    roleId: null,
+    status,
+    createdAt: 1,
+  };
+}
+
+/** SQLite 契约播种（替代旧 team.json 落盘）：team 行 + 可选领队/成员实例行。 */
+function seedTeam(
+  ws: string,
+  opts: {
+    name?: string;
+    leaderSession?: string;
+    memberSession?: string;
+    memberStatus?: TaskMemberRecord['status'];
+  } = {},
+): TeamState {
+  const root = joinPath(ws, '.eteams');
+  const name = opts.name ?? '演示团队';
+  let teamId = 0;
+  withTeamTx(root, undefined, (tx) => {
+    teamId = insertTeamRow(tx, name, opts.leaderSession !== undefined, tx.now);
+  });
+  const taskMembers: TaskMemberRecord[] = [];
+  if (opts.leaderSession !== undefined) taskMembers.push(leaderRow(teamId, opts.leaderSession));
+  if (opts.memberSession !== undefined) {
+    taskMembers.push(memberRow(teamId, opts.memberSession, opts.memberStatus ?? 'ready'));
+  }
+  const state: TeamState = {
+    id: teamId,
+    name,
+    hasLeader: opts.leaderSession !== undefined,
     createdAt: 1,
     updatedAt: 1,
-    version: 0,
-    taskSeq: 0,
-    attemptSeq: 0,
-    mailSeq: 0,
-    maxRetries: 3,
+    taskMembers,
     members: [],
     tasks: [],
     pendingDecisions: [],
-    ...overrides,
   };
+  withTeamTx(root, teamId, (tx) => writeTeamInTx(tx, state));
+  return state;
 }
 
 /** Host ctx stub exposing the registry under both service key candidates. */
@@ -79,55 +132,58 @@ const NO_CTX = {};
 
 describe('locateAgentTeam (registry-wide, binding → captain → member)', () => {
   it('finds a bound team living in ANOTHER workspace (跨工作区绑定)', () => {
-    putTeam(wsB, team());
+    const seeded = seedTeam(wsB);
     const ctx = ctxWithRegistry([wsA, wsB]);
-    const located = locateAgentTeam(config, ctx, 's-other', wsA, 'demo');
+    const located = locateAgentTeam(config, ctx, 's-other', wsA, String(seeded.id));
     expect(located?.workspacePath).toBe(wsB);
-    expect(located?.team.id).toBe('demo');
+    expect(located?.team.id).toBe(seeded.id);
   });
 
   it('binding wins over own captaincy in another workspace', () => {
-    putTeam(wsA, team({ id: 'own', captainSessionId: 's-x' }));
-    putTeam(wsB, team({ id: 'bound', name: '绑定队' }));
-    setSessionTeam('s-x', { teamId: 'bound', name: '绑定队', boundAt: 1 });
+    seedTeam(wsA, { leaderSession: 's-x' });
+    // team_id 是各工作区库内自增（两库各自从 1 发号），补一条填充行把绑定队
+    // 顶到 2，保证绑定键（数字串）在 wsA 里不存在——跨工作区定位才会走到 wsB。
+    seedTeam(wsB, { name: '填充队' });
+    const bound = seedTeam(wsB, { name: '绑定队' });
+    setSessionTeam('s-x', { teamId: String(bound.id), name: bound.name, boundAt: 1 });
     try {
-      const located = locateAgentTeam(config, ctxWithRegistry([wsA, wsB]), 's-x', wsA, 'bound');
+      const located = locateAgentTeam(
+        config,
+        ctxWithRegistry([wsA, wsB]),
+        's-x',
+        wsA,
+        String(bound.id),
+      );
       expect(located?.workspacePath).toBe(wsB);
-      expect(located?.team.id).toBe('bound');
+      expect(located?.team.id).toBe(bound.id);
     } finally {
       clearSessionTeam('s-x');
     }
   });
 
   it('finds a panel-created team by captainSessionId across workspaces', () => {
-    putTeam(wsB, team({ captainSessionId: 's-panel' }));
+    seedTeam(wsB, { leaderSession: 's-panel' });
     const located = locateAgentTeam(config, ctxWithRegistry([wsA, wsB]), 's-panel', wsA);
     expect(located?.workspacePath).toBe(wsB);
   });
 
   it('finds a member by durable child session id across workspaces', () => {
-    putTeam(
-      wsB,
-      team({ members: [{ id: 'm-1', name: '甲', status: 'active' } as TeamState['members'][0]] }),
-    );
+    seedTeam(wsB, { memberSession: 'm-1' });
     const located = locateAgentTeam(config, ctxWithRegistry([wsA, wsB]), 'm-1', wsA);
     expect(located?.workspacePath).toBe(wsB);
   });
 
   it('excludes removed members', () => {
-    putTeam(
-      wsB,
-      team({ members: [{ id: 'm-1', name: '甲', status: 'removed' } as TeamState['members'][0]] }),
-    );
+    seedTeam(wsB, { memberSession: 'm-1', memberStatus: 'removed' });
     expect(locateAgentTeam(config, ctxWithRegistry([wsA, wsB]), 'm-1', wsA)).toBeUndefined();
   });
 
   it('degrades to own-workspace-only without the registry service', () => {
-    putTeam(wsA, team({ captainSessionId: 's-own' }));
+    const own = seedTeam(wsA, { leaderSession: 's-own' });
     // 绑定指向不存在的团队 → 按优先级落到本工作区领队身份（与 resolveCaller 一致）。
     const withGhost = locateAgentTeam(config, NO_CTX, 's-own', wsA, 'ghost');
     expect(withGhost?.workspacePath).toBe(wsA);
-    expect(withGhost?.team.id).toBe('demo');
+    expect(withGhost?.team.id).toBe(own.id);
     const located = locateAgentTeam(config, NO_CTX, 's-own', wsA);
     expect(located?.workspacePath).toBe(wsA);
   });
@@ -143,8 +199,8 @@ describe('envForAgent re-point (tool env follows the team workspace)', () => {
   }
 
   it('re-points a cross-workspace bound session to the team workspace', () => {
-    putTeam(wsB, team());
-    setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
+    const seeded = seedTeam(wsB);
+    setSessionTeam('s-other', { teamId: String(seeded.id), name: seeded.name, boundAt: 1 });
     const env = envForAgent(
       config,
       ctxWithRegistry([wsA, wsB]) as never,
@@ -156,9 +212,9 @@ describe('envForAgent re-point (tool env follows the team workspace)', () => {
   it('re-points a captain child the same way (领队子代理跨工作区)', () => {
     // docs/26 用户迭代 2026-09-03: the dispatch child acts as team captain —
     // its eteams_* env must follow the team's workspace too.
-    putTeam(wsB, team({ captainSessionId: 's-creator' }));
-    registerCaptainChild('s-child', 'demo');
-    expect(captainChildTeamOf('s-child')).toBe('demo');
+    const seeded = seedTeam(wsB, { leaderSession: 's-creator' });
+    registerCaptainChild('s-child', String(seeded.id));
+    expect(captainChildTeamOf('s-child')).toBe(String(seeded.id));
     const env = envForAgent(
       config,
       ctxWithRegistry([wsA, wsB]) as never,

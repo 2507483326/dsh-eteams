@@ -33,7 +33,8 @@ import {
   type RuntimeEnv,
 } from '../runtime/base.js';
 import type { TeamState } from '../model/types.js';
-import { readTeam, writeTeam } from '../state/store.js';
+import { readTeamSync, withTeamTx } from '../state/store.js';
+import { leaderRowOf } from '../runtime/notifier.js';
 import { teamView } from '../runtime/teamOps.js';
 import { envForAgent, resolveCaller } from './identity.js';
 import {
@@ -79,8 +80,9 @@ function captainPersonaOf(env: RuntimeEnv, config: ETeamsResolvedConfig): string
 }
 
 /**
- * 落盘持续领队子代理的 durable id（`team.captainChildId`）。团队锁内
- * read-modify-write；团队消失（删除/归档竞态）时静默放弃——子代理已
+ * 落盘持续领队子代理的 durable id：写领队行（task_members 领队锚点行，
+ * name=领队名且 main_task_id 为空）的 child_session_id——团队锁内同步事务
+ * 直改该列，不整存整取快照。团队消失（删除竞态）时静默放弃——子代理已
  * 建立但惰性无害，下一次 dispatch 按空缺处理。
  */
 async function persistCaptainChildId(
@@ -90,11 +92,18 @@ async function persistCaptainChildId(
 ): Promise<void> {
   const root = stateRootOf(env);
   await locks.withLock(teamLockKey(root, teamId), async () => {
-    const team = await readTeam(root, teamId);
-    if (!team || team.captainChildId === childId) return;
-    team.captainChildId = childId;
-    team.updatedAt = Date.now();
-    await writeTeam(root, team);
+    const team = readTeamSync(root, teamId);
+    if (team === undefined) return;
+    const leader = leaderRowOf(team);
+    if (leader === undefined || leader.childSessionId === childId) return;
+    withTeamTx(root, team.id, (tx) => {
+      tx.db
+        .prepare(
+          'UPDATE task_members SET child_session_id = ?, update_time = ? ' +
+            'WHERE team_id = ? AND name = ? AND main_task_id IS NULL',
+        )
+        .run(childId, Date.now(), team.id, LEADER_NAME);
+    });
   });
 }
 
@@ -146,7 +155,7 @@ export function createCaptainDispatchTool(
       if (caller.kind !== 'captain') {
         throw new ETeamsError('只有团队领队会话可以转交领队子代理');
       }
-      const team: TeamState | undefined = await readTeam(stateRootOf(env), caller.team.id);
+      const team: TeamState | undefined = readTeamSync(stateRootOf(env), caller.team.id);
       if (!team) throw new ETeamsError(`团队「${caller.team.id}」不存在`);
       const subagents = env.ctx.subagents;
       if (subagents?.startContinuable === undefined || subagents?.followup === undefined) {
@@ -163,16 +172,16 @@ export function createCaptainDispatchTool(
         args.message,
       ].join('\n');
       const persona = captainPersonaOf(env, config);
-      const previous = team.captainChildId;
+      const previous = leaderRowOf(team)?.childSessionId ?? '';
       // 先试续聊（含宿主重启后的冷恢复）；失败（会话记录被回收/lineage 不
       // 符）再重建。注册表先撤旧条目再登记新会话。
-      if (previous !== undefined) {
+      if (previous !== '') {
         try {
           await subagents.followup(exec.agent, previous as unknown as SessionId, textTurn(prompt), {
             source: { ...CAPTAIN_SOURCE },
             signal,
           });
-          registerCaptainChild(previous, team.id);
+          registerCaptainChild(previous, String(team.id));
           return { ok: true as const, relayed: dispatchAck(previous) };
         } catch {
           unregisterCaptainChild(previous);
@@ -182,7 +191,7 @@ export function createCaptainDispatchTool(
       // 返回，不等待轮次完成——汇报经 report 通道随后送达）。
       const start = await subagents.startContinuable({
         provider: config.memberProvider,
-        label: buildCaptainLabel(team.id),
+        label: buildCaptainLabel(String(team.id)),
         request: {
           prompt: textTurn(prompt),
           parent: exec.agent,
@@ -193,8 +202,8 @@ export function createCaptainDispatchTool(
       });
       const childId = String(start.childId);
       // 子代理的 eteams_* 调用按该团队领队解析（identity.ts / 跨工作区重指）。
-      registerCaptainChild(childId, team.id);
-      await persistCaptainChildId(env, team.id, childId);
+      registerCaptainChild(childId, String(team.id));
+      await persistCaptainChildId(env, String(team.id), childId);
       return { ok: true as const, relayed: dispatchAck(childId) };
     },
   });

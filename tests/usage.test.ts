@@ -6,7 +6,7 @@
  *
  * @module dsh-eteams/tests/usage
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Context } from '@deepseek-ai/cordis';
@@ -30,7 +30,9 @@ import {
   type UsageMeterHandle,
   type UsageRecord,
 } from '../src/host/runtime/usage';
-import { writeTeam } from '../src/host/state/store';
+import { insertTeamRow, withTeamTx, writeTeam } from '../src/host/state/store';
+import { LEADER_NAME } from '../src/host/state/db';
+import { cleanupTempWorkspace } from './support/tmpWorkspace';
 
 let root: string;
 let stateRoot: string;
@@ -39,14 +41,53 @@ const config: ETeamsResolvedConfig = resolveConfig({ stateDir: '.eteams' });
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'eteams-usage-'));
   stateRoot = join(root, '.eteams');
+  // 逐项写 usage.jsonl 的用例需要目录先在（meter 写路径自带 mkdir）。
   mkdirSync(stateRoot, { recursive: true });
   resetUsageMeterForTests();
 });
 
 afterEach(() => {
   resetUsageMeterForTests();
-  rmSync(root, { recursive: true, force: true });
+  // SQLite 连接先关（本套件只在领队归属测试落库）再删目录——退避重试兜住
+  // 刚写完的 usage 文件被扫描短暂占住的情形（tests/support/tmpWorkspace）。
+  cleanupTempWorkspace(root);
 });
+
+/** SQLite 契约播种：team 行 + 领队实例行（usage 的领队归属读领队行
+ * mainSessionId，team.captainSessionId 字段已随锚点迁走，docs/36 建议 3）。 */
+async function seedTeam(name: string, leaderSession: string): Promise<number> {
+  let teamId = 0;
+  withTeamTx(stateRoot, undefined, (tx) => {
+    teamId = insertTeamRow(tx, name, true, tx.now);
+  });
+  const state = {
+    id: teamId,
+    name,
+    hasLeader: true,
+    createdAt: 1,
+    updatedAt: 1,
+    taskMembers: [
+      {
+        id: 0,
+        teamId,
+        mainTaskId: null,
+        nowTaskId: null,
+        name: LEADER_NAME,
+        employeeId: null,
+        mainSessionId: leaderSession,
+        childSessionId: '',
+        roleId: null,
+        status: 'ready' as const,
+        createdAt: 1,
+      },
+    ],
+    members: [],
+    tasks: [],
+    pendingDecisions: [],
+  } satisfies TeamState;
+  await writeTeam(stateRoot, state);
+  return teamId;
+}
 
 // ---------- fake host ctx (capturing firehose) ----------
 
@@ -172,9 +213,8 @@ describe('attribution priority', () => {
     expect(rows[0]?.memberName).toBeNull();
   });
 
-  it('captain session matches team.captainSessionId on disk', async () => {
-    const team = { id: 'team-c', version: 0, captainSessionId: 'cap-9' } as unknown as TeamState;
-    await writeTeam(stateRoot, team);
+  it('captain session matches the leader row mainSessionId on disk', async () => {
+    const teamId = await seedTeam('丙队', 'cap-9');
     const meter = installMeter();
     meter.emit(
       makeSession('cap-9'),
@@ -182,7 +222,11 @@ describe('attribution priority', () => {
     );
     await usageWritesIdle();
     const rows = readRows(usageFile(stateRoot));
-    expect(rows[0]).toMatchObject({ teamId: 'team-c', roleKind: 'captain', memberName: null });
+    expect(rows[0]).toMatchObject({
+      teamId: String(teamId),
+      roleKind: 'captain',
+      memberName: null,
+    });
   });
 
   it('panel binding (conversation) beats workspace bucket', async () => {

@@ -9,27 +9,32 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { sanitizeKey, stationProgress, taskSlug } from '../model/taskMachine.js';
-import type { MemberRecord, TaskRecord, TeamState } from '../model/types.js';
+import type { MemberRecord, ModelRouteSnapshot, TaskRecord, TeamState } from '../model/types.js';
 import { renderContract } from '../prompts/handoff.js';
+import { leaderRowOf, memberStatusOf } from './notifier.js';
 
-/** Relative work dir for one team (recorded into TeamState at approval). */
+/** 团队工作目录基准段（相对工作区；任务 work_dir 在它之下分配）。 */
 export function teamWorkDirRel(team: TeamState): string {
   return `teams/${sanitizeKey(team.name)}`;
 }
 
-/** Absolute work dir given the workspace. */
+/** Absolute team work dir given the workspace. */
 export function teamWorkDirAbs(workspace: string, team: TeamState): string {
-  return join(workspace, team.workDir ?? teamWorkDirRel(team));
+  return join(workspace, teamWorkDirRel(team));
 }
 
-/** Workspace-relative task folder (tool output / panel display, docs/26). */
+/**
+ * Workspace-relative task folder (tool output / panel display, docs/26).
+ * work_dir 归任务（docs/35 §3#8）：已分配按任务字面路径原样返回；未分配
+ * （新建前的预览路径）按当前命名规则推算，不落库。
+ */
 export function taskDirRel(team: TeamState, task: TaskRecord): string {
-  const base = team.workDir ?? teamWorkDirRel(team);
-  if (task.parentId) {
+  if (task.workDir) return task.workDir;
+  if (task.parentId !== null) {
     const parent = team.tasks.find((t) => t.id === task.parentId);
-    if (parent) return `${base}/tasks/${taskSlug(parent)}/sub/${taskSlug(task)}`;
+    if (parent?.workDir) return `${parent.workDir}/sub/${taskSlug(task)}`;
   }
-  return `${base}/tasks/${taskSlug(task)}`;
+  return `${teamWorkDirRel(team)}/tasks/${taskSlug(task)}`;
 }
 
 /**
@@ -38,36 +43,43 @@ export function taskDirRel(team: TeamState, task: TaskRecord): string {
  * folder takes the whole subtree with it.
  */
 export function taskDirAbs(workspace: string, team: TeamState, task: TaskRecord): string {
-  if (task.parentId) {
-    const parent = team.tasks.find((t) => t.id === task.parentId);
-    if (parent) return join(taskDirAbs(workspace, team, parent), 'sub', taskSlug(task));
-  }
-  return join(teamWorkDirAbs(workspace, team), 'tasks', taskSlug(task));
+  return join(workspace, taskDirRel(team, task));
 }
 
 /** Render the idempotent team README (overview view). */
 export function renderTeamReadme(team: TeamState): string {
+  const leader = leaderRowOf(team);
   const lines: string[] = [
     `# ${team.name}`,
     '',
     `- 团队 id：${team.id}`,
-    `- 目标：${team.goal}`,
-    `- 状态：${team.phase}${team.planReviewState ? ` · 计划${planReviewLabel(team.planReviewState)}` : ''}`,
-    `- 领队会话：${team.captainSessionId}`,
+    `- 领队：${leader !== undefined && leader.status !== 'removed' ? '项目牧羊人（在册）' : '（未设领队）'}`,
     '',
     '## 成员',
   ];
-  const active = team.members.filter((m) => m.status !== 'removed');
-  if (active.length === 0) lines.push('（暂无成员）');
-  for (const m of active)
-    lines.push(`- **${m.name}**（${m.role}）· ${m.status} · 路线 ${routeLabel(m)}`);
+  // 成员列表按实例行聚合（docs/35 §5#12）：名字去重、状态取聚合口径，
+  // 角色/路线读班底模板行；领队行单独不重复列。
+  const names: string[] = [];
+  for (const row of team.taskMembers) {
+    if (row.status === 'removed') continue;
+    if (row.name === leader?.name && row.mainTaskId === null) continue;
+    if (!names.includes(row.name)) names.push(row.name);
+  }
+  if (names.length === 0) lines.push('（暂无成员）');
+  for (const name of names) {
+    const template = team.members.find((m) => m.name === name);
+    lines.push(
+      `- **${name}**（${template?.role ?? '成员'}）· ${memberStatusOf(team, name)} · 路线 ${routeLabel(template)}`,
+    );
+  }
   lines.push('', '## 任务');
   if (team.tasks.length === 0) lines.push('（暂无任务）');
   const taskLine = (t: TaskRecord, indent = ''): string => {
     const station = stationProgress(t);
     const chainTxt = station !== undefined ? ` · 链 ${station.done}/${station.total}` : '';
     const assignee = t.assignee ? ` · ${t.assignee}` : '';
-    const groupTxt = t.kind === 'group' ? '（任务单）' : '';
+    const groupTxt =
+      t.parentId === null && team.tasks.some((x) => x.parentId === t.id) ? '（任务单）' : '';
     return `${indent}- ${t.id} ${t.subject}${groupTxt} — ${t.status}${assignee}${chainTxt}`;
   };
   for (const t of team.tasks.filter((x) => !x.parentId)) {
@@ -77,21 +89,15 @@ export function renderTeamReadme(team: TeamState): string {
   }
   lines.push(
     '',
-    '> 本文件由 eteams 自动渲染（幂等视图）；请勿手工编辑，任务笔记写在对应 tasks/tN-*/notes.md。',
+    '> 本文件由 eteams 自动渲染（幂等视图）；请勿手工编辑，任务笔记写在对应 tasks/<任务号>-<slug>/notes.md。',
     '',
   );
   return lines.join('\n');
 }
 
-function planReviewLabel(state: string): string {
-  if (state === 'awaiting_review') return '待批准';
-  if (state === 'returned') return '已退回';
-  return '已批准';
-}
-
-function routeLabel(m: MemberRecord): string {
-  const r = m.modelRoute;
-  return `${r.provider}/${r.model}${r.reasoningEffort ? `@${r.reasoningEffort}` : ''}（${r.source === 'inherited' ? '继承' : '覆盖'}）`;
+function routeLabel(m: MemberRecord | undefined): string {
+  const r: ModelRouteSnapshot = m?.modelRoute ?? { model: '', reasoningEffort: undefined };
+  return r.model === '' ? '跟随' : `${r.model}${r.reasoningEffort ? `@${r.reasoningEffort}` : ''}`;
 }
 
 /** Render the idempotent contract view for one task. */
@@ -116,8 +122,8 @@ export function renderTaskContract(team: TeamState, task: TaskRecord): string {
       lines.push(`${mark} ${i + 1}. **${s.member}**：${s.stageBrief}`);
     }
   }
-  if (task.kind === 'group') {
-    // docs/26: 主任务合同渲染小任务清单（成员槽接力见各小任务自己的合同）。
+  if (task.parentId === null) {
+    // docs/26: 大任务容器渲染小任务清单（成员槽接力见各小任务自己的合同）。
     const subs = team.tasks.filter((t) => t.parentId === task.id);
     lines.push('', '## 小任务');
     if (subs.length === 0) lines.push('（尚未拆解）');
@@ -158,9 +164,9 @@ export function renderTeamDocs(
   team: TeamState,
   log?: (msg: string) => void,
 ): string[] {
-  // docs/26：staged 且尚未提交任务的团队（workDir 未分配）不落文档树；
-  // 一旦分配（批准或首次提交）即物化，phase 不再是唯一闸门。
-  if (!team.workDir) return [];
+  // docs/35 §3#8：work_dir 归任务——任何任务已分配目录即物化文档树；
+  // 全无任务时不落（README 也等首个任务）。
+  if (!team.tasks.some((t) => t.workDir !== undefined)) return [];
   const warnings: string[] = [];
   const warn = log ?? (() => undefined);
   try {

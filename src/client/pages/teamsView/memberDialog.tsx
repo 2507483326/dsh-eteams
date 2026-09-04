@@ -34,7 +34,8 @@ export function MemberDialog({ team, member }: { team: TeamSnapshot; member: Mem
     return () => {
       alive = false;
     };
-  }, [team.teamId, team.version, member.name]);
+    // 回拉锚点：快照版本号已砍（docs/27），最新事件的 seq 即团队变更水位。
+  }, [team.teamId, team.latestEvents.at(-1)?.seq, member.name]);
   const kindLabel: Record<string, string> = {
     assignment: '指派',
     report: '汇报',

@@ -185,14 +185,14 @@ GET /eteams-api/team/<teamId>/usage/calendar?year=2026
 
 ### 28.5.2 「Token 消耗」卡片规格（BoardTab）
 
-位置与容器：`BoardTab`（现 `src/client/pages/teamsView/boardTab.tsx`，原 `src/client/eteamsView.tsx:1000-1146`，结构整改已拆分）「最近动态」卡之后新增一张 `Card className={PANEL_CARD_CLASS}`，标题行复用 `SECTION_TITLE_CLASS`；meta 行用 `MUTED_CLASS`（三个类名常量现均在 `src/client/pages/teamsView/shared.tsx`）。数据经新 `fetchUsageCalendar(teamId, year)`（api.ts，`requestJson` 同款，`api.ts:11,53-69`）获取，挂载/切年/切团队/`refreshActivitySoon` 低频触发（60s 可选轮询，`monitor.ts:343` 的 `refreshActivitySoon` 不动）。
+位置与容器：`BoardTab`（现 `src/client/pages/teamsView/boardTab.tsx`，原 `src/client/eteamsView.tsx:1000-1146`，结构整改已拆分）**看板顶部**（2026-09-04 用户迭代：位置由「最近动态」卡之后移到看板顶部；样式试过一版去卡壳扁平渲染后定稿——仍按 `Card className={PANEL_CARD_CLASS}` 卡壳渲染，日历与 meta 行在卡内居中显示；组件名 `UsageCalendarCard` 保留），标题行复用 `SECTION_TITLE_CLASS`；meta 行用 `MUTED_CLASS`（类名常量现均在 `src/client/pages/teamsView/shared.tsx`）。数据经新 `fetchUsageCalendar(teamId, year)`（api.ts，`requestJson` 同款，`api.ts:11,53-69`）获取，挂载/切年/切团队/`refreshActivitySoon` 低频触发（60s 可选轮询，`monitor.ts:343` 的 `refreshActivitySoon` 不动）。
 
 | 项 | 规格 |
 |---|---|
 | 年份切换 | 标题行右侧 `ChevronLeft`/`ChevronRight`（lucide 深层导入，文件头 S 纪律）；未来年禁用；切换即重拉 |
 | 亮暗 | `useHostDark()`（先例 `src/client/features/mdEditor/mdEditor.tsx:157-169`，纯移动行号不变：`document.body.hasAttribute('data-ds-dark-theme')` + MutationObserver）→ `colorScheme={dark ? 'dark' : 'light'}`；**不要**省略让它读系统 scheme——宿主 GUI 主题与系统可能不一致（eteams.css 注记「宿主暗色时 body 带该属性」） |
 | `theme` 色板（官网 sky 令牌，与 docs/24 D22a 一致；fill 为 SVG attribute，**不用 `var(--token)`**——属性值不解析 CSS 变量） | light `['#f1f5f9','#bae6fd','#7dd3fc','#38bdf8','#0ea5e9']`（slate-100 空档 → sky-200/300/400/500）；dark `['#1e293b','#0c4a6e','#0369a1','#0284c7','#38bdf8']` |
-| 几何 | `blockSize=11, blockMargin=3, blockRadius=2, fontSize=12`（面板 14px 基线下的小字档）；`weekStart={1}`（周一开头） |
+| 几何 | `blockSize=11, blockMargin=3, blockRadius=2, fontSize=12`（面板 14px 基线下的小字档）；`weekStart={1}`（周一开头）；格子无装饰（2026-09-04 用户迭代：`renderBlock` + cloneElement 以 `stroke:'none'` 覆掉包 v3 给每格硬编码的 hairline 描边——light `rgba(0,0,0,0.08)` / dark `rgba(255,255,255,0.04)`，纯色方块扁平风） |
 | 标签 | `labels={{ months:['一月',…], weekdays:['日','一','二','三','四','五','六'], totalCount:'{{year}} 年共 {{count}} tokens', legend:{ less:'少', more:'多' } }}`；`showWeekdayLabels={['sun','wed']}`；图例默认显示（`showColorLegend` 不传） |
 | level 分级 | 客户端对**当日 `totalTokens>0`** 的天取四分位（P25/P50/P75）→ 1–4 档，0 tokens 恒为 0 档；某年全 0 时全部 level 0（空档色） |
 | tooltip | `tooltips={{ activity: { text: (a) => 分项文案, placement: 'top' } }}`；`text` 闭包内查 `date → day` 映射渲染多行：`9月4日 · 64,220 tokens` + `输入 11,240 / 输出 860 / 缓存读 52,310 / 缓存写 0`（`reasoningTokens>0` 时附「推理 512（可能与输出重叠）」；`calls` 一并展示） |

@@ -30,14 +30,24 @@ export const MEMBER_TOOL_SHEET = [
   '- eteams_team_status {} → 团队概览',
 ].join('\n');
 
-/** The spawn welcome: full persona + rules + tool sheet + first context. */
-export function memberWelcome(team: TeamState, member: MemberRecord): string {
+/**
+ * The spawn welcome: full persona + rules + tool sheet + first context.
+ * `template` 是同名班底模板行（docs/35 §5#12 成员=纯模板），人设从它读；
+ * 缺省（无模板行）给极简开场。目标行随 docs/35 §3#1 砍掉——目标不再入库。
+ */
+export function memberWelcome(
+  team: TeamState,
+  name: string,
+  template?: MemberRecord,
+): string {
+  const persona = template?.persona;
+  const role = template?.role ?? '成员';
   return [
-    `你已被领队拉入团队「${team.name}」，任 ${member.name}（${member.role}）。`,
-    `团队目标：${team.goal}`,
+    `你已被领队拉入团队「${team.name}」，任 ${name}（${role}）。`,
     '',
-    renderPersonaBlock(member.persona, member.name),
-    personaDigest(member.persona, member.name),
+    ...(persona !== undefined
+      ? [renderPersonaBlock(persona, name), personaDigest(persona, name)]
+      : [`# 人设 · ${name}`]),
     '',
     '## 工作规则',
     ...MEMBER_RULES.map((r) => `- ${r}`),
@@ -45,6 +55,6 @@ export function memberWelcome(team: TeamState, member: MemberRecord): string {
     '## 你的工具',
     MEMBER_TOOL_SHEET,
     '',
-    '任务详情用 eteams_task_board 查看；任务文档位于 teams 目录下对应任务文件夹。现在等待第一条指派。',
+    '任务详情用 eteams_task_board 查看；任务文档在团队工作目录下对应任务文件夹。现在等待第一条指派。',
   ].join('\n');
 }

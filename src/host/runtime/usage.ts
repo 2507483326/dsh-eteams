@@ -29,6 +29,7 @@ import { atomicWriteText, listTeams } from '../state/store.js';
 import { parseJsonl } from '../state/events.js';
 import { captainChildTeamOf } from './captainAgent.js';
 import { getSessionTeamId } from './sessionTeam.js';
+import { leaderRowOf } from './notifier.js';
 import type { RuntimeLogger } from './base.js';
 
 // ---------- 行模型（28.3.1） ----------
@@ -159,11 +160,16 @@ async function resolveIdentity(sessionId: string, root: string): Promise<Session
     if (childTeam !== undefined) {
       identity = { teamId: childTeam, memberName: null, roleKind: 'captain-child' };
     } else {
-      // 3. 领队主会话：本工作区 team.json 比对 captainSessionId（读盘面）
+      // 3. 领队主会话：本工作区团队快照比对领队行 main_session_id（领队锚点
+      //    docs/36 建议 3；team.captainSessionId 字段已随锚点迁入领队行）
       let captainTeamId: string | undefined;
       try {
         const teams = await listTeams(root);
-        captainTeamId = teams.find((t) => t.captainSessionId === sessionId)?.id;
+        const hit = teams.find((t) => {
+          const leader = leaderRowOf(t);
+          return leader !== undefined && leader.mainSessionId === sessionId;
+        });
+        if (hit !== undefined) captainTeamId = String(hit.id);
       } catch {
         // 读盘失败不归属（落 workspace 桶）；下次 TTL 过期重试
       }

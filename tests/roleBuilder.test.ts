@@ -5,7 +5,7 @@
  *
  * @module dsh-eteams/tests/roleBuilder
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -29,7 +29,8 @@ import {
   setBuildParentSession,
 } from '../src/host/runtime/roleBuilder';
 import { MEMBER_DENIED_TOOLS } from '../src/host/runtime/members';
-import { ensurePresetMembers, upsertRosterMember } from '../src/host/runtime/roster';
+import { ensurePresetMembers, findRosterMember, upsertRosterMember } from '../src/host/runtime/roster';
+import { cleanupTempWorkspace } from './support/tmpWorkspace';
 
 let stateRoot: string;
 
@@ -38,7 +39,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmSync(stateRoot, { recursive: true, force: true });
+  // roster 写路径已落 SQLite（<stateRoot>/eteams.db）：先关连接（两把键口径）
+  // 再退避删目录——tests/support/tmpWorkspace。
+  cleanupTempWorkspace(stateRoot);
 });
 
 describe('D18 对话式新增成员', () => {
@@ -67,10 +70,9 @@ describe('D18 对话式新增成员', () => {
   it('seeds the 角色构建师 preset idempotently (D18-3)', async () => {
     await ensurePresetMembers(stateRoot);
     await ensurePresetMembers(stateRoot);
-    const file = JSON.parse(readFileSync(join(stateRoot, 'roster.json'), 'utf8')) as {
-      members: { name: string; role: string; rules?: string[] }[];
-    };
-    const rb = file.members.find((m) => m.name === '角色构建师');
+    // roster.json 已随 SQLite 改造退场（roster.ts：roster.json 不再读写），
+    // 预置行改走 member 表公共模板行断言。
+    const rb = findRosterMember(stateRoot, '角色构建师');
     expect(rb).toBeDefined();
     expect(rb?.role).toBe('角色构建师');
     expect(rb?.rules?.length ?? 0).toBeGreaterThan(0);
@@ -134,10 +136,8 @@ describe('D18 对话式新增成员', () => {
     expect(session.status).toBe('confirmed');
     expect(memberName).toBe('data-eng');
     expect(readBuildSession(stateRoot)?.status).toBe('confirmed');
-    const roster = JSON.parse(readFileSync(join(stateRoot, 'roster.json'), 'utf8')) as {
-      members: { name: string }[];
-    };
-    expect(roster.members.some((m) => m.name === 'data-eng')).toBe(true);
+    // 确认入库 = member 表公共模板行（roster.json 已退场）。
+    expect(findRosterMember(stateRoot, 'data-eng')).toBeDefined();
     // 终态会话拒绝继续报告（docs/19.16：防后台代理迟到播报复活会话）；
     // 只有显式 newBuild 的 active 报告开启新一轮
     await expect(reportBuildProgress(stateRoot, { step: 'x' })).rejects.toThrow(/已结束/);

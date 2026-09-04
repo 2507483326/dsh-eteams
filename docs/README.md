@@ -38,6 +38,7 @@
 | 32   | [32 项目结构整改方案](32-restructure-plan.md)                 | client 平面归属规则（pages/features/lib/components 判定树与目录规则、camelCase 命名）与 eteamsView.tsx 巨石（5060 行 110 符号）逐符号拆分映射、tests/scripts/构建接线同步、分阶段执行与文档回写清单 |
 | 33   | [33 结构整改审核报告](33-restructure-review.md)               | 对 docs/32 的证据级审核：拆分映射表逐符号全量核验、构建接线/测试/脚本清单回查，阻塞/建议/备忘清单与执行前修订结论（2026-09-04 修订已落实进 32） |
 | 34   | [34 结构整改验收报告](34-acceptance.md)                       | 对 docs/32 全量执行的独立验收：四门 + verifyM0 亲跑全绿、体积台账（5223→5230 KB +0.13%）、110 符号映射逐行复核与结构收口 grep 零命中、8 条偏差记录与实施结果回写 |
+| 37   | [37 Agent Loop 剖析与借鉴](37-agent-loop-lessons.md)          | Claude Code `src/query.ts` 的 agent loop 核心逻辑剖析（循环骨架/消息拼接/工具调用/compact/继续执行）与 eTeam 可借鉴点清单（token 断点恢复、唤醒补投熔断、增量快照、续跑指令文案等 11 条，按 A 类插件可落地 / B 类宿主层分档） |
 
 ## 决策记录（2026-02 与用户确认）
 

@@ -31,6 +31,13 @@ const strR = (description: string) => ({
   description,
   required: true as const,
 });
+/** 任务号 / 尝试号全库自增（docs/27）——参数与输出一律整数（docs/35 §5#11）。 */
+const int = (description: string) => ({ type: 'integer' as const, description });
+const intR = (description: string) => ({
+  type: 'integer' as const,
+  description,
+  required: true as const,
+});
 
 /** Build the member tool set for one child scope. */
 export function createMemberTools(
@@ -52,14 +59,14 @@ export function createMemberTools(
     name: 'eteams_claim_task',
     description:
       '接取指派给你的任务：返回 attempt_id 与 token（后续进度的凭证）+ 完整合同 + 邮箱摘要。接不了用 eteams_decline_task。',
-    parameters: { taskId: strR('任务 id') },
+    parameters: { taskId: intR('任务号（面板「任务 #N」的 N）') },
     output: {
       schema: {
         type: 'object' as const,
         properties: {
           ok: { type: 'boolean' as const, description: '是否成功' },
-          taskId: str('任务 id'),
-          attemptId: str('attempt id'),
+          taskId: int('任务号'),
+          attemptId: int('attempt id'),
           token: str('执行凭证（妥善保管）'),
           contract: str('任务合同全文'),
           inboxPreview: {
@@ -95,7 +102,7 @@ export function createMemberTools(
     name: 'eteams_decline_task',
     description:
       '婉拒指派（能力/负载/前置不满足）：任务回到就绪池，领队改派。已接取的任务不能用本工具。',
-    parameters: { taskId: strR('任务 id'), reason: strR('婉拒原因（具体到缺什么）') },
+    parameters: { taskId: intR('任务号（面板「任务 #N」的 N）'), reason: strR('婉拒原因（具体到缺什么）') },
     output: {
       schema: {
         type: 'object' as const,
@@ -115,8 +122,8 @@ export function createMemberTools(
     name: 'eteams_append_progress',
     description: '记录执行进度（≤200 字）：开工即记，阶段节点再记。需要 attempt_id 与 token。',
     parameters: {
-      taskId: strR('任务 id'),
-      attemptId: strR('attempt id'),
+      taskId: intR('任务号'),
+      attemptId: intR('attempt id'),
       token: strR('接取时获得的 token'),
       text: strR('进度内容（≤200 字）'),
     },
@@ -140,8 +147,8 @@ export function createMemberTools(
     description:
       '交付完成：output 写清做了什么/改了哪些文件/如何验证；changedPaths 列改动文件。链任务完成中间站后领队会推进下一站。',
     parameters: {
-      taskId: strR('任务 id'),
-      attemptId: strR('attempt id'),
+      taskId: intR('任务号'),
+      attemptId: intR('attempt id'),
       token: strR('接取时获得的 token'),
       output: strR('产出说明'),
       changedPaths: {
@@ -178,8 +185,8 @@ export function createMemberTools(
     description:
       '上报失败：error 写具体障碍与已尝试方案。未超重试上限会自动安排同成员重试；超限进入领队决策。',
     parameters: {
-      taskId: strR('任务 id'),
-      attemptId: strR('attempt id'),
+      taskId: intR('任务号'),
+      attemptId: intR('attempt id'),
       token: strR('token'),
       error: strR('失败原因与已尝试方案'),
     },
@@ -230,17 +237,21 @@ export function createMemberTools(
     },
     execute: async (_args, exec) => {
       const { caller } = await memberOf(exec);
+      const me = caller.member.name;
       const mine = caller.team.tasks.filter(
         (t) =>
-          t.assignee === caller.member.name ||
-          t.chain.some((s, i) => i > t.chainCursor && s.member === caller.member.name),
+          t.assignee === me ||
+          t.chain.some((s, i) => i > t.chainCursor && s.member === me),
       );
+      // 角色/路线读班底模板行（docs/35 §3#5：member=纯模板，task_members=实例行）。
+      const template = caller.team.members.find((m) => m.name === me);
+      // 当前任务口径（docs/36 建议 2）：wait(已派待接取)/start(执行中)/paused
+      // 三态之一；completed/failed 等终态任务不再是「当前任务」。
+      const current = mine.find((t) => ['wait', 'start', 'paused'].includes(t.status));
       const view = {
-        member: caller.member.name,
-        role: caller.member.role,
-        currentTask:
-          mine.find((t) => ['assigned', 'in_progress', 'retrying', 'paused'].includes(t.status))
-            ?.id ?? null,
+        member: me,
+        role: template?.role ?? me,
+        currentTask: current?.id ?? null,
         tasks: mine.map((t) => ({
           id: t.id,
           subject: t.subject,
@@ -249,11 +260,11 @@ export function createMemberTools(
           station:
             t.chain.length > 0
               ? {
-                  done: t.chainCursor + 1,
+                  // 末站完成即 completed（chainCursor 不再推进）——完成态直接
+                  // 按满进度口径显示（docs/35 §5#10 观察项）。
+                  done: t.status === 'completed' ? t.chain.length : t.chainCursor + 1,
                   total: t.chain.length,
-                  mine: t.chain.findIndex(
-                    (s, i) => i > t.chainCursor && s.member === caller.member.name,
-                  ),
+                  mine: t.chain.findIndex((s, i) => i > t.chainCursor && s.member === me),
                 }
               : null,
           contract: renderContract(t),
@@ -270,7 +281,7 @@ export function createMemberTools(
     parameters: {
       to: strR('收件人（captain 或成员名）'),
       content: strR('消息内容'),
-      taskId: str('相关任务 id（可选）'),
+      taskId: int('相关任务号（可选）'),
     },
     output: {
       schema: {
@@ -295,7 +306,7 @@ export function createMemberTools(
 
   const statusTool = defineTool({
     name: 'eteams_team_status',
-    description: '团队概览（只读）：阶段、成员、任务进度。',
+    description: '团队概览（只读）：成员、任务进度。',
     parameters: {},
     output: {
       schema: {

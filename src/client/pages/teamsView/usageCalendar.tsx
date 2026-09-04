@@ -2,15 +2,18 @@
  * 看板 · Token 消耗日历卡（docs/28）：每日聚合 + 全年格子 + 悬浮明细。
  * 符号自 eteamsView.tsx 原样搬出（docs/32 32.5.1 纯移动、零行为变更），
  * 供 boardTab 消费（依赖方向：boardTab → usageCalendar → shared）。
+ * 用户迭代 2026-09-04：置看板顶部；样式回归 docs/28 28.5.2 卡片规格
+ * （PANEL_CARD_CLASS 卡壳），日历与 meta 行居中显示；格子无装饰扁平化
+ * （renderBlock 去包内 hairline 描边，见 usageFlatBlock）。
  *
  * @module dsh-eteams/client/pages/teamsView/usageCalendar
  */
-import { useEffect, useState, type ReactNode } from 'react';
+import { cloneElement, useEffect, useState, type ReactElement, type ReactNode } from 'react';
 // docs/28 Token 消耗日历：react-activity-calendar（v3，devDep；React 18 peer
 // 兼容）+ 其 tooltip 样式（tsdown 虚拟 CSS 插件以字符串载入，见
 // usageCalendarCss.d.ts / tsdown.config.ts usageTooltipsCssInline）。
 import { ActivityCalendar } from 'react-activity-calendar';
-import type { Activity, Labels, ThemeInput } from 'react-activity-calendar';
+import type { Activity, BlockElement, Labels, ThemeInput } from 'react-activity-calendar';
 import usageTooltipsCss from 'react-activity-calendar/tooltips.css';
 import ChevronLeft from 'lucide-react/dist/esm/icons/chevron-left.mjs';
 import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right.mjs';
@@ -122,6 +125,23 @@ function usageTooltipText(day: UsageDay | undefined, activity: Activity): string
   return lines.join('\n');
 }
 
+/** 无装饰扁平格子（用户迭代 2026-09-04）：包 v3 给每个方块硬编码 hairline
+ * 描边（light `rgba(0,0,0,0.08)` / dark `rgba(255,255,255,0.04)`，视觉即格内
+ * 阴影/高光边），经 `renderBlock` + cloneElement 以 `stroke:'none'` 覆写——
+ * 数据格与图例色块都只留纯色方块（圆角 blockRadius=2 属几何规格保留，见
+ * docs/28.5.2 几何行）。 */
+function usageFlatBlock(block: BlockElement): ReactElement {
+  return cloneElement(block, { style: { ...block.props.style, stroke: 'none' } });
+}
+
+/** 图例色块扁平：renderColorLegend 拿到的是包着色块的 svg wrapper（描边在
+ * 内层 rect 的 style 上），拆开取内层 rect 交 usageFlatBlock 同款覆写。 */
+function usageFlatLegendBlock(block: BlockElement): ReactElement {
+  return cloneElement(block, {
+    children: usageFlatBlock(block.props.children as BlockElement),
+  });
+}
+
 /**
  * Token 消耗卡（docs/28.5.2）：全年 365/366 格日历、年份切换（未来年禁用）、
  * 悬浮明细、合计行；60s 低频轮询（面板可见且文档未隐藏才发请求）。取数
@@ -211,6 +231,9 @@ export function UsageCalendarCard({ teamId }: { teamId: string }): ReactNode {
           </Button>
         </div>
       </div>
+      {/* 日历居中（用户迭代 2026-09-04）：SVG 固定宽度，flex justify-center
+      在容器更窄时两侧等量溢出裁切，宽面板即正居中；flex 只包日历本体，
+      meta 行留居中层外整行居中。 */}
       <div className="mt-3 min-w-0">
         {error !== null && calendar === null ? (
           <div>
@@ -225,29 +248,33 @@ export function UsageCalendarCard({ teamId }: { teamId: string }): ReactNode {
             </Button>
           </div>
         ) : firstLoad || activities.length > 0 ? (
-          <ActivityCalendar
-            data={activities}
-            loading={firstLoad}
-            theme={USAGE_CALENDAR_THEME}
-            colorScheme={dark ? 'dark' : 'light'}
-            blockSize={11}
-            blockMargin={3}
-            blockRadius={2}
-            fontSize={12}
-            weekStart={1}
-            showWeekdayLabels={['sun', 'wed']}
-            showColorLegend
-            labels={USAGE_CALENDAR_LABELS}
-            tooltips={{
-              activity: {
-                text: (activity) => usageTooltipText(dayByDate.get(activity.date), activity),
-              },
-            }}
-          />
+          <div className="flex justify-center">
+            <ActivityCalendar
+              data={activities}
+              loading={firstLoad}
+              theme={USAGE_CALENDAR_THEME}
+              colorScheme={dark ? 'dark' : 'light'}
+              blockSize={11}
+              blockMargin={3}
+              blockRadius={2}
+              fontSize={12}
+              weekStart={1}
+              showWeekdayLabels={['sun', 'wed']}
+              showColorLegend
+              labels={USAGE_CALENDAR_LABELS}
+              renderBlock={usageFlatBlock}
+              renderColorLegend={usageFlatLegendBlock}
+              tooltips={{
+                activity: {
+                  text: (activity) => usageTooltipText(dayByDate.get(activity.date), activity),
+                },
+              }}
+            />
+          </div>
         ) : (
-          <div className={MUTED_CLASS}>暂无日历数据</div>
+          <div className={cn(MUTED_CLASS, 'text-center')}>暂无日历数据</div>
         )}
-        <div className={cn(MUTED_CLASS, 'mt-2')}>
+        <div className={cn(MUTED_CLASS, 'mt-2 text-center')}>
           {error !== null && calendar !== null
             ? `上次刷新失败：${error}`
             : hasData && totals !== undefined

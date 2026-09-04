@@ -1,7 +1,9 @@
 /**
  * Member lifecycle (docs/07.2, FR-14/FR-15): continuable spawning, persona
- * injection, model-route snapshots, per-child tool installation, and
- * interruption. This is the only module that starts subagents.
+ * injection, per-child tool installation, and interruption. This is the only
+ * module that starts subagents. docs/35 §5#12 之后成员是纯模板行（无状态无
+ * 会话）：起会话只读模板行，状态与 child_session_id 的回填由调用方（首派
+ * 路径，assignment.ts）随事务写回 task_members 实例行。
  *
  * @module dsh-eteams/runtime/members
  */
@@ -10,10 +12,11 @@ import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { SessionId } from '@deepseek-ai/dsh-session';
 import { foldSubagentDescriptor } from '@deepseek-ai/dsh-subagent';
 import type { ETeamsResolvedConfig } from '../config.js';
-import type { MemberRecord, TaskRecord, TeamState } from '../model/types.js';
-import { readTeamSync } from '../state/store.js';
+import type { MemberRecord, TaskMemberRecord, TaskRecord, TeamState } from '../model/types.js';
+import { insertMailInTx } from '../state/events.js';
+import { readTeamSync, type TeamTx } from '../state/store.js';
 import { ETeamsError, stateRootOf, type RuntimeContext, type RuntimeEnv } from './base.js';
-import { deliverAssignment, queueNotice } from './notifier.js';
+import { leaderRowOf, makeMail, type Wake, wakeMember } from './notifier.js';
 import { assignmentMail } from '../prompts/handoff.js';
 import { memberWelcome } from '../prompts/member.js';
 import { registerMemberSession } from './usage.js';
@@ -64,42 +67,53 @@ export const MEMBER_DENIED_TOOLS: readonly string[] = [
   'eteams_suspend_task',
   'eteams_resume_task',
   'eteams_cancel_task',
-  'eteams_archive_team',
   'eteams_delete_team',
   'eteams_dispatch_captain',
 ];
 
 /**
- * Spawn one staged member as a durable continuable child of the captain.
- * Atomic per member: throws before mutating team state if start fails.
+ * 同名班底模板行（team.members）：起会话的人设/模型路线都从这里读。
+ * docs/35 §5#12 成员=纯模板：状态、会话都不在模板行上。
+ */
+export function memberTemplateOf(team: TeamState, name: string): MemberRecord | undefined {
+  return team.members.find((m) => m.name === name);
+}
+
+/**
+ * Spawn one member child as a durable continuable child of the captain（首派
+ * 按链起人路径调用，docs/35 §5#3）。原子性：start 失败直接抛，调用方尚未
+ * 改任何状态；成功返回 childId，由调用方在事务内回填实例行。
+ * 模型路线（docs/35 §3#5）：模板行 model 有值 → override（provider 固定用
+ * config.memberProvider，路由只挑模型）；model 为空 = 跟随（不带
+ * agentOptions，子会话继承领队会话模型——领队默认模型功能随 docs/27 取消）。
  */
 export async function spawnMember(
   env: RuntimeEnv,
   team: TeamState,
-  member: MemberRecord,
+  row: TaskMemberRecord,
   captain: Agent,
 ): Promise<string> {
-  // 模型路线解析（用户迭代 2026-09：领队也选模型）：成员 override > 领队
-  // override（团队默认，成员「跟随领队」随之）> 会话默认（不带 agentOptions，
-  // 子会话继承领队会话模型）。领队自身会话模型不由插件切换。
-  const route =
-    member.modelRoute.source === 'override'
-      ? member.modelRoute
-      : team.leaderModelRoute?.source === 'override'
-        ? team.leaderModelRoute
-        : member.modelRoute;
+  const template = memberTemplateOf(team, row.name);
+  const persona = template?.persona;
+  // 人设手册全文（docs/36 建议 4）：personaMd 有烘全文时用它，结构字段不
+  // 再渲染进 persona；无手册（旧数据）退回 executionPrompt。
+  const personaText =
+    persona?.personaMd !== undefined && persona.personaMd.trim() !== ''
+      ? persona.personaMd
+      : (persona?.executionPrompt ?? `你是「${row.name}」，以团队成员身份为团队交付。`);
+  const route = template?.modelRoute;
   const start = await env.ctx.subagents.startContinuable({
     provider: env.config.memberProvider,
-    label: buildMemberLabel(team.id, member.name),
+    label: buildMemberLabel(String(team.id), row.name),
     request: {
-      prompt: [{ type: 'text', text: memberWelcome(team, member) }],
+      prompt: [{ type: 'text', text: memberWelcome(team, row.name, template) }],
       parent: captain,
-      persona: member.persona.executionPrompt,
+      persona: personaText,
       toolFilter: { deny: [...MEMBER_DENIED_TOOLS] },
-      ...(route.source === 'override'
+      ...(route !== undefined && route.model !== ''
         ? {
             agentOptions: {
-              provider: route.provider,
+              provider: env.config.memberProvider,
               model: route.model,
               ...(route.reasoningEffort ? { reasoningEffort: route.reasoningEffort } : {}),
             },
@@ -111,46 +125,18 @@ export async function spawnMember(
   return String(start.childId);
 }
 
-/**
- * Spawn every staged member atomically (docs/07.2): the first failure
- * interrupts the already-started children and rethrows, leaving all
- * members staged.
- */
-export async function spawnTeamMembers(
-  env: RuntimeEnv,
-  team: TeamState,
-  captain: Agent,
-): Promise<string[]> {
-  const staged = team.members.filter((m) => m.status === 'staged');
-  const started: string[] = [];
-  for (const member of staged) {
-    try {
-      const childId = await spawnMember(env, team, member, captain);
-      started.push(childId);
-      member.id = childId;
-      member.status = 'ready';
-    } catch (error) {
-      for (const childId of started) {
-        try {
-          env.ctx.subagents.interrupt(childId as SessionId, { kind: 'ancestor', agent: captain });
-        } catch {
-          // best-effort rollback; the cold child stays inert without a team
-        }
-      }
-      throw new ETeamsError(
-        `成员「${member.name}」启动失败：${String(error)}`,
-        '已回滚本次全部启动；请检查子代理提供方配置后重试批准',
-      );
-    }
-  }
-  return started;
-}
-
 /** Interrupt one live member's current turn (activation retained). */
-export function interruptMember(env: RuntimeEnv, member: MemberRecord, captain: Agent): void {
-  if (!member.id) return;
+export function interruptMember(
+  env: RuntimeEnv,
+  row: TaskMemberRecord,
+  captain: Agent,
+): void {
+  if (row.childSessionId === '') return;
   try {
-    env.ctx.subagents.interrupt(member.id as SessionId, { kind: 'ancestor', agent: captain });
+    env.ctx.subagents.interrupt(row.childSessionId as unknown as SessionId, {
+      kind: 'ancestor',
+      agent: captain,
+    });
   } catch {
     // absent target is an accepted no-op
   }
@@ -166,9 +152,9 @@ export function interruptMember(env: RuntimeEnv, member: MemberRecord, captain: 
 export async function drainMembers(
   env: RuntimeEnv,
   captain: Agent,
-  memberIds: (string | undefined)[],
+  childIds: (string | undefined)[],
 ): Promise<void> {
-  const ids = memberIds.filter((id): id is string => typeof id === 'string' && id !== '');
+  const ids = childIds.filter((id): id is string => typeof id === 'string' && id !== '');
   if (ids.length === 0) return;
   const subagents = env.ctx.subagents;
   if (subagents?.drainContinuableChildren === undefined) return;
@@ -180,31 +166,33 @@ export async function drainMembers(
 }
 
 /**
- * Deliver the first assignment mail right after spawn (used by
- * assignTask against a freshly ready member). Kept here so assignment.ts
- * stays free of spawn concerns.
+ * 派发邮件（事务内落库 + 返回提交后的唤醒动作）：首派与链推进共用；邮件
+ * 随团队快照同一事务落库（docs/35 §3#14），唤醒在 COMMIT 之后。
  */
-export async function sendAssignment(
+export function sendAssignmentInTx(
   env: RuntimeEnv,
+  tx: TeamTx,
   team: TeamState,
-  member: MemberRecord,
+  row: TaskMemberRecord,
   task: TaskRecord,
-  attemptId: string,
+  attemptId: number,
   opts: { stageBrief?: string; handoff?: string } = {},
-): Promise<void> {
+): Wake {
   const isStation = task.chain.length > 0;
   const content = assignmentMail(task, { teamName: team.name, attemptId, isStation, ...opts });
-  await deliverAssignment(env, team, member, content, { taskId: task.id, attemptId });
-}
-
-/** Queue a notice for a not-yet-spawned member (staged roster additions). */
-export async function queueStagedNotice(
-  env: RuntimeEnv,
-  team: TeamState,
-  member: MemberRecord,
-  content: string,
-): Promise<void> {
-  await queueNotice(env, team, member.name, content);
+  insertMailInTx(
+    tx,
+    team.id,
+    row.name,
+    makeMail(
+      { kind: 'captain', name: '领队' },
+      { kind: 'member', name: row.name },
+      'assignment',
+      content,
+      { taskId: task.id, attemptId },
+    ),
+  );
+  return () => wakeMember(env, team, row, content);
 }
 
 /**
@@ -238,18 +226,23 @@ export function installMemberRuntime(
     const workspace = child.session?.header?.cwd ?? process.cwd();
     const stateRoot = stateRootOf({ ctx: hostCtx as unknown as RuntimeContext, config, workspace });
     const team = readTeamSync(stateRoot, identity.teamId);
-    if (!team || team.captainSessionId !== String(child.session?.header?.parentSession ?? ''))
+    if (!team) return () => undefined;
+    // 领队锚点校验（docs/36 建议 3）：子代理的父会话必须是该队领队行登记
+    // 的会话——team 表不再存 captainSessionId。
+    const leader = leaderRowOf(team);
+    if (!leader || leader.mainSessionId !== String(child.session?.header?.parentSession ?? '')) {
       return () => undefined;
-    const member = team.members.find(
-      (m) => m.name === identity.memberName && m.status !== 'removed',
+    }
+    const row = team.taskMembers.find(
+      (r) => r.name === identity.memberName && r.status !== 'removed',
     );
-    if (!member) return () => undefined;
+    if (!row) return () => undefined;
     const env: RuntimeEnv = { ctx: hostCtx as unknown as RuntimeContext, config, workspace };
     registerMemberTools(childCtx, env);
     // docs/28 归属注册表：成员子代理会话 → 团队/成员（usage 计量按此解析
     // roleKind='member'；每次 Activation 重跑，冷恢复的会话身份随之重建）。
     registerMemberSession(String(child.id), {
-      teamId: identity.teamId,
+      teamId: String(team.id),
       memberName: identity.memberName,
     });
     return () => undefined;

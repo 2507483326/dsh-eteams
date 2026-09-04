@@ -269,8 +269,9 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
     };
   }, [dispatch]);
 
-  const myTeams = state.teams.filter((t) => t.captainSessionId === props.sessionId);
-  const pool = myTeams.length > 0 ? myTeams : state.teams;
+  // docs/35 §5：goal 砍掉后快照不再有 captainSessionId——面板不再按会话
+  // 过滤，直接展示全部团队（跨会话聚合口径与看板一致）。
+  const pool = state.teams;
   // Derived (no effect): stale/null selection falls back to the first team.
   const team = pool.find((t) => t.teamId === activeId) ?? pool[0];
   const now = state.serverTime || state.fetchedAt;

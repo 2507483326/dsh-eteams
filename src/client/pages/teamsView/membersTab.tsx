@@ -293,7 +293,6 @@ export function MembersTab({
             ...(detail.executionPrompt !== undefined
               ? { executionPrompt: detail.executionPrompt }
               : {}),
-            ...(detail.provider !== undefined ? { provider: detail.provider } : {}),
             ...(detail.model !== undefined ? { model: detail.model } : {}),
             ...(detail.reasoningEffort !== undefined
               ? { reasoningEffort: detail.reasoningEffort }

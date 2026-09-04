@@ -17,10 +17,11 @@ import {
   type TeamSnapshot,
 } from '../../lib/monitor';
 import type { ModelCatalogState } from '../../lib/modelCatalog';
+import { catalogRowByModel } from '../../lib/modelCatalog';
 import { cn } from '../../lib/cn';
 import { Avatar } from '../../features/avatar/avatar';
 import { MdEditor } from '../../features/mdEditor/mdEditor';
-import { STATUS_LABELS, memberTone } from '../../features/tasks/taskDisplayStatus';
+import { MEMBER_STATUS_LABELS, memberTone } from '../../features/tasks/taskDisplayStatus';
 import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
 import { ModelRoutePicker } from './modelRoutePicker';
@@ -42,38 +43,19 @@ const MEMBER_CARD_CLASS = `flex flex-col gap-2 rounded-xl border border-solid bg
 const ROLE_CHIP_CLASS =
   'inline-flex w-fit items-center rounded-full bg-business-tint px-2.5 py-0.5 text-xs font-medium text-[color:var(--eteams-brand-ink)]';
 
-/** 领队静态选项（目录不可用时的回退，用户迭代 2026-09）：inherit=会话默认。
- * 领队即面板会话，自身模型不由插件切换——此路线是团队默认，成员「会话默认」
- * spawn 时解析到它。目录就绪时由 RouteOptionItems 以会话模型目录替代。 */
-const LEADER_MODEL_OPTIONS: { value: string; label: string }[] = [
-  { value: 'inherit', label: '会话默认' },
-  { value: 'deepseek-chat', label: 'DeepSeek Chat' },
-  { value: 'deepseek-reasoner', label: 'DeepSeek Reasoner' },
-];
-
 /** The 领队（项目牧羊人）leader card. S13 Tailwind 化。
  * 用户迭代 2026-09：领队可被移出团队（可经添加成员弹窗加回），onRemove 挂移除钮；
  * 领队也算团队一员——工号 + 右侧同款模型二级菜单（= 团队默认路线）。
- * 用户迭代 2026-09 四：查看手册按钮去掉，点卡片进领队详情（手册只读）。 */
+ * 用户迭代 2026-09 四：查看手册按钮去掉，点卡片进领队详情（手册只读）。
+ * docs/35 §5#5（docs/36 建议 5）：领队模型路线下线——领队即面板会话，模型
+ * 随会话；本卡只保留移除与详情入口。 */
 export function LeaderCard({
   captain,
-  catalog,
   onRemove,
-  onModelChange,
-  onEffortChange,
-  modelSaving,
   onOpenDetail,
 }: {
   captain: CaptainView;
-  /** 会话模型目录状态（数据 + loading/failed/reload，对话选择器同款）。 */
-  catalog: ModelCatalogState;
   onRemove?: () => void;
-  /** 领队模型选择（右侧二级菜单）：'inherit' = 会话默认。 */
-  onModelChange?: (model: string) => void;
-  /** 领队推理等级（菜单内「推理等级」子面板；null = 提供方默认）。 */
-  onEffortChange?: (effort: string | null) => void;
-  /** 领队模型路由保存中（菜单短暂禁用防连点）。 */
-  modelSaving?: boolean;
   /** 点卡片进领队详情（手册只读）。 */
   onOpenDetail?: () => void;
 }): ReactNode {
@@ -100,22 +82,6 @@ export function LeaderCard({
             </div>
           </div>
         </div>
-        {onModelChange !== undefined && (
-          <ModelRoutePicker
-            catalogState={catalog}
-            stored={{
-              provider: captain.provider,
-              model: captain.model,
-              reasoningEffort: captain.reasoningEffort,
-            }}
-            inheritLabel="会话默认"
-            fallback={LEADER_MODEL_OPTIONS}
-            disabled={modelSaving}
-            onModelPick={onModelChange}
-            onEffortPick={(effort) => onEffortChange !== undefined && onEffortChange(effort)}
-            title="选择领队模型（= 团队默认；成员「会话默认」启动时按此下发；目录与对话模型选择一致）"
-          />
-        )}
         {onRemove !== undefined && (
           <Button
             type="button"
@@ -132,19 +98,19 @@ export function LeaderCard({
   );
 }
 
-/** 成员模型选项（用户迭代 2026-09 七）：inherit=会话默认（与领队同款，默认
- * 路线）；切换只改 member.modelRoute——staged 成员启动即生效，运行中的成员
- * 下次启动生效。 */
-/** 成员静态选项（目录不可用时的回退）：inherit=会话默认（与领队同款）；切换
+/** 成员模型选项（用户迭代 2026-09 七）：inherit=跟随领队（docs/35 §3#5：
+ * model 空串=继承领队会话模型）；切换只改 member.modelRoute——staged 成员
+ * 启动即生效，运行中的成员下次启动生效。 */
+/** 成员静态选项（目录不可用时的回退）：inherit=跟随领队；切换
  * 只改 member.modelRoute——staged 成员启动即生效，运行中的成员下次启动生效。 */
 const MODEL_OPTIONS: { value: string; label: string }[] = [
-  { value: 'inherit', label: '会话默认' },
+  { value: 'inherit', label: '跟随领队' },
   { value: 'deepseek-chat', label: 'DeepSeek Chat' },
   { value: 'deepseek-reasoner', label: 'DeepSeek Reasoner' },
 ];
 
 /** 成员卡（用户迭代 2026-09 七）：与领队卡同款单行、竖排一行一个——头像 +
- * 名字（+ 子代理活动点）+ 工号 · 角色，右侧模型选择（默认「会话默认」，与
+ * 名字（+ 子代理活动点）+ 工号 · 角色，右侧模型选择（默认「跟随领队」，与
  * 领队一致）+ 移出团队。状态 pill（staged 等）与「汇报记录」按钮已去掉
  * （用户迭代 2026-09 七）；模型目录与对话一致——二级菜单内多档 effort 模型
  * 带「推理等级」子面板。用户迭代 2026-09 四：点卡片（头像/名字区）进成员
@@ -165,7 +131,7 @@ export function MemberCard({
   /** Subagent activity (docs/20.4 P4): 'running' | 'inactive' | undefined. */
   activity?: string;
   onRemove?: (name: string) => void;
-  /** 模型选择（右侧二级菜单）：行 id=`provider/model`，'inherit' = 会话默认。 */
+  /** 模型选择（右侧二级菜单）：行 id=`provider/model`，'inherit' = 跟随领队。 */
   onModelChange?: (memberName: string, model: string) => void;
   /** 推理等级改写（菜单内「推理等级」子面板；null = 提供方默认）。 */
   onEffortChange?: (memberName: string, effort: string | null) => void;
@@ -177,6 +143,11 @@ export function MemberCard({
   const openDetail = (): void => {
     if (onOpenDetail !== undefined) onOpenDetail(m.name);
   };
+  // 快照路线只剩 {model, reasoningEffort}（docs/35 §3#5）——菜单内部仍按
+  // `provider/model` 行值渲染选中态，provider 由 model 经目录反查；跟随中
+  // （model 空串）回 inherit 哨兵；目录查不到的历史路线按裸模型 id 兜底。
+  const routeRow = catalogRowByModel(catalog.catalog, m.model);
+  const follow = m.model === '';
   return (
     <div className={MEMBER_CARD_CLASS}>
       <div className="flex items-center gap-2.5">
@@ -215,19 +186,23 @@ export function MemberCard({
         {onModelChange !== undefined && (
           <ModelRoutePicker
             catalogState={catalog}
-            stored={{
-              provider: m.provider,
-              model: m.model,
-              reasoningEffort: m.reasoningEffort,
-            }}
-            inheritLabel="会话默认"
+            stored={
+              follow
+                ? { provider: 'inherit', model: 'inherit', reasoningEffort: null }
+                : {
+                    provider: routeRow?.group.id ?? 'legacy',
+                    model: m.model,
+                    reasoningEffort: m.reasoningEffort,
+                  }
+            }
+            inheritLabel="跟随领队"
             fallback={MODEL_OPTIONS}
             disabled={modelSaving}
             onModelPick={(v) => onModelChange !== undefined && onModelChange(m.name, v)}
             onEffortPick={(effort) =>
               onEffortChange !== undefined && onEffortChange(m.name, effort)
             }
-            title="选择成员运行的模型（「会话默认」= 团队默认路线；运行中的成员下次启动时生效）"
+            title="选择成员运行的模型（「跟随领队」= 继承领队会话模型；运行中的成员下次启动时生效）"
           />
         )}
         {onRemove !== undefined && (
@@ -386,7 +361,9 @@ export function MemberDetailView({
         <span className="text-lg font-semibold tracking-tight text-foreground">{view.name}</span>
         {target.kind === 'captain' && <span className={ROLE_CHIP_CLASS}>领队</span>}
         {view.status !== null && (
-          <Pill tone={memberTone(view.status)}>{STATUS_LABELS[view.status] ?? view.status}</Pill>
+          <Pill tone={memberTone(view.status)}>
+            {MEMBER_STATUS_LABELS[view.status] ?? view.status}
+          </Pill>
         )}
       </div>
 

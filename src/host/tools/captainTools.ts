@@ -20,7 +20,6 @@ import {
   removeMember,
   updateMember,
   teamView,
-  archiveTeam,
   deleteTeam,
   sendMessage,
 } from '../runtime/teamOps.js';
@@ -66,6 +65,18 @@ const strArr = (description: string, required = false) => ({
   ...(required ? { required: true as const } : {}),
 });
 const bool = (description: string) => ({ type: 'boolean' as const, description });
+/** 任务号 / 尝试号全库自增（docs/27）——参数与输出一律整数（docs/35 §5#11）。 */
+const int = (description: string) => ({ type: 'integer' as const, description });
+const intR = (description: string) => ({
+  type: 'integer' as const,
+  description,
+  required: true as const,
+});
+const intArr = (description: string) => ({
+  type: 'array' as const,
+  items: { type: 'integer' as const },
+  description,
+});
 
 /**
  * 意图访谈发布去重（模块级）：同一份会话更新只 steer 一次——子代理的
@@ -120,12 +131,14 @@ function taskSummary(task: TaskRecord) {
     subject: task.subject,
     status: task.status,
     assignee: task.assignee ?? null,
-    attemptId: task.currentAttemptId ?? null,
+    // 产出不落列（docs/35 §5#10）：当前尝试 = 最新一条 attempt 行。
+    attemptId: task.attempts.at(-1)?.id ?? null,
     retryCount: task.retryCount,
     chain:
       station !== undefined
         ? {
-            done: station.done,
+            // 末站完成即 completed（chainCursor 不再推进）——完成态按满进度口径显示。
+            done: task.status === 'completed' ? station.total : station.done,
             total: station.total,
             next: task.chain[task.chainCursor + 1]?.member ?? null,
           }
@@ -150,53 +163,36 @@ export function createCaptainTools(
   const createTeamTool = defineTool({
     name: 'eteams_create_team',
     description:
-      '创建一个多代理团队并成为其领队。默认 staged：随后用 eteams_add_member / eteams_create_task 完成计划并等待用户批准。approval="automatic" 时立即批准并启动（跳过用户审阅）。拆解前先完成问询（FR-37），questionnaire 记录你的提问。',
+      '创建一个多代理团队并成为其领队（建队即生效，无审批环节）。随后用 eteams_add_member 拉人、eteams_submit_task / eteams_create_task 拆任务推进。拆解前先完成问询（FR-37），questionnaire 记录你的提问。',
     parameters: {
       name: strR('团队名（将用作目录名）'),
-      goal: strR('团队目标（一句话，成员可见）'),
-      approval: {
-        type: 'string' as const,
-        enum: ['required', 'automatic'],
-        description: 'required=等待用户批准（默认）；automatic=立即启动',
-      },
       questionnaire: strArr('问询记录：拆解前向用户确认的问题（FR-37 五区）'),
-      maxRetries: { type: 'integer' as const, description: '同成员自动重试上限（默认取插件配置）' },
     },
     output: {
       schema: {
         type: 'object' as const,
         properties: {
           ok: bool('是否成功'),
-          teamId: str('团队 id'),
-          phase: str('团队阶段'),
-          planReviewState: str('计划审阅状态'),
+          teamId: int('团队 id（全库自增）'),
         },
         additionalProperties: false as const,
       },
-      render: (_a, v) => text(`团队「${v.teamId}」已创建（${v.phase}）`),
+      render: (_a, v) => text(`团队 #${v.teamId} 已创建`),
     },
     execute: async (args, exec) => {
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
       const team = await createTeam(env, exec.agent!, {
         name: args.name,
-        goal: args.goal,
-        approval: args.approval,
         questionnaire: args.questionnaire,
-        maxRetries: args.maxRetries,
       });
-      return {
-        ok: true as const,
-        teamId: team.id,
-        phase: team.phase,
-        planReviewState: team.planReviewState ?? '',
-      };
+      return { ok: true as const, teamId: team.id };
     },
   });
 
   const addMemberTool = defineTool({
     name: 'eteams_add_member',
     description:
-      '添加团队成员（staged 计划或运行中团队均可）。不指定 provider/model 时继承当前会话路线（route source=inherited）。',
+      '添加团队成员（新团队或运行中团队均可）。不指定 model 时执行会话跟随领队路线（派发时解析）；同名成员已有工号则沿用。',
     parameters: {
       name: strR('成员名（任务链与指派都用它）'),
       role: strR('角色：researcher/engineer/reviewer/writer/…（决定默认人设）'),
@@ -206,10 +202,9 @@ export function createCaptainTools(
       skills: str('能力（覆盖角色模板默认人设）'),
       rules: strArr('工作纪律列表（覆盖角色模板默认人设）'),
       personaMd: str('完整角色手册（Markdown），或成员库已有同名定义则自动带入'),
-      provider: str('LLM provider（与 model 同给才生效，覆盖继承路线）'),
       model: str('LLM model'),
       reasoningEffort: str('推理力度（可选）'),
-      teamId: str('团队 id（默认当前领队团队）'),
+      teamId: int('团队 id（默认当前领队团队）'),
     },
     output: {
       schema: {
@@ -217,12 +212,12 @@ export function createCaptainTools(
         properties: {
           ok: bool('是否成功'),
           member: str('成员名'),
-          status: str('staged|ready'),
-          teamId: str('团队 id'),
+          teamId: int('团队 id'),
+          employeeId: int('工号（补零显示为 ET-xxxx）'),
         },
         additionalProperties: false as const,
       },
-      render: (_a, v) => text(`成员 ${v.member}（${v.status}）`),
+      render: (_a, v) => text(`成员 ${v.member} 已加入团队 #${v.teamId}`),
     },
     execute: async (args, exec) => {
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
@@ -236,11 +231,15 @@ export function createCaptainTools(
         skills: args.skills,
         rules: args.rules,
         personaMd: args.personaMd,
-        provider: args.provider,
         model: args.model,
         reasoningEffort: args.reasoningEffort,
       });
-      return { ok: true as const, member: member.name, status: member.status, teamId: team.id };
+      return {
+        ok: true as const,
+        member: member.name,
+        teamId: team.id,
+        employeeId: member.employeeId ?? 0,
+      };
     },
   });
 
@@ -257,7 +256,6 @@ export function createCaptainTools(
       rules: strArr('工作纪律列表（整体替换）'),
       executionPrompt: str('执行提示'),
       personaMd: str('完整角色手册（Markdown：使命/核心职责/关键规则/交付标准）'),
-      provider: str('LLM provider（与 model 同给才生效）'),
       model: str('LLM model'),
       reasoningEffort: str('推理力度（可选）'),
     },
@@ -284,7 +282,6 @@ export function createCaptainTools(
         ...(args.rules !== undefined ? { rules: args.rules } : {}),
         ...(args.executionPrompt !== undefined ? { executionPrompt: args.executionPrompt } : {}),
         ...(args.personaMd !== undefined ? { personaMd: args.personaMd } : {}),
-        ...(args.provider !== undefined ? { provider: args.provider } : {}),
         ...(args.model !== undefined ? { model: args.model } : {}),
         ...(args.reasoningEffort !== undefined ? { reasoningEffort: args.reasoningEffort } : {}),
       });
@@ -704,7 +701,7 @@ export function createCaptainTools(
     name: 'eteams_remove_member',
     description:
       '移除成员：未接取指派直接撤下；进行中工作吊销 attempt、任务回到就绪池，并中断其当前回合。',
-    parameters: { name: strR('成员名'), teamId: str('团队 id（默认当前团队）') },
+    parameters: { name: strR('成员名'), teamId: int('团队 id（默认当前团队）') },
     output: {
       schema: {
         type: 'object' as const,
@@ -733,7 +730,7 @@ export function createCaptainTools(
       rules: strArr('工作纪律列表（整体替换）'),
       executionPrompt: str('执行提示'),
       personaMd: str('完整角色手册（Markdown：使命/核心职责/关键规则/交付标准）'),
-      teamId: str('团队 id（默认当前团队）'),
+      teamId: int('团队 id（默认当前团队）'),
     },
     output: {
       schema: {
@@ -753,26 +750,26 @@ export function createCaptainTools(
   const createTaskTool = defineTool({
     name: 'eteams_create_task',
     description:
-      '创建任务：一句主题 + 合同（description/acceptance/inScope/outOfScope/deliverables/idempotencyNote）+ 显式 dependencies + 可选执行链 chain。staged 团队生成草稿，批准后自动就绪；running 团队直接就绪。对话任务拆解（docs/26）：传 parentTaskId 把本任务挂为对应主任务（任务单）下的小任务——chain 站点即成员槽，成员按序接力；小任务文件夹落在主任务文件夹 sub/ 下。',
+      '创建任务：一句主题 + 合同（description/acceptance/inScope/outOfScope/deliverables/idempotencyNote）+ 显式 dependencies + 可选执行链 chain。对话任务拆解（docs/26）：传 parentTaskId 把本任务挂为对应主任务（任务单）下的小任务——chain 站点即成员槽，成员按序接力；小任务文件夹落在主任务文件夹 sub/ 下。',
     parameters: {
       subject: strR('任务主题（一句话，作为文件夹 slug）'),
-      parentTaskId: str('父主任务 id（对话任务拆解：挂到对应任务单下）'),
+      parentTaskId: int('父主任务号（对话任务拆解：挂到对应任务单下）'),
       description: str('任务说明'),
       acceptance: strArr('验收标准（逐条可核对）'),
       inScope: strArr('允许改动的范围'),
       outOfScope: strArr('明确非目标'),
       deliverables: strArr('交付物'),
       idempotencyNote: str('幂等说明（重跑安全的前提）'),
-      dependencies: strArr('依赖任务 id 列表'),
+      dependencies: intArr('依赖任务号列表'),
       chain: chainParam(),
     },
     output: {
       schema: {
         type: 'object' as const,
-        properties: { ok: bool('是否成功'), taskId: str('任务 id'), status: str('任务状态') },
+        properties: { ok: bool('是否成功'), taskId: int('任务号'), status: str('任务状态') },
         additionalProperties: false as const,
       },
-      render: (_a, v) => text(`任务 ${v.taskId}（${v.status}）`),
+      render: (_a, v) => text(`任务 #${v.taskId}（${v.status}）`),
     },
     execute: async (args, exec) => {
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
@@ -807,13 +804,13 @@ export function createCaptainTools(
         type: 'object' as const,
         properties: {
           ok: bool('是否成功'),
-          taskId: str('主任务 id'),
+          taskId: int('主任务号'),
           status: str('任务状态'),
           folder: str('专属任务文件夹（相对工作区）'),
         },
         additionalProperties: false as const,
       },
-      render: (_a, v) => text(`任务 ${v.taskId} 已提交（任务单文件夹 ${v.folder}）`),
+      render: (_a, v) => text(`任务 #${v.taskId} 已提交（任务单文件夹 ${v.folder}）`),
     },
     execute: async (args, exec) => {
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
@@ -845,7 +842,7 @@ export function createCaptainTools(
     description:
       '更新未领取任务（draft/ready 可改）的合同/依赖/执行链；对话任务工作流里用它把问询结论写回主任务（任务单）description。已入执行（指派后）的任务合同冻结。',
     parameters: {
-      taskId: strR('任务 id'),
+      taskId: intR('任务号'),
       subject: str('新主题'),
       description: str('任务说明'),
       acceptance: strArr('验收标准'),
@@ -853,16 +850,16 @@ export function createCaptainTools(
       outOfScope: strArr('非目标'),
       deliverables: strArr('交付物'),
       idempotencyNote: str('幂等说明'),
-      dependencies: strArr('依赖任务 id（整体替换）'),
+      dependencies: intArr('依赖任务号（整体替换）'),
       chain: chainParam(),
     },
     output: {
       schema: {
         type: 'object' as const,
-        properties: { ok: bool('是否成功'), taskId: str('任务 id') },
+        properties: { ok: bool('是否成功'), taskId: int('任务号') },
         additionalProperties: false as const,
       },
-      render: (_a, v) => text(`任务 ${v.taskId} 已更新`),
+      render: (_a, v) => text(`任务 #${v.taskId} 已更新`),
     },
     execute: async (args, exec) => {
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
@@ -885,7 +882,7 @@ export function createCaptainTools(
     name: 'eteams_delete_task',
     description:
       '删除未领取任务（draft/ready 可删；主任务级联删除其全部未领取小任务并清任务文件夹）。被依赖或已入执行的任务不可删。',
-    parameters: { taskId: strR('任务 id') },
+    parameters: { taskId: intR('任务号') },
     output: {
       schema: {
         type: 'object' as const,
@@ -908,7 +905,7 @@ export function createCaptainTools(
     description:
       '把 ready 任务指派给成员并投递指派信。链任务默认指派执行链下一站；改派其他成员必须给 deviationNote（D11）。handoff 是给受派成员的上一站交接说明。',
     parameters: {
-      taskId: strR('任务 id'),
+      taskId: intR('任务号'),
       member: strR('受派成员名'),
       deviationNote: str('偏离执行链的原因（改派非下一站成员时必填）'),
       handoff: str('交接说明（可选）'),
@@ -918,13 +915,13 @@ export function createCaptainTools(
         type: 'object' as const,
         properties: {
           ok: bool('是否成功'),
-          taskId: str('任务 id'),
+          taskId: int('任务号'),
           member: str('成员'),
-          attemptId: str('attempt id'),
+          attemptId: int('attempt id'),
         },
         additionalProperties: false as const,
       },
-      render: (_a, v) => text(`任务 ${v.taskId} → ${v.member}（${v.attemptId}）`),
+      render: (_a, v) => text(`任务 #${v.taskId} → ${v.member}（attempt ${v.attemptId}）`),
     },
     execute: async (args, exec) => {
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
@@ -943,19 +940,19 @@ export function createCaptainTools(
     name: 'eteams_advance_task',
     description:
       '推进链任务到下一站（完成即续派的第一动作）。无链任务会报错并提示用 eteams_assign_task。',
-    parameters: { taskId: strR('任务 id'), handoff: str('交接说明（可选）') },
+    parameters: { taskId: intR('任务号'), handoff: str('交接说明（可选）') },
     output: {
       schema: {
         type: 'object' as const,
         properties: {
           ok: bool('是否成功'),
-          taskId: str('任务 id'),
+          taskId: int('任务号'),
           member: str('下一站成员'),
-          attemptId: str('attempt id'),
+          attemptId: int('attempt id'),
         },
         additionalProperties: false as const,
       },
-      render: (_a, v) => text(`任务 ${v.taskId} → 下一站 ${v.member}（${v.attemptId}）`),
+      render: (_a, v) => text(`任务 #${v.taskId} → 下一站 ${v.member}（attempt ${v.attemptId}）`),
     },
     execute: async (args, exec) => {
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
@@ -974,9 +971,9 @@ export function createCaptainTools(
   const reassignTaskTool = defineTool({
     name: 'eteams_reassign_task',
     description:
-      '改派进行中/待决策任务：吊销当前 attempt（旧 token 立即失效），任务转新成员。链任务偏离需 deviationNote。也用于处置 awaiting_decision。',
+      '改派进行中/待决策（wait_decision）任务：吊销当前 attempt（旧 token 立即失效），任务转新成员。链任务偏离需 deviationNote。也用于处置待决策任务。',
     parameters: {
-      taskId: strR('任务 id'),
+      taskId: intR('任务号'),
       member: str('新成员（缺省=原成员重派）'),
       deviationNote: str('偏离原因（偏离链时必填）'),
     },
@@ -985,13 +982,13 @@ export function createCaptainTools(
         type: 'object' as const,
         properties: {
           ok: bool('是否成功'),
-          taskId: str('任务 id'),
+          taskId: int('任务号'),
           member: str('新成员'),
-          attemptId: str('attempt id'),
+          attemptId: int('attempt id'),
         },
         additionalProperties: false as const,
       },
-      render: (_a, v) => text(`任务 ${v.taskId} 改派 → ${v.member}（${v.attemptId}）`),
+      render: (_a, v) => text(`任务 #${v.taskId} 改派 → ${v.member}（attempt ${v.attemptId}）`),
     },
     execute: async (args, exec) => {
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
@@ -1008,15 +1005,16 @@ export function createCaptainTools(
 
   const suspendTaskTool = defineTool({
     name: 'eteams_suspend_task',
-    description: '挂起任务：吊销 attempt 并通知成员停止；ready 任务转入依赖阻塞态。',
-    parameters: { taskId: strR('任务 id'), note: str('挂起原因') },
+    description:
+      '挂起任务：进行中任务吊销 attempt 并通知成员停止（转 paused）；就绪任务转依赖阻塞（wait + blockedFrom，恢复时还原）。',
+    parameters: { taskId: intR('任务号'), note: str('挂起原因') },
     output: {
       schema: {
         type: 'object' as const,
-        properties: { ok: bool('是否成功'), taskId: str('任务 id') },
+        properties: { ok: bool('是否成功'), taskId: int('任务号') },
         additionalProperties: false as const,
       },
-      render: (_a, v) => text(`任务 ${v.taskId} 已挂起`),
+      render: (_a, v) => text(`任务 #${v.taskId} 已挂起`),
     },
     execute: async (args, exec) => {
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
@@ -1034,19 +1032,21 @@ export function createCaptainTools(
 
   const resumeTaskTool = defineTool({
     name: 'eteams_resume_task',
-    description: '恢复挂起任务：向原成员发新 attempt（重新接取）。',
-    parameters: { taskId: strR('任务 id') },
+    description:
+      '恢复挂起任务：paused 任务给原成员开新一轮尝试（新 attempt）；依赖阻塞（wait + blockedFrom）任务还原阻塞前状态（无新 attempt）。',
+    parameters: { taskId: intR('任务号') },
     output: {
       schema: {
         type: 'object' as const,
         properties: {
           ok: bool('是否成功'),
-          taskId: str('任务 id'),
-          attemptId: str('attempt id（ready 恢复时为空）'),
+          taskId: int('任务号'),
+          attemptId: int('attempt id（阻塞还原时无新尝试，缺省）'),
         },
         additionalProperties: false as const,
       },
-      render: (_a, v) => text(`任务 ${v.taskId} 已恢复（${v.attemptId}）`),
+      render: (_a, v) =>
+        text(`任务 #${v.taskId} 已恢复${v.attemptId !== undefined ? `（attempt ${v.attemptId}）` : ''}`),
     },
     execute: async (args, exec) => {
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
@@ -1057,21 +1057,25 @@ export function createCaptainTools(
         { teamId: caller.team.id, actor: caller.actor },
         args.taskId,
       );
-      return { ok: true as const, taskId: task.id, attemptId: attempt?.id ?? '' };
+      return {
+        ok: true as const,
+        taskId: task.id,
+        ...(attempt !== undefined ? { attemptId: attempt.id } : {}),
+      };
     },
   });
 
   const cancelTaskTool = defineTool({
     name: 'eteams_cancel_task',
     description: '取消任务（终态）：吊销 attempt、通知成员、解除打开的决策。',
-    parameters: { taskId: strR('任务 id'), reason: str('取消原因') },
+    parameters: { taskId: intR('任务号'), reason: str('取消原因') },
     output: {
       schema: {
         type: 'object' as const,
-        properties: { ok: bool('是否成功'), taskId: str('任务 id') },
+        properties: { ok: bool('是否成功'), taskId: int('任务号') },
         additionalProperties: false as const,
       },
-      render: (_a, v) => text(`任务 ${v.taskId} 已取消`),
+      render: (_a, v) => text(`任务 #${v.taskId} 已取消`),
     },
     execute: async (args, exec) => {
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
@@ -1093,7 +1097,7 @@ export function createCaptainTools(
     parameters: {
       to: strR('收件成员名'),
       content: strR('消息内容'),
-      taskId: str('相关任务 id（可选）'),
+      taskId: int('相关任务号（可选）'),
     },
     output: {
       schema: {
@@ -1117,7 +1121,7 @@ export function createCaptainTools(
   const teamStatusTool = defineTool({
     name: 'eteams_team_status',
     description:
-      '查看团队概览：阶段、成员与状态、任务与执行链进度、待决策、领队邮箱近况、构建会话（角色构建师派发前用它判断是否已有构建进行中）。',
+      '查看团队概览：成员与状态、任务与执行链进度、待决策、领队邮箱近况、构建会话（角色构建师派发前用它判断是否已有构建进行中）。',
     parameters: {},
     output: {
       schema: {
@@ -1147,7 +1151,7 @@ export function createCaptainTools(
   const taskBoardTool = defineTool({
     name: 'eteams_task_board',
     description: '任务看板：全部任务的合同摘要与执行记录；status 过滤可选。',
-    parameters: { status: str('按状态过滤（如 ready/assigned/in_progress/completed）') },
+    parameters: { status: str('按状态过滤（如 ready/wait/start/paused/wait_decision/completed）') },
     output: {
       schema: {
         type: 'object' as const,
@@ -1209,34 +1213,15 @@ export function createCaptainTools(
       const teams = await listTeams(stateRootOf(env));
       return {
         ok: true as const,
-        teams: teams.map((t) => ({ id: t.id, name: t.name, phase: t.phase, goal: t.goal })),
+        teams: teams.map((t) => ({ id: t.id, name: t.name })),
       };
-    },
-  });
-
-  const archiveTeamTool = defineTool({
-    name: 'eteams_archive_team',
-    description: '归档 completed/halted 团队（状态目录移入 archive/）。',
-    parameters: { teamId: strR('团队 id') },
-    output: {
-      schema: {
-        type: 'object' as const,
-        properties: { ok: bool('是否成功'), archivedTo: str('归档目录') },
-        additionalProperties: false as const,
-      },
-      render: (_a, v) => text(`已归档至 ${v.archivedTo}`),
-    },
-    execute: async (args, exec) => {
-      const env = envForAgent(config, runtime, exec.agent, exec.signal);
-      const to = await archiveTeam(env, exec.agent!, args.teamId);
-      return { ok: true as const, archivedTo: to };
     },
   });
 
   const deleteTeamTool = defineTool({
     name: 'eteams_delete_team',
-    description: '删除 staged/completed 团队的全部状态（不可恢复）。',
-    parameters: { teamId: strR('团队 id') },
+    description: '删除团队的全部状态（不可恢复）。仍有活跃任务（wait/start/paused/wait_decision/wait_user）时会被拒绝。',
+    parameters: { teamId: intR('团队 id') },
     output: {
       schema: {
         type: 'object' as const,
@@ -1315,7 +1300,6 @@ export function createCaptainTools(
     teamStatusTool,
     taskBoardTool,
     listTeamsTool,
-    archiveTeamTool,
     deleteTeamTool,
     mailboxTool,
   ];
