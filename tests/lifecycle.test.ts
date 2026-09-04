@@ -15,7 +15,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import { resolveConfig, type ETeamsResolvedConfig } from '../src/host/config';
 import { createCaptainTools } from '../src/host/tools/captainTools';
 import { createMemberTools } from '../src/host/tools/memberTools';
-import { setMemberModel } from '../src/host/runtime/teamOps';
+import { setLeaderModel, setMemberModel } from '../src/host/runtime/teamOps';
 import { joinPath, type RuntimeEnv } from '../src/host/runtime/base';
 import { readTeamSync } from '../src/host/state/store';
 import { readEventsSync } from '../src/host/state/events';
@@ -261,9 +261,9 @@ describe('lifecycle (offline full flow)', () => {
     expect(memberTools.some((t) => t.name === 'eteams_assign_task')).toBe(false);
 
     // 6. 依赖未完成 → 拒绝指派依赖任务（校验在起会话之前，无副作用）
-    await expect(
-      cap('eteams_assign_task', { taskId: doc.taskId, member: 'Bob' }),
-    ).rejects.toThrow(/依赖未完成/);
+    await expect(cap('eteams_assign_task', { taskId: doc.taskId, member: 'Bob' })).rejects.toThrow(
+      /依赖未完成/,
+    );
 
     // 7. 指派链任务首站 → Alice
     const assigned = await cap<{ ok: true; taskId: number; member: string; attemptId: number }>(
@@ -275,9 +275,7 @@ describe('lifecycle (offline full flow)', () => {
     // 指派信已投递（邮箱 + followup 唤醒），链任务首站信头含「执行链」
     const aliceChild = runtime.children.find((c) => c.label.endsWith(':Alice'))!;
     expect(
-      runtime.deliveries.some(
-        (d) => d.childId === aliceChild.childId && d.text.includes('执行链'),
-      ),
+      runtime.deliveries.some((d) => d.childId === aliceChild.childId && d.text.includes('执行链')),
     ).toBe(true);
 
     const aliceAgent = memberAgent(aliceChild.childId);
@@ -327,9 +325,9 @@ describe('lifecycle (offline full flow)', () => {
     expect(midBox.messages.at(-1)!.content).toContain('Bob');
 
     // 10. 偏离链：改派 Carol 必须 deviationNote（D11），留痕后放行
-    await expect(
-      cap('eteams_assign_task', { taskId: subId, member: 'Carol' }),
-    ).rejects.toThrow(/deviation_note|偏离/);
+    await expect(cap('eteams_assign_task', { taskId: subId, member: 'Carol' })).rejects.toThrow(
+      /deviation_note|偏离/,
+    );
     await cap<{ ok: true }>('eteams_assign_task', {
       taskId: subId,
       member: 'Carol',
@@ -386,11 +384,9 @@ describe('lifecycle (offline full flow)', () => {
     // （重试指派为 pending_accept，成员需重新 claim 才能再次上报）
     const docAgent = memberAgent(runtime.children.find((c) => c.label.endsWith(':Bob'))!.childId);
     const failOnce = async (expectRetried: boolean) => {
-      const claim = await mem<{ token: string; attemptId: number }>(
-        docAgent,
-        'eteams_claim_task',
-        { taskId: doc.taskId },
-      );
+      const claim = await mem<{ token: string; attemptId: number }>(docAgent, 'eteams_claim_task', {
+        taskId: doc.taskId,
+      });
       const failed = await mem<{
         ok: true;
         retried: boolean;
@@ -452,9 +448,9 @@ describe('lifecycle (offline full flow)', () => {
     expect(deviated?.payload?.deviation).toBe('Bob 临时不可用');
 
     // 14. 非法转换被拒绝：completed 任务不能再 assign
-    await expect(
-      cap('eteams_assign_task', { taskId: subId, member: 'Alice' }),
-    ).rejects.toThrow(/只能指派 ready|处于 completed/);
+    await expect(cap('eteams_assign_task', { taskId: subId, member: 'Alice' })).rejects.toThrow(
+      /只能指派 ready|处于 completed/,
+    );
 
     // 15. 邮箱可见
     const mailbox = await cap<{ ok: true; messages: unknown[] }>('eteams_mailbox', {});
@@ -480,22 +476,24 @@ describe('lifecycle (offline full flow)', () => {
 });
 
 describe('member spawn route resolution (per-member model, docs/35 §3#5)', () => {
-  it('spawns 跟随 members with no agentOptions; member overrides keep theirs', async () => {
+  it('spawns members without agentOptions when no session default service is mounted', async () => {
     const created = await cap<{ teamId: number }>('eteams_create_team', { name: '路线团队' });
     const teamId = created.teamId;
     await cap('eteams_add_member', { name: 'Follower', role: 'engineer', teamId });
     await cap('eteams_add_member', { name: 'Overrider', role: 'engineer', teamId });
 
-    // Overrider pins its own model; Follower stays 跟随（无 agentOptions，子
-    // 会话继承领队会话模型——领队默认模型路线已随 docs/27 取消，provider 不
-    // 再入档，派发时按 config.memberProvider 解析）。
+    // Overrider pins its own model; Follower keeps 会话默认（用户迭代
+    // 2026-09-04：model 空串 = settings agent-default-model 即时快照）——
+    // 本测试的 fake ctx 不挂 agentDefaultModel 服务，spawn 退回不带
+    // agentOptions 的旧行为（provider 不再入档，派发时按
+    // config.memberProvider 解析）。
     await setMemberModel(runtimeEnvFor(), captain as never, {
       teamId,
       name: 'Overrider',
       model: 'deepseek-chat',
     });
 
-    const t1 = await cap<{ taskId: number }>('eteams_create_task', { subject: '跟随任务' });
+    const t1 = await cap<{ taskId: number }>('eteams_create_task', { subject: '默认任务' });
     await cap('eteams_assign_task', { taskId: t1.taskId, member: 'Follower' });
     const follower = runtime.children.find((c) => c.label.endsWith(':Follower'))!;
     expect(follower.request.agentOptions).toBeUndefined();
@@ -508,13 +506,54 @@ describe('member spawn route resolution (per-member model, docs/35 §3#5)', () =
       model: 'deepseek-chat',
     });
 
-    // 清空路线（不传 model）回跟随：后加入成员的派发不带 agentOptions。
+    // 清空路线（不传 model）回会话默认；服务未挂的 ctx 里派发不带 agentOptions。
     await setMemberModel(runtimeEnvFor(), captain as never, { teamId, name: 'Overrider' });
     await cap('eteams_add_member', { name: 'Latecomer', role: 'engineer', teamId });
     const t3 = await cap<{ taskId: number }>('eteams_create_task', { subject: '后补任务' });
     await cap('eteams_assign_task', { taskId: t3.taskId, member: 'Latecomer' });
     const latecomer = runtime.children.find((c) => c.label.endsWith(':Latecomer'))!;
     expect(latecomer.request.agentOptions).toBeUndefined();
+  });
+
+  it('pins empty-route members to the host session-default model (会话默认)', async () => {
+    // 宿主 agent-default-model 服务（settings 即时快照）挂到 fake ctx 上：
+    // 模型路线为空的成员派发固定到它的 provider/model/reasoningEffort。
+    (runtime.ctx as { agentDefaultModel?: unknown }).agentDefaultModel = {
+      currentSelection: () => ({
+        provider: 'ollama',
+        model: 'glm-5.3-flash:cloud',
+        reasoningEffort: 'low',
+      }),
+    };
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '默认团队' });
+    const teamId = created.teamId;
+    await cap('eteams_add_member', { name: 'Defaults', role: 'engineer', teamId });
+    const t1 = await cap<{ taskId: number }>('eteams_create_task', { subject: '默认任务' });
+    await cap('eteams_assign_task', { taskId: t1.taskId, member: 'Defaults' });
+    const defaults = runtime.children.find((c) => c.label.endsWith(':Defaults'))!;
+    expect(defaults.request.agentOptions).toEqual({
+      provider: 'ollama',
+      model: 'glm-5.3-flash:cloud',
+      reasoningEffort: 'low',
+    });
+  });
+
+  it('setLeaderModel writes the 领队行 route (团队默认路线, 团队页领队卡)', async () => {
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '领队路线' });
+    const teamId = created.teamId;
+    await setLeaderModel(runtimeEnvFor(), captain as never, {
+      teamId,
+      model: 'deepseek-chat',
+      reasoningEffort: 'low',
+    });
+    const leader = readTeam(teamId).taskMembers.find((r) => r.mainTaskId === null)!;
+    expect(leader.model).toBe('deepseek-chat');
+    expect(leader.reasoningEffort).toBe('low');
+    // 空 model 重置为会话默认（round-trip 后空串落库为 null → 内存缺省）。
+    await setLeaderModel(runtimeEnvFor(), captain as never, { teamId });
+    const after = readTeam(teamId).taskMembers.find((r) => r.mainTaskId === null)!;
+    expect(after.model ?? '').toBe('');
+    expect(after.reasoningEffort).toBeUndefined();
   });
 });
 

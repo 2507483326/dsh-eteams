@@ -128,7 +128,7 @@ persona 关系（captainDispatch.ts:76-77）：重构后手册来源 = member �
 ### 建议 4 成员模板/执行实例的使用点核对（docs/35 §3#9 的落地面）
 
 - requireMember（按 name + status !== 'removed'）→ 查 task_members (team_id, name)；wakeMember 的 `if (!member.id) return false` staged 判断（notifier.ts:57）→ `!row.child_session_id`。
-- spawnMember 模型解析（members.ts:86-90 的 leaderModelRoute 分支）删除，与 §5#4 一致；spawn 时插 task_members 行（staged → working）并回填 child_session_id。
+- spawnMember 模型解析（members.ts:86-90 的 leaderModelRoute 分支）删除，与 §5#4 一致；spawn 时插 task_members 行（staged → working）并回填 child_session_id。修订（2026-09-04 用户迭代）：空路线分支恢复但语义改为「会话默认」（settings agent-default-model 即时快照）；领队模型选择同时恢复——task_members 领队行 model/reasoning_effort 即团队默认路线，领队子代理派发按它解析。
 - addMember 在 phase running 时立即 spawn（teamOps.ts:302）——phase 删掉后该分支没了，建议统一为「首次派任务时起会话」（与 §5#3 一致），addMember 只建模板/实例行。
 - 链推进 advanceTask / reassignTask / sendMessage / freeMember：member.currentAttemptId 改实例行字段或反查 attempts（docs/27:389 已写反查，代码面等价替换）。
 - 多并行任务多实例行的选行问题 → 见待确认 1。

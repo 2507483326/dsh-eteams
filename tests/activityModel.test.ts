@@ -9,12 +9,18 @@
  * 回滚、set 到达时的 pending 结算（同值确认摘除 / 在途旧包继续覆盖 / 目标
  * 消失摘除）。
  *
- * docs/27 + docs/35 §3#5 收口：路线只对成员存在（model 空串=跟随，provider
- * 不再入档）——领队默认模型已取消，快照里没有 captain 路线可打补丁。
+ * 用户迭代 2026-09-04（领队模型选择恢复）：target 支持 {kind:'captain'}——
+ * 路线对领队（团队默认路线）与成员都存在（model 空串=会话默认，provider
+ * 不入档）。
  */
 import { describe, expect, it } from 'vitest';
 import type { DvaAction } from 'dva-core';
-import type { ActivityState, RoutePatch, RouteTriple, TeamSnapshot } from '../src/client/lib/monitor';
+import type {
+  ActivityState,
+  RoutePatch,
+  RouteTriple,
+  TeamSnapshot,
+} from '../src/client/lib/monitor';
 import { getApp } from '../src/client/store/app';
 import { activityModel } from '../src/client/store/models/activity';
 
@@ -90,6 +96,12 @@ const PATCH_MEMBER: RoutePatch = {
   target: { kind: 'member', name: '成员甲' },
   route: MEMBER_NEW,
 };
+const CAPTAIN_NEW: RouteTriple = { model: 'gpt-test', reasoningEffort: null };
+const PATCH_CAPTAIN: RoutePatch = {
+  teamId: 'team-1',
+  target: { kind: 'captain' },
+  route: CAPTAIN_NEW,
+};
 
 describe('activity reducers（S7）', () => {
   it('set：整包替换快照', () => {
@@ -153,16 +165,24 @@ describe('activity reducers（乐观路线补丁，用户迭代 2026-09）', () 
     expect(result?.teams[0]?.captain).toBe(state.teams[0]?.captain);
   });
 
-  it('patchRoute：领队无路线可打（docs/27 取消领队默认模型）→ 原样返回', () => {
-    // 快照里的 captain 只是展示投影（CaptainView 无 model/reasoningEffort），
-    // 路线补丁只认成员：历史 captain 目标 payload（dva 不校验形状）被忽略。
+  it('patchRoute（领队，用户迭代 2026-09-04）：captain 路线即时改写 + pending 记录', () => {
+    // 快照领队投影的旧包可能不带 model/reasoningEffort（旧运行时）——按空
+    // 路线（会话默认）读，写后即有值。
     const state = snapshotWithMemberRoute(MEMBER_OLD);
-    const legacyCaptainPatch = action('activity/patchRoute', {
+    const result = activityModel.reducers?.patchRoute?.(
+      state,
+      action('activity/patchRoute', PATCH_CAPTAIN),
+    );
+    const captain = result?.teams[0]?.captain;
+    expect(captain?.model).toBe(CAPTAIN_NEW.model);
+    expect(captain?.reasoningEffort).toBeNull();
+    expect(result?.pendingRoutes?.['team-1|captain']).toEqual({
       teamId: 'team-1',
       target: { kind: 'captain' },
-      route: { model: 'gpt-test', reasoningEffort: null },
+      route: CAPTAIN_NEW,
     });
-    expect(activityModel.reducers?.patchRoute?.(state, legacyCaptainPatch)).toBe(state);
+    // 不可变写：成员子树原引用保留。
+    expect(result?.teams[0]?.members).toBe(state.teams[0]?.members);
   });
 
   it('patchRoute：团队/成员不在（已删等）→ 原样返回', () => {
@@ -273,9 +293,7 @@ describe('activity model store 接线（S7）', () => {
     // 回滚路径：改回旧值再回滚 → 路线恢复 + pending 清空。
     const downgrade: RoutePatch = { ...PATCH_MEMBER, route: MEMBER_OLD };
     store.dispatch(action('activity/patchRoute', downgrade));
-    store.dispatch(
-      action('activity/revertRoute', { patch: downgrade, previous: MEMBER_NEW }),
-    );
+    store.dispatch(action('activity/revertRoute', { patch: downgrade, previous: MEMBER_NEW }));
     expect(store.getState().activity.teams[0]?.members[0]?.model).toBe(MEMBER_NEW.model);
     expect(store.getState().activity.pendingRoutes).toEqual({});
   });

@@ -33,8 +33,8 @@
 | 2 | 架构形态 | 内存模型保留，只换持久层（整存整取） |
 | 3 | ID 类型 | 任务/尝试/决策/事件号从文本号（`t1`/`a1`）连内存模型一起改自增整数，面板显示「任务 #N」 |
 | 4 | persona 存法 | persona_md 只存手册全文（结构字段不单独存；旧数据导入时把六字段渲染成全文；编辑把改动烘进全文再存） |
-| 5 | 模型路线 | 只存 model + reasoning_effort 两列；provider 派发时按 `config.memberProvider` 解析；model 空=继承领队会话模型，有值=覆盖 |
-| 6 | 团队级字段 | goal / phase / planReviewState / captainSessionId / captainChildId / leaderModelRoute **全部砍掉**：团队只是定执行流程的容器；goal 的 11 处消费点（欢迎词/横幅/README/建队工具/面板等）一并删除（定案：真砍） |
+| 5 | 模型路线 | 只存 model + reasoning_effort 两列；provider 派发时按 `config.memberProvider` 解析；model 空=会话默认（修订 2026-09-04 用户迭代：settings agent-default-model 即时快照，原「继承领队会话模型」口径作废），有值=覆盖 |
+| 6 | 团队级字段 | goal / phase / planReviewState / captainSessionId / captainChildId **砍掉**：团队只是定执行流程的容器；goal 的 11 处消费点（欢迎词/横幅/README/建队工具/面板等）一并删除（定案：真砍）。修订（2026-09-04 用户迭代）：leaderModelRoute 不砍——落 task_members 领队行 model/reasoning_effort，领队子代理派发按它解析 |
 | 7 | 审批环节 | 「staged 草稿→批准→运行」的团队级状态门砍掉；开跑确认是**对话内纪律**（用户选队 → 领队分解任务选成员 → 用户确认 → 派任务开跑），不落团队级状态列 |
 | 8 | 领队锚点 | team 表只留 `has_leader`；领队也是 task_members 一行（`name='项目牧羊人'`、`main_task_id` 空），会话锚点在那行，重启后去 task_members 找 |
 | 9 | 成员模型 | **member = 纯模板**（一人一行，无状态无会话，`team_id` 空=公共模板/非空=班底；工号 `employee_id` 独立发号保留；班底同名复用模板行，不重开行）；**task_members = 执行实例**（状态/子会话/当前任务都在这）；实例行**按大任务粒度建**（同一人每条大任务一行、各绑独立子会话——定案），选行规则见 §5#12 |
@@ -63,7 +63,7 @@
 1. **审批环节重构**：approvePlan / planReviewState / phase 一套删除；createTeam 后团队即可用；领队在对话里等用户确认后才派任务（提示词纪律，不落状态）。
 2. **领队会话解析重构**：requireCaptainTeam / notifyCaptain / 派发续聊改从 task_members 领队行（`team_id = ? AND name='项目牧羊人' AND main_task_id IS NULL`）取 `main_session_id / child_session_id`；has_leader 只标记班底里是否含领队；领队行由 createTeam 写入、captainDispatch 回填 child_session_id、leader 移除/恢复改行 status + has_leader。涉及调用点：store.findTeamByCaptain、tools/identity.resolveCaller、workspaces.locateAgentTeam、notifier.wakeMember、members setup hook、webui agentFor/agentactivity、captainDispatch、usage.resolveIdentity（全部换数据源，无结构性障碍——审核建议 3）。
 3. **成员起会话时机**：不再「批准后一次性起全员」——首次派任务时按执行链起对应成员（task_members 行 staged → spawn → working）。
-4. **spawnMember 模型解析简化**：member.model 有值 → agentOptions（provider = config.memberProvider）；空 → 不带 agentOptions（子会话继承领队会话模型）。
+4. **spawnMember 模型解析**：member.model 有值 → agentOptions（provider = config.memberProvider）；空 → 会话默认（修订 2026-09-04 用户迭代：固定到 settings agent-default-model 即时快照；服务未挂退回不带 agentOptions，原「继承领队会话模型」口径作废）。
 5. **workDir 归任务**：ensureWorkDir 改为逐任务分配 `task.work_dir`（撞名 -N 后缀逻辑保留，对比集改为其他任务的 work_dir 与目录存在性）；存量任务目录以字面路径导入（该列语义就是分配后固定，旧目录不改名）。
 6. **maxRetries 全局**：每团队上限改为 config.maxRetries 统一（handoff.ts 与 failTask 同步）。
 7. **任务号显示**：`t1` → `#N` 整数；工具参数（taskId 等）整数化（webui 路由段解析 parseInt）；taskSlug 变 `1-login` 格式，旧目录不迁移；领队提示词文案同步。

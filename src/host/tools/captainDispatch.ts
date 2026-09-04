@@ -28,6 +28,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session';
 import type { ETeamsResolvedConfig } from '../config.js';
 import {
   ETeamsError,
+  sessionDefaultRouteOf,
   stateRootFor,
   stateRootOf,
   type RuntimeContext,
@@ -157,7 +158,21 @@ export function createCaptainDispatchTool(
         args.message,
       );
       const persona = captainPersonaOf(env, config);
-      const previous = leaderRowOf(team)?.childSessionId ?? '';
+      const leader = leaderRowOf(team);
+      const previous = leader?.childSessionId ?? '';
+      // 领队子代理运行路线（用户迭代 2026-09-04 恢复领队模型选择）：领队行
+      // model 有值即 override（provider 固定 config.memberProvider，docs/35
+      // §3#5）；空 = 会话默认——宿主 agent-default-model 即时快照 pin；服务
+      // 缺失退回不带 agentOptions 的旧行为。
+      const leaderModel = leader?.model ?? '';
+      const agentOptions =
+        leaderModel !== ''
+          ? {
+              provider: config.memberProvider,
+              model: leaderModel,
+              ...(leader?.reasoningEffort ? { reasoningEffort: leader.reasoningEffort } : {}),
+            }
+          : sessionDefaultRouteOf(env.ctx);
       // 先试续聊（含宿主重启后的冷恢复）；失败（会话记录被回收/lineage 不
       // 符）再重建。注册表先撤旧条目再登记新会话。
       if (previous !== '') {
@@ -182,6 +197,7 @@ export function createCaptainDispatchTool(
           parent: exec.agent,
           persona,
           toolFilter: { deny: [...CAPTAIN_CHILD_DENIED_TOOLS] },
+          ...(agentOptions !== undefined ? { agentOptions } : {}),
         },
         signal,
       });

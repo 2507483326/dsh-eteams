@@ -39,7 +39,7 @@ export interface MemberView {
   employeeId: string | null;
   role: string;
   status: string;
-  /** 模型路线（docs/35 §3#5）：空串 = 跟随（继承领队会话模型）。 */
+  /** 模型路线（docs/35 §3#5）：空串 = 会话默认（用户迭代 2026-09-04）。 */
   model: string;
   reasoningEffort: string | null;
   currentTaskId: number | null;
@@ -135,6 +135,9 @@ export interface CaptainView {
   skills: string;
   personaMd: string | null;
   avatar: { seed: number; salt: number };
+  /** 模型路线（用户迭代 2026-09-04 恢复领队模型选择）：空串 = 会话默认。 */
+  model?: string;
+  reasoningEffort?: string | null;
 }
 
 /** Full team snapshot served by /state. */
@@ -180,10 +183,11 @@ export interface RouteTriple {
   reasoningEffort: string | null;
 }
 
-/** 乐观路线补丁：定位一队成员的一条路线并整体替换（对话 choose() 的本地即时性）。 */
+/** 乐观路线补丁：定位一队（领队或成员）的一条路线并整体替换（对话
+ * choose() 的本地即时性）。 */
 export interface RoutePatch {
   teamId: string;
-  target: { kind: 'member'; name: string };
+  target: { kind: 'member'; name: string } | { kind: 'captain' };
   route: RouteTriple;
 }
 

@@ -20,7 +20,7 @@ const EMPTY: ActivityState = {
 };
 
 const routeKey = (teamId: string, target: RoutePatch['target']): string =>
-  `${teamId}|member|${target.name}`;
+  target.kind === 'captain' ? `${teamId}|captain` : `${teamId}|member|${target.name}`;
 
 const sameRoute = (a: RouteTriple, b: RouteTriple): boolean =>
   a.model === b.model && (a.reasoningEffort ?? null) === (b.reasoningEffort ?? null);
@@ -33,6 +33,13 @@ const readRoute = (
 ): RouteTriple | null => {
   const team = snapshot.teams.find((t) => t.teamId === teamId);
   if (team === undefined) return null;
+  if (target.kind === 'captain') {
+    // 旧运行时快照领队不带路线字段 → 视为会话默认（空路线）。
+    return {
+      model: team.captain.model ?? '',
+      reasoningEffort: team.captain.reasoningEffort ?? null,
+    };
+  }
   const member = team.members.find((m) => m.name === target.name);
   if (member === undefined) return null;
   return { model: member.model, reasoningEffort: member.reasoningEffort };
@@ -48,12 +55,21 @@ const writeRoute = (
   const at = snapshot.teams.findIndex((t) => t.teamId === teamId);
   const team = snapshot.teams[at];
   if (at === -1 || team === undefined) return null;
-  if (!team.members.some((m) => m.name === target.name)) return null;
   const teams = [...snapshot.teams];
+  if (target.kind === 'captain') {
+    teams[at] = {
+      ...team,
+      captain: { ...team.captain, model: route.model, reasoningEffort: route.reasoningEffort },
+    };
+    return { ...snapshot, teams };
+  }
+  if (!team.members.some((m) => m.name === target.name)) return null;
   teams[at] = {
     ...team,
     members: team.members.map((m) =>
-      m.name === target.name ? { ...m, model: route.model, reasoningEffort: route.reasoningEffort } : m,
+      m.name === target.name
+        ? { ...m, model: route.model, reasoningEffort: route.reasoningEffort }
+        : m,
     ),
   };
   return { ...snapshot, teams };

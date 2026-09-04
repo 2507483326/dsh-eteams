@@ -170,7 +170,7 @@ CREATE TABLE member (
   role_name        TEXT NOT NULL,         -- 成员名就是角色名
   employee_id      INTEGER,               -- 工号：独立发号（插入成员模板时取 member 表最大工号 +1），同人跨团队同号；显示补零 1 → 0001
   persona_md       TEXT,                  -- 完整角色手册（Markdown 全文；duty/style/skills 等结构字段不单独存，写入时烘进手册）
-  model            TEXT,                  -- 采用的模型；NULL=跟随（派发时子会话继承领队会话模型），有值=覆盖（provider 派发时按配置解析）
+  model            TEXT,                  -- 采用的模型；NULL=会话默认（用户迭代 2026-09-04：派发时固定到 settings agent-default-model 即时快照，dsh-agent-default-model 服务的 currentSelection()），有值=覆盖（provider 派发时按配置解析）
   reasoning_effort TEXT,                  -- 模型思考强度
   avatar           TEXT,                  -- 头像
   created_time     INTEGER NOT NULL,      -- 创建时间
@@ -233,7 +233,7 @@ CREATE TABLE task_members (
   status           TEXT NOT NULL DEFAULT 'staged',
                    -- 成员状态：staged / ready / working / paused / removed
   persona_md       TEXT,                -- 执行时的人设手册（沿用 member 模板的手册，可按任务微调）
-  model            TEXT,                -- 执行时采用的模型（沿用模板值；NULL=跟随）
+  model            TEXT,                -- 执行时采用的模型（沿用模板值；NULL=会话默认）。领队行同列 = 团队默认路线（用户迭代 2026-09-04 恢复领队模型选择，领队子代理派发按它解析）
   reasoning_effort TEXT,                -- 模型思考强度
   avatar           TEXT,                -- 头像
   created_time     INTEGER NOT NULL,    -- 创建时间
@@ -384,7 +384,7 @@ CREATE INDEX idx_status_changes_time ON task_status_changes (team_id, change_tim
 | TeamState 的 id / name | `team.team_id`（自增整数）/ `team_name`（文本目录名不入库，目录映射由写入代码按 team_name 推导查重） |
 | TeamState 的 goal / phase / planReviewState | **砍掉**（定案：团队只是流程容器，不要目标/阶段/进展；「批准后开跑」是对话内确认，不落团队级状态） |
 | TeamState 的 captainSessionId / captainChildId | **砍掉**——领队会话锚点在 task_members 领队行（`name='项目牧羊人'`、`main_task_id` 为空）的 `main_session_id / child_session_id` 上，重启后去 task_members 找；team 表只留 `has_leader` |
-| TeamState 的 leaderModelRoute / maxRetries / activeSwitch | **砍掉**：领队默认模型功能取消（成员 model 空=子会话继承领队会话模型）；重试上限用全局配置；activeSwitch 是死字段 |
+| TeamState 的 leaderModelRoute / maxRetries / activeSwitch | leaderModelRoute **回队**（用户迭代 2026-09-04 恢复领队模型选择）：落在 task_members 领队行的 `model / reasoning_effort` 列上（领队子代理派发按它解析；空 = 会话默认），不需要 team 表列；maxRetries 重试上限用全局配置；activeSwitch 是死字段 |
 | TeamState 的 workDir | **`task.work_dir`**（定案：工作目录归任务，逐任务分配） |
 | TeamState 的 leaderRemoved / version / taskSeq·attemptSeq·mailSeq | `has_leader`；version 不存（进程锁 + 事务已够）；三个序号被自增主键取代，删 |
 | MemberRecord（成员模板） | `member` 表：name / employeeId / role / persona（手册全文）/ modelRoute（model + reasoning_effort）/ avatar → `role_name / employee_id / persona_md / model + reasoning_effort / avatar`；provider 不存（派发时按配置解析）；**status、子会话 id、当前尝试不在模板表** |
@@ -523,7 +523,7 @@ UPDATE task SET status = 'start', update_time = ?2
 1. **token 记账——已定案（2026-09-04）**：采集点 = 会话事件流（插件收到全进程所有会话的事件），存储 = 状态根下 usage.jsonl 逐条追加（全局单库下即全局根一份，跨工作区台账合一）、读取时聚合、不落日汇总。本库不设 token 表；若以后要做 token 投影表，行模型必须按事件行对齐，不得回退日聚合表。
 2. **「天」的时区口径——已定案**：token 记账的 day 在记录时按宿主本地日界折算（与用户日历一致）；本库无 day 列。
 3. **枚举校验放哪——已定案（2026-09-04 用户定案）**：表上不放 CHECK，枚举合法性由写入代码校验，改枚举值零迁移。
-4. **暂未入库的代码字段——已定案（2026-09-04 逐条对账）**：goal / phase / planReviewState / captainSessionId / captainChildId / leaderModelRoute 砍掉（审批转对话内确认、领队锚点转 task_members、成员模型空=继承领队会话）；activeSwitch 删；maxRetries 用全局配置；version 不存；workDir 归 `task.work_dir`；task 补合同四数组（acceptance/in_scope/out_of_scope/deliverables）+ idempotency_note + blocked_from；suspendNote 并入 status_note；decisionId / currentAttemptId / outcome 反查 attempts / decisions；member 模板化（状态/会话在 task_members）。
+4. **暂未入库的代码字段——已定案（2026-09-04 逐条对账）**：goal / phase / planReviewState / captainSessionId / captainChildId 砍掉（审批转对话内确认、领队锚点转 task_members）；activeSwitch 删；maxRetries 用全局配置；version 不存；workDir 归 `task.work_dir`；task 补合同四数组（acceptance/in_scope/out_of_scope/deliverables）+ idempotency_note + blocked_from；suspendNote 并入 status_note；decisionId / currentAttemptId / outcome 反查 attempts / decisions；member 模板化（状态/会话在 task_members）。修订（2026-09-04 用户迭代）：leaderModelRoute 恢复，落 task_members 领队行 model/reasoning_effort 列；成员 model 空 = 会话默认（settings agent-default-model 即时快照），不再继承领队会话模型。
 5. **depend_tasks / member_chain_list 是否拆表**：现在写入代码查环够用；若任务页要 SQL 级 DAG 查询（上游阻塞传播、关键路径），再拆依赖边表与链站点表。
 6. **events.jsonl / inbox 的最终关系——已定案**：停写（表为唯一真相），原文件保留作导入备份。
 7. **归档形态——已定案（2026-09-04）**：归档下线。archiveTeam 与面板归档页删除，删团队走对话内确认 + 数据库事务删除；archive/ 目录不导入。

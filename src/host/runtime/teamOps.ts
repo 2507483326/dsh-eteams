@@ -173,13 +173,9 @@ export function ensureTaskWorkDir(env: RuntimeEnv, team: TeamState, task: TaskRe
   if (task.workDir !== undefined) return task.workDir;
   const leaf = taskSlug(task);
   const parentDir =
-    task.parentId !== null
-      ? team.tasks.find((t) => t.id === task.parentId)?.workDir
-      : undefined;
+    task.parentId !== null ? team.tasks.find((t) => t.id === task.parentId)?.workDir : undefined;
   const base =
-    parentDir !== undefined
-      ? `${parentDir}/sub/${leaf}`
-      : `${teamWorkDirRel(team)}/tasks/${leaf}`;
+    parentDir !== undefined ? `${parentDir}/sub/${leaf}` : `${teamWorkDirRel(team)}/tasks/${leaf}`;
   const taken = new Set<string>();
   for (const other of team.tasks) {
     if (other.id === task.id || other.workDir === undefined) continue;
@@ -357,8 +353,7 @@ function routeFromParams(
 /** 同名班底模板行（team.members）；缺省报「成员不存在」。 */
 function requireMemberTemplate(team: TeamState, name: string): MemberRecord {
   const member = team.members.find((m) => m.name === name);
-  if (!member)
-    throw new ETeamsError(`成员「${name}」不存在`, '用 eteams_team_status 查看在册成员');
+  if (!member) throw new ETeamsError(`成员「${name}」不存在`, '用 eteams_team_status 查看在册成员');
   return member;
 }
 
@@ -419,10 +414,11 @@ export async function updateMember(
 
 /**
  * Set one member's model route (user iteration 2026-09: per-member model
- * select on the member card). Empty model resets to 跟随（不带 agentOptions，
- * 子会话继承领队会话模型）；有值即 override——provider 不再入档（docs/35
- * §3#5），派发起会话时按 config.memberProvider 解析。写班底模板行，同时
- * 同步到该成员 staged 实例行；已起会话的成员在下次起会话生效。
+ * select on the member card). Empty model resets to 会话默认（用户迭代
+ * 2026-09-04：settings agent-default-model，spawn 侧 sessionDefaultRouteOf）；
+ * 有值即 override——provider 不再入档（docs/35 §3#5），派发起会话时按
+ * config.memberProvider 解析。写班底模板行，同时同步到该成员 staged 实例行；
+ * 已起会话的成员在下次起会话生效。
  */
 export async function setMemberModel(
   env: RuntimeEnv,
@@ -459,6 +455,50 @@ export async function setMemberModel(
       actor: captainActor(teamNow),
       type: 'member.updated',
       payload: { name: params.name, route: member.modelRoute },
+    });
+    return teamNow;
+  });
+  renderTeamDocs(env.workspace, fresh, (msg) => env.ctx.logger.warn(msg));
+  return fresh;
+}
+
+/**
+ * Set the 领队 model route（用户迭代 2026-09-04「领队模型选择」回归）：
+ * 写 task_members 领队行（name=项目牧羊人、main_task_id 为空）的
+ * model/reasoning_effort——团队级默认路线，领队子代理派发起会话按它解析。
+ * 空 model = 会话默认（settings agent-default-model，spawn 侧
+ * sessionDefaultRouteOf）；行不存在（领队从未就位）静默不写。
+ */
+export async function setLeaderModel(
+  env: RuntimeEnv,
+  captain: Agent,
+  params: {
+    teamId?: TeamKey;
+    provider?: string;
+    model?: string;
+    reasoningEffort?: string;
+  },
+): Promise<TeamState> {
+  const team =
+    params.teamId !== undefined
+      ? await requireTeamById(env, captain, params.teamId)
+      : await requireCaptainTeam(env, captain);
+  const route = routeFromParams(params.model, params.reasoningEffort);
+  const fresh = await withTeam(env, team.id, (teamNow, _root, tx) => {
+    const leader = leaderRowOf(teamNow);
+    if (leader === undefined) return teamNow;
+    leader.model = route.model;
+    if (route.reasoningEffort !== undefined) {
+      leader.reasoningEffort = route.reasoningEffort;
+    } else {
+      delete leader.reasoningEffort;
+    }
+    insertEventInTx(tx, teamNow.id, {
+      seq: 0,
+      at: tx.now,
+      actor: captainActor(teamNow),
+      type: 'member.updated',
+      payload: { name: leader.name, route },
     });
     return teamNow;
   });
@@ -704,7 +744,13 @@ export async function sendMessage(
         tx,
         fresh.id,
         'captain',
-        makeMail(from, { kind: 'captain', name: '领队' }, from.kind === 'user' ? 'user_message' : 'report', content, refs),
+        makeMail(
+          from,
+          { kind: 'captain', name: '领队' },
+          from.kind === 'user' ? 'user_message' : 'report',
+          content,
+          refs,
+        ),
       );
       const leader = leaderRowOf(fresh);
       const captainAgent = leader ? env.ctx.agents.get(leader.mainSessionId) : undefined;
@@ -730,7 +776,9 @@ export async function sendMessage(
       );
       const row = latestInstanceRow(fresh, to);
       if (row !== undefined) {
-        wakes.push(() => wakeMember(env, fresh, row, `[来自 ${from.name ?? from.kind}] ${content}`));
+        wakes.push(() =>
+          wakeMember(env, fresh, row, `[来自 ${from.name ?? from.kind}] ${content}`),
+        );
       }
     }
     insertEventInTx(tx, fresh.id, {

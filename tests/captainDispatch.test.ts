@@ -42,6 +42,7 @@ interface ContinuableSpec {
     parent: unknown;
     persona?: string;
     toolFilter?: { deny: string[] };
+    agentOptions?: Record<string, unknown>;
   };
   signal?: unknown;
 }
@@ -266,6 +267,44 @@ describe('eteams_dispatch_captain', () => {
       ) as Promise<unknown>,
     ).rejects.toThrow('只有团队领队会话可以转交领队子代理');
     expect(runtime.starts).toHaveLength(0);
+  });
+
+  it('spawns the fresh child on the leader route override (领队模型选择)', async () => {
+    const seeded = seedTeam();
+    // 领队行预置路线（setLeaderModel 的写入路径由 lifecycle.test.ts 覆盖，
+    // 这里按整存整取快照直接播种）。
+    const withRoute: TeamState = {
+      ...seeded,
+      taskMembers: seeded.taskMembers.map((r) =>
+        r.mainTaskId === null ? { ...r, model: 'deepseek-reasoner', reasoningEffort: 'high' } : r,
+      ),
+    };
+    withTeamTx(root, seeded.id, (tx) => writeTeamInTx(tx, withRoute));
+    await tool.execute(
+      { message: '帮我做一个导出功能' } as never,
+      { agent: captain, signal: undefined } as never,
+    );
+    expect(runtime.starts[0]!.request.agentOptions).toEqual({
+      provider: config.memberProvider,
+      model: 'deepseek-reasoner',
+      reasoningEffort: 'high',
+    });
+  });
+
+  it('pins the fresh child to the host session-default model when the route is empty', async () => {
+    seedTeam();
+    // 宿主 agent-default-model 服务（settings 即时快照）挂到 fake ctx 上。
+    (runtime.ctx as unknown as { agentDefaultModel?: unknown }).agentDefaultModel = {
+      currentSelection: () => ({ provider: 'ollama', model: 'glm-5.3-flash:cloud' }),
+    };
+    await tool.execute(
+      { message: '继续' } as never,
+      { agent: captain, signal: undefined } as never,
+    );
+    expect(runtime.starts[0]!.request.agentOptions).toEqual({
+      provider: 'ollama',
+      model: 'glm-5.3-flash:cloud',
+    });
   });
 
   it('errors when the subagent service is unavailable', async () => {

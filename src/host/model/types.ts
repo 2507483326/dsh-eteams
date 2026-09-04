@@ -81,8 +81,8 @@ export interface PersonaRecord {
 /**
  * Snapshot of the model route a member runs on (docs/05.3, FR-08；docs/35
  * §3#5 精简：只留 model + reasoningEffort 两项，provider 由派发时按
- * config.memberProvider 解析，内存不再携带；model 空串 = 跟随（子会话继承
- * 领队会话模型），有值 = 覆盖）。
+ * config.memberProvider 解析，内存不再携带；model 空串 = 会话默认（用户
+ * 迭代 2026-09-04：settings agent-default-model 即时快照），有值 = 覆盖）。
  */
 export interface ModelRouteSnapshot {
   model: string;
@@ -144,7 +144,7 @@ export interface TaskMemberRecord {
   status: MemberStatus;
   /** 执行时的人设手册（沿用模板手册，可按任务微调；库内 persona_md 列）。 */
   personaMd?: string;
-  /** 执行时采用的模型（空串 = 跟随领队会话模型）。 */
+  /** 执行时采用的模型（空串 = 会话默认，用户迭代 2026-09-04）。 */
   model?: string;
   reasoningEffort?: string;
   avatar?: AvatarRecord;

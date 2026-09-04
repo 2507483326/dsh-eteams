@@ -13,6 +13,7 @@ import {
   createTeamViaPanel,
   deleteTeam,
   removeTeamMember,
+  setLeaderModel,
   setMemberModel,
   setTeamLeaderRemoved,
   type RosterMember,
@@ -175,8 +176,9 @@ export function TeamTab({
   // 模型目录默认强度（model.reasoning.defaultEffort——对话 /model 弹层的
   // selectionOf 同款）；同一路线重选由菜单自行关闭不上送（对话 choose()
   // 同款）。目录查不到的旧路线按裸模型 id 下发（host 按配置解析 provider）。
-  // 'inherit' = 清 override（跟随：docs/35 §3#5——model 空串=继承领队会话
-  // 模型，host 空 body 即重置为跟随）。null = 非法行值（防御）。
+  // 'inherit' = 清 override（会话默认：用户迭代 2026-09-04——model 空串=
+  // settings agent-default-model 即时快照，host 空 body 即重置）。null =
+  // 非法行值（防御）。
   const routeBody = (
     value: string,
     stored: RouteTriple,
@@ -275,6 +277,64 @@ export function TeamTab({
     void removeTeamMember(detailTeam.teamId, memberName).catch((e) =>
       setDetailError(memberOpError(e)),
     );
+  };
+
+  // 领队模型选择（用户迭代 2026-09-04 恢复）：与 changeModel 同款乐观补丁 +
+  // POST /leader/model，target 换成 captain。'inherit' = 会话默认（host 空
+  // body = 重置）；有值即团队默认路线，领队子代理派发按它解析。
+  const changeCaptainModel = (value: string): void => {
+    if (detailTeam === null) return;
+    const previous: RouteTriple = {
+      model: detailTeam.captain.model ?? '',
+      reasoningEffort: detailTeam.captain.reasoningEffort ?? null,
+    };
+    const body = routeBody(value, previous);
+    if (body === null) return;
+    setDetailError(null);
+    setModelSavingName('__captain__');
+    const patch: RoutePatch = {
+      teamId: detailTeam.teamId,
+      target: { kind: 'captain' },
+      route: { model: body.model ?? '', reasoningEffort: body.reasoningEffort ?? null },
+    };
+    applyRoutePatch(patch);
+    void setLeaderModel(detailTeam.teamId, body)
+      .then(() => refreshActivitySoon())
+      .catch((e) => {
+        revertRoutePatch(patch, previous);
+        setDetailError(memberOpError(e));
+      })
+      .finally(() => setModelSavingName(null));
+  };
+
+  // 领队推理等级（与 changeMemberEffort 同词汇表）：只对已有具体路线的领队
+  // 生效；effort 为 null = 提供方默认。会话默认（model 空串）不可单独改。
+  const changeCaptainEffort = (effort: string | null): void => {
+    if (detailTeam === null) return;
+    const captain = detailTeam.captain;
+    if ((captain.model ?? '') === '') return;
+    setDetailError(null);
+    setModelSavingName('__captain__');
+    const previous: RouteTriple = {
+      model: captain.model ?? '',
+      reasoningEffort: captain.reasoningEffort ?? null,
+    };
+    const patch: RoutePatch = {
+      teamId: detailTeam.teamId,
+      target: { kind: 'captain' },
+      route: { ...previous, reasoningEffort: effort },
+    };
+    applyRoutePatch(patch);
+    void setLeaderModel(detailTeam.teamId, {
+      model: captain.model ?? '',
+      ...(effort !== null && effort !== '' ? { reasoningEffort: effort } : {}),
+    })
+      .then(() => refreshActivitySoon())
+      .catch((e) => {
+        revertRoutePatch(patch, previous);
+        setDetailError(memberOpError(e));
+      })
+      .finally(() => setModelSavingName(null));
   };
 
   const removeLeader = (): void => {
@@ -579,8 +639,12 @@ export function TeamTab({
               {!detailTeam.leaderRemoved && (
                 <LeaderCard
                   captain={detailTeam.captain}
+                  catalog={modelCatalog}
                   onRemove={removeLeader}
                   onOpenDetail={() => setMemberDetail({ kind: 'captain' })}
+                  onModelChange={changeCaptainModel}
+                  onEffortChange={changeCaptainEffort}
+                  modelSaving={modelSavingName === '__captain__'}
                 />
               )}
               {detailTeam.members.map((m) => (

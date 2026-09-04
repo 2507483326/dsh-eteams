@@ -15,7 +15,12 @@ import type { ETeamsResolvedConfig } from '../config.js';
 import type { MemberRecord, TaskMemberRecord, TaskRecord, TeamState } from '../model/types.js';
 import { insertMailInTx } from '../state/events.js';
 import { readTeamSync, type TeamTx } from '../state/store.js';
-import { stateRootOf, type RuntimeContext, type RuntimeEnv } from './base.js';
+import {
+  sessionDefaultRouteOf,
+  stateRootOf,
+  type RuntimeContext,
+  type RuntimeEnv,
+} from './base.js';
 import { leaderRowOf, makeMail, type Wake, wakeMember } from './notifier.js';
 import { assignmentMail } from '../prompts/handoff/mails.js';
 import { memberWelcome } from '../prompts/spawn/member.js';
@@ -83,9 +88,10 @@ export function memberTemplateOf(team: TeamState, name: string): MemberRecord | 
  * Spawn one member child as a durable continuable child of the captain（首派
  * 按链起人路径调用，docs/35 §5#3）。原子性：start 失败直接抛，调用方尚未
  * 改任何状态；成功返回 childId，由调用方在事务内回填实例行。
- * 模型路线（docs/35 §3#5）：模板行 model 有值 → override（provider 固定用
- * config.memberProvider，路由只挑模型）；model 为空 = 跟随（不带
- * agentOptions，子会话继承领队会话模型——领队默认模型功能随 docs/27 取消）。
+ * 模型路线（用户迭代 2026-09-04「会话默认」）：模板行 model 为空 = 固定用
+ * 宿主会话默认模型（sessionDefaultRouteOf，settings agent-default-model），
+ * 不再继承领队会话模型；有值 = override（provider 固定用
+ * config.memberProvider，路由只挑模型——docs/35 §3#5 既有口径）。
  */
 export async function spawnMember(
   env: RuntimeEnv,
@@ -118,7 +124,13 @@ export async function spawnMember(
               ...(route.reasoningEffort ? { reasoningEffort: route.reasoningEffort } : {}),
             },
           }
-        : {}),
+        : sessionDefaultRouteOf(env.ctx) !== undefined
+          ? {
+              // 会话默认（用户迭代 2026-09-04）：宿主 agent-default-model
+              // 即时快照——provider/model/reasoningEffort 都是真实路线值。
+              agentOptions: sessionDefaultRouteOf(env.ctx),
+            }
+          : {}),
     },
     signal: env.signal,
   });
@@ -126,11 +138,7 @@ export async function spawnMember(
 }
 
 /** Interrupt one live member's current turn (activation retained). */
-export function interruptMember(
-  env: RuntimeEnv,
-  row: TaskMemberRecord,
-  captain: Agent,
-): void {
+export function interruptMember(env: RuntimeEnv, row: TaskMemberRecord, captain: Agent): void {
   if (row.childSessionId === '') return;
   try {
     env.ctx.subagents.interrupt(row.childSessionId as unknown as SessionId, {

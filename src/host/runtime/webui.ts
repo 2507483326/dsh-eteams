@@ -41,6 +41,7 @@ import {
   createTeam,
   deleteTeam,
   removeMember,
+  setLeaderModel,
   setLeaderRemoved,
   setMemberModel,
   syncMemberToRoster,
@@ -254,6 +255,10 @@ export function teamSnapshot(
       // 头像（用户迭代 2026-09-03）：优先名册领队条目——面板「随机头像」
       // 换脸后团队页领队卡同步；缺省回落固定 (hashName, 7)。
       avatar: rosterLeader?.avatar ?? { seed: avatarSeedFor('项目牧羊人'), salt: 7 },
+      // 模型路线（用户迭代 2026-09-04 恢复领队模型选择）：领队行
+      // model/reasoning_effort，空 model = 会话默认。
+      model: leader?.model ?? '',
+      reasoningEffort: leader?.reasoningEffort ?? null,
     },
     // 成员 = 班底模板行（实例行全部 removed 的成员不再展示，docs/35 §5#12）。
     members: team.members
@@ -338,19 +343,35 @@ export function summarizeEvent(e: EventRecord): string {
   }
 }
 
-/** Read every unarchived team across all registered workspaces. */
+/**
+ * Read every unarchived team across all registered workspaces. 全局单库
+ * （用户迭代 2026-09-04，stateDir 绝对路径）下所有工作区解析到同一个状态
+ * 根——按根去重、每个根只收一遍（否则同一团队按工作区数重复出现在面板），
+ * 并记住每个根的代表工作区供 teamSnapshot 用。
+ */
+function collectRoots(
+  ctx: Context,
+  config: ETeamsResolvedConfig,
+): { root: string; workspacePath: string }[] {
+  const registry = workspaceRegistryOf(ctx);
+  if (!registry) return [];
+  const byRoot = new Map<string, string>();
+  for (const workspace of registry.list()) {
+    const root = stateRootFor(config, workspace.path);
+    if (!byRoot.has(root)) byRoot.set(root, workspace.path);
+  }
+  return [...byRoot].map(([root, workspacePath]) => ({ root, workspacePath }));
+}
+
 async function collectTeams(
   ctx: Context,
   config: ETeamsResolvedConfig,
 ): Promise<Record<string, unknown>[]> {
-  const registry = workspaceRegistryOf(ctx);
-  if (!registry) return [];
   const snapshots: Record<string, unknown>[] = [];
-  for (const workspace of registry.list()) {
-    const root = stateRootFor(config, workspace.path);
+  for (const { root, workspacePath } of collectRoots(ctx, config)) {
     for (const teamId of await listTeamIds(root)) {
       const team = readTeamSync(root, teamId);
-      if (team) snapshots.push(teamSnapshot(team, workspace.path, config));
+      if (team) snapshots.push(teamSnapshot(team, workspacePath, config));
     }
   }
   return snapshots;
@@ -972,9 +993,39 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               sendJson(res, 200, { ok: true });
               return;
             }
-            // docs/36 建议 5：领队模型路线（/team/<id>/leader/model）随审批
-            // 重构下线——成员「跟随」在派发时解析到领队会话路线，无团队级
-            // 覆盖项可设。
+            // POST /team/<id>/leader/model - set the leader's model route
+            // (用户迭代 2026-09-04 恢复领队模型选择：领队卡模型二级菜单写
+            // task_members 领队行，领队子代理派发按它解析). Empty model
+            // resets to 会话默认.
+            if (
+              req.method === 'POST' &&
+              segments[0] === 'team' &&
+              segments.length === 4 &&
+              segments[2] === 'leader' &&
+              segments[3] === 'model'
+            ) {
+              const body = parseJsonObject(await readBody(req));
+              const located = locateTeam(ctx, config, segments[1]!);
+              if (!located) {
+                sendError(res, 404, '团队 ' + segments[1] + ' 不存在');
+                return;
+              }
+              const { team, workspacePath } = located;
+              try {
+                await setLeaderModel(envFor(ctx, config, workspacePath), captainAgentOf(team), {
+                  teamId: team.id,
+                  ...(str(body.model, '') !== '' ? { model: str(body.model) } : {}),
+                  ...(str(body.reasoningEffort, '') !== ''
+                    ? { reasoningEffort: str(body.reasoningEffort) }
+                    : {}),
+                });
+              } catch (e) {
+                sendError(res, 400, e instanceof Error ? e.message : String(e));
+                return;
+              }
+              sendJson(res, 200, { ok: true });
+              return;
+            }
             // POST /team/<id>/delete — permanently remove a team directory
             // (deleteTeam rejects teams with active tasks; cancel or finish
             // them first). 团队列表小卡片「删除」按钮（用户迭代 2026-09 七）。
@@ -1387,18 +1438,16 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
             }
             if (segments[0] === 'board' && segments.length === 1) {
               // 跨团队聚合面板（docs/35 §6：Q1/Q3/Q4/Q5/Q9，纯只读 SQL）。
-              const registry = workspaceRegistryOf(ctx);
+              // 根去重同 collectRoots（全局单库下多工作区一个根，不重复聚合）。
               const teams: unknown[] = [];
-              if (registry) {
-                for (const workspace of registry.list()) {
-                  try {
-                    teams.push(...boardOverview(stateRootFor(config, workspace.path)));
-                  } catch (e) {
-                    const logger = (ctx as unknown as { logger?: { warn?: (m: string) => void } })
-                      .logger;
-                    if (typeof logger?.warn === 'function')
-                      logger.warn(`eteams: board aggregation skipped a workspace: ${String(e)}`);
-                  }
+              for (const { root } of collectRoots(ctx, config)) {
+                try {
+                  teams.push(...boardOverview(root));
+                } catch (e) {
+                  const logger = (ctx as unknown as { logger?: { warn?: (m: string) => void } })
+                    .logger;
+                  if (typeof logger?.warn === 'function')
+                    logger.warn(`eteams: board aggregation skipped a workspace: ${String(e)}`);
                 }
               }
               sendJson(res, 200, { teams, serverTime: Date.now() });

@@ -107,6 +107,44 @@ export function stateRootOf(env: RuntimeEnv): string {
   return stateRootFor(env.config, env.workspace);
 }
 
+/**
+ * 宿主会话默认模型路线（用户迭代 2026-09-04「会话默认」）：dsh-agent-default-model
+ * 服务的 currentSelection()——settings「agent-default-model」的即时快照。
+ * 领队/成员模型路线为空时派发固定到它（不再继承领队会话模型）。服务未挂
+ * （旧运行时/单测 ctx）返回 undefined，派发退回不带 agentOptions 的旧行为。
+ */
+export function sessionDefaultRouteOf(
+  ctx: unknown,
+): { provider: string; model: string; reasoningEffort?: string } | undefined {
+  const withProp = ctx as {
+    agentDefaultModel?: { currentSelection?: () => unknown };
+  };
+  const withGet = ctx as { get?: (key: string) => unknown };
+  const service =
+    withProp.agentDefaultModel ??
+    (typeof withGet.get === 'function' ? (withGet.get('agentDefaultModel') as unknown) : undefined);
+  const selection = (
+    service as { currentSelection?: () => unknown } | undefined
+  )?.currentSelection?.() as
+    { provider?: unknown; model?: unknown; reasoningEffort?: unknown } | undefined;
+  if (
+    selection === undefined ||
+    typeof selection.provider !== 'string' ||
+    selection.provider === '' ||
+    typeof selection.model !== 'string' ||
+    selection.model === ''
+  ) {
+    return undefined;
+  }
+  return {
+    provider: selection.provider,
+    model: selection.model,
+    ...(typeof selection.reasoningEffort === 'string' && selection.reasoningEffort !== ''
+      ? { reasoningEffort: selection.reasoningEffort }
+      : {}),
+  };
+}
+
 /** Tiny join helper (avoids importing node:path twice in hot paths). */
 export function joinPath(...parts: string[]): string {
   return parts

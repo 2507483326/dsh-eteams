@@ -129,9 +129,9 @@ export async function addTeamMember(
 
 /**
  * Set one member's model route（成员卡右侧模型选择）：model 为空 = 重置为
- * 跟随（继承领队会话模型）。运行中的成员在下次启动时生效（staged 成员启动
- * 即生效）。docs/35 §3#5：body 只收 {model, reasoningEffort}，provider 由
- * host 按配置解析。
+ * 会话默认（settings agent-default-model，用户迭代 2026-09-04）。运行中的
+ * 成员在下次启动时生效（staged 成员启动即生效）。docs/35 §3#5：body 只收
+ * {model, reasoningEffort}，provider 由 host 按配置解析。
  */
 export async function setMemberModel(
   teamId: string,
@@ -146,6 +146,22 @@ export async function setMemberModel(
       body: JSON.stringify(model),
     },
   );
+}
+
+/**
+ * Set the leader's model route（领队卡模型二级菜单，用户迭代 2026-09-04
+ * 恢复领队模型选择）：model 为空 = 重置为会话默认；有值 = 团队默认路线，
+ * 领队子代理派发按它解析。
+ */
+export async function setLeaderModel(
+  teamId: string,
+  model: { model?: string; reasoningEffort?: string },
+): Promise<void> {
+  await requestJson(`${API_BASE}/team/${encodeURIComponent(teamId)}/leader/model`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(model),
+  });
 }
 
 /**
