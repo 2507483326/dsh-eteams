@@ -33,7 +33,7 @@
  * - 主题采样（D22g-7）：从作用域根元素 getComputedStyle 读
  *   `--eteams-backdrop-label` / `--eteams-backdrop-accent`。
  *
- * 堆叠契约（eteamsView 接线，S22-4）：作用域根 inline `position:relative` 承载
+ * 堆叠契约（teamsView 壳接线（原 eteamsView，已拆分至 pages/teamsView/），S22-4）：作用域根 inline `position:relative` 承载
  * 本画布（画布内联 absolute 挂 0 高 sticky 条下——D25：宿主内工具类定位失效
  * 的根因修复，定位必须内联），SHELL_CLASS 加 `relative`——sticky 条与壳都是
  * 定位元素、按 DOM 序 painting，壳自然盖在画布上。

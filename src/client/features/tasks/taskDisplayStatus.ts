@@ -9,7 +9,7 @@
  *   经 import 继续使用，B.3 共存策略）。
  * - `memberTone`：成员状态五档 tone（原 eteamsView 同名函数迁移）。
  * - `DOT_BASE_CLASS`/`DOT_TONE_CLASS`：6px 状态点工具类（D22e 彩点唯一载体，
- *   完整字面量映射表，21.5.1 禁拼接纪律；eteamsView 经 import 消费）。
+ *   完整字面量映射表，21.5.1 禁拼接纪律；teamsView（原 eteamsView）经 import 消费）。
  *
  * @module dsh-eteams/client/taskDisplayStatus
  */

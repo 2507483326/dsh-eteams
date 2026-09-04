@@ -57,8 +57,8 @@ declare module 'lucide-react/dist/esm/icons/chevron-up.mjs' {
 
 // docs/24 S24-2（D22f emoji 清零 + 官网图标化）增补五枚：Search（侧栏筛选框）、
 // Plus（「新增」钮前缀）、ArrowLeft（返回钮）、MessageSquare（对话页入口）、
-// PenLine（意图访谈语义）。消费方：eteamsView / teamsPanel / teamsButton /
-// buildCard。同款深层导入纪律（一个图标只进一个模块）。
+// PenLine（意图访谈语义）。消费方：teamsView（原 eteamsView，已拆分至
+// pages/teamsView/）/ teamsPanel / teamsButton / buildCard。同款深层导入纪律（一个图标只进一个模块）。
 declare module 'lucide-react/dist/esm/icons/search.mjs' {
   import type { ForwardRefExoticComponent, RefAttributes } from 'react';
   import type { LucideProps } from 'lucide-react';

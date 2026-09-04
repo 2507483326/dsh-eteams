@@ -1,7 +1,8 @@
 /**
  * ui model（docs/21-client-ui-stack.md S8/S9）：面板全局 UI 状态——第一批
  * 导航与选择（S8：activeNav/selectedTeamId），第二批抽屉与对话框（S9：
- * drawerTaskId/dialogMember）。eteamsView 的对应 useState 已删除：Provider
+ * drawerTaskId/dialogMember）。原 eteamsView（已拆分至 pages/teamsView/）
+ * 的对应 useState 已删除：Provider
  * 包在表面根（ETeamsView），面板体经 useSelector 读、useDispatch 发
  * `ui/setNav` / `ui/setSelectedTeam` / `ui/setDrawerTask` / `ui/setDialogMember`；
  * goto 桥（consumePendingGoto* / SELECT_TEAM_EVENT）触发的目标状态同样走
@@ -14,7 +15,7 @@ import type { DvaModel } from 'dva-core';
 
 /** 面板全局 UI 状态（21.5.3）：纯 reducers；组件内瞬态仍留 useState。 */
 export interface UiState {
-  /** 侧栏当前 tab（与 eteamsView 的 tabs 五值对齐）。 */
+  /** 侧栏当前 tab（与 teamsView 壳 index.tsx 的 tabs 五值对齐）。 */
   activeNav: 'board' | 'team' | 'roster' | 'tasks' | 'reports';
   /** 当前选中团队（board 联动与弹层跳转共用；null=未选）。 */
   selectedTeamId: string | null;

@@ -201,7 +201,8 @@ export interface PendingRouteEntry {
 
 /**
  * React subscription over the polled activity state（S7：快照已迁 dva，
- * 签名与返回类型不变——card/eteamsView/teamsButton 消费方零改动）。
+ * 签名与返回类型不变——card/teamsView（原 eteamsView，已拆分至
+ * pages/teamsView/）/teamsButton 消费方零改动）。
  *
  * 无条件 useSelector（D19e「组件优先 useSelector」）。前提——祖先树里有
  * react-redux Provider——由 21.5.3 表面拓扑保证：五个表面根（ETeamsView /

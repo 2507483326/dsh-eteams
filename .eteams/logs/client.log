@@ -1,15 +1,3 @@
-{"at":1787917766524,"version":"v0.2.0","entry":{"at":1787917764513,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787918655361,"version":"v0.2.0","entry":{"at":1787917764513,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787918655361,"version":"v0.2.0","entry":{"at":1787918652116,"kind":"error","message":"Uncaught ReferenceError: exports is not defined","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=631e2e4a2fe8:1:23"}}
-{"at":1787918656852,"version":"v0.2.0","entry":{"at":1787918653938,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787918739846,"version":"v0.2.0","entry":{"at":1787917764513,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787918739846,"version":"v0.2.0","entry":{"at":1787918652116,"kind":"error","message":"Uncaught ReferenceError: exports is not defined","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=631e2e4a2fe8:1:23"}}
-{"at":1787918739846,"version":"v0.2.0","entry":{"at":1787918736935,"kind":"error","message":"Uncaught SyntaxError: Identifier 'react_jsx_runtime' has already been declared","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=631e2e4a2fe8:1:1"}}
-{"at":1787918739873,"version":"v0.2.0","entry":{"at":1787918653938,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787918739873,"version":"v0.2.0","entry":{"at":1787918736935,"kind":"error","message":"Uncaught SyntaxError: Identifier 'react_jsx_runtime' has already been declared","source":"http://127.0.0.1:43120/plugins/dsh-eteams/client.js?rev=631e2e4a2fe8:1:1"}}
-{"at":1787918740855,"version":"v0.2.0","entry":{"at":1787918738595,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787919435670,"version":"v0.2.0","entry":{"at":1787919433606,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
-{"at":1787921157851,"version":"v0.2.0","entry":{"at":1787921155288,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
 {"at":1787921408873,"version":"v0.2.0","entry":{"at":1787921406870,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
 {"at":1787922054850,"version":"v0.2.0","entry":{"at":1787922052191,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
 {"at":1787922170715,"version":"v0.2.0","entry":{"at":1787922168652,"kind":"bundle","message":"eteams client bundle loaded v0.2.0"}}
@@ -398,3 +386,15 @@
 {"at":1788498943171,"version":"v0.2.12","entry":{"at":1788498940383,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
 {"at":1788498945176,"version":"v0.2.12","entry":{"at":1788498940383,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
 {"at":1788498945176,"version":"v0.2.12","entry":{"at":1788498943170,"kind":"backdrop-geom","message":"canvas=1577x945 attr=position: absolute; top: 0px; left: 0px; width: 100%; height: 945px; opacity: 1; root=1577x951 scroll=1577x1041"}}
+{"at":1788499562175,"version":"v0.2.12","entry":{"at":1788499559902,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788499565165,"version":"v0.2.12","entry":{"at":1788499559902,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788499565165,"version":"v0.2.12","entry":{"at":1788499562175,"kind":"backdrop-geom","message":"canvas=1577x945 attr=position: absolute; top: 0px; left: 0px; width: 100%; height: 945px; opacity: 1; root=1577x951 scroll=1577x1041"}}
+{"at":1788499841177,"version":"v0.2.12","entry":{"at":1788499838545,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788499844172,"version":"v0.2.12","entry":{"at":1788499838545,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788499844172,"version":"v0.2.12","entry":{"at":1788499841177,"kind":"backdrop-geom","message":"canvas=1577x945 attr=position: absolute; top: 0px; left: 0px; width: 100%; height: 945px; opacity: 1; root=1577x951 scroll=1577x1041"}}
+{"at":1788500712167,"version":"v0.2.12","entry":{"at":1788500709965,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788500715164,"version":"v0.2.12","entry":{"at":1788500709965,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788500715164,"version":"v0.2.12","entry":{"at":1788500712167,"kind":"backdrop-geom","message":"canvas=1577x945 attr=position: absolute; top: 0px; left: 0px; width: 100%; height: 945px; opacity: 1; root=1577x951 scroll=1577x1041"}}
+{"at":1788502556074,"version":"v0.2.12","entry":{"at":1788502554064,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788502558524,"version":"v0.2.12","entry":{"at":1788502554064,"kind":"bundle","message":"eteams client bundle loaded v0.2.12"}}
+{"at":1788502558524,"version":"v0.2.12","entry":{"at":1788502556521,"kind":"backdrop-geom","message":"canvas=1577x951 attr=position: absolute; top: 0px; left: 0px; width: 100%; height: 951px; opacity: 1; root=1577x951 scroll=1577x1041"}}

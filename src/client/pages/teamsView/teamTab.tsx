@@ -72,6 +72,12 @@ const TEAM_GOAL_PLACEHOLDER = '（待完善：与领队在对话中确认目标�
 const PHASE_PILL_CLASS =
   'inline-flex w-fit shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-[color:var(--eteams-pill-bg)] px-2.5 py-0.5 text-xs font-medium text-[color:var(--eteams-pill-ink)]';
 
+/**
+ * 团队：新增团队（弹窗，名称即建）+ 团队列表/详情两级视图（用户迭代
+ * 2026-09）。列表态是长条形团队卡（名称 + 阶段徽标 + 进度 + 右侧成员
+ * 头像略缩图最多 3 个），点击卡片进入该团队的详情——成员栅格、拉人、
+ * 移出等只在详情视图出现。
+ */
 export function TeamTab({
   sessionId,
   pool,

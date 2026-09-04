@@ -143,6 +143,21 @@ Provider：`ETeamsView`、`TeamsButton`、`ETeamsCard`、`EteamBuildCard`、`tea
 > - S14：**tooltip/tabs 最终未 vendoring**——迁移中未出现消费面，按 D19g 按需纪律不落库；PHASE_LABELS 合并至 `phaseLabels.ts`，旧 `TONE_FG`/`TONE_BG`/`PILL_FG` 色表与 `styles`/`fns` inline 工厂删除（面板残余 inline 仅进度条宽度 ×2 与壳高度锚点 ×1，均为运行时动态值）。
 > - S15：`teamsButton.tsx` 改直连 `phaseLabels.ts`（eteamsView 兼容 re-export 撤销）；RootState 类型收口（`store/app.ts` 补 roster/build 键，eteamsView 局部 `PanelRootState` 别名删除）；全仓死代码清理（client：`ADD_PEOPLE_PREFIX`、`clientDiagEntries` 删除，`STATE_URL`/`ETEAMS_DATA_ATTR`/`withComposerTextarea`/`composerDraft`/`openTeamsOverlay` 收敛为模块私有，`T` token 表裁剪到注入样式表实际消费的 7 键；host：`noticeMail`/`memberWakeHeader`/`agentIdentity`/`SYSTEM_ACTOR`/`readTeamByIdSync`/`appendTaskNote`/`captainLockKey` 七个零引用符号删除，`captainProtocolFull` 依 docs/19.5.3 契约保留）；docs/README.md 阅读顺序行 + D19 决策行、docs/03 §3.11 选型节、体积终态见附录 C。
 
+### 21.6.1 结构整改指针（docs/32，2026-09-04）
+
+D19 系列的接线与纪律经 docs/32 结构整改后全部保持，仅路径变化（本文 S0–S15 施工记录中的旧路径为历史证据，不回改，按本节对照）：
+
+| 项 | 现值 |
+|---|---|
+| 根目录 | `src/client/` 只剩 `index.tsx`（入口）+ 目录：`lib/ hooks/ components/ store/ features/ pages/ styles/ types/` |
+| D19d vendoring 目录 | `components/ui/` 不变（shadcn 13 件 + portal.ts + lucide-icon.d.ts，kebab-case 例外不变） |
+| cn | `src/client/lib/cn.ts`（components.json `aliases.utils` 同步） |
+| hooks | `src/client/hooks/useHostDark.ts`（components.json `aliases.hooks` 建立后首次成真） |
+| Tailwind 唯一输入 | `src/client/styles/eteams.css`（`buildTailwind.mjs -i` 与 components.json `tailwind.css` 同步） |
+| tailwind content 扫描 | `src/client/**/*.{ts,tsx}` 不变（移动全在 src/client 内，类名字面量仍被扫描） |
+| 运行时注入器 | `src/client/lib/tailwind.ts` 的 `ensureEteamsStyles()`（幂等注入 `<style data-dsh-eteams-tw>`） |
+| 原单文件面板巨石 | `eteamsView.tsx`（5060 行）已拆分至 `pages/teamsView/` 14 文件（壳 index.tsx + shared.tsx + 12 个 tab/子组件）；任务拖拽/展示态在 `features/tasks/`；头像 `features/avatar/`；背景板 `features/backdrop/`；md 编辑器 `features/mdEditor/` |
+
 ## 21.7 审核与测试计划
 
 ### 21.7.1 每步门（小步快跑的「快」来自自动化兜底）
@@ -247,5 +262,6 @@ Provider：`ETeamsView`、`TeamsButton`、`ETeamsCard`、`EteamBuildCard`、`tea
 | `lib/client.js` 终态（S15 全量 build 后，单文件 CJS envelope，min） | **4012 KB**（4,108,322 B） |
 | `lib/tailwind.gen.css`（`--minify`，gitignored，运行时字符串内联进 envelope） | 28.2 KB（28,911 B），落在预估 5–30KB 区间内 |
 | S0 基线 | 基线值记录于 S0 步骤报告（工作流上下文），未持久化进仓库；各步增量以对应提交的体积记录为准 |
+| 结构整改（docs/32，2026-09-04） | `lib/client.js` 5223 KB（docs/32 批 0 基线，S15 后随功能迭代增长）→ **5230 KB，+7 KB（+0.13%）**；构成 = shared.tsx 拆分 +4 KB、shared 抽取 +3 KB，import 改写无行为变更 |
 
 > 说明：envelope 同时承载 mdxeditor 全家（既有大头）与本次 UI 栈增量；本表只锚定终态绝对值与 Tailwind 产物体积，步骤级增量以各步 commit 记录与 S0 报告为准。

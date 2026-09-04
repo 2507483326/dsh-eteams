@@ -93,7 +93,7 @@ option  = randomOption(rand, widgets, palettes, {
 
 ## 14.8 M6 首切片（2026-08-28 提前交付）
 
-- **种子化 SVG 渲染器已上线**（`src/client/avatar.tsx`）：(seed, salt) 经 mulberry32 确定性推导 背景/肤色/发型×5/眼型×3/嘴型×3/眼镜/腮红，64×64 viewBox，无外部资产；无头像对时回退首字母色环。
+- **种子化 SVG 渲染器已上线**（`src/client/features/avatar/avatar.tsx`）：(seed, salt) 经 mulberry32 确定性推导 背景/肤色/发型×5/眼型×3/嘴型×3/眼镜/腮红，64×64 viewBox，无外部资产；无头像对时回退首字母色环。
 - **头像提前生成**（用户需求）：成员库 upsert 时若未携带 avatar 即自动生成并落盘（`roster.json`），更新条目保留既有头像；团队采纳成员（fromRoster）继承成员库头像，非采纳路径按名字哈希 + 随机 salt 生成（`eteams_add_member`）。
 - **展示面**：成员 tab（团队成员卡片 + 成员库行）、团队 tab、快照 `members[].avatar` 投影。
 - M6 剩余：vue-color-avatar 完整形状数据移植、重摇/编辑器、种子化数据资产压缩。
@@ -105,21 +105,21 @@ option  = randomOption(rand, widgets, palettes, {
 **资产与生成**
 
 - `assets/avatar/widgets/**`：上游 `src/assets/widgets/` 全量 39 个形状 SVG **逐字 vendored**（face=1 ear=2 earrings=2 eyebrows=4 eyes=4 nose=3 glasses=2 mouth=8 beard=1 tops=9 clothes=3）；溯源在 `assets/avatar/UPSTREAM.json`（本地快照无 commit，版本 1.0.0），署名在 `NOTICE.md`（随包分发）。
-- `scripts/genAvatarWidgets.mjs`：读取 vendored SVG → 生成 `src/client/avatarWidgets.ts` 字符串表（JSON.stringify 内联，带 sha256 指纹 `AVATAR_WIDGETS_FINGERPRINT`）。换资产重跑脚本即可，客户端零 loader 插件。
+- `scripts/genAvatarWidgets.mjs`：读取 vendored SVG → 生成 `src/client/features/avatar/avatarWidgets.ts` 字符串表（JSON.stringify 内联，带 sha256 指纹 `AVATAR_WIDGETS_FINGERPRINT`）。换资产重跑脚本即可，客户端零 loader 插件。
 
-**模型与生成算法**（`src/client/avatarOption.ts`）
+**模型与生成算法**（`src/client/features/avatar/avatarOption.ts`）
 
 - 上游 `getRandomAvatarOption` 忠实移植：mulberry32 种子流、`usually` 条目 ×15 权重、`avoid` 过滤、性别池（女发 danny/wave/pixie，男发其余 6 种 + scruff 胡须 15:1 权重）、punk/fonze 发色规避同色背景、scruff `zIndex = mouth - 1`（压嘴下）。
 - **契约不变**：`(seed, salt)` → `(seed ^ imul(salt+1, 2654435761))` 种子，成员库已落盘的 pair 全部沿用，无迁移。
 
-**合成器**（`src/client/avatarSvg.ts`，移植 `VueColorAvatar.vue` watchEffect）
+**合成器**（`src/client/features/avatar/avatarSvg.ts`，移植 `VueColorAvatar.vue` watchEffect）
 
 - 按 `AVATAR_LAYER` z 序排序、剥 `<svg>` 壳拼 `<g>` 层、`$fillColor` 替换、ear 继承肤色、`translate(100, 65)`，全部逐字对齐上游。
 - **画板固定 400×400**：上游 viewBox 公式 `size/0.7` 以默认 size=280 校准（280/0.7=400），部件画稿按 400 板绘制；上游传其他尺寸会裁板。移植改为板恒 400、视口随 `size` 缩放——任意尺寸都呈现上游 280px 的完整观感（34px 名字行 → 72px 预览同一张脸）。
 - **id 命名空间**（有意分歧）：上游单页单头像，`mask0`/`clip0` 裸 id 不冲突；本面板一页几十个头像，`namespaceIds()` 以 `eteams-av-{useId}-` 前缀改写全部 `id="…"`/`url(#…)`/`href="#…"`，浏览器实测 48 头像同页 0 重复 id、0 串色。
 - 未知形状 id → 跳过该层（前向兼容，14.3 口径）。
 
-**组件**（`src/client/avatar.tsx`）
+**组件**（`src/client/features/avatar/avatar.tsx`）
 
 - `Avatar({name, seed, salt, size})` API 与 12 处调用点不变；合成结果为完整 `<svg>` 文档，经 `dangerouslySetInnerHTML` 直挂容器 span（同上游 v-html）；容器背景 = `option.background.color`（含渐变），圆形裁切沿用 `AVATAR_CONTAINER_CLASS`。无 pair 回退首字母色环不变。
 

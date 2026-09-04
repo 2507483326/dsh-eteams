@@ -4,7 +4,8 @@
  * （fetch/confirm/cancel/restart/interview）改发 `build/…` action，不再直接
  * await api（api.ts 不动）。
  *
- * 轮询纪律（迁移前现状保持）：1.5s interval 留在 eteamsView（角色构建师的
+ * 轮询纪律（迁移前现状保持）：1.5s interval 留在视图层（原 eteamsView，
+ * 已拆分至 pages/teamsView/，现住 membersTab.tsx；角色构建师的
  * monitor 逻辑不动），本 model 只承接单次 fetch。失败语义分两档：
  * - fetch：落 state.error 后吞掉——迁移前 refreshBuild 就是
  *   `.catch(() => undefined)` 的静默面，且 1.5s 高频轮询，不上抛（不给

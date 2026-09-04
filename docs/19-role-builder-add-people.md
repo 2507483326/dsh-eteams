@@ -185,7 +185,7 @@
 
 ## 19.7 客户端改造
 
-### 19.7.1 「新增成员」按钮：无表单一键预填（`src/client/eteamsView.tsx`）
+### 19.7.1 「新增成员」按钮：无表单一键预填（`src/client/pages/teamsView/membersTab.tsx`，原 `src/client/eteamsView.tsx` 已拆分）
 
 - 成员页头部的「新增成员」按钮不再进入输入表单视图，**点击即预填**（双层写入，docs/19.4）：
   1. **官方写路径**：`props.inputActions.setDraft(command)` 全量替换状态机草稿（`conversation.view` 是 session-scope 槽位，按 `SessionStandardProps` 约定收到 `inputActions`；类型未显式暴露时结构性断言访问，与现有 `TeamsButtonProps` 策略一致）。命令以 `/eteam` 开头：
@@ -210,7 +210,7 @@
 - **自动跳转**：见 19.6.2（`updatedAt` 会话键去重的单次跳转）。
 - Token 表 `T` / 胶囊 / 卡片规范沿用 13.x 设计系统（禁止裸十六进制色）。
 
-### 19.7.3 composer 团队按钮（`src/client/teamsButton.tsx`）
+### 19.7.3 composer 团队按钮（`src/client/pages/teamsButton.tsx`）
 
 popup 增加 **「＋ 新增成员」** 项：执行与 19.7.1 相同的一键预填（任何视图下都可用），并 `activateETeamsTab()` 跳回面板（构建过程随后自动出现在构建工作台）。
 
@@ -321,9 +321,9 @@ popup 增加 **「＋ 新增成员」** 项：执行与 19.7.1 相同的一键�
 | 8 | `src/host/tools/captainTools.ts` | `eteams_build_report` 工具定义 |
 | 9 | `src/host/runtime/members.ts` | `MEMBER_DENIED_TOOLS` += `eteams_build_report` |
 | 10 | `src/host/runtime/webui.ts` | GET `/rolebuilder`、POST `/rolebuilder/confirm`、POST `/rolebuilder/cancel` |
-| 11 | `src/client/api.ts` | `fetchBuildState` / `confirmBuild` / `cancelBuild` |
-| 12 | `src/client/eteamsView.tsx` | 按钮一键预填、构建工作台四态视图、自动跳转、确认接线、手动创建折叠 |
-| 13 | `src/client/teamsButton.tsx` | popup「＋ 新增成员」项（同样一键预填） |
+| 11 | `src/client/lib/api.ts` | `fetchBuildState` / `confirmBuild` / `cancelBuild` |
+| 12 | `src/client/pages/teamsView/membersTab.tsx`（原 `src/client/eteamsView.tsx`，已拆分；草稿簇在 `buildDraft.tsx`） | 按钮一键预填、构建工作台四态视图、自动跳转、确认接线、手动创建折叠 |
+| 13 | `src/client/pages/teamsButton.tsx` | popup「＋ 新增成员」项（同样一键预填） |
 | 14 | `tests/roleBuilder.test.ts`（新增） | 见 19.12 |
 | 15 | `docs/README.md` | D18 决策行 + 文档索引行（已随本文落地） |
 
@@ -473,13 +473,13 @@ popup 增加 **「＋ 新增成员」** 项：执行与 19.7.1 相同的一键�
 
 1. **人设深度对齐 agency-agents-zh**（`jnMetaCode/agency-agents-zh`，20k★）：构建师按单文件规格产出——YAML frontmatter（`name/description/emoji/color`）+ 正文（身份开篇段 → 🧠 身份与记忆 → 🎯 核心使命 → 🔧 关键规则 → ≥2 个领域专章（工作流含代码块 / 陷阱对照表 / 速查清单）→ 💬 沟通风格 → 📊 成功指标），正文 ≥60 行；emoji/color 按领域随机挑选。见 `ROLE_BUILDER_PRESET.rules` 与 19.8.1 standing section。
 2. **人设统一 md 管理**：`personaMd` 是唯一权威——frontmatter 承载 name/description/emoji/color，正文承载全部人设章节；duty/style/skills/rules 变为从 md 提炼的摘要（`eteams_member_save` 参数兼容保留）。
-3. **md 编辑器**（`src/client/mdEditor.tsx`）：待确认表单以「工具栏（H2/加粗/行内码/列表/引用/代码块/表格）+ 等宽编辑区 + 编辑/预览切换（MarkdownText）」取代散装 textarea；预览与 DSH 同一渲染组件。
-4. **对话内命令卡片**（`src/client/buildCard.tsx`，docs/19.9.5）：
+3. **md 编辑器**（`src/client/features/mdEditor/mdEditor.tsx`）：待确认表单以「工具栏（H2/加粗/行内码/列表/引用/代码块/表格）+ 等宽编辑区 + 编辑/预览切换（MarkdownText）」取代散装 textarea；预览与 DSH 同一渲染组件。
+4. **对话内命令卡片**（`src/client/pages/buildCard.tsx`，docs/19.9.5）：
    - `/eteam` 命令节点经 `conversation.chat.commandview` keyed 槽（key `eteam`）渲染为「成员创建中」卡片，替换通用命令卡片；
    - 激活消息以 plugin source（`{kind:'plugin', plugin:'dsh-eteams', form:'notice', summary}`）steer——模型照常收到全文，会话折叠为上下文行而非用户气泡（input-message 节点折叠规则：`source.kind !== 'user'` → context 节点）；
    - 卡片 1.5s 轮询 `/eteams-api/rolebuilder`，呈现 创建中（步骤）/ 待确认 / 已入库，点击（或「打开创建页」）→ `openMemberBuilder()` → 团队 tab + 成员新增工作台（`eteams:goto-add` 窗口事件 → `openAddTick` prop）；
    - 构建对话纪律：构建师在对话里只回一句简短确认，细节全部走 `eteams_build_report`。
-5. **头像**：已有 seeded SVG 头像（`src/client/avatar.tsx`，docs/14）——`upsertRosterMember` 对无头像成员自动分配随机 `(seed, salt)`，构建师创建的成员天然适用；卡片与工作台均渲染。
+5. **头像**：已有 seeded SVG 头像（`src/client/features/avatar/avatar.tsx`，docs/14）——`upsertRosterMember` 对无头像成员自动分配随机 `(seed, salt)`，构建师创建的成员天然适用；卡片与工作台均渲染。
 
 构建时间线步骤名对齐：`收到需求 → 查重成员库 → 起草统一手册 → 深化领域章节 → 完成草稿`（`eteams_build_report` step/stepsDone 逐字使用，面板 `BUILD_STEPS` 渲染）。
 

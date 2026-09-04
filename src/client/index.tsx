@@ -33,7 +33,7 @@ import { installCard } from './pages/eteamsCard';
 import { EteamBuildCard } from './pages/buildCard';
 import { ETEAMS_TAB_LABEL, ETEAMS_VIEW_ID } from './lib/bridge';
 import { installClientDiagnostics, recordClientDiag } from './lib/diagnostics';
-import { ETeamsView } from './eteamsView';
+import { ETeamsView } from './pages/teamsView/index';
 import { installHeroTeamsButton } from './pages/heroTeamsButton';
 import { installModelCatalog } from './lib/modelCatalog';
 import { ensureEteamsStyles } from './lib/tailwind';

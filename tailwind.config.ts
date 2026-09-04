@@ -14,7 +14,7 @@ import tailwindcssAnimate from 'tailwindcss-animate';
  *   `className="eteams-ui"` 字面量，否则 content 扫描不到该选择器、purge
  *   会清空产物。
  * - theme.extend.colors（S3，附录 A）：shadcn 语义 token 全部映射
- *   `var(--token)`（token 定义在 src/client/eteams.css 的 @layer base）。
+ *   `var(--token)`（token 定义在 src/client/styles/eteams.css 的 @layer base）。
  *   token 值为完整色值，不用 hsl(var())
  *   通道形式；token 色禁用 /alpha 修饰（需要半透明走专用 token/color-mix）。
  *   success/warning/business 为扩展 token，服务 Tone 徽标语义。

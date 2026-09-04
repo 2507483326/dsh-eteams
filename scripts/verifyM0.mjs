@@ -48,8 +48,8 @@ if (exists('lib/client.js')) {
   ok('exports.apply exported', client.includes('exports.apply'));
   ok('exports.inject exported', client.includes('exports.inject'));
   ok(
-    'exports.inject declares every accessed service (slots + conversationEvents)',
-    /inject\s*=\s*\[\s*"slots"\s*,\s*"conversationEvents"\s*\]/.test(client),
+    'exports.inject declares every accessed service (slots + conversationEvents + modelDirectories)',
+    /inject\s*=\s*\[\s*"slots"\s*,\s*"conversationEvents"\s*,\s*"modelDirectories"\s*\]/.test(client),
   );
   ok('registers conversation.view entry', client.includes('"conversation.view"'));
   ok('registers conversation.input.right entry', client.includes('"conversation.input.right"'));

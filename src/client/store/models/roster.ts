@@ -1,6 +1,7 @@
 /**
  * roster model（docs/21-client-ui-stack.md S10 / 21.5.3）：成员库（D16）的
- * 列表 + 加载/错误态，CRUD 副作用迁入 dva effects。eteamsView 的调用点改发
+ * 列表 + 加载/错误态，CRUD 副作用迁入 dva effects。teamsView 各页面（原
+ * eteamsView，已拆分至 pages/teamsView/）的调用点改发
  * `roster/fetchRoster` / `roster/saveRoster` / `roster/deleteRoster`，
  * 不再直接 await api（api.ts 仍是唯一 HTTP 面，本步不动它）。
  *

@@ -3,7 +3,7 @@
  *
  * 构建期：`pnpm build` 串步 `scripts/buildTailwind.mjs` —— tailwind CLI 以
  * tailwind.config.ts（preflight 关闭、`important: '.eteams-ui'`、content 只扫
- * src/client）把 src/client/eteams.css 编译成 lib/tailwind.gen.css
+ * src/client）把 src/client/styles/eteams.css 编译成 lib/tailwind.gen.css
  * （gitignored）；tsdown 的 tailwindCssInline 虚拟模块（id 不以 .css 结尾，
  * 规避 css-guard）把该产物以字符串内联进单文件 CJS envelope，类型由
  * eteamsCss.d.ts 的 `*.gen.css` 通配声明供给。

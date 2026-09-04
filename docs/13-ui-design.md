@@ -190,7 +190,7 @@ t3 实现导出模块                    ●in_progress  [取消任务] [改派]
 - **成员 tab = 公司员工模型（2026-08-28 三次调整，用户定稿）**：成员页 = 全体成员列表 + 「新增成员」按钮 + 点击成员看详情（头像/人设 D13/所属团队/汇报时间线）；**不显示团队成员列表**——先有员工、再组建团队，组队发生在「团队」页（成员栅格 + 从成员列表拉人）。新增成员仍走对话命令（eteams_member_save）；「成员库」字样在 UI 中不再出现（roster.json 即全体成员，领队工具保留）。
 - **回归防线**：verifyM0 断言宿主与客户端 bundle 均不得出现 `/plugins/dsh-eteams`（路由命名空间事故防线，18 §7.1）。
 
-- **设计系统化改造（2026-08-28，UI 设计师 pass，用户要求）**：面板视觉层全部收进单一 Token 表（`T`，eteamsView.tsx）——背景 bg-base/bg-layer-1/layer-2、边框 border-l1/l2、文字 label-primary/secondary/tertiary 三级、强调 brand-primary、状态五桶 info/ok/warn/err/muted（state-*-primary 作前景、*-secondary 作底色），全部走 `--dsw-alias-*` 带回退，明暗随宿主。组件基线：卡片 12px 圆角+1px 边+微阴影；导航 pill（激活=accentSoft 底+accent 字）；状态一律 `fns.pill(tone)` 胶囊（任务分组头、成员卡）；成员行 hover 行样式、详情页 hero 头像+角色 roleChip+人设 detailRow 行；进度条 accent→business 渐变；空态虚线框；横幅用 warn 色对。禁止再写裸十六进制颜色（诊断：文件内 #hex 仅允许出现在 Token 表回退值中）。
+- **设计系统化改造（2026-08-28，UI 设计师 pass，用户要求）**：面板视觉层全部收进单一 Token 表（`T`，原 `eteamsView.tsx`，该文件已拆分至 `pages/teamsView/`；S15 起 T 表裁剪至注入样式表实际消费面）——背景 bg-base/bg-layer-1/layer-2、边框 border-l1/l2、文字 label-primary/secondary/tertiary 三级、强调 brand-primary、状态五桶 info/ok/warn/err/muted（state-*-primary 作前景、*-secondary 作底色），全部走 `--dsw-alias-*` 带回退，明暗随宿主。组件基线：卡片 12px 圆角+1px 边+微阴影；导航 pill（激活=accentSoft 底+accent 字）；状态一律 `fns.pill(tone)` 胶囊（任务分组头、成员卡）；成员行 hover 行样式、详情页 hero 头像+角色 roleChip+人设 detailRow 行；进度条 accent→business 渐变；空态虚线框；横幅用 warn 色对。禁止再写裸十六进制颜色（诊断：文件内 #hex 仅允许出现在 Token 表回退值中）。
 
 - **成员详情角色手册（2026-08-28）**：详情页在人设摘要行下新增「角色手册（Markdown）」卡片，用宿主 `MarkdownText`（primitives）渲染 `personaMd`；无手册的成员不显示该卡片。新增成员表单可选填手册，命令以 `eteams-persona-md` 围栏携带原文，领队原样作为 personaMd 参数传入 `eteams_member_save`。
 

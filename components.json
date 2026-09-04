@@ -1,5 +1,5 @@
 {
-  "$comment": "仅 CLI 参考用：本仓不跑 shadcn CLI（手动 vendoring 到 src/client/components/ui/，docs/21-client-ui-stack.md D19d）。本文件按 shadcn 标准布局记录映射关系，供人工对照与未来 CLI 接入；aliases 用仓库真实路径（rootDir=src/client，无 paths 别名）。",
+  "$comment": "仅 shadcn CLI 参考配置：本仓不跑 shadcn CLI（组件手动 vendoring 到 src/client/components/ui/，kebab-case 例外）。本文件按 shadcn 标准布局记录映射关系，供人工对照与未来 CLI 接入；tailwind.css 字段不参与实际样式构建——真实链路是 scripts/buildTailwind.mjs 以 src/client/styles/eteams.css 为唯一输入产出 lib/tailwind.gen.css、tsdown 虚拟模块字符串内联。aliases 用仓库真实路径（rootDir=src/client，无 paths 别名）：utils=src/client/lib/cn、lib=src/client/lib、hooks=src/client/hooks（结构整改后 hooks/ 建立首次成真）。",
   "$schema": "https://ui.shadcn.com/schema.json",
   "style": "new-york",
   "rsc": false,

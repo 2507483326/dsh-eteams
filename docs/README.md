@@ -34,6 +34,10 @@
 | 28   | [28 看板每日 Token 消耗日历](28-token-usage-calendar.md)      | 看板「Token 消耗」日历：usage.jsonl 事件粒度记账（`session/event` firehose + 水位对账，token 记账唯一真相）+ 聚合路由 + react-activity-calendar 渲染规格 |
 | 29   | [29 小任务拖拽指派 + 任务展示态](29-subtask-dnd-task-status.md) | 任务页小任务成员框拖拽指派（react-dnd，纯填链语义，D14 细化口径见其 A.3.3）与 13 态→展示态派生层 |
 | 30   | [30 设计审核报告](30-design-review.md)                        | 对 27/28/29 的证据级审核：阻塞/建议/备忘清单与修订结论（2026-09-04 修订已落实进 27/28/29） |
+| 31   | [31 验收报告（四功能）](31-acceptance.md)                     | Token 日历 / SQLite 设计 / 小任务拖拽 / 展示态四功能的最终集成验收：四门 272/272 全绿、构建冒烟与体积对拍（+835 KB/+19.0% 归因）、需求逐条对照与 6 条偏差记录 |
+| 32   | [32 项目结构整改方案](32-restructure-plan.md)                 | client 平面归属规则（pages/features/lib/components 判定树与目录规则、camelCase 命名）与 eteamsView.tsx 巨石（5060 行 110 符号）逐符号拆分映射、tests/scripts/构建接线同步、分阶段执行与文档回写清单 |
+| 33   | [33 结构整改审核报告](33-restructure-review.md)               | 对 docs/32 的证据级审核：拆分映射表逐符号全量核验、构建接线/测试/脚本清单回查，阻塞/建议/备忘清单与执行前修订结论（2026-09-04 修订已落实进 32） |
+| 34   | [34 结构整改验收报告](34-acceptance.md)                       | 对 docs/32 全量执行的独立验收：四门 + verifyM0 亲跑全绿、体积台账（5223→5230 KB +0.13%）、110 符号映射逐行复核与结构收口 grep 零命中、8 条偏差记录与实施结果回写 |
 
 ## 决策记录（2026-02 与用户确认）
 

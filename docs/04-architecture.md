@@ -78,26 +78,57 @@ src/host/
 
 ```
 src/client/
-  index.ts            # 注入入口：注册对话卡片节点、浮动面板挂载、locale 订阅
-  card/ETeamsCard.tsx # 对话卡片（FR-29）
-  panel/
-    ActivityPanel.tsx # 浮动面板容器 + 团队切换器（FR-30）
-    OverviewTab.tsx  MemberTab.tsx  TasksTab.tsx  FeedTab.tsx
-    StagedPlanEditor.tsx            # staged 计划编辑（FR-31）
-    TaskDetail.tsx                  # 任务详情 + 执行线路时间线 + 执行槽（FR-20/D14）
-    MemberDialog.tsx                # 成员对话框：双向消息时间线 + 用户直发（D15/FR-42）
-    TaskEditDialog.tsx MemberPicker.tsx DecisionBanner.tsx
-    slotDnD.ts                      # 执行槽拖拽上下文：合法目标判定/放置语义（D14/FR-41）
-  state/
-    monitor.ts         # 共享轮询控制器 + 快照外部存储（useSyncExternalStore）
-    api.ts             # fetch 封装：state / ops 路由
-  avatar/
-    Avatar.tsx         # React SVG 渲染器（option → SVG）
-    option.ts          # 与宿主共享的种子→option 算法（同构模块）
-    AvatarEditor.tsx   # 简化编辑：重摇 + 逐类别微调（FR-09）
+  index.tsx            # 注入入口：apply() 装配 + 五表面槽位注册 + inject 清单（根目录仅此一文件）
+  lib/                 # 横切基建：无表面归属、不渲染业务 UI
+    bridge.ts          # 跨表面桥：window 事件常量、pending 信号、tab 激活/可见性
+    monitor.ts         # /eteams-api/state 轮询 + activity 快照投影（refreshActivitySoon）
+    api.ts             # /eteams-api 写 API 封装（roster/team/task/build/usage）
+    cn.ts              # clsx + tailwind-merge 类名合并
+    modelCatalog.ts    # 会话模型目录只读（host modelDirectories 服务）
+    addPeople.ts       # /eteam 命令模板 + 一键预填 helper（React-free）
+    phaseLabels.ts     # 团队阶段词表
+    versionLabel.ts    # 版本标签常量
+    tailwind.ts        # Tailwind 产物运行时幂等注入（ensureEteamsStyles，构建接线端点）
+    diagnostics.tsx    # 诊断环形缓冲 + host 上报 + ClientErrorBoundary
+  hooks/
+    useHostDark.ts     # 宿主暗色 body 属性订阅（亮暗主题跟随）
+  components/
+    ui/                # shadcn/ui 手动 vendored 13 件 + 自管 portal 容器（portal.ts）+ 图标声明垫片（lucide-icon.d.ts），kebab-case
+  store/               # dva 单例 store（D19e）
+    app.ts             # create → model → start 引导（RootState 聚合）
+    models/            # activity/ui/build/roster 四 model + index 聚合
+  features/            # 领域特性块：组件 + 纯逻辑 + 领域常量，各有独立文档线与测试
+    avatar/            # 头像系统（docs/14）：Avatar 渲染器 + option 模型 + SVG 合成器 + 脚本生成的 vendored 部件表
+    backdrop/          # 背景板（docs/25）：纯计算引擎（零 DOM 可单测）+ canvas/DPR/降运动薄壳
+    mdEditor/          # mdxeditor 人设编辑器（mdxeditor 样式运行时注入）
+    tasks/             # 任务领域（docs/29）：拖拽指派组件 + 拖拽纯逻辑层 + 13 态→展示态派生层
+  pages/               # 表面：一个文件/目录 = 一个宿主挂载面
+    eteamsCard.tsx     # 会话卡片 ETeamsCard（conversation 卡槽）
+    buildCard.tsx      # /eteam 命令卡片 EteamBuildCard（commandview keyed 槽）
+    teamsButton.tsx    # 输入栏「团队」按钮 + 团队/角色弹层
+    teamsPanel.tsx     # 智能入口 / 整页团队页（enterTeamsPanel）
+    heroTeamsButton.ts # hero 行 DOM 注入按钮（无 React 树）
+    teamsView/         # 团队面板（conversation.view 槽；原 5060 行 eteamsView.tsx 巨石拆分 14 文件）
+      index.tsx        # 壳：ETeamsView + ETeamsViewBody（侧栏/tab 路由/信号消费）
+      shared.tsx       # 页内跨 tab 共享层（类名常量/tone 徽标/小组件/领域常量）
+      boardTab.tsx     # 看板 tab（目标/进度/最近动态）
+      usageCalendar.tsx # Token 消耗日历卡（docs/28）
+      teamTab.tsx      # 团队 tab（团队列表栅格 + 团队详情）
+      teamMembers.tsx  # 领队卡/成员卡/成员详情
+      modelRoutePicker.tsx # 模型路线选择器（领队/成员共用）
+      addMembersDialog.tsx # 添加成员弹窗（点餐式，含 StepButtons）
+      buildDraft.tsx   # 构建草稿簇（docs/19 构建工作台的草稿/步骤/命令芯片）
+      membersTab.tsx   # 角色 tab（成员库 + 构建工作台）
+      tasksTab.tsx     # 任务 tab（分组清单 + 编辑弹窗 + 展示态徽标）
+      taskDrawer.tsx   # 任务详情抽屉 + 站点行
+      memberDialog.tsx # 成员对话框（D15）
+      reportsTab.tsx   # 汇报 tab（成员选择 + 汇报时间线）
+  styles/
+    eteams.css         # Tailwind 唯一输入 + shadcn token 桥（亮暗双块），buildTailwind `-i` 端点
+  types/               # 环境声明垫片（dvaCore/eteamsCss/mdEditorCss/usageCalendarCss，声明体均为包名/通配，与位置无关）
 ```
 
-客户端原则：**只渲染、不决策**。一切状态变更走 ops 路由写盘；面板刷新即重建，不维护本地状态副本。
+目录职责口径：`lib/` 是横切基建（多表面共享、不渲染业务 UI）；`features/` 是有独立文档线与测试的领域块；`pages/` 是宿主挂载面（表面私有子组件放该页面目录内，跨 tab 共用进 teamsView/shared.tsx）；`components/ui/`（vendored shadcn）、`store/`（dva）、`styles/`（唯一 Tailwind 输入）、`types/`（声明垫片）各司其职；目录与文件一律 camelCase（`components/ui/` 沿用 shadcn kebab-case 例外）。客户端原则：**只渲染、不决策**。一切状态变更走 ops 路由写盘；面板刷新即重建，不维护本地状态副本（跨表面共享的轮询快照经 dva store 单例分发）。
 
 ## 4.4 关键生命周期
 

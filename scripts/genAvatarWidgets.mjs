@@ -1,5 +1,5 @@
 /**
- * Generate src/client/avatarWidgets.ts from the vendored widget SVGs
+ * Generate src/client/features/avatar/avatarWidgets.ts from the vendored widget SVGs
  * (assets/avatar/widgets/**). The SVGs come from Codennnn/vue-color-avatar
  * (MIT, see assets/avatar/UPSTREAM.json); this script inlines them as string
  * literals so the client bundle stays offline-capable with no loader

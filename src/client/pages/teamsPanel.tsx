@@ -57,7 +57,7 @@ import ArrowLeft from 'lucide-react/dist/esm/icons/arrow-left.mjs';
 import { activateETeamsTab, stageTeamSignals, teamsTabVisible } from '../lib/bridge';
 import { Button } from '../components/ui/button';
 import { ClientErrorBoundary, recordClientDiag } from '../lib/diagnostics';
-import { ETeamsView } from '../eteamsView';
+import { ETeamsView } from '../pages/teamsView/index';
 import { HERO_ROW_SELECTOR } from './heroTeamsButton';
 import { getApp } from '../store/app';
 

@@ -185,20 +185,20 @@ GET /eteams-api/team/<teamId>/usage/calendar?year=2026
 
 ### 28.5.2 「Token 消耗」卡片规格（BoardTab）
 
-位置与容器：`BoardTab`（`src/client/eteamsView.tsx:1000-1146`）「最近动态」卡之后新增一张 `Card className={PANEL_CARD_CLASS}`（282 行常量），标题行复用 `SECTION_TITLE_CLASS`（270 行）；meta 行用 `MUTED_CLASS`（265 行）。数据经新 `fetchUsageCalendar(teamId, year)`（api.ts，`requestJson` 同款，`api.ts:11,53-69`）获取，挂载/切年/切团队/`refreshActivitySoon` 低频触发（60s 可选轮询，`monitor.ts:343` 的 `refreshActivitySoon` 不动）。
+位置与容器：`BoardTab`（现 `src/client/pages/teamsView/boardTab.tsx`，原 `src/client/eteamsView.tsx:1000-1146`，结构整改已拆分）「最近动态」卡之后新增一张 `Card className={PANEL_CARD_CLASS}`，标题行复用 `SECTION_TITLE_CLASS`；meta 行用 `MUTED_CLASS`（三个类名常量现均在 `src/client/pages/teamsView/shared.tsx`）。数据经新 `fetchUsageCalendar(teamId, year)`（api.ts，`requestJson` 同款，`api.ts:11,53-69`）获取，挂载/切年/切团队/`refreshActivitySoon` 低频触发（60s 可选轮询，`monitor.ts:343` 的 `refreshActivitySoon` 不动）。
 
 | 项 | 规格 |
 |---|---|
 | 年份切换 | 标题行右侧 `ChevronLeft`/`ChevronRight`（lucide 深层导入，文件头 S 纪律）；未来年禁用；切换即重拉 |
-| 亮暗 | `useHostDark()`（先例 `src/client/mdEditor.tsx:157-169`：`document.body.hasAttribute('data-ds-dark-theme')` + MutationObserver）→ `colorScheme={dark ? 'dark' : 'light'}`；**不要**省略让它读系统 scheme——宿主 GUI 主题与系统可能不一致（eteams.css 注记「宿主暗色时 body 带该属性」） |
+| 亮暗 | `useHostDark()`（先例 `src/client/features/mdEditor/mdEditor.tsx:157-169`，纯移动行号不变：`document.body.hasAttribute('data-ds-dark-theme')` + MutationObserver）→ `colorScheme={dark ? 'dark' : 'light'}`；**不要**省略让它读系统 scheme——宿主 GUI 主题与系统可能不一致（eteams.css 注记「宿主暗色时 body 带该属性」） |
 | `theme` 色板（官网 sky 令牌，与 docs/24 D22a 一致；fill 为 SVG attribute，**不用 `var(--token)`**——属性值不解析 CSS 变量） | light `['#f1f5f9','#bae6fd','#7dd3fc','#38bdf8','#0ea5e9']`（slate-100 空档 → sky-200/300/400/500）；dark `['#1e293b','#0c4a6e','#0369a1','#0284c7','#38bdf8']` |
 | 几何 | `blockSize=11, blockMargin=3, blockRadius=2, fontSize=12`（面板 14px 基线下的小字档）；`weekStart={1}`（周一开头） |
 | 标签 | `labels={{ months:['一月',…], weekdays:['日','一','二','三','四','五','六'], totalCount:'{{year}} 年共 {{count}} tokens', legend:{ less:'少', more:'多' } }}`；`showWeekdayLabels={['sun','wed']}`；图例默认显示（`showColorLegend` 不传） |
 | level 分级 | 客户端对**当日 `totalTokens>0`** 的天取四分位（P25/P50/P75）→ 1–4 档，0 tokens 恒为 0 档；某年全 0 时全部 level 0（空档色） |
 | tooltip | `tooltips={{ activity: { text: (a) => 分项文案, placement: 'top' } }}`；`text` 闭包内查 `date → day` 映射渲染多行：`9月4日 · 64,220 tokens` + `输入 11,240 / 输出 860 / 缓存读 52,310 / 缓存写 0`（`reasoningTokens>0` 时附「推理 512（可能与输出重叠）」；`calls` 一并展示） |
-| tooltip 样式 | `import tooltipsCss from 'react-activity-calendar/tooltips.css'` 字符串模块注入（mdEditor 先例 `mdEditor.tsx:85` + `mdEditorCss.d.ts` shim，新增 `usageCalendarCss.d.ts` 垫片）；该样式自带反色 dark（`.react-activity-calendar__tooltip[data-color-scheme='dark']` 是浅底深字），在 `.eteams-ui` 作用域追加覆写为深底浅字以贴面板。**实现时先确认 tooltip DOM 挂点**：floating-ui tooltip 若渲染在 body 根 portal 而非 `.eteams-ui` 子树内，`.eteams-ui` 作用域选择器不命中——必要时把覆写选择器提到 body 级并以 `data-source` 标记限定（eteams.css 暗色块同为 body 后代选择器可覆盖，实测为准） |
-| 加载/空态 | 拉取中 `loading`（内置骨架闪烁）；`days` 全 0 或 `totals.totalTokens === 0` → 日历照渲（全 0 档）+ 底部 `MUTED_CLASS` 兜底文案「本团队还没有 Token 消耗记录（统计自启用后开始）」；拉取失败 → 卡内 `FormErrorNote`（`eteamsView.tsx:432-447`）+ 日历渲染上次成功数据 |
-| 无团队 | BoardTab 既有空态分支（`eteamsView.tsx:1029-1043`）不涉及本卡；**取数 useEffect 必须置于该早退分支之前**（`rules-of-hooks`：hook 不得放在条件 return 之后）——空态分支只是不渲染本卡，hook 照常挂载 |
+| tooltip 样式 | `import tooltipsCss from 'react-activity-calendar/tooltips.css'` 字符串模块注入（mdEditor 先例 `features/mdEditor/mdEditor.tsx:85` + `mdEditorCss.d.ts` shim，新增 `usageCalendarCss.d.ts` 垫片）；该样式自带反色 dark（`.react-activity-calendar__tooltip[data-color-scheme='dark']` 是浅底深字），在 `.eteams-ui` 作用域追加覆写为深底浅字以贴面板。**实现时先确认 tooltip DOM 挂点**：floating-ui tooltip 若渲染在 body 根 portal 而非 `.eteams-ui` 子树内，`.eteams-ui` 作用域选择器不命中——必要时把覆写选择器提到 body 级并以 `data-source` 标记限定（eteams.css 暗色块同为 body 后代选择器可覆盖，实测为准） |
+| 加载/空态 | 拉取中 `loading`（内置骨架闪烁）；`days` 全 0 或 `totals.totalTokens === 0` → 日历照渲（全 0 档）+ 底部 `MUTED_CLASS` 兜底文案「本团队还没有 Token 消耗记录（统计自启用后开始）」；拉取失败 → 卡内 `FormErrorNote`（现 `pages/teamsView/shared.tsx`，原 `eteamsView.tsx:432-447`）+ 日历渲染上次成功数据 |
+| 无团队 | BoardTab 既有空态分支（现 `pages/teamsView/boardTab.tsx`，原 `eteamsView.tsx:1029-1043`）不涉及本卡；**取数 useEffect 必须置于该早退分支之前**（`rules-of-hooks`：hook 不得放在条件 return 之后）——空态分支只是不渲染本卡，hook 照常挂载 |
 
 日历数据源映射：`days` 直接来自 API（服务端已按日聚合），客户端只做 level 分位与 tooltip 查表，不做任何折算——保证「图即真相」。
 
@@ -247,10 +247,10 @@ GET /eteams-api/team/<teamId>/usage/calendar?year=2026
 | `src/host/runtime/captainAgent.ts` | 不改 | `captainChildren` 注册表现成可查（usage.ts 事件时读 `captainChildTeamOf`） |
 | `src/host/runtime/sessionTeam.ts` | 不改 | `getSessionTeamId` 现成可查（62-64 行） |
 | `src/host/runtime/webui.ts` | 修改 | `/team/<id>/...` GET 段（1489-1561 行）新增 `usage/calendar` 子路由 + `days`/`totals` 聚合响应（28.4）+ 解析缓存 |
-| `src/client/api.ts` | 修改 | 新增 `UsageDay`/`UsageCalendar` 类型与 `fetchUsageCalendar(teamId, year)`（`requestJson` 同款） |
-| `src/client/eteamsView.tsx` | 修改 | BoardTab 新增「Token 消耗」卡（年切换、`ActivityCalendar` 接线、level 分位、tooltip 分项、loading/空态，28.5.2 规格）；引入 `useHostDark`（从 mdEditor 提取或复制并注明先例） |
-| `src/client/useHostDark.ts` | 新增（可选） | 把 `mdEditor.tsx:157-169` 的 hook 提为共享模块，mdEditor 与日历卡共用（不提取则复制 8 行） |
-| `src/client/usageCalendarCss.d.ts` | 新增 | `declare module 'react-activity-calendar/tooltips.css'` 垫片（对齐 `mdEditorCss.d.ts`） |
+| `src/client/lib/api.ts` | 修改 | 新增 `UsageDay`/`UsageCalendar` 类型与 `fetchUsageCalendar(teamId, year)`（`requestJson` 同款） |
+| `src/client/pages/teamsView/usageCalendar.tsx`（原 `src/client/eteamsView.tsx`，已拆分；`BoardTab` 挂载点在 `boardTab.tsx`） | 修改 | BoardTab 新增「Token 消耗」卡（年切换、`ActivityCalendar` 接线、level 分位、tooltip 分项、loading/空态，28.5.2 规格）；引入 `useHostDark`（从 mdEditor 提取或复制并注明先例） |
+| `src/client/hooks/useHostDark.ts` | 新增（可选） | 把 `features/mdEditor/mdEditor.tsx:157-169` 的 hook 提为共享模块，mdEditor 与日历卡共用（不提取则复制 8 行） |
+| `src/client/types/usageCalendarCss.d.ts` | 新增 | `declare module 'react-activity-calendar/tooltips.css'` 垫片（对齐 `types/mdEditorCss.d.ts`） |
 | `package.json` | 修改 | devDependencies 加 `react-activity-calendar: ^3.2.1`（`pnpm add -D`），构建后记录 `lib/client.js` 体积增量（docs/21 纪律：预计 +120KB min / +35KB gzip 级，实测为准） |
 | `tests/usage.test.ts` | 新增 | vitest：归属优先级表、usage.jsonl 聚合/去重（`(sessionId,seq)`）、撕裂尾行容错、轮转阈值（对齐 docs/16 验收口径） |
 | `tests/webui.test.ts` | 修改 | `GET /team/<id>/usage/calendar` 路由契约用例（现有路由测试文件内追加） |

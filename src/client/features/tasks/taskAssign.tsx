@@ -56,8 +56,8 @@ function useMemberDrag(memberName: string) {
   );
 }
 
-/* —— 类名常量（完整字面量；边框 token 类与 eteamsView BORDER_L1_CLASS 同值，
-   独立成表避免与视图模块互相 import 成环）—— */
+/* —— 类名常量（完整字面量；边框 token 类与 teamsView shared.tsx 的
+   BORDER_L1_CLASS 同值（原 eteamsView），独立成表避免与视图模块互相 import 成环）—— */
 const BORDER_TOKEN_CLASS = 'border-[color:var(--border)]';
 /** 成员框基座（A.5.1：26px 高 / min-w-96px / 圆角 6px / 12px 字）。 */
 const BOX_BASE_CLASS =
@@ -65,7 +65,7 @@ const BOX_BASE_CLASS =
 /** 空框：虚线槽（BORDER_L1 类边框 token）。 */
 const BOX_EMPTY_CLASS = `border border-dashed text-muted-foreground ${BOX_BASE_CLASS} ${BORDER_TOKEN_CLASS}`;
 /** 可放置（非悬停）：虚线边框转品牌淡边——token 色禁 /alpha，半透明走
- * color-mix（token 纪律；eteamsView MemberCard 的 shadow 光晕同路径）。 */
+ * color-mix（token 纪律；teamMembers.tsx MemberCard 的 shadow 光晕同路径）。 */
 const BOX_CAN_DROP_CLASS = `${BOX_BASE_CLASS} border border-dashed border-[color:color-mix(in_srgb,var(--primary)_60%,transparent)] text-muted-foreground`;
 /** 拖拽悬停：虚线转实线 + 品牌边 + 中性 pill 底（A.5.1 悬停行）。 */
 const BOX_OVER_CLASS = `${BOX_BASE_CLASS} border border-solid border-primary bg-[color:var(--eteams-pill-bg)] text-foreground`;

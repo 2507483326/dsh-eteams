@@ -19,11 +19,11 @@
 ## 25.2 模块拆解
 
 ### S25-1 背景板 R5（D23-1..5）
-- 范围：`src/client/backdropEngine.ts`（FADE/alpha 常量重定标、StaticOp kind 扩 ring、波纹纯函数）、`src/client/eteamsBackdrop.tsx`（CELL 14/12、TANK_COUNT=0、波纹接线、按需 rAF）、`tests/backdropEngine.test.ts`（fade 锁重定标 + 波纹锁 + c14 预算锁）。
+- 范围：`src/client/features/backdrop/backdropEngine.ts`（FADE/alpha 常量重定标、StaticOp kind 扩 ring、波纹纯函数）、`src/client/features/backdrop/eteamsBackdrop.tsx`（CELL 14/12、TANK_COUNT=0、波纹接线、按需 rAF）、`tests/backdropEngine.test.ts`（fade 锁重定标 + 波纹锁 + c14 预算锁）。
 - 不变式：坦克引擎与其测试锁零改动；token 采样源不变；`pointer-events-none` 不破（波纹监听在父元素）。
 
 ### S25-2 按钮与弹窗官网化（D23-6/7）
-- 范围：`src/client/heroTeamsButton.ts`（chip 缩档）、`src/client/components/ui/button.tsx`（ghost 补 border-none）、`src/client/teamsButton.tsx`（触发器缩档 + 下划线 tab）。
+- 范围：`src/client/pages/heroTeamsButton.ts`（chip 缩档）、`src/client/components/ui/button.tsx`（ghost 补 border-none）、`src/client/pages/teamsButton.tsx`（触发器缩档 + 下划线 tab）。
 
 ### S25-3 预览重生成 + 总验收（D23-8）
 - 范围：`.tmp-tw-docs/preview/` 重生成 + sim 复跑 + 四绿门 + 浏览器取证 + 本文档施工记录；`corepack pnpm build` + 重装 DSH。
@@ -49,7 +49,7 @@
 - 预览页（localhost:8791/preview.html）：canvas 覆盖面板（covers=true）、波纹渲染（pointermove 后画布新增非零 α 像素）、坦克零渲染、两等半下划线 tab 可交互、暗色按钮移除（宿主切换）。
 - 宿主修复取证：canvas 定位改内联样式（`position:absolute;inset:0;width:100%;height:100%`）——工具类定位在宿主 DOM 失效的根因规避；若仍异常，2s 后 `backdrop-geom` 诊断给出 canvas/parent 实测尺寸。
 
-**给用户的验收入口**：重启 DSH Desktop 后在面板内验收（背景右上水印格 + 鼠标波纹 + 无坦克 + 触发钮/弹窗 tab 新观感）。坦克回归：`src/client/eteamsBackdrop.tsx` 的 `TANK_COUNT` 改回 3 即恢复。
+**给用户的验收入口**：重启 DSH Desktop 后在面板内验收（背景右上水印格 + 鼠标波纹 + 无坦克 + 触发钮/弹窗 tab 新观感）。坦克回归：`src/client/features/backdrop/eteamsBackdrop.tsx` 的 `TANK_COUNT` 改回 3 即恢复。
 
 ## 25.5 R6：波纹 → 格子微光（D24 系列，2026-09-02）
 

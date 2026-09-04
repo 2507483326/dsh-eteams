@@ -341,11 +341,11 @@ group 自身只有 draft/ready/completed（+cancelled）四态可达（taskMachi
 | 文件 | 改什么 |
 | --- | --- |
 | `package.json` | devDeps 增 `react-dnd@16.0.1`、`react-dnd-html5-backend@16.0.1`（pnpm add -D，A.2） |
-| `src/client/taskAssign.tsx`（新） | `DndProvider(HTML5Backend)` 包裹器、`MemberDragChip`（useDrag 'eteams-member'）、`TaskAssignDropBox`（useDrop + canDrop 预判）、`nextChainAfterDrop` 纯函数；类名全部完整字面量映射表（E17 纪律） |
-| `src/client/taskDisplayStatus.ts`（新） | `displayStatusOf(status): {key,label,tone,icon,detail}`、`groupDisplayOf(subs)` 纯函数（B.1/B.2） |
-| `src/client/eteamsView.tsx` | TasksTab：根包 DndProvider；小任务行尾挂 `TaskAssignDropBox`（+单站点抑制 TaskStations）；每张组卡内小任务行之后插「团队成员」罗列条（逐卡一份，A.5.3 用户决策）；`assignBusy/assignError` 瞬态 + 行内 FormErrorNote；任务行/组卡换展示态 pill + detail；`STATUS_GROUPS` 收敛为展示态分组 |
-| `src/client/api.ts` | 不改（`updateTeamTask` 已支持 chain 全量替换，api.ts:343-360） |
-| `src/client/monitor.ts` | 不改（`TaskView.chain/chainCursor/chainLength`、`MemberView.status/avatar` 齐备，monitor.ts:77-102、36-62） |
+| `src/client/features/tasks/taskAssign.tsx` | `DndProvider(HTML5Backend)` 包裹器、`MemberDragChip`（useDrag 'eteams-member'）、`TaskAssignDropBox`（useDrop + canDrop 预判）、`nextChainAfterDrop` 纯函数；类名全部完整字面量映射表（E17 纪律） |
+| `src/client/features/tasks/taskDisplayStatus.ts` | `displayStatusOf(status): {key,label,tone,icon,detail}`、`groupDisplayOf(subs)` 纯函数（B.1/B.2） |
+| `src/client/pages/teamsView/tasksTab.tsx`（原 `src/client/eteamsView.tsx`，已拆分） | TasksTab：根包 DndProvider；小任务行尾挂 `TaskAssignDropBox`（+单站点抑制 TaskStations）；每张组卡内小任务行之后插「团队成员」罗列条（逐卡一份，A.5.3 用户决策）；`assignBusy/assignError` 瞬态 + 行内 FormErrorNote；任务行/组卡换展示态 pill + detail；`STATUS_GROUPS` 分组定义落 `features/tasks/taskDisplayStatus.ts` |
+| `src/client/lib/api.ts` | 不改（`updateTeamTask` 已支持 chain 全量替换，api.ts:343-360） |
+| `src/client/lib/monitor.ts` | 不改（`TaskView.chain/chainCursor/chainLength`、`MemberView.status/avatar` 齐备，monitor.ts:77-102、36-62） |
 | `src/host/**` | 不改（host 校验/路由/状态机零变更；29.5 冲突的 host 侧缺口只记录为开放问题） |
 | `tests/taskAssign.test.ts`（新，建议） | `nextChainAfterDrop` 规则锁：空链建站、同站替换、同名 no-op、多站只改站点 0、只读窗口 |
 | `tests/taskDisplayStatus.test.ts`（新，建议） | 13 态→展示态映射全表 + group 汇总优先级（error>doing>waiting） |

@@ -98,7 +98,7 @@
 
 ### 32.3.3 命名与放置细则
 
-- **文件名一律 camelCase**（既有 `unicorn/filename-case` 纪律不变）：目录名可用连字符（如 `features/md-editor/`），但根目录与 `components/` 之外的所有新文件保持 camelCase，**不新引入 kebab 文件**，现有 eslint 配置零改动。仅一处改名：`card.tsx → pages/eteamsCard.tsx`（裸「card」与 `components/ui/card.tsx` 撞名且看不出是表面）。
+- **文件名一律 camelCase**（既有 `unicorn/filename-case` 纪律不变）：目录名同样 camelCase（eslint filename-case 约束目录名，shadcn `components/ui/` 除外），但根目录与 `components/` 之外的所有新文件保持 camelCase，**不新引入 kebab 文件**，现有 eslint 配置零改动。仅一处改名：`card.tsx → pages/eteamsCard.tsx`（裸「card」与 `components/ui/card.tsx` 撞名且看不出是表面）。
 - shadcn `components/ui/` 原样保留（kebab-case + 既有 override，docs/21 D19d）。
 - 组件文件名 = 主导出符号；一个文件一个主导出组件/函数（子组件私有，不导出除非跨文件消费）。
 - 类名常量不新建目录：页面私有类名留页面文件，跨 tab 进 `shared.tsx`（禁拼接种类名、完整字面量映射纪律不变，docs/21 21.5.1）。
@@ -138,14 +138,14 @@ src/client/
 │   ├── backdrop/                      # 背景板系统（docs/25）
 │   │   ├── backdropEngine.ts          # 纯计算引擎（零 DOM、可单测）
 │   │   └── eteamsBackdrop.tsx         # canvas/DPR/rAF/降运动薄壳
-│   ├── md-editor/
+│   ├── mdEditor/
 │   │   └── mdEditor.tsx               # mdxeditor 人设编辑器（样式运行时注入 + 语言预载）
 │   └── tasks/                         # 任务领域（docs/29 A/B）
 │       ├── taskAssign.tsx             # 拖拽指派组件（DndProvider/DropBox/成员条）
 │       ├── taskAssignCore.ts          # 拖拽纯逻辑层（React-free）
 │       └── taskDisplayStatus.ts       # 13 态→展示态派生 + 词表/tone/彩点类 + STATUS_GROUPS（迁入）
 ├── pages/                             # 表面：一个文件/目录 = 一个宿主挂载面
-│   ├── teams-view/                    # 团队面板（conversation.view 槽，原 eteamsView.tsx）
+│   ├── teamsView/                     # 团队面板（conversation.view 槽，原 eteamsView.tsx）
 │   │   ├── index.tsx                  # ETeamsView + ETeamsViewBody（壳/侧栏/tab 路由/信号消费）
 │   │   ├── shared.tsx                 # 页内跨 tab 共享层（32.5.2：类名常量/tone 徽标/小组件/领域常量）
 │   │   ├── boardTab.tsx               # 看板 tab（目标/进度/最近动态）
@@ -174,7 +174,7 @@ src/client/
     └── usageCalendarCss.d.ts
 ```
 
-要点：根目录只剩 `index.tsx`；`teams-view/` 平铺 14 个文件（不建 `tabs/` 子目录——14 个文件一层放得下，多一层只增加路径长度）；`features/` 四个域各有独立文档线（docs/14/25/29/19），判定标准可复核。
+要点：根目录只剩 `index.tsx`；`teamsView/` 平铺 14 个文件（不建 `tabs/` 子目录——14 个文件一层放得下，多一层只增加路径长度）；`features/` 四个域各有独立文档线（docs/14/25/29/19），判定标准可复核。
 
 ## 32.5 eteamsView.tsx 拆分映射
 
@@ -412,3 +412,32 @@ pnpm typecheck && pnpm lint && pnpm test && pnpm build && node scripts/verifyM0.
 | Q6 | shared.tsx 的拆分阈值 | 超 400 行再二分 classes.ts / widgets.tsx；默认单文件 |
 | Q7 | docs 历史施工记录中的 `eteamsView.tsx:行号` 锚点漂移 | 不回改历史证据；受影响的「现状描述」段在回写时更新（32.10） |
 | Q8 | 执行分支 | 沿用 D19f 惯例：自 master 切 `refactor/client-structure`，阶段=提交序列，单步可 revert |
+
+## 32.12 实施结果回写（2026-09-04，验收报告为 docs/34）
+
+全部批次已执行完毕，验收通过（独立验收与逐项证据见 docs/34）。本段按 32.10 的要求记录实际结果：
+
+### 批次实际结果一览（每批四绿；体积锚点 = 批 0 基线与终态，见下）
+
+| 批 | 内容 | 结果 |
+|---|---|---|
+| 0 | 基线四绿 + 体积记录 | 绿；5223 KB（5,348,587 B） |
+| 1 | `pages/teamsView/shared.tsx`（32.5.1 shared 行 30 符号，四段分区注释） | 绿 |
+| 2 | `features/tasks/` 三文件归位 + `STATUS_GROUPS` 上浮 taskDisplayStatus.ts；import 同步范围按 32-M8 补全 | 绿 |
+| 3 | `usageCalendar.tsx` → `boardTab.tsx`（含 `usageStylesInjected`，32-B1 补列项）；tsdown docstring 注释随批更新 | 绿 |
+| 4 | `taskDrawer.tsx` → `tasksTab.tsx` | 绿 |
+| 5 | 修订序 `modelRoutePicker → buildDraft → teamMembers → addMembersDialog → teamTab` | 绿 |
+| 6 | 修订序 `memberDialog → membersTab → reportsTab` | 绿 |
+| 7 | 收口 `index.tsx`/壳常量迁 `pages/teamsView/index.tsx`、删 `eteamsView.tsx`、index/teamsPanel 改显式 `./pages/teamsView/index` 导入 | 绿 + verifyM0 |
+
+每批边界处的逐批体积记录于执行时的批次验证输出（工作流上下文，未持久化进仓库，与 docs/21 附录 C 的 S0 基线同口径）；可持久核对的锚点是**批 0 基线 5223 KB 与终态 5230 KB**（见下）。终态四门：`pnpm typecheck` / `pnpm lint` / `pnpm test`（272/272）/ `pnpm build`（SMOKE OK）全绿；`node scripts/verifyM0.mjs` all checks passed；`node scripts/smokeEnvelope.mjs` SMOKE OK（验收独立复跑）。**体积终态 5230 KB（5,355,635 B），基线 +7 KB（+0.13%），在 R7 ±1% 阈值内**（台账同步进 docs/21 附录 C）。
+
+### 与方案文本的三处实施差异（验收报告 docs/34 §五有实证）
+
+1. **两处目录 camelCase 改名**：`pages/teams-view/` → `pages/teamsView/`、`features/md-editor/` → `features/mdEditor/`。32.3.3 原文「目录名可用连字符」的示例与既有 `unicorn/filename-case` 纪律相悖（该规则连带约束目录名），属方案事实性错误——**本段回写时已将 32.3.3 更正为「目录名同样 camelCase（eslint filename-case 约束目录名，shadcn `components/ui/` 除外）」**；32.4 目标树同步改名。全仓 kebab 仅存 `components/ui/`（既有 override）。
+2. **verifyM0 断言修复**（批 0 后）：inject 服务断言由 2 服务改为 3 服务（slots + conversationEvents + modelDirectories）——断言底稿与 `src/client/index.tsx` 既有事实对齐，非行为变更；修复后 all checks passed。
+3. **`cb52bc4`「结构归位」为批 6 中间态快照**：验收实测该快照 `tsc -p tsconfig.client.json` 报 3 处 TS2305（membersTab 的 useDispatch/useSelector、MemberDialog——批 6 未收尾）；批 6+7 尾段与阶段 4 文档回写落在工作区未提交改动中，终态四绿。历史快照本身不绿属中途提交产物，不影响终态；回滚锚点建议用阶段前基线 commit（`c1e0a95`）。
+
+### 阶段 4 文档回写完成清单
+
+docs/04 §4.3 重写、docs/21 §21.6.1 + 附录 C 体积行、components.json `$comment`、docs/13/14/19/25/28/29 现状段路径更新（历史锚点保留）、docs/README 32/33 行（31/34 行由验收补齐）、tsdown.config.ts docstring（批 3）、tailwind.config.ts / types/eteamsCss.d.ts / lib 注释级路径更新——全部完成。`pillClass` 随族迁 shared.tsx **原样保留不删**（其唯一调用位是 Pill 组件体，基线 423 行、现 shared.tsx:93 同构；32.10「基线即零调用」措辞欠准，口径以 docs/34 §五-⑥ 为准），删除属后续独立清理项。
