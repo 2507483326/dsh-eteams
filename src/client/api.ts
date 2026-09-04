@@ -514,3 +514,48 @@ export async function fetchAgentActivity(teamId: string): Promise<Record<string,
     ? (body.activity as Record<string, string>)
     : {};
 }
+
+// ---------- usage calendar (docs/28 每日 Token 消耗日历) ----------
+
+/** One calendar day (docs/28.4): zero-filled for the whole year. */
+export interface UsageDay {
+  date: string;
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  reasoningTokens: number;
+  /** 记账行数（usage-bearing assistant/message 条数）。 */
+  calls: number;
+}
+
+/** Year totals (docs/28.4): firstDay/lastDay 为有数据首末日（无数据 null）。 */
+export interface UsageTotals {
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  reasoningTokens: number;
+  calls: number;
+  firstDay: string | null;
+  lastDay: string | null;
+}
+
+/** GET /team/<id>/usage/calendar response (docs/28.4). */
+export interface UsageCalendar {
+  teamId: string;
+  year: number;
+  serverTime: number;
+  days: UsageDay[];
+  totals: UsageTotals;
+}
+
+/** Fetch one team's daily token-usage calendar (year defaults to current). */
+export async function fetchUsageCalendar(teamId: string, year?: number): Promise<UsageCalendar> {
+  const params = year === undefined ? '' : `?year=${year}`;
+  return (await requestJson(
+    `${API_BASE}/team/${encodeURIComponent(teamId)}/usage/calendar${params}`,
+  )) as UsageCalendar;
+}

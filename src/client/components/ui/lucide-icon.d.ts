@@ -134,3 +134,15 @@ declare module 'lucide-react/dist/esm/icons/dices.mjs' {
   const Dices: ForwardRefExoticComponent<Omit<LucideProps, 'ref'> & RefAttributes<SVGSVGElement>>;
   export default Dices;
 }
+
+// docs/28 增补：看板 Token 消耗卡年份切换的左箭头（与 chevron-right 同款）。
+// 同款深层导入纪律（一个图标只进一个模块）。
+declare module 'lucide-react/dist/esm/icons/chevron-left.mjs' {
+  import type { ForwardRefExoticComponent, RefAttributes } from 'react';
+  import type { LucideProps } from 'lucide-react';
+
+  const ChevronLeft: ForwardRefExoticComponent<
+    Omit<LucideProps, 'ref'> & RefAttributes<SVGSVGElement>
+  >;
+  export default ChevronLeft;
+}

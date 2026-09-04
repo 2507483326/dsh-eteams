@@ -31,6 +31,7 @@ import { createCaptainTools } from './tools/captainTools.js';
 import { createCaptainDispatchTool } from './tools/captainDispatch.js';
 import { createMemberTools } from './tools/memberTools.js';
 import { installMemberRuntime } from './runtime/members.js';
+import { installUsageMeter } from './runtime/usage.js';
 import { installWebSurface, locateTeam, rootForWrites } from './runtime/webui.js';
 import { sessionPersonaSection, sessionIdOfScope } from './runtime/sessionPersona.js';
 import { sessionTeamSection } from './runtime/sessionTeam.js';
@@ -116,6 +117,17 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
     },
   );
   log.info('eteams: member runtime installed');
+
+  // 2b) Usage meter（docs/28.2.3 方案 A / E18 同型先例）：root-scope firehose
+  //     监听 session/event 采集 assistant/message 的 usage，写
+  //     <workspace>/.eteams/usage.jsonl；冷恢复靠 session/created 对账 +
+  //     ctx.sessions.list() 装机补折。失败不外抛（计量绝不影响会话）。
+  try {
+    installUsageMeter(ctx, config);
+    log.info('eteams: usage meter installed');
+  } catch (error) {
+    log.warn('eteams: usage meter install failed (calendar stays empty): %s', String(error));
+  }
 
   // 3) Captain standing prompt (compact section, tools guidance band).
   try {

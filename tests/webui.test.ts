@@ -74,6 +74,69 @@ function readFileSync2(file: string): string {
   return readFileSync(file, 'utf8');
 }
 
+/** Install the web surface against a minimal registry ctx; return the handler. */
+async function installFake(): Promise<{
+  handler: (req: unknown, res: unknown) => Promise<void>;
+  res: () => {
+    code: number;
+    body: string;
+    writeHead(code: number): void;
+    end(data?: string): void;
+  };
+  post: (path: string, body: unknown) => Promise<{ code: number; body: string }>;
+}> {
+  const registered: { handler: (req: unknown, res: unknown) => Promise<void> }[] = [];
+  const ctx = {
+    get: (key: string) =>
+      key === 'webServer'
+        ? {
+            register: (route: { handler: (req: unknown, res: unknown) => Promise<void> }) => {
+              registered.push(route);
+            },
+          }
+        : key === 'workspaceRegistry'
+          ? { list: () => [{ path: workspace, title: 'ws' }] }
+          : undefined,
+    // delete/archive ops resolve the captain's live agent through the
+    // registry (absent here → the op falls back to the session-id agent).
+    agents: { get: () => undefined },
+    effect: (fn: () => unknown) => {
+      fn();
+      return () => undefined;
+    },
+    logger: { info: () => undefined, warn: () => undefined },
+  } as unknown as Context;
+  installWebSurface(ctx, config);
+  const handler = registered[0]!.handler;
+  const res = () => ({
+    code: 0,
+    body: '',
+    writeHead(code: number) {
+      this.code = code;
+    },
+    end(data?: string) {
+      this.body = data ?? '';
+    },
+  });
+  const post = async (path: string, body: unknown) => {
+    const r = res();
+    const payload = JSON.stringify(body);
+    await handler(
+      {
+        method: 'POST',
+        url: path,
+        on(event: string, cb: (chunk?: Buffer) => void) {
+          if (event === 'data') cb(Buffer.from(payload, 'utf8'));
+          if (event === 'end') cb();
+        },
+      },
+      r,
+    );
+    return { code: r.code, body: r.body };
+  };
+  return { handler, res, post };
+}
+
 describe('TeamSnapshot builder (docs/12.2)', () => {
   it('projects members, tasks, chain stations, progress and events', async () => {
     const { ctx, call } = fakeCtx();
@@ -163,69 +226,6 @@ describe('TeamSnapshot builder (docs/12.2)', () => {
 });
 
 describe('panel write routes (M5 first slice)', () => {
-  /** Install the web surface against a minimal registry ctx; return the handler. */
-  async function installFake(): Promise<{
-    handler: (req: unknown, res: unknown) => Promise<void>;
-    res: () => {
-      code: number;
-      body: string;
-      writeHead(code: number): void;
-      end(data?: string): void;
-    };
-    post: (path: string, body: unknown) => Promise<{ code: number; body: string }>;
-  }> {
-    const registered: { handler: (req: unknown, res: unknown) => Promise<void> }[] = [];
-    const ctx = {
-      get: (key: string) =>
-        key === 'webServer'
-          ? {
-              register: (route: { handler: (req: unknown, res: unknown) => Promise<void> }) => {
-                registered.push(route);
-              },
-            }
-          : key === 'workspaceRegistry'
-            ? { list: () => [{ path: workspace, title: 'ws' }] }
-            : undefined,
-      // delete/archive ops resolve the captain's live agent through the
-      // registry (absent here → the op falls back to the session-id agent).
-      agents: { get: () => undefined },
-      effect: (fn: () => unknown) => {
-        fn();
-        return () => undefined;
-      },
-      logger: { info: () => undefined, warn: () => undefined },
-    } as unknown as Context;
-    installWebSurface(ctx, config);
-    const handler = registered[0]!.handler;
-    const res = () => ({
-      code: 0,
-      body: '',
-      writeHead(code: number) {
-        this.code = code;
-      },
-      end(data?: string) {
-        this.body = data ?? '';
-      },
-    });
-    const post = async (path: string, body: unknown) => {
-      const r = res();
-      const payload = JSON.stringify(body);
-      await handler(
-        {
-          method: 'POST',
-          url: path,
-          on(event: string, cb: (chunk?: Buffer) => void) {
-            if (event === 'data') cb(Buffer.from(payload, 'utf8'));
-            if (event === 'end') cb();
-          },
-        },
-        r,
-      );
-      return { code: r.code, body: r.body };
-    };
-    return { handler, res, post };
-  }
-
   it('upserts roster entries and serves GET /roster', async () => {
     const { handler, res, post } = await installFake();
     await post('/eteams-api/roster', { name: 'Alice', role: 'researcher', duty: '调研与检索' });
@@ -1035,6 +1035,65 @@ describe('conversation task workflow (docs/26)', () => {
     expect(groupView.kind).toBe('group');
     expect(groupView.folder).not.toContain('sub/');
     void h.handler;
+  });
+});
+
+describe('usage calendar route (docs/28.4)', () => {
+  /** 365/366 as the zero-filled grid builds it. */
+  function daysInYear(year: number): number {
+    let total = 0;
+    for (let month = 0; month < 12; month += 1) total += new Date(year, month + 1, 0).getDate();
+    return total;
+  }
+
+  it('serves the aggregated calendar, 400s a bad year and 404s unknown teams', async () => {
+    const { handler, post, res } = await installFake();
+    const created = await post('/eteams-api/team', { name: '用量队', sessionId: 'cap-webui' });
+    expect(created.code).toBe(200);
+    const teamId = (JSON.parse(created.body) as { teamId?: string }).teamId ?? '';
+    expect(teamId).not.toBe('');
+    // 采集面的归属/水位已由 tests/usage.test.ts 覆盖；这里只验证路由组合。
+    const year = new Date().getFullYear();
+    const row = {
+      at: Date.now(),
+      day: `${year}-01-02`,
+      sessionId: 'm1',
+      seq: 1,
+      teamId,
+      memberName: 'Alice',
+      roleKind: 'member',
+      provider: 'p',
+      model: 'm',
+      inputTokens: 10,
+      outputTokens: 2,
+      cacheReadTokens: null,
+      cacheWriteTokens: null,
+      reasoningTokens: null,
+    };
+    mkdirSync(join(workspace, '.eteams'), { recursive: true });
+    writeFileSync(join(workspace, '.eteams', 'usage.jsonl'), `${JSON.stringify(row)}\n`);
+    const r = res();
+    await handler({ method: 'GET', url: `/eteams-api/team/${teamId}/usage/calendar` }, r);
+    expect(r.code).toBe(200);
+    const parsed = JSON.parse(r.body) as {
+      teamId: string;
+      year: number;
+      days: { date: string; totalTokens: number; calls: number }[];
+      totals: { totalTokens: number; firstDay: string | null; lastDay: string | null };
+    };
+    expect(parsed.teamId).toBe(teamId);
+    expect(parsed.year).toBe(year);
+    expect(parsed.days).toHaveLength(daysInYear(year));
+    expect(parsed.totals.totalTokens).toBe(12);
+    expect(parsed.totals.firstDay).toBe(`${year}-01-02`);
+    expect(parsed.totals.lastDay).toBe(`${year}-01-02`);
+    // 400：非法年份；404：未知团队
+    const bad = res();
+    await handler({ method: 'GET', url: `/eteams-api/team/${teamId}/usage/calendar?year=abcd` }, bad);
+    expect(bad.code).toBe(400);
+    const missing = res();
+    await handler({ method: 'GET', url: '/eteams-api/team/nope/usage/calendar' }, missing);
+    expect(missing.code).toBe(404);
   });
 });
 

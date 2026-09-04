@@ -105,6 +105,34 @@ function tailwindCssInline() {
   };
 }
 
+/**
+ * 把 'react-activity-calendar/tooltips.css' 改道为虚拟 JS 模块（字符串导出）。
+ * 同 mdxEditorCssInline 手法：单文件 CJS envelope 没有独立 CSS 通道，样式以
+ * 字符串进包、运行时注入 <style>（见 src/client/eteamsView.tsx 的 Token 消耗
+ * 卡片）。tooltip 经 FloatingPortal 挂在 document.body 根（docs/30 28-M3），
+ * 注入的样式标签放在 <head>、选择器全局生效即可命中。
+ */
+function usageTooltipsCssInline() {
+  const TOOLTIP_CSS_VIRTUAL_ID = '\0dsh-eteams:usage-tooltips-css-js';
+  return {
+    name: 'dsh-eteams:usage-tooltips-css-inline',
+    resolveId(id: string) {
+      if (id === 'react-activity-calendar/tooltips.css') return TOOLTIP_CSS_VIRTUAL_ID;
+      return null;
+    },
+    load(id: string) {
+      if (id === TOOLTIP_CSS_VIRTUAL_ID) {
+        const css = readFileSync(
+          new URL('./node_modules/react-activity-calendar/build/tooltips.css', import.meta.url),
+          'utf8',
+        );
+        return `export default ${JSON.stringify(css)};`;
+      }
+      return null;
+    },
+  };
+}
+
 export default [
   {
     entry: { index: 'src/host/index.ts' },
@@ -132,7 +160,7 @@ export default [
     sourcemap: false,
     clean: false,
     outExtensions: () => ({ js: '.js' }),
-    plugins: [mdxEditorCssInline(), tailwindCssInline()],
+    plugins: [mdxEditorCssInline(), usageTooltipsCssInline(), tailwindCssInline()],
     // lexical 的 default 分支（.mjs）带 top-level await（运行时在 dev/prod
     // 间二选一），CJS 输出不支持 TLA。rolldown 对 import 语句默认用
     // ["import","node","default"] 解析 exports——'node' 命中 @lexical/react

@@ -64,6 +64,7 @@ import {
 import { spawnBuildPhase, spawnContinueAfterAnswers } from './builderPhases.js';
 import { clearSessionPersona, setSessionPersona } from './sessionPersona.js';
 import { clearSessionTeam, setSessionTeam } from './sessionTeam.js';
+import { readUsageCalendar } from './usage.js';
 import { locateTeamAcrossWorkspaces, workspaceRegistryOf } from './workspaces.js';
 
 /** Web-server service key candidates, newest first. */
@@ -1557,6 +1558,29 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                 }
                 const after = Number(url.searchParams.get('after') ?? '0') || 0;
                 sendJson(res, 200, memberDialog(root, team, member, after));
+                return;
+              }
+              // GET /team/<id>/usage/calendar?year=<y> — 每日 Token 消耗日历
+              // （docs/28.4）：读取时聚合 usage.jsonl + 归档，全年零填充日格
+              // （未来年同构返回零格，不 404）。year 缺省当年；非法值 400。
+              if (segments[2] === 'usage' && segments[3] === 'calendar' && segments.length === 4) {
+                const yearParam = url.searchParams.get('year');
+                const year =
+                  yearParam === null || yearParam === ''
+                    ? new Date().getFullYear()
+                    : Number(yearParam);
+                if (!Number.isInteger(year) || year < 2000 || year > 2999) {
+                  sendError(res, 400, `year 参数无效（需 2000-2999 的整数）：${String(yearParam)}`);
+                  return;
+                }
+                const calendar = readUsageCalendar(root, team.id, year);
+                sendJson(res, 200, {
+                  teamId: team.id,
+                  year,
+                  serverTime: Date.now(),
+                  days: calendar.days,
+                  totals: calendar.totals,
+                });
                 return;
               }
             }

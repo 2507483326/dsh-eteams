@@ -86,6 +86,10 @@ staged 计划编辑器数据（成员草案 + 人设 + 任务 DAG + 执行链 + 
 
 成员对话框时间线（D15/FR-42）：`{ memberStatus, items: [...] }`——双向邮箱消息 + 该成员进度事件按时间合并；`after` 增量拉取。
 
+### GET `/team/<teamId>/usage/calendar?year=<y>`
+
+每日 Token 消耗日历（docs/28.4）：读取时聚合工作区 `usage.jsonl` + `usage-archive.jsonl`（按 (sessionId, seq) 全局去重、按 teamId 过滤），全年零填充日格。`{ teamId, year, serverTime, days: [{ date, totalTokens, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens, calls }], totals: { …, firstDay, lastDay } }`；`year` 缺省当年，非法值 400，未来年返回全年零格（不 404）。
+
 ## 12.3 写路由（ops，全部 POST）
 
 > **实现状态**：M5 首切片已于 M4 后提前交付——`/roster`、`/team`（新建）、`/team/<id>/member`（入库添加）；其余仍为 M5 计划契约。已实现路由的工作区解析：优先已存在 `.eteams` 的工作区，否则第一个注册工作区。

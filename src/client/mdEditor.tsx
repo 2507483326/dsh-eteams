@@ -84,6 +84,7 @@ import { python } from '@codemirror/lang-python';
 import { yaml } from '@codemirror/lang-yaml';
 import mdxEditorCss from '@mdxeditor/editor/style.css';
 import { recordClientDiag } from './diagnostics';
+import { useHostDark } from './useHostDark';
 
 const T = {
   sunken: 'var(--dsw-alias-bg-layer-2, #edf0f4)',
@@ -151,21 +152,6 @@ function ensureMdxStyles(): void {
   } catch (error) {
     recordClientDiag('mdx-editor', error instanceof Error ? error.message : String(error));
   }
-}
-
-/** 宿主暗色（body[data-ds-dark-theme]）→ 编辑器根 `dark-theme` 类。 */
-function useHostDark(): boolean {
-  const [dark, setDark] = useState(
-    () => typeof document !== 'undefined' && document.body.hasAttribute('data-ds-dark-theme'),
-  );
-  useEffect(() => {
-    const sync = (): void => setDark(document.body.hasAttribute('data-ds-dark-theme'));
-    sync();
-    const observer = new MutationObserver(sync);
-    observer.observe(document.body, { attributes: true, attributeFilter: ['data-ds-dark-theme'] });
-    return () => observer.disconnect();
-  }, []);
-  return dark;
 }
 
 /** frontmatter 围栏（仅识别文档开头的 `---` 块）。 */

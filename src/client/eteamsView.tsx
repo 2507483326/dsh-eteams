@@ -63,6 +63,7 @@ import {
 import ArrowLeft from 'lucide-react/dist/esm/icons/arrow-left.mjs';
 import Check from 'lucide-react/dist/esm/icons/check.mjs';
 import ChevronDown from 'lucide-react/dist/esm/icons/chevron-down.mjs';
+import ChevronLeft from 'lucide-react/dist/esm/icons/chevron-left.mjs';
 import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right.mjs';
 import Dices from 'lucide-react/dist/esm/icons/dices.mjs';
 import MessageSquare from 'lucide-react/dist/esm/icons/message-square.mjs';
@@ -70,6 +71,12 @@ import Minus from 'lucide-react/dist/esm/icons/minus.mjs';
 import PenLine from 'lucide-react/dist/esm/icons/pen-line.mjs';
 import Plus from 'lucide-react/dist/esm/icons/plus.mjs';
 import Search from 'lucide-react/dist/esm/icons/search.mjs';
+// docs/28 Token 消耗日历：react-activity-calendar（v3，devDep；React 18 peer
+// 兼容）+ 其 tooltip 样式（tsdown 虚拟 CSS 插件以字符串载入，见
+// usageCalendarCss.d.ts / tsdown.config.ts usageTooltipsCssInline）。
+import { ActivityCalendar } from 'react-activity-calendar';
+import type { Activity, Labels, ThemeInput } from 'react-activity-calendar';
+import usageTooltipsCss from 'react-activity-calendar/tooltips.css';
 import { Provider, useDispatch, useSelector } from 'react-redux';
 import { ADD_PEOPLE_TEMPLATE, prefillComposer, type PrefillOutcome } from './addPeople';
 import { Avatar } from './avatar';
@@ -108,6 +115,7 @@ import {
   SelectValue,
 } from './components/ui/select';
 import { MdEditor } from './mdEditor';
+import { useHostDark } from './useHostDark';
 import {
   addTeamMember,
   approveTeamPlan,
@@ -116,6 +124,7 @@ import {
   deleteTeam,
   deleteTeamTask,
   fetchAgentActivity,
+  fetchUsageCalendar,
   removeTeamMember,
   setLeaderModel,
   setMemberModel,
@@ -127,6 +136,8 @@ import {
   type InterviewQuestion,
   type RosterMember,
   type TaskSlotInput,
+  type UsageCalendar,
+  type UsageDay,
 } from './api';
 import { catalogRow, useModelCatalog, type ModelCatalogState } from './modelCatalog';
 import {
@@ -144,6 +155,20 @@ import {
 } from './monitor';
 import { getApp, type RootState } from './store/app';
 import { PHASE_LABELS } from './phaseLabels';
+// docs/29 A：小任务拖拽指派组件（DndProvider 局部包裹器/成员罗列条/成员框）
+// 与 B 展示态派生层（13 态→六档 + cancelled；tone/词表/彩点类迁移至此）。
+import { TaskAssignDropBox, TaskDndProvider, TeamMemberStrip } from './taskAssign';
+import { boxRendersContent, clearedChain } from './taskAssignCore';
+import {
+  DOT_BASE_CLASS,
+  DOT_TONE_CLASS,
+  STATUS_LABELS,
+  displayStatusOf,
+  groupDisplayOf,
+  memberTone,
+  type GroupSummary,
+  type Tone,
+} from './taskDisplayStatus';
 
 /** The leader is a member too — default-joined, undeletable (用户定稿模型). */
 const LEADER_NAME = '项目牧羊人';
@@ -160,39 +185,31 @@ function memberRank(name: string): number {
   return 2;
 }
 
+/**
+ * 顶层状态分组（docs/29 B.3：收敛为展示态分组——分组边界从 13 态并成六档
+ * + cancelled 独立组；行内展示态 pill 与组头同口径，消除「行在『待接取』组
+ * 却显示『等待执行』」的错位）。statuses 仍是 13 态值（行过滤键），tone 沿用
+ * 既有组语义：等待系黄、执行系蓝、成功绿、失败红、初始化/取消灰。
+ */
 const STATUS_GROUPS: { id: string; label: string; statuses: string[]; tone: Tone }[] = [
-  { id: 'active', label: '执行中', statuses: ['in_progress', 'retrying'], tone: 'info' },
-  { id: 'assigned', label: '待接取', statuses: ['assigned'], tone: 'info' },
-  { id: 'ready', label: '待指派', statuses: ['ready'], tone: 'muted' },
+  { id: 'init', label: '初始化', statuses: ['draft'], tone: 'muted' },
+  { id: 'created', label: '已创建', statuses: ['ready'], tone: 'info' },
   {
-    id: 'decision',
-    label: '待决策',
-    statuses: ['awaiting_decision', 'needs_user'],
+    id: 'waiting',
+    label: '等待执行',
+    statuses: ['assigned', 'blocked', 'paused', 'suspended'],
     tone: 'warn',
   },
-  { id: 'paused', label: '已挂起', statuses: ['paused', 'suspended'], tone: 'warn' },
-  { id: 'blocked', label: '被阻断', statuses: ['blocked'], tone: 'err' },
-  { id: 'completed', label: '已完成', statuses: ['completed'], tone: 'ok' },
-  { id: 'failed', label: '失败', statuses: ['failed'], tone: 'err' },
+  { id: 'doing', label: '进行中', statuses: ['in_progress', 'retrying'], tone: 'info' },
+  { id: 'done', label: '已完成', statuses: ['completed'], tone: 'ok' },
+  {
+    id: 'error',
+    label: '错误',
+    statuses: ['awaiting_decision', 'needs_user', 'failed'],
+    tone: 'err',
+  },
   { id: 'cancelled', label: '已取消', statuses: ['cancelled'], tone: 'muted' },
-  { id: 'draft', label: '草稿', statuses: ['draft'], tone: 'muted' },
 ];
-
-const STATUS_LABELS: Record<string, string> = {
-  draft: '草稿',
-  ready: '待指派',
-  assigned: '待接取',
-  in_progress: '执行中',
-  retrying: '重试中',
-  paused: '已挂起',
-  awaiting_decision: '待决策',
-  needs_user: '待用户',
-  suspended: '已暂停',
-  blocked: '被阻断',
-  completed: '已完成',
-  failed: '失败',
-  cancelled: '已取消',
-};
 
 /**
  * 角色/团队列表注入样式表（ROLE_LIST_CSS）消费的主题 token——S12–S14 迁移
@@ -205,14 +222,13 @@ const STATUS_LABELS: Record<string, string> = {
  * button.tsx 先例）。
  */
 
-/** Semantic tone — every status color flows through these five buckets. */
-type Tone = 'info' | 'ok' | 'warn' | 'err' | 'muted';
-
 /**
  * S12：Tone→工具类映射表（完整字面量，content 扫描可检出——禁 `tone-${x}`
  * 拼接，21.5.1 纪律）。语义色走 token 类（D19c；success/warning/business
  * 为附录 A 扩展 token，muted 走中性 token muted-foreground）。
  * S13 的状态徽标（pillClass/dotClass）沿用此表语义，S14 余下区块同。
+ * （Tone 类型与成员态映射 memberTone 已迁 taskDisplayStatus——docs/29 B，
+ * 经 import 使用。）
  */
 const TONE_CLASS: Record<Tone, string> = {
   info: 'text-business',
@@ -235,14 +251,6 @@ const PHASE_TONES: Record<string, Tone> = {
   completed: 'ok',
   archived: 'muted',
 };
-
-function memberTone(status: string): Tone {
-  if (status === 'working' || status === 'busy') return 'info';
-  if (status === 'ready' || status === 'idle' || status === 'done') return 'ok';
-  if (status === 'paused') return 'warn';
-  if (status === 'failed' || status === 'error') return 'err';
-  return 'muted';
-}
 
 /* styles/fns 两个 inline 工厂已随 S14 收尾迁移整体删除（docs/21 21.6 死
 代码清理）：styles.* → 下方「S14 迁移新增的类名常量」段（或沿用 S12/S13
@@ -399,17 +407,9 @@ const PILL_TONE_CLASS: Record<Tone, string> = {
   err: PILL_NEUTRAL_CLASS,
   muted: PILL_NEUTRAL_CLASS,
 };
-/** 原 fns.dot 的类名版（完整字面量映射）：D22e 后 dot 是状态色的唯一载体
- * ——执行中 business/sky、成功 success 绿、警告 warning amber、错误
- * destructive 红、muted 中性灰（token 值已官网化：sky/绿600/amber600/红600）。 */
-const DOT_BASE_CLASS = 'inline-block h-1.5 w-1.5 shrink-0 rounded-full';
-const DOT_TONE_CLASS: Record<Tone, string> = {
-  info: 'bg-business',
-  ok: 'bg-success',
-  warn: 'bg-warning',
-  err: 'bg-destructive',
-  muted: 'bg-muted-foreground',
-};
+/** 原 fns.dot 的类名版：D22e 后 dot 是状态色的唯一载体——DOT_BASE_CLASS/
+ * DOT_TONE_CLASS 已迁 taskDisplayStatus（docs/29 B，与展示态/tone 同家），
+ * dotClass 经 import 消费。 */
 const pillClass = (tone: Tone): string => cn(PILL_BASE_CLASS, PILL_TONE_CLASS[tone]);
 const dotClass = (tone: Tone): string => cn(DOT_BASE_CLASS, DOT_TONE_CLASS[tone]);
 
@@ -443,6 +443,42 @@ function FormErrorNote({
     >
       {children}
     </Alert>
+  );
+}
+
+/** 展示态徽标（docs/29 B.3 渲染位）：中性 pill（Badge secondary + 6px dot，
+ * tone 按展示态逐格对表——29-M3 同桶异色）+ 13 态差异 detail 小字（重试 n/
+ * 待决策/已挂起…）。TaskDrawer 与任务详情**保留 13 态精确文案**（STATUS_
+ * LABELS），展示态只用于任务行/组卡/分组头。 */
+function DisplayStatusPill({
+  status,
+  retryCount = 0,
+  className,
+}: {
+  status: string;
+  retryCount?: number;
+  className?: string;
+}): ReactNode {
+  const d = displayStatusOf(status, retryCount);
+  return (
+    <span className={cn('inline-flex items-baseline gap-1.5 whitespace-nowrap', className)}>
+      <Pill tone={d.tone}>{d.label}</Pill>
+      {d.detail !== '' && <span className={MUTED_CLASS}>{d.detail}</span>}
+    </span>
+  );
+}
+
+/** 组卡汇总 chip（B.2 规则 2）：异常 chip 带前缀 ✕（「✕ n 项异常」，err 红
+ * ——与行内 awaiting/needs_user pill 的 warning 黄同桶异色）+ 首个异常
+ * detail 小字；执行中/等待执行/待指派按优先级降档。 */
+function GroupSummaryChip({ summary }: { summary: GroupSummary }): ReactNode {
+  return (
+    <span className="inline-flex items-baseline gap-1.5 whitespace-nowrap">
+      <Pill tone={summary.tone}>
+        {summary.icon !== '' ? `${summary.icon} ${summary.label}` : summary.label}
+      </Pill>
+      {summary.detail !== '' && <span className={MUTED_CLASS}>{summary.detail}</span>}
+    </span>
   );
 }
 
@@ -1120,6 +1156,11 @@ function BoardTab({
         </div>
       </Card>
 
+      {/* docs/28 看板 · 每日 Token 消耗日历（全年格子 + 悬浮明细）。取数 hooks
+      都在子组件内部——子组件只在有团队时挂载，早退分支不会打断任何 hook 序
+      （docs/30 28-M2 的「hooks 在早退前」约束等价成立）。 */}
+      <UsageCalendarCard teamId={team.teamId} />
+
       {/* docs/26 批准计划确认弹窗：批准 = staged → running、小任务 draft→ready、
       全员子代理启动；合同冻结，后续变更在对话中留痕。失败就地显示。 */}
       <Dialog
@@ -1160,6 +1201,247 @@ function BoardTab({
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+// ---------- docs/28 看板 · Token 消耗日历（每日聚合 + 全年格子） ----------
+
+/** 日历主题（28.5.2 定稿色板）：亮/暗两档各 5 级（0 空档 + 4 活跃档）。 */
+const USAGE_CALENDAR_THEME: ThemeInput = {
+  light: ['#f1f5f9', '#bae6fd', '#7dd3fc', '#38bdf8', '#0ea5e9'],
+  dark: ['#1e293b', '#0c4a6e', '#0369a1', '#0284c7', '#38bdf8'],
+};
+
+/** 中文标签（28.5.2）：weekdays 下标 0=周日（组件按 getDay() 索引，实测
+ * node_modules build chunks index-B3Gga1-_.js renderWeekdayLabels）。 */
+const USAGE_CALENDAR_LABELS: Labels = {
+  months: ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'],
+  weekdays: ['日', '一', '二', '三', '四', '五', '六'],
+  totalCount: '{{year}} 年共 {{count}} tokens',
+  legend: { less: '少', more: '多' },
+};
+
+let usageStylesInjected = false;
+
+/**
+ * 注入 tooltip 样式（幂等，mdEditor ensureMdxStyles 同型）：包内
+ * tooltips.css + 两处覆盖。docs/30 28-M3：tooltip 经 FloatingPortal 挂在
+ * document.body 根（不在 .eteams-ui 子树内），选择器必须放 body 层全局
+ * 生效——样式标签挂 <head>，用包自带的 react-activity-calendar__tooltip
+ * 类定位，不依赖 .eteams-ui 祖先。
+ */
+function ensureUsageCalendarStyles(): void {
+  if (usageStylesInjected) return;
+  usageStylesInjected = true;
+  try {
+    const style = document.createElement('style');
+    style.setAttribute('data-source', 'dsh-eteams-usage-calendar');
+    style.textContent =
+      usageTooltipsCss +
+      // 覆盖一：明细按 \n 折行（tooltips.activity.text 只回字符串，多行
+      // 全靠这里）。
+      '.react-activity-calendar__tooltip{white-space:pre-line;}' +
+      // 覆盖二：暗色 tooltip 反转为深底浅字，与面板暗色一致（包默认暗档
+      // 是浅底深字，浮在暗面板上刺眼）。同标签源序在后，同特异性覆盖生效。
+      ".react-activity-calendar__tooltip[data-color-scheme='dark']{background-color:hsl(0 0% 10%);color:hsl(0 0% 94%);}" +
+      ".react-activity-calendar__tooltip[data-color-scheme='dark'] .react-activity-calendar__tooltip-arrow{fill:hsl(0 0% 10%);}";
+    document.head.appendChild(style);
+  } catch {
+    // 样式注入失败只影响观感（tooltip 退浏览器默认样式），不炸卡片。
+  }
+}
+
+/** 千分位（tooltip/合计行）：固定 en-US 分组，不随宿主 locale 漂移。 */
+function usageNum(n: number): string {
+  return n.toLocaleString('en-US');
+}
+
+/** 'yyyy-MM-dd' → 'M月d日'（字符串切片取数，绕开 Date 的时区歧义）。 */
+function usageDateLabel(date: string): string {
+  const month = Number(date.slice(5, 7));
+  const day = Number(date.slice(8, 10));
+  if (!Number.isFinite(month) || !Number.isFinite(day)) return date;
+  return `${month}月${day}日`;
+}
+
+/** 线性插值百分位（28.5.2 四分位档：P25/P50/P75 定 1-4 级）。 */
+function usagePercentile(sorted: readonly number[], p: number): number {
+  if (sorted.length === 0) return 0;
+  const pos = p * (sorted.length - 1);
+  const lower = Math.floor(pos);
+  const upper = Math.ceil(pos);
+  if (lower === upper) return sorted[lower] ?? 0;
+  return (sorted[lower] ?? 0) + ((sorted[upper] ?? 0) - (sorted[lower] ?? 0)) * (pos - lower);
+}
+
+/** 日期 → 0-4 级映射：0 恒空档；正数日按 P25/P50/P75 分四档（28.5.2）。 */
+function usageLevelsOf(days: readonly UsageDay[]): Map<string, number> {
+  const positive = days
+    .map((d) => d.totalTokens)
+    .filter((v) => v > 0)
+    .sort((a, b) => a - b);
+  const p25 = usagePercentile(positive, 0.25);
+  const p50 = usagePercentile(positive, 0.5);
+  const p75 = usagePercentile(positive, 0.75);
+  const levels = new Map<string, number>();
+  for (const day of days) {
+    const v = day.totalTokens;
+    levels.set(day.date, v <= 0 ? 0 : v <= p25 ? 1 : v <= p50 ? 2 : v <= p75 ? 3 : 4);
+  }
+  return levels;
+}
+
+/** tooltip 文案（28.5.2 格式）：标题行 + 四分项 + 可选推理行 + 调用次数。 */
+function usageTooltipText(day: UsageDay | undefined, activity: Activity): string {
+  const lines = [
+    `${usageDateLabel(day?.date ?? activity.date)} · ${usageNum(day?.totalTokens ?? 0)} tokens`,
+    `输入 ${usageNum(day?.inputTokens ?? 0)} / 输出 ${usageNum(day?.outputTokens ?? 0)} / 缓存读 ${usageNum(
+      day?.cacheReadTokens ?? 0,
+    )} / 缓存写 ${usageNum(day?.cacheWriteTokens ?? 0)}`,
+  ];
+  if ((day?.reasoningTokens ?? 0) > 0) {
+    lines.push(`推理 ${usageNum(day?.reasoningTokens ?? 0)}（可能与输出重叠）`);
+  }
+  lines.push(`调用 ${usageNum(day?.calls ?? 0)} 次`);
+  return lines.join('\n');
+}
+
+/**
+ * Token 消耗卡（docs/28.5.2）：全年 365/366 格日历、年份切换（未来年禁用）、
+ * 悬浮明细、合计行；60s 低频轮询（面板可见且文档未隐藏才发请求）。取数
+ * hooks 全在本组件内部——本组件只在有团队时挂载，BoardTab 早退分支不会
+ * 打断任何 hook 序（docs/30 28-M2 约束等价成立）。
+ */
+function UsageCalendarCard({ teamId }: { teamId: string }): ReactNode {
+  ensureUsageCalendarStyles();
+  const dark = useHostDark();
+  const currentYear = new Date().getFullYear();
+  const [year, setYear] = useState(currentYear);
+  const [calendar, setCalendar] = useState<UsageCalendar | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
+
+  // 取数 + 低频轮询（28.5.2）：teamId/year/retry 变化即重拉；60s 间隔仅在
+  // document 可见时触发；卸载后丢弃迟到响应。loading 不落 state（effect 里
+  // 同步 setState 会级联渲染，react-hooks/set-state-in-effect）——首拉 =
+  // calendar 仍为 null 即加载中。
+  useEffect(() => {
+    if (teamId === '') return;
+    let alive = true;
+    const fetchOne = (): void => {
+      fetchUsageCalendar(teamId, year)
+        .then((body) => {
+          if (!alive) return;
+          setCalendar(body);
+          setError(null);
+        })
+        .catch((e: unknown) => {
+          if (!alive) return;
+          setError(e instanceof Error ? e.message : String(e));
+        });
+    };
+    fetchOne();
+    const timer = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      fetchOne();
+    }, 60_000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [teamId, year, retry]);
+
+  const days = calendar?.days ?? [];
+  const totals = calendar?.totals;
+  // 日期 → 明细查表（tooltip 用；Activity.count 只是视觉计数，真值在这里）。
+  const dayByDate = new Map(days.map((d) => [d.date, d]));
+  const levelByDate = usageLevelsOf(days);
+  const activities: Activity[] = days.map((d) => ({
+    date: d.date,
+    count: d.totalTokens,
+    level: levelByDate.get(d.date) ?? 0,
+  }));
+  // 无数据（totals 全 0）也整年零档渲染（28.5.2），仅补一行说明。
+  const hasData = totals !== undefined && totals.totalTokens > 0;
+  const firstLoad = calendar === null && error === null;
+
+  return (
+    <Card className={PANEL_CARD_CLASS}>
+      <div className="flex items-center justify-between">
+        <div className={cn(SECTION_TITLE_CLASS, 'mb-0')}>Token 消耗</div>
+        {/* 年份切换：右箭头到未来年禁用（28.5.2——未来年无数据可看）。 */}
+        <div className="flex items-center gap-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6"
+            aria-label="上一年"
+            onClick={() => setYear((y) => y - 1)}
+          >
+            <ChevronLeft className="h-3.5 w-3.5" />
+          </Button>
+          <span className="text-sm font-medium leading-6 text-foreground">{year}</span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6"
+            aria-label="下一年"
+            disabled={year >= currentYear}
+            onClick={() => setYear((y) => y + 1)}
+          >
+            <ChevronRight className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      </div>
+      <div className="mt-3 min-w-0">
+        {error !== null && calendar === null ? (
+          <div>
+            <FormErrorNote>消耗数据加载失败：{error}</FormErrorNote>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setRetry((n) => n + 1)}
+            >
+              重试
+            </Button>
+          </div>
+        ) : firstLoad || activities.length > 0 ? (
+          <ActivityCalendar
+            data={activities}
+            loading={firstLoad}
+            theme={USAGE_CALENDAR_THEME}
+            colorScheme={dark ? 'dark' : 'light'}
+            blockSize={11}
+            blockMargin={3}
+            blockRadius={2}
+            fontSize={12}
+            weekStart={1}
+            showWeekdayLabels={['sun', 'wed']}
+            showColorLegend
+            labels={USAGE_CALENDAR_LABELS}
+            tooltips={{
+              activity: {
+                text: (activity) => usageTooltipText(dayByDate.get(activity.date), activity),
+              },
+            }}
+          />
+        ) : (
+          <div className={MUTED_CLASS}>暂无日历数据</div>
+        )}
+        <div className={cn(MUTED_CLASS, 'mt-2')}>
+          {error !== null && calendar !== null
+            ? `上次刷新失败：${error}`
+            : hasData && totals !== undefined
+              ? `全年合计 ${usageNum(totals.totalTokens)} tokens · ${usageNum(totals.calls)} 次调用`
+              : calendar !== null
+                ? '今年还没有记录到消耗——成员执行任务后这里会逐日亮起。'
+                : ''}
+        </div>
+      </div>
+    </Card>
   );
 }
 
@@ -4254,7 +4536,11 @@ docs/26 对话任务：顶部「对话任务」区块渲染 kind==='group' 的�
 单）卡 + 嵌套小任务行；小任务在 draft/ready（未领取）时面板可改删——修
 改弹窗（主题/说明/成员槽编辑）与删除确认弹窗，主任务卡内可新增小任务。
 编辑/删除弹窗为组件内瞬态 useState，不入 ui model；保存/删除成功后
-refreshActivitySoon 立即回拉快照。 */
+refreshActivitySoon 立即回拉快照。
+docs/29 拖拽指派：根包 TaskDndProvider（单实例）；每张组卡下方成员罗列条
+（拖拽源）+ 小任务行尾成员框（TaskAssignDropBox，drop=下一待执行站快捷位，
+整链重发 updateTeamTask、非乐观更新）；assignBusy/assignError 瞬态同
+editBusy/editError 模式，错误就地 FormErrorNote。 */
 function TasksTab({
   team,
   now,
@@ -4275,6 +4561,10 @@ function TasksTab({
   const [deleteTarget, setDeleteTarget] = useState<TaskView | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // docs/29 拖拽指派瞬态（对齐 editBusy/editError 模式）：busy 按小任务
+  // taskId 定位（框禁用 + 透明度），error 单槽记录受影响小任务（行内展示）。
+  const [assignBusy, setAssignBusy] = useState<string | null>(null);
+  const [assignError, setAssignError] = useState<{ taskId: string; message: string } | null>(null);
   const editingTask = editTarget !== null && editTarget.task !== null ? editTarget.task : null;
 
   const openEdit = (group: TaskView, task: TaskView | null): void => {
@@ -4337,334 +4627,390 @@ function TasksTab({
       setDeleteBusy(false);
     }
   };
+  // 拖拽指派提交（DA10/A.4）：新链由 TaskAssignDropBox 在 drop 时刻以最新
+  // 快照的 chain 现算（不缓存旧链），这里只整链重发 updateTeamTask——
+  // 非乐观更新，成功后 refreshActivitySoon 立即回拉；失败行内就地显示。
+  const submitAssignChain = async (taskId: string, chain: TaskSlotInput[]): Promise<void> => {
+    setAssignBusy(taskId);
+    setAssignError((cur) => (cur !== null && cur.taskId === taskId ? null : cur));
+    try {
+      await updateTeamTask(team.teamId, taskId, { chain });
+      refreshActivitySoon();
+    } catch (e) {
+      setAssignError({ taskId, message: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setAssignBusy(null);
+    }
+  };
 
   const groups = team.tasks.filter((t) => t.kind === 'group');
+  // docs/29 DA2：DndProvider 只包 TasksTab（消费面唯一，单实例单 Provider，
+  // 随 tab 卸载销毁；1s 轮询只换数据不重挂 Provider）。
   return (
-    <div>
-      {/* docs/26 对话任务：主任务（任务单）卡 + 嵌套小任务行。小任务在
+    <TaskDndProvider>
+      <div>
+        {/* docs/26 对话任务：主任务（任务单）卡 + 嵌套小任务行。小任务在
       draft/ready（未领取）时可改删；领取后合同冻结，按钮消失（06.4）。 */}
-      {groups.length > 0 && (
-        <div className="mb-3.5">
-          <div className="mb-1 flex items-center gap-1.5 text-sm font-semibold leading-6 text-foreground">
-            <span className={dotClass('info')} />
-            对话任务
-            <span className="text-xs font-normal text-muted-foreground">· {groups.length}</span>
-          </div>
-          {groups.map((group) => {
-            const subs = team.tasks.filter((t) => t.parentId === group.taskId);
-            const done = subs.filter((t) => t.status === 'completed').length;
-            const mutable = group.status === 'draft' || group.status === 'ready';
-            return (
-              <div
-                key={group.taskId}
-                className={cn(
-                  'mb-2.5 rounded-[8px] border border-solid bg-background px-3 py-2.5',
-                  BORDER_L1_CLASS,
-                )}
-              >
-                <div>
-                  <strong>{group.taskId}</strong> {group.subject}
-                  <span className={MUTED_CLASS}>
-                    {' '}
-                    {STATUS_LABELS[group.status] ?? group.status} · 小任务 {done}/{subs.length} 完成
-                  </span>
-                </div>
-                {group.folder !== null && (
-                  <div className={MUTED_CLASS}>文件夹：{group.folder}/</div>
-                )}
-                {mutable && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="mt-1.5"
-                    onClick={() => openEdit(group, null)}
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                    新增小任务
-                  </Button>
-                )}
-                {subs.map((t) => {
-                  const subMutable = t.status === 'draft' || t.status === 'ready';
-                  return (
-                    <div key={t.taskId}>
-                      <div
-                        className={cn(TASK_ROW_CLASS, 'ml-4')}
-                        onClick={() => setExpandedTask(expandedTask === t.taskId ? null : t.taskId)}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <strong>{t.taskId}</strong> {t.subject}
-                            <span className={MUTED_CLASS}>
-                              {' '}
-                              {STATUS_LABELS[t.status] ?? t.status}
-                              {t.assignee !== null ? ` · ${t.assignee}` : ''}
-                            </span>
-                          </div>
-                          {subMutable && (
-                            <div
-                              className="flex shrink-0 gap-1.5"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => openEdit(group, t)}
-                              >
-                                修改
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => setDeleteTarget(t)}
-                              >
-                                删除
-                              </Button>
-                            </div>
-                          )}
-                        </div>
-                        <TaskStations task={t} />
-                      </div>
-                      {expandedTask === t.taskId && (
-                        <TaskDrawer
-                          team={team}
-                          task={t}
-                          now={now}
-                          onClose={() => setExpandedTask(null)}
-                        />
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            );
-          })}
-        </div>
-      )}
-      {STATUS_GROUPS.map((group) => {
-        // docs/26：主任务（group）在上方「对话任务」区块，小任务挂在组卡内
-        // ——状态分组只列顶层普通任务。
-        const rows = team.tasks.filter(
-          (t) => group.statuses.includes(t.status) && t.parentId === null && t.kind !== 'group',
-        );
-        if (rows.length === 0) return null;
-        return (
-          <div key={group.id} className="mb-3.5">
-            {/* D22e 任务页组头降噪：彩 pill → 中性文字 + 计数 + 彩色 6px dot。 */}
+        {groups.length > 0 && (
+          <div className="mb-3.5">
             <div className="mb-1 flex items-center gap-1.5 text-sm font-semibold leading-6 text-foreground">
-              <span className={dotClass(group.tone)} />
-              {group.label}
-              <span className="text-xs font-normal text-muted-foreground">· {rows.length}</span>
+              <span className={dotClass('info')} />
+              对话任务
+              <span className="text-xs font-normal text-muted-foreground">· {groups.length}</span>
             </div>
-            {rows.map((t) => (
-              <div key={t.taskId}>
+            {groups.map((group) => {
+              const subs = team.tasks.filter((t) => t.parentId === group.taskId);
+              const done = subs.filter((t) => t.status === 'completed').length;
+              const mutable = group.status === 'draft' || group.status === 'ready';
+              // docs/29 B.2 组卡汇总：ready 且有小任务时叠加汇总 chip（error >
+              // doing > waiting > created；全 completed 不加——进度行已表达）。
+              const summary =
+                group.status === 'ready' && subs.length > 0 ? groupDisplayOf(subs) : null;
+              // draft（批准前拆解中）不做汇总——只显示计数（B.2 规则尾部）。
+              const progressText =
+                group.status === 'draft'
+                  ? `小任务 ${subs.length} 个`
+                  : `小任务 ${done}/${subs.length} 完成`;
+              return (
                 <div
-                  className={TASK_ROW_CLASS}
-                  onClick={() => setExpandedTask(expandedTask === t.taskId ? null : t.taskId)}
+                  key={group.taskId}
+                  className={cn(
+                    'mb-2.5 rounded-[8px] border border-solid bg-background px-3 py-2.5',
+                    BORDER_L1_CLASS,
+                  )}
                 >
                   <div>
-                    <strong>{t.taskId}</strong> {t.subject}
-                    <span className={MUTED_CLASS}>
-                      {' '}
-                      {STATUS_LABELS[t.status] ?? t.status}
-                      {t.retryCount > 0 ? ` · 重试 ${t.retryCount}` : ''}
-                      {t.assignee !== null ? ` · ${t.assignee}` : ''}
-                    </span>
+                    <strong>{group.taskId}</strong> {group.subject}
+                    <DisplayStatusPill status={group.status} className="ml-1" />
+                    <span className={cn(MUTED_CLASS, 'ml-1')}>· {progressText}</span>
+                    {summary !== null && <GroupSummaryChip summary={summary} />}
                   </div>
-                  <TaskStations task={t} />
-                  {t.dependencies.length > 0 && (
-                    <div className="mt-[3px]">
-                      {t.dependencies.map((d) => (
-                        <span key={d} className={CHIP_CLASS}>
-                          依赖 {d}
-                        </span>
-                      ))}
-                    </div>
+                  {group.folder !== null && (
+                    <div className={MUTED_CLASS}>文件夹：{group.folder}/</div>
+                  )}
+                  {mutable && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="mt-1.5"
+                      onClick={() => openEdit(group, null)}
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      新增小任务
+                    </Button>
+                  )}
+                  {subs.map((t) => {
+                    const subMutable = t.status === 'draft' || t.status === 'ready';
+                    // docs/29 A.5.1：单站点（chain≤1）且框有内容时站点行与框
+                    // 内容重合——抑制 TaskStations；多站点保留（框只承下一站）。
+                    const suppressStations = t.chain.length === 1 && boxRendersContent(t);
+                    return (
+                      <div key={t.taskId}>
+                        <div
+                          className={cn(TASK_ROW_CLASS, 'ml-4')}
+                          onClick={() =>
+                            setExpandedTask(expandedTask === t.taskId ? null : t.taskId)
+                          }
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <strong>{t.taskId}</strong> {t.subject}
+                              <DisplayStatusPill status={t.status} className="ml-1" />
+                              {t.assignee !== null && (
+                                <span className={cn(MUTED_CLASS, 'ml-1')}>· {t.assignee}</span>
+                              )}
+                            </div>
+                            <div
+                              className="flex shrink-0 items-center gap-1.5"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {subMutable && (
+                                <div className="flex shrink-0 gap-1.5">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => openEdit(group, t)}
+                                  >
+                                    修改
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => setDeleteTarget(t)}
+                                  >
+                                    删除
+                                  </Button>
+                                </div>
+                              )}
+                              {/* docs/29 A.8：行尾成员框（拖拽指派 drop target；
+                            框自身对不可渲染情形返回 null——空链只读等）。 */}
+                              <TaskAssignDropBox
+                                task={t}
+                                members={team.members}
+                                busy={assignBusy === t.taskId}
+                                onAssign={(chain) => void submitAssignChain(t.taskId, chain)}
+                                onClear={() => void submitAssignChain(t.taskId, clearedChain(t))}
+                                onOpenEdit={() => openEdit(group, t)}
+                              />
+                            </div>
+                          </div>
+                          {!suppressStations && <TaskStations task={t} />}
+                        </div>
+                        {assignError !== null && assignError.taskId === t.taskId && (
+                          <FormErrorNote className="ml-4">{assignError.message}</FormErrorNote>
+                        )}
+                        {expandedTask === t.taskId && (
+                          <TaskDrawer
+                            team={team}
+                            task={t}
+                            now={now}
+                            onClose={() => setExpandedTask(null)}
+                          />
+                        )}
+                      </div>
+                    );
+                  })}
+                  {/* docs/29 A.5.3（用户 2026-09-04 拍板）：成员罗列条每张组卡
+                下方一条（小任务行之后），chip 副本相同；只在存在可放置小任务
+                （draft/ready）时渲染。 */}
+                  {subs.some((t) => t.status === 'draft' || t.status === 'ready') && (
+                    <TeamMemberStrip team={team} />
                   )}
                 </div>
-                {expandedTask === t.taskId && (
-                  <TaskDrawer
-                    team={team}
-                    task={t}
-                    now={now}
-                    onClose={() => setExpandedTask(null)}
-                  />
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
-        );
-      })}
-      {team.tasks.length === 0 && (
-        <div className={EMPTY_CLASS}>
-          还没有任务。在对话中把任务交给团队，或计划批准后任务会出现在这里。
-        </div>
-      )}
-
-      {/* docs/26 小任务编辑/新增弹窗：主题 + 说明 + 成员槽（站点按序接力）。
-      新增时空表单；修改时按当前值回填（成员槽从执行链展开）。host 校验
-      成员在团/合同冻结（领取后），错误就地显示。 */}
-      <Dialog
-        open={editTarget !== null}
-        onOpenChange={(next) => {
-          if (!next) closeEdit();
-        }}
-      >
-        <DialogContent className="max-w-md">
-          <DialogHeader className="space-y-1 text-left">
-            <DialogTitle>
-              {editingTask !== null ? `修改 ${editingTask.taskId}` : '新增小任务'}
-            </DialogTitle>
-            <DialogDescription className={MUTED_CLASS}>
-              挂靠任务单 {editTarget?.group.taskId ?? ''}（{editTarget?.group.subject ?? ''}）；
-              成员槽按序接力，站点留空可跳过。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2.5">
-            <Input
-              value={editSubject}
-              autoFocus
-              placeholder="小任务主题"
-              onChange={(e) => setEditSubject(e.target.value)}
-            />
-            <Textarea
-              value={editDesc}
-              rows={2}
-              placeholder="说明 / 验收要点（可空）"
-              onChange={(e) => setEditDesc(e.target.value)}
-            />
-            <div>
-              <span className={FORM_LABEL_CLASS}>成员槽（按序接力）</span>
-              {editSlots.map((s, i) => (
-                <div key={i} className="mt-1.5 flex items-center gap-1.5">
-                  <Select
-                    value={s.member === '' ? SELECT_NONE : s.member}
-                    onValueChange={(v) =>
-                      setEditSlots((list) =>
-                        list.map((x, j) =>
-                          j === i ? { ...x, member: v === SELECT_NONE ? '' : v } : x,
-                        ),
-                      )
-                    }
+        )}
+        {STATUS_GROUPS.map((group) => {
+          // docs/26：主任务（group）在上方「对话任务」区块，小任务挂在组卡内
+          // ——状态分组只列顶层普通任务。
+          const rows = team.tasks.filter(
+            (t) => group.statuses.includes(t.status) && t.parentId === null && t.kind !== 'group',
+          );
+          if (rows.length === 0) return null;
+          return (
+            <div key={group.id} className="mb-3.5">
+              {/* D22e 任务页组头降噪：彩 pill → 中性文字 + 计数 + 彩色 6px dot。 */}
+              <div className="mb-1 flex items-center gap-1.5 text-sm font-semibold leading-6 text-foreground">
+                <span className={dotClass(group.tone)} />
+                {group.label}
+                <span className="text-xs font-normal text-muted-foreground">· {rows.length}</span>
+              </div>
+              {rows.map((t) => (
+                <div key={t.taskId}>
+                  <div
+                    className={TASK_ROW_CLASS}
+                    onClick={() => setExpandedTask(expandedTask === t.taskId ? null : t.taskId)}
                   >
-                    <SelectTrigger className="h-[30px] w-[42%] shrink-0 px-2.5 text-[12px] font-medium">
-                      <SelectValue placeholder="— 成员 —" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={SELECT_NONE} className="text-[12px]">
-                        — 成员 —
-                      </SelectItem>
-                      {team.members.map((m) => (
-                        <SelectItem key={m.name} value={m.name} className="text-[12px]">
-                          {m.name}（{m.role}）
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Input
-                    className="h-[30px] min-w-0 flex-1 px-2.5 text-[12px]"
-                    value={s.stageBrief}
-                    placeholder="该站产出 / 交接物"
-                    onChange={(e) =>
-                      setEditSlots((list) =>
-                        list.map((x, j) => (j === i ? { ...x, stageBrief: e.target.value } : x)),
-                      )
-                    }
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    className="h-[30px] w-[30px] shrink-0"
-                    aria-label="移除站点"
-                    onClick={() => setEditSlots((list) => list.filter((_, j) => j !== i))}
-                  >
-                    <Minus className="h-3.5 w-3.5" />
-                  </Button>
+                    <div>
+                      <strong>{t.taskId}</strong> {t.subject}
+                      {/* docs/29 B.3：展示态 pill（retryCount 并入 detail，
+                    顶层行既有「重试 n」标记并入）；assignee 小字保留。 */}
+                      <DisplayStatusPill
+                        status={t.status}
+                        retryCount={t.retryCount}
+                        className="ml-1"
+                      />
+                      {t.assignee !== null && (
+                        <span className={cn(MUTED_CLASS, 'ml-1')}>· {t.assignee}</span>
+                      )}
+                    </div>
+                    <TaskStations task={t} />
+                    {t.dependencies.length > 0 && (
+                      <div className="mt-[3px]">
+                        {t.dependencies.map((d) => (
+                          <span key={d} className={CHIP_CLASS}>
+                            依赖 {d}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {expandedTask === t.taskId && (
+                    <TaskDrawer
+                      team={team}
+                      task={t}
+                      now={now}
+                      onClose={() => setExpandedTask(null)}
+                    />
+                  )}
                 </div>
               ))}
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="mt-1.5"
-                onClick={() => setEditSlots((list) => [...list, { member: '', stageBrief: '' }])}
-              >
-                <Plus className="h-3.5 w-3.5" />
-                添加站点
-              </Button>
             </div>
-            {editError !== null && <FormErrorNote>{editError}</FormErrorNote>}
-            <div className="flex items-center justify-end gap-2 pt-1">
+          );
+        })}
+        {team.tasks.length === 0 && (
+          <div className={EMPTY_CLASS}>
+            还没有任务。在对话中把任务交给团队，或计划批准后任务会出现在这里。
+          </div>
+        )}
+
+        {/* docs/26 小任务编辑/新增弹窗：主题 + 说明 + 成员槽（站点按序接力）。
+      新增时空表单；修改时按当前值回填（成员槽从执行链展开）。host 校验
+      成员在团/合同冻结（领取后），错误就地显示。 */}
+        <Dialog
+          open={editTarget !== null}
+          onOpenChange={(next) => {
+            if (!next) closeEdit();
+          }}
+        >
+          <DialogContent className="max-w-md">
+            <DialogHeader className="space-y-1 text-left">
+              <DialogTitle>
+                {editingTask !== null ? `修改 ${editingTask.taskId}` : '新增小任务'}
+              </DialogTitle>
+              <DialogDescription className={MUTED_CLASS}>
+                挂靠任务单 {editTarget?.group.taskId ?? ''}（{editTarget?.group.subject ?? ''}）；
+                成员槽按序接力，站点留空可跳过。
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2.5">
+              <Input
+                value={editSubject}
+                autoFocus
+                placeholder="小任务主题"
+                onChange={(e) => setEditSubject(e.target.value)}
+              />
+              <Textarea
+                value={editDesc}
+                rows={2}
+                placeholder="说明 / 验收要点（可空）"
+                onChange={(e) => setEditDesc(e.target.value)}
+              />
+              <div>
+                <span className={FORM_LABEL_CLASS}>成员槽（按序接力）</span>
+                {editSlots.map((s, i) => (
+                  <div key={i} className="mt-1.5 flex items-center gap-1.5">
+                    <Select
+                      value={s.member === '' ? SELECT_NONE : s.member}
+                      onValueChange={(v) =>
+                        setEditSlots((list) =>
+                          list.map((x, j) =>
+                            j === i ? { ...x, member: v === SELECT_NONE ? '' : v } : x,
+                          ),
+                        )
+                      }
+                    >
+                      <SelectTrigger className="h-[30px] w-[42%] shrink-0 px-2.5 text-[12px] font-medium">
+                        <SelectValue placeholder="— 成员 —" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={SELECT_NONE} className="text-[12px]">
+                          — 成员 —
+                        </SelectItem>
+                        {team.members.map((m) => (
+                          <SelectItem key={m.name} value={m.name} className="text-[12px]">
+                            {m.name}（{m.role}）
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Input
+                      className="h-[30px] min-w-0 flex-1 px-2.5 text-[12px]"
+                      value={s.stageBrief}
+                      placeholder="该站产出 / 交接物"
+                      onChange={(e) =>
+                        setEditSlots((list) =>
+                          list.map((x, j) => (j === i ? { ...x, stageBrief: e.target.value } : x)),
+                        )
+                      }
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="h-[30px] w-[30px] shrink-0"
+                      aria-label="移除站点"
+                      onClick={() => setEditSlots((list) => list.filter((_, j) => j !== i))}
+                    >
+                      <Minus className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="mt-1.5"
+                  onClick={() => setEditSlots((list) => [...list, { member: '', stageBrief: '' }])}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  添加站点
+                </Button>
+              </div>
+              {editError !== null && <FormErrorNote>{editError}</FormErrorNote>}
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={editBusy}
+                  onClick={closeEdit}
+                >
+                  取消
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={editBusy || editSubject.trim() === ''}
+                  onClick={() => void saveEdit()}
+                >
+                  {editingTask !== null ? '保存' : '新增'}
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* docs/26 小任务删除确认弹窗：未领取（draft/ready）可删，host 校验。 */}
+        <Dialog
+          open={deleteTarget !== null}
+          onOpenChange={(next) => {
+            if (!next) {
+              setDeleteTarget(null);
+              setDeleteError(null);
+            }
+          }}
+        >
+          <DialogContent className="max-w-sm">
+            <DialogHeader className="space-y-1 text-left">
+              <DialogTitle>删除小任务</DialogTitle>
+              <DialogDescription className={MUTED_CLASS}>
+                确定删除「{deleteTarget?.taskId ?? ''} {deleteTarget?.subject ?? ''}」？未领取的
+                任务删除后不可恢复。
+              </DialogDescription>
+            </DialogHeader>
+            {deleteError !== null && <FormErrorNote>{deleteError}</FormErrorNote>}
+            <div className="flex items-center justify-end gap-2">
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                disabled={editBusy}
-                onClick={closeEdit}
+                disabled={deleteBusy}
+                onClick={() => {
+                  setDeleteTarget(null);
+                  setDeleteError(null);
+                }}
               >
                 取消
               </Button>
               <Button
                 type="button"
+                variant="destructive"
                 size="sm"
-                disabled={editBusy || editSubject.trim() === ''}
-                onClick={() => void saveEdit()}
+                disabled={deleteBusy}
+                onClick={() => void confirmDelete()}
               >
-                {editingTask !== null ? '保存' : '新增'}
+                删除
               </Button>
             </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* docs/26 小任务删除确认弹窗：未领取（draft/ready）可删，host 校验。 */}
-      <Dialog
-        open={deleteTarget !== null}
-        onOpenChange={(next) => {
-          if (!next) {
-            setDeleteTarget(null);
-            setDeleteError(null);
-          }
-        }}
-      >
-        <DialogContent className="max-w-sm">
-          <DialogHeader className="space-y-1 text-left">
-            <DialogTitle>删除小任务</DialogTitle>
-            <DialogDescription className={MUTED_CLASS}>
-              确定删除「{deleteTarget?.taskId ?? ''} {deleteTarget?.subject ?? ''}」？未领取的
-              任务删除后不可恢复。
-            </DialogDescription>
-          </DialogHeader>
-          {deleteError !== null && <FormErrorNote>{deleteError}</FormErrorNote>}
-          <div className="flex items-center justify-end gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={deleteBusy}
-              onClick={() => {
-                setDeleteTarget(null);
-                setDeleteError(null);
-              }}
-            >
-              取消
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              size="sm"
-              disabled={deleteBusy}
-              onClick={() => void confirmDelete()}
-            >
-              删除
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-    </div>
+          </DialogContent>
+        </Dialog>
+      </div>
+    </TaskDndProvider>
   );
 }
 

@@ -16,6 +16,7 @@ import { ETeamsError, stateRootOf, type RuntimeContext, type RuntimeEnv } from '
 import { deliverAssignment, queueNotice } from './notifier.js';
 import { assignmentMail } from '../prompts/handoff.js';
 import { memberWelcome } from '../prompts/member.js';
+import { registerMemberSession } from './usage.js';
 
 /** Label prefix identifying eteams member children. */
 export const MEMBER_LABEL_PREFIX = 'eteams-member:';
@@ -245,6 +246,12 @@ export function installMemberRuntime(
     if (!member) return () => undefined;
     const env: RuntimeEnv = { ctx: hostCtx as unknown as RuntimeContext, config, workspace };
     registerMemberTools(childCtx, env);
+    // docs/28 归属注册表：成员子代理会话 → 团队/成员（usage 计量按此解析
+    // roleKind='member'；每次 Activation 重跑，冷恢复的会话身份随之重建）。
+    registerMemberSession(String(child.id), {
+      teamId: identity.teamId,
+      memberName: identity.memberName,
+    });
     return () => undefined;
   });
 }
