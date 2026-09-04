@@ -4,11 +4,11 @@
 >
 > 字段基线：[src/host/model/types.ts](../src/host/model/types.ts)——表里每个字段都能在 types.ts 找到对应；两处有出入时以 types.ts 为准。
 >
-> token 记账不进这个库：token 消耗逐条记在工作区的事件日志文件 usage.jsonl 里，读取时现聚合；本库只管角色/团队/任务数据，不设 token 表。
+> token 记账不进这个库：token 消耗逐条记在状态根下的 usage.jsonl 里（全局单库下就是全局根那份，用量台账跨工作区合一），读取时现聚合；本库只管角色/团队/任务数据，不设 token 表。
 >
 > 表上不留外键、CHECK、UNIQUE、触发器——每张表只有列定义、主键、普通索引，规则全部由写入代码保证。
 >
-> 2026-09-04 用户改版定稿：表精简为 11 张（team / roles / member / task / task_members + attempts / events / mail_messages / decisions / task_status_changes + schema_meta）；**主键 = 每张表自己的编号列，统一整数自增**（team_id / role_id / member_id / task_id / task_member_id / attempt_id / decision_id / seq / change_id；schema_meta 例外，key 即主键）；**每张表最后两列固定 created_time / update_time**，时间相关列一律 `_time` 结尾；**工号 = member.employee_id 列，数据库递增发号**（显示补零，1 → 0001，即 ET-0001）；**库文件放 `<workspace>/.eteams/db/` 子目录**。
+> 2026-09-04 用户改版定稿：表精简为 11 张（team / roles / member / task / task_members + attempts / events / mail_messages / decisions / task_status_changes + schema_meta）；**主键 = 每张表自己的编号列，统一整数自增**（team_id / role_id / member_id / task_id / task_member_id / attempt_id / decision_id / seq / change_id；schema_meta 例外，key 即主键）；**每张表最后两列固定 created_time / update_time**，时间相关列一律 `_time` 结尾；**工号 = member.employee_id 列，数据库递增发号**（显示补零，1 → 0001，即 ET-0001）；**库文件放状态根的 `db/` 子目录——状态根 = `<状态根>/db/`，默认配置 `stateDir: C:/Users/epat/.eteams` 为绝对路径即全局单库（2026-09-04 用户定案：所有工作区共用一个 eteams.db、一份成员库；stateDir 配相对路径才是旧口径 per-workspace `<workspace>/.eteams`）**。
 
 ## 27.1 为什么引入 SQLite
 
@@ -54,25 +54,26 @@
 ## 27.3 库文件布局与共存策略
 
 ```
-<workspace>/.eteams/                      # 状态根目录（可配置）
+<状态根>/                                # stateDir 绝对路径=全局单库（共用一个根）；
+                                         # 相对路径=per-workspace <workspace>/<stateDir>（旧口径）
   db/
-    eteams.db                             # SQLite 主库（本轮不创建；规划中的新真相源）
-    eteams.db-wal                         # WAL 前滚日志（journal_mode=WAL 自动出现）
-    eteams.db-shm                         # WAL 共享内存索引
-  roster.json                             # 现行工作区成员库（共存期不变；入库后由 member / task_members 承担）
-  captain-persona.yaml                    # 领队人设覆盖（本轮不入库）
-  rolebuilder.json                        # 角色构建会话的活动槽（构建过程的临时文件，不进库）
-  usage.jsonl                             # token 消耗台账（逐条事件追加，不进库）
+    eteams.db                            # SQLite 主库
+    eteams.db-wal                        # WAL 前滚日志（journal_mode=WAL 自动出现）
+    eteams.db-shm                        # WAL 共享内存索引
+  roster.json                            # 旧成员库文件（导入备份，入库后停读写）
+  captain-persona.yaml                   # 领队人设覆盖（不入库）
+  rolebuilder.json                       # 角色构建会话的活动槽（构建过程的临时文件，不进库）
+  usage.jsonl                            # token 消耗台账（逐条事件追加，不进库）
   logs/client.log
   <teamId>/
-    team.json                             # 现行磁盘真相（共存期不变）
-    events.jsonl                          # 现行事件日志（共存期不变）
-    inbox/*.jsonl                         # 现行邮箱（共存期不变）
-  archive/<teamId>/                       # 归档团队（暂不入库，见 27.9）
+    team.json                            # 旧磁盘真相（导入备份）
+    events.jsonl                         # 旧事件日志（导入备份）
+    inbox/*.jsonl                        # 旧邮箱（导入备份）
+  archive/<teamId>/                      # 归档团队（已下线，见 27.9）
 ```
 
 - **库文件集中在 `db/` 子目录**：主库和 -wal/-shm 两个运行文件待在一起，不与 json/yaml 配置混放；杀软排除、备份、gitignore 都只针对这一个目录。原方案放 `.eteams/` 根下，改为独立子目录。
-- **单库 per workspace（而非 per team）**：成员库、跨团队统计天然是工作区级的；跨团队查询要求单库。团队用 `team_id` 作分区键；量级（单团队 ≤500 任务）对 SQLite 毫无压力。放弃 per-team 库文件：跨团队聚合要 attach 多库，复杂且无收益。
+- **全局单库（一个状态根，而非 per team）**（2026-09-04 用户定案，改自原「单库 per workspace」口径）：成员库、跨团队统计天然是全局级的——一个 eteams.db、一份成员库、一份用量台账，任何工作区的会话与面板读写同一个库，跨团队/跨工作区查询零拼接。实现上由 `stateRootFor` 收口：`stateDir` 为绝对路径（盘符/UNC）时所有工作区共用这一个根，相对路径回退 per-workspace。团队用 `team_id` 作分区键；量级（单团队 ≤500 任务）对 SQLite 毫无压力。放弃 per-team 库文件：跨团队聚合要 attach 多库，复杂且无收益。放弃 per-workspace 库（本机实测坑）：成员库固定写首个有状态的工作区，团队可建在别的工作区，加成员时按团队自己的工作区查库就找不到（「成员库中没有「小丑」」即此因）。
 - **工号由数据库递增发号**：原来工作区有个 employee-seq.json 计数器文件，现在不再需要——工号列 `member.employee_id`（成员模板一人一行，插入时取 member 表最大工号 +1；task_members 行带同号副本，见 27.4「发号」）。
 - **切换语义（已定案）**：首次启动建库时把现有 team.json / events.jsonl / inbox / roster.json 的数据一次性导入；此后 **SQLite 是唯一真相**，原文件停读写、原样保留作备份。删除 `eteams.db` 不会自动找回数据，恢复靠备份或重新导入旧文件。
 - **版本约定**：DB 自带独立的 `db_schema_version`（`schema_meta` 表 + `PRAGMA user_version` 双写同值），**从 1 起步**；与 team.json 的结构版本互不相干；两者都遵循「前向兼容、只进不退」。
@@ -164,7 +165,7 @@ CREATE TABLE roles (
 -- ---------------------------------------------------------------------
 CREATE TABLE member (
   member_id        INTEGER PRIMARY KEY AUTOINCREMENT,  -- 自增主键（行号；工号见 employee_id）
-  team_id          INTEGER,               -- 属于哪个团队（team.team_id）；NULL=工作区公共成员模板
+  team_id          INTEGER,               -- 属于哪个团队（team.team_id）；NULL=全局公共成员模板（全局单库下即成员库）
   role_id          INTEGER,               -- 角色 ID（roles.role_id，松引用）
   role_name        TEXT NOT NULL,         -- 成员名就是角色名
   employee_id      INTEGER,               -- 工号：独立发号（插入成员模板时取 member 表最大工号 +1），同人跨团队同号；显示补零 1 → 0001
@@ -392,7 +393,7 @@ CREATE INDEX idx_status_changes_time ON task_status_changes (team_id, change_tim
 | TaskRecord 合同（acceptance/inScope/outOfScope/deliverables/idempotencyNote） | `task` 表 `acceptance / in_scope / out_of_scope / deliverables`（JSON 数组）+ `idempotency_note`（已定补列） |
 | TaskRecord 的 blockedFrom / suspendNote / decisionId / currentAttemptId / outcome / kind / workDir | `blocked_from` 列；suspendNote 并入 status_note；decisionId / currentAttemptId 反查 decisions / attempts；outcome 反查 attempts 最新成功行；kind 由 parent_id 为空表达；`work_dir` 列 |
 | `attempts[]` / `pendingDecisions[]` | `attempts` / `decisions` 表 |
-| `roster.json`（工作区成员库） | `member` 表（模板行：`team_id` 空=工作区公共模板，非空=该团队班底） |
+| `roster.json`（旧成员库文件） | `member` 表（模板行：`team_id` 空=全局公共模板，非空=该团队班底） |
 | 预置角色模板 + 角色构建师产物 | `roles` 表（首次启动写预置；确认构建时写入） |
 | `events.jsonl` | `events` 表；actor 拍平 `actor_kind / actor_name`，事件号全库自增 |
 | `inbox/*.jsonl` | `mail_messages` 表；from/to 拍平四列 + `box_key` 分箱，邮件号全库自增 |
@@ -519,7 +520,7 @@ UPDATE task SET status = 'start', update_time = ?2
 
 ## 27.9 开放问题
 
-1. **token 记账——已定案（2026-09-04）**：采集点 = 会话事件流（插件收到全进程所有会话的事件），存储 = 工作区下 usage.jsonl 逐条追加、读取时聚合、不落日汇总。本库不设 token 表；若以后要做 token 投影表，行模型必须按事件行对齐，不得回退日聚合表。
+1. **token 记账——已定案（2026-09-04）**：采集点 = 会话事件流（插件收到全进程所有会话的事件），存储 = 状态根下 usage.jsonl 逐条追加（全局单库下即全局根一份，跨工作区台账合一）、读取时聚合、不落日汇总。本库不设 token 表；若以后要做 token 投影表，行模型必须按事件行对齐，不得回退日聚合表。
 2. **「天」的时区口径——已定案**：token 记账的 day 在记录时按宿主本地日界折算（与用户日历一致）；本库无 day 列。
 3. **枚举校验放哪——已定案（2026-09-04 用户定案）**：表上不放 CHECK，枚举合法性由写入代码校验，改枚举值零迁移。
 4. **暂未入库的代码字段——已定案（2026-09-04 逐条对账）**：goal / phase / planReviewState / captainSessionId / captainChildId / leaderModelRoute 砍掉（审批转对话内确认、领队锚点转 task_members、成员模型空=继承领队会话）；activeSwitch 删；maxRetries 用全局配置；version 不存；workDir 归 `task.work_dir`；task 补合同四数组（acceptance/in_scope/out_of_scope/deliverables）+ idempotency_note + blocked_from；suspendNote 并入 status_note；decisionId / currentAttemptId / outcome 反查 attempts / decisions；member 模板化（状态/会话在 task_members）。
@@ -528,7 +529,7 @@ UPDATE task SET status = 'start', update_time = ?2
 7. **归档形态——已定案（2026-09-04）**：归档下线。archiveTeam 与面板归档页删除，删团队走对话内确认 + 数据库事务删除；archive/ 目录不导入。
 8. **角色/人设配置的入库范围——部分定案**：预置角色模板与角色构建师产物进 `roles` 表（已定）；领队人设覆盖（captain-persona.yaml）是否入库待定。
 9. **邮箱序号——已定案**：邮件号（mail_message_id）全库自增（数据库发号），箱内顺序按它排；message_id 只做幂等键。
-10. **member 与 task_members 的分工——已定案**：member = 成员模板（一人一行，无状态无会话，`team_id` 空=工作区公共模板、非空=该团队班底，工号在此发号）；task_members = 任务成员执行实例（状态/会话锚点/当前任务都在这），**按大任务粒度建行（同一人每条大任务一行、各绑一个子会话，用户定案）**，领队也是一行（`name='项目牧羊人'`、`main_task_id` 空）。实例行的人设/模型沿用模板值；模板编辑是否回填存量实例行默认不回填。
+10. **member 与 task_members 的分工——已定案**：member = 成员模板（一人一行，无状态无会话，`team_id` 空=全局公共模板（成员库）、非空=该团队班底，工号在此发号）；task_members = 任务成员执行实例（状态/会话锚点/当前任务都在这），**按大任务粒度建行（同一人每条大任务一行、各绑一个子会话，用户定案）**，领队也是一行（`name='项目牧羊人'`、`main_task_id` 空）。实例行的人设/模型沿用模板值；模板编辑是否回填存量实例行默认不回填。
 11. **任务状态枚举——已定案（10 态 + 映射方案 A）**：draft / ready / wait / start / paused / wait_decision / wait_user / completed / failed / cancelled；代码从 13 态收敛：assigned→wait、in_progress→start、retrying→wait（重试=重新排队）、suspended→paused（原因进 status_note）、blocked→wait（记 blocked_from，解除时还原）。**毒化集随收敛更新：paused / failed / wait_decision / wait_user 毒化下游依赖任务（旧 suspended 毒化、paused 不毒化，合并后 paused 也毒化——用户定案）**。
 12. **多实例并发**：两个进程打开同一工作区时，WAL 允许多连接但写互斥——单写者场景进程锁已够；若将来多实例，再补乐观 version 列。
 13. **node:sqlite 稳定性**：仍标记实验性（Node 24 打警告）；个别 API（`backup()` 等）按目标 Node 版本验证。若遇 API 缺口，按 27.2 兜底换 better-sqlite3（同一份 DDL）。

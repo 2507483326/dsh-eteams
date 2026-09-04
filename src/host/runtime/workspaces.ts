@@ -16,8 +16,9 @@
  */
 import { getDb } from '../state/db.js';
 import { ensureWorkspaceReady } from '../state/import.js';
-import { joinPath } from './base.js';
+import { stateRootFor } from './base.js';
 import { readTeamSync } from '../state/store.js';
+import { findRosterMember, type RosterMember } from './roster.js';
 import type { TeamState } from '../model/types.js';
 import type { ETeamsResolvedConfig } from '../config.js';
 import { leaderRowOf } from './notifier.js';
@@ -79,7 +80,7 @@ function teamByIdIn(
   teamId: string,
 ): LocatedTeam | undefined {
   for (const ws of workspaces) {
-    const root = joinPath(ws, config.stateDir);
+    const root = stateRootFor(config, ws);
     const team = readTeamSync(root, teamId);
     if (team) return { team, root, workspacePath: ws };
   }
@@ -92,7 +93,7 @@ function teamMatchingIn(
   match: (team: TeamState) => boolean,
 ): LocatedTeam | undefined {
   for (const ws of workspaces) {
-    const root = joinPath(ws, config.stateDir);
+    const root = stateRootFor(config, ws);
     for (const id of listTeamIdsSync(root)) {
       const team = readTeamSync(root, id);
       if (team && match(team)) return { team, root, workspacePath: ws };
@@ -117,6 +118,37 @@ export function locateTeamAcrossWorkspaces(
     config,
     teamId,
   );
+}
+
+/**
+ * 成员库条目跨工作区兜底（用户迭代 2026-09-04）：角色库固定落在
+ * writeWorkspacePath（注册表首个有 eteams 状态的工作区），而团队可建在任意
+ * 工作区（docs/26 跨工作区）——团队所在工作区的 member 表没有该条目时，按
+ * 注册表顺序逐工作区兜底查找，命中处连状态根一起返回（工号回填等写回应以
+ * 条目所在工作区为准，避免把别区的条目复制成重复行）。
+ */
+export function findRosterMemberAcrossWorkspaces(
+  ctx: unknown,
+  config: Pick<ETeamsResolvedConfig, 'stateDir'>,
+  name: string,
+  preferWorkspacePath?: string,
+): { entry: RosterMember; root: string; workspacePath: string } | undefined {
+  const probe = (workspacePath: string) => {
+    const root = stateRootFor(config, workspacePath);
+    const entry = findRosterMember(root, name);
+    return entry !== undefined ? { entry, root, workspacePath } : undefined;
+  };
+  if (preferWorkspacePath !== undefined && preferWorkspacePath !== '') {
+    const own = probe(preferWorkspacePath);
+    if (own !== undefined) return own;
+  }
+  const registry = workspaceRegistryOf(ctx);
+  if (!registry) return undefined;
+  for (const workspace of registry.list()) {
+    const found = probe(workspace.path);
+    if (found !== undefined) return found;
+  }
+  return undefined;
 }
 
 /**

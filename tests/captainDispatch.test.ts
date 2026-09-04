@@ -57,7 +57,9 @@ function fakeRuntime() {
   const ctx = {
     logger: { info: () => undefined, warn: () => undefined },
     subagents: {
-      async startContinuable(spec: ContinuableSpec): Promise<{ childId: string; messageId: string }> {
+      async startContinuable(
+        spec: ContinuableSpec,
+      ): Promise<{ childId: string; messageId: string }> {
         const childId = `sess-child-${++childSeq}`;
         starts.push(spec);
         spawnedIds.push(childId);
@@ -189,7 +191,7 @@ describe('eteams_dispatch_captain', () => {
     expect(spec.label).toBe(`eteams-captain:${seeded.id}`);
     // 人设 = roster 领队手册（缺省回退内置手册）+ 子代理纪律。
     const fromRoster = findRosterMember(root, LEADER_NAME)?.personaMd;
-    const fallbackMd = composeCaptainPersona(ws, '.eteams').personaMd;
+    const fallbackMd = composeCaptainPersona(join(ws, '.eteams')).personaMd;
     expect(spec.request.persona).toBe(captainChildPersona(fromRoster ?? fallbackMd));
     expect(spec.request.persona).toContain('角色手册（领队 · 项目牧羊人）');
     expect(spec.request.toolFilter?.deny).toEqual([...CAPTAIN_CHILD_DENIED_TOOLS]);

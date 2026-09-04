@@ -24,13 +24,12 @@ import type {
 import { readEventsSync, readMailboxSync } from '../state/events.js';
 import { boardOverview } from '../state/queries.js';
 import { listTeamIds, readTeamSync } from '../state/store.js';
-import { joinPath, type RuntimeContext, type RuntimeEnv } from './base.js';
+import { joinPath, stateRootFor, type RuntimeContext, type RuntimeEnv } from './base.js';
 import { taskDirRel } from './docs.js';
 import { composeCaptainPersona } from '../prompts/personas/captain.js';
 import {
   avatarSeedFor,
   ensurePresetMembers,
-  findRosterMember,
   formatEmployeeId,
   LEADER_NAME,
   readRoster,
@@ -64,7 +63,11 @@ import { spawnBuildPhase, spawnContinueAfterAnswers } from './builderPhases.js';
 import { clearSessionPersona, setSessionPersona } from './sessionPersona.js';
 import { clearSessionTeam, setSessionTeam } from './sessionTeam.js';
 import { readUsageCalendar } from './usage.js';
-import { locateTeamAcrossWorkspaces, workspaceRegistryOf } from './workspaces.js';
+import {
+  findRosterMemberAcrossWorkspaces,
+  locateTeamAcrossWorkspaces,
+  workspaceRegistryOf,
+} from './workspaces.js';
 
 /** Web-server service key candidates, newest first. */
 const WEB_SERVER_KEYS = ['webServer', 'httpServer'] as const;
@@ -148,9 +151,7 @@ function taskView(t: TaskRecord, team: TeamState, groupOutcomes?: Map<number, st
   // 末站完成即 completed（chainCursor 不再推进，docs/35 §5#10）——完成态
   // 按满进度口径显示站点。
   const stationStatus = (i: number): StationView['stationStatus'] =>
-    t.status === 'completed'
-      ? 'done'
-      : stationStatusOf(t.status, t.chain.length, t.chainCursor, i);
+    t.status === 'completed' ? 'done' : stationStatusOf(t.status, t.chain.length, t.chainCursor, i);
   return {
     taskId: t.id,
     subject: t.subject,
@@ -204,18 +205,19 @@ export function teamSnapshot(
   workspacePath: string,
   config: ETeamsResolvedConfig,
 ): Record<string, unknown> {
+  // 状态根统一走 stateRootFor（用户迭代 2026-09-04 全局单库：stateDir 绝对
+  // 路径时所有工作区共用一个根；相对路径保持 per-workspace）。
+  const stateRoot = stateRootFor(config, workspacePath);
   // The captain (项目牧羊人) is rendered as the leader card on the 团队 page;
   // it is not a roster member, so it travels with the snapshot instead. Its
   // 工号 comes from the roster leader entry (backfilled on first /roster
   // read); 'ET-0001' covers workspaces whose roster was never listed yet.
-  const captainPersona = composeCaptainPersona(workspacePath, config.stateDir);
-  const rosterLeader = readRoster(joinPath(workspacePath, config.stateDir)).find(
-    (m) => m.name === LEADER_NAME,
-  );
+  const captainPersona = composeCaptainPersona(stateRoot);
+  const rosterLeader = readRoster(stateRoot).find((m) => m.name === LEADER_NAME);
   const leader = leaderRowOf(team);
   // 组收口产出（docs/26）：task.completed 事件 payload.via='subtasks.completed'
   // 的聚合文本按 taskId 收敛，同任务多次收口取最新一条（Map 覆盖写）。
-  const events = readEventsSync(joinPath(workspacePath, config.stateDir), team.id);
+  const events = readEventsSync(stateRoot, team.id);
   const groupOutcomes = new Map<number, string>();
   for (const e of events) {
     if (e.type !== 'task.completed' || e.taskId === undefined) continue;
@@ -270,17 +272,15 @@ export function teamSnapshot(
         retryCount: d.retryCount,
         createdAt: d.createdAt,
       })),
-    latestEvents: events
-      .slice(-30)
-      .map((e) => ({
-        seq: e.seq,
-        at: e.at,
-        actor: e.actor.name ?? e.actor.kind,
-        actorKind: e.actor.kind,
-        type: e.type,
-        taskId: e.taskId ?? null,
-        text: summarizeEvent(e),
-      })),
+    latestEvents: events.slice(-30).map((e) => ({
+      seq: e.seq,
+      at: e.at,
+      actor: e.actor.name ?? e.actor.kind,
+      actorKind: e.actor.kind,
+      type: e.type,
+      taskId: e.taskId ?? null,
+      text: summarizeEvent(e),
+    })),
   };
 }
 
@@ -347,7 +347,7 @@ async function collectTeams(
   if (!registry) return [];
   const snapshots: Record<string, unknown>[] = [];
   for (const workspace of registry.list()) {
-    const root = joinPath(workspace.path, config.stateDir);
+    const root = stateRootFor(config, workspace.path);
     for (const teamId of await listTeamIds(root)) {
       const team = readTeamSync(root, teamId);
       if (team) snapshots.push(teamSnapshot(team, workspace.path, config));
@@ -407,9 +407,9 @@ function appendClientLog(ctx: Context, config: ETeamsResolvedConfig, raw: string
   if (!registry) return 0;
   const list = registry.list();
   if (list.length === 0) return 0;
-  let root = joinPath(list[0]!.path, config.stateDir);
+  let root = stateRootFor(config, list[0]!.path);
   for (const ws of list) {
-    const candidate = joinPath(ws.path, config.stateDir);
+    const candidate = stateRootFor(config, ws.path);
     if (existsSync(candidate)) {
       root = candidate;
       break;
@@ -481,9 +481,9 @@ function appendHostLog(
     if (registry === undefined) return;
     const list = registry.list();
     if (list.length === 0) return;
-    let root = joinPath(list[0]!.path, config.stateDir);
+    let root = stateRootFor(config, list[0]!.path);
     for (const ws of list) {
-      const candidate = joinPath(ws.path, config.stateDir);
+      const candidate = stateRootFor(config, ws.path);
       if (existsSync(candidate)) {
         root = candidate;
         break;
@@ -718,71 +718,71 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                 return;
               }
               const { team, workspacePath } = located;
-              const root = joinPath(workspacePath, config.stateDir);
               // sourceName: add a copy of a roster role under a new name
               // (user iteration 2026-09: multiple same roles per team).
-              const entry = findRosterMember(root, str(body.sourceName, '') || name);
+              // 成员库跨工作区兜底（用户迭代 2026-09-04）：角色库固定落在
+              // writeWorkspacePath（注册表首个有状态的工作区），团队却可能
+              // 建在别的工作区——团队本区没有该条目时按注册表逐区查找。
+              const wanted = str(body.sourceName, '') || name;
+              const { entry } =
+                findRosterMemberAcrossWorkspaces(ctx, config, wanted, workspacePath) ?? {};
               if (body.fromRoster === true && !entry) {
                 sendError(res, 404, `成员库中没有「${name}」`);
                 return;
               }
               let result;
               try {
-                result = await addMember(
-                  envFor(ctx, config, workspacePath),
-                  captainAgentOf(team),
-                  {
-                    name,
-                    role: str(body.role, entry?.role ?? 'member'),
-                    ...(body.executionPrompt !== undefined
-                      ? { executionPrompt: str(body.executionPrompt) }
-                      : entry?.executionPrompt !== undefined
-                        ? { executionPrompt: entry.executionPrompt }
-                        : {}),
-                    ...(body.duty !== undefined
-                      ? { duty: str(body.duty) }
-                      : entry?.duty !== undefined
-                        ? { duty: entry.duty }
-                        : {}),
-                    ...(body.style !== undefined
-                      ? { style: str(body.style) }
-                      : entry?.style !== undefined
-                        ? { style: entry.style }
-                        : {}),
-                    ...(body.skills !== undefined
-                      ? { skills: str(body.skills) }
-                      : entry?.skills !== undefined
-                        ? { skills: entry.skills }
-                        : {}),
-                    ...(Array.isArray(body.rules)
-                      ? { rules: body.rules.map((r) => str(r)) }
-                      : entry?.rules !== undefined
-                        ? { rules: entry.rules }
-                        : {}),
-                    ...(body.personaMd !== undefined
-                      ? { personaMd: str(body.personaMd) }
-                      : entry?.personaMd !== undefined
-                        ? { personaMd: entry.personaMd }
-                        : {}),
-                    ...(str(body.employeeId, '') !== ''
-                      ? { employeeId: str(body.employeeId) }
-                      : entry?.employeeId !== undefined
-                        ? { employeeId: String(entry.employeeId) }
-                        : {}),
-                    ...(entry?.avatar !== undefined ? { avatar: entry.avatar } : {}),
-                    ...(str(body.model, '') !== ''
-                      ? { model: str(body.model) }
-                      : entry?.model !== undefined
-                        ? { model: entry.model }
-                        : {}),
-                    ...(body.reasoningEffort !== undefined
-                      ? { reasoningEffort: str(body.reasoningEffort) }
-                      : entry?.reasoningEffort !== undefined
-                        ? { reasoningEffort: entry.reasoningEffort }
-                        : {}),
-                    via: 'panel',
-                  },
-                );
+                result = await addMember(envFor(ctx, config, workspacePath), captainAgentOf(team), {
+                  name,
+                  role: str(body.role, entry?.role ?? 'member'),
+                  ...(body.executionPrompt !== undefined
+                    ? { executionPrompt: str(body.executionPrompt) }
+                    : entry?.executionPrompt !== undefined
+                      ? { executionPrompt: entry.executionPrompt }
+                      : {}),
+                  ...(body.duty !== undefined
+                    ? { duty: str(body.duty) }
+                    : entry?.duty !== undefined
+                      ? { duty: entry.duty }
+                      : {}),
+                  ...(body.style !== undefined
+                    ? { style: str(body.style) }
+                    : entry?.style !== undefined
+                      ? { style: entry.style }
+                      : {}),
+                  ...(body.skills !== undefined
+                    ? { skills: str(body.skills) }
+                    : entry?.skills !== undefined
+                      ? { skills: entry.skills }
+                      : {}),
+                  ...(Array.isArray(body.rules)
+                    ? { rules: body.rules.map((r) => str(r)) }
+                    : entry?.rules !== undefined
+                      ? { rules: entry.rules }
+                      : {}),
+                  ...(body.personaMd !== undefined
+                    ? { personaMd: str(body.personaMd) }
+                    : entry?.personaMd !== undefined
+                      ? { personaMd: entry.personaMd }
+                      : {}),
+                  ...(str(body.employeeId, '') !== ''
+                    ? { employeeId: str(body.employeeId) }
+                    : entry?.employeeId !== undefined
+                      ? { employeeId: String(entry.employeeId) }
+                      : {}),
+                  ...(entry?.avatar !== undefined ? { avatar: entry.avatar } : {}),
+                  ...(str(body.model, '') !== ''
+                    ? { model: str(body.model) }
+                    : entry?.model !== undefined
+                      ? { model: entry.model }
+                      : {}),
+                  ...(body.reasoningEffort !== undefined
+                    ? { reasoningEffort: str(body.reasoningEffort) }
+                    : entry?.reasoningEffort !== undefined
+                      ? { reasoningEffort: entry.reasoningEffort }
+                      : {}),
+                  via: 'panel',
+                });
               } catch (e) {
                 sendError(res, 400, e instanceof Error ? e.message : String(e));
                 return;
@@ -864,18 +864,14 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               }
               const { team, workspacePath } = located;
               try {
-                await setMemberModel(
-                  envFor(ctx, config, workspacePath),
-                  captainAgentOf(team),
-                  {
-                    teamId: team.id,
-                    name: decodeURIComponent(segments[3]!),
-                    ...(str(body.model, '') !== '' ? { model: str(body.model) } : {}),
-                    ...(str(body.reasoningEffort, '') !== ''
-                      ? { reasoningEffort: str(body.reasoningEffort) }
-                      : {}),
-                  },
-                );
+                await setMemberModel(envFor(ctx, config, workspacePath), captainAgentOf(team), {
+                  teamId: team.id,
+                  name: decodeURIComponent(segments[3]!),
+                  ...(str(body.model, '') !== '' ? { model: str(body.model) } : {}),
+                  ...(str(body.reasoningEffort, '') !== ''
+                    ? { reasoningEffort: str(body.reasoningEffort) }
+                    : {}),
+                });
               } catch (e) {
                 sendError(res, 400, e instanceof Error ? e.message : String(e));
                 return;
@@ -906,11 +902,11 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               }
               const { team, workspacePath } = located;
               try {
-                await updateMember(
-                  envFor(ctx, config, workspacePath),
-                  captainAgentOf(team),
-                  { teamId: team.id, name: decodeURIComponent(segments[3]!), personaMd },
-                );
+                await updateMember(envFor(ctx, config, workspacePath), captainAgentOf(team), {
+                  teamId: team.id,
+                  name: decodeURIComponent(segments[3]!),
+                  personaMd,
+                });
               } catch (e) {
                 sendError(res, 400, e instanceof Error ? e.message : String(e));
                 return;
@@ -936,15 +932,11 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               }
               const { team, workspacePath } = located;
               try {
-                await syncMemberToRoster(
-                  envFor(ctx, config, workspacePath),
-                  captainAgentOf(team),
-                  {
-                    teamId: team.id,
-                    name: decodeURIComponent(segments[3]!),
-                    ...(str(body.personaMd, '') !== '' ? { personaMd: str(body.personaMd) } : {}),
-                  },
-                );
+                await syncMemberToRoster(envFor(ctx, config, workspacePath), captainAgentOf(team), {
+                  teamId: team.id,
+                  name: decodeURIComponent(segments[3]!),
+                  ...(str(body.personaMd, '') !== '' ? { personaMd: str(body.personaMd) } : {}),
+                });
               } catch (e) {
                 sendError(res, 400, e instanceof Error ? e.message : String(e));
                 return;
@@ -969,14 +961,10 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               }
               const { team, workspacePath } = located;
               try {
-                await setLeaderRemoved(
-                  envFor(ctx, config, workspacePath),
-                  captainAgentOf(team),
-                  {
-                    teamId: team.id,
-                    removed: segments[3] === 'remove',
-                  },
-                );
+                await setLeaderRemoved(envFor(ctx, config, workspacePath), captainAgentOf(team), {
+                  teamId: team.id,
+                  removed: segments[3] === 'remove',
+                });
               } catch (e) {
                 sendError(res, 400, e instanceof Error ? e.message : String(e));
                 return;
@@ -1003,11 +991,7 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               }
               const { team, workspacePath } = located;
               try {
-                await deleteTeam(
-                  envFor(ctx, config, workspacePath),
-                  captainAgentOf(team),
-                  team.id,
-                );
+                await deleteTeam(envFor(ctx, config, workspacePath), captainAgentOf(team), team.id);
               } catch (e) {
                 sendError(res, 400, e instanceof Error ? e.message : String(e));
                 return;
@@ -1408,7 +1392,7 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               if (registry) {
                 for (const workspace of registry.list()) {
                   try {
-                    teams.push(...boardOverview(joinPath(workspace.path, config.stateDir)));
+                    teams.push(...boardOverview(stateRootFor(config, workspace.path)));
                   } catch (e) {
                     const logger = (ctx as unknown as { logger?: { warn?: (m: string) => void } })
                       .logger;
@@ -1560,20 +1544,24 @@ export function locateTeam(
 
 // ---------- panel-write helpers (M5 first slice) ----------
 
-/** The workspace panel writes target: prefer one with existing eteams state. */
+/**
+ * The workspace panel writes target: prefer one with existing eteams state.
+ * 全局单库（stateDir 绝对路径）下各工作区的状态根都归一到同一处，这里照常
+ * 返回注册表首个工作区即可——rootForWrites 再经 stateRootFor 归一。
+ */
 function writeWorkspacePath(ctx: Context, config: ETeamsResolvedConfig): string {
   const registry = workspaceRegistryOf(ctx);
   const list = registry?.list() ?? [];
   if (list.length === 0) throw new Error('没有可用工作区（workspaceRegistry 未就绪）');
   for (const workspace of list) {
-    if (existsSync(joinPath(workspace.path, config.stateDir))) return workspace.path;
+    if (existsSync(stateRootFor(config, workspace.path))) return workspace.path;
   }
   return list[0]!.path;
 }
 
 /** State root for roster reads/writes (same resolution as writeWorkspacePath). */
 export function rootForWrites(ctx: Context, config: ETeamsResolvedConfig): string {
-  return joinPath(writeWorkspacePath(ctx, config), config.stateDir);
+  return stateRootFor(config, writeWorkspacePath(ctx, config));
 }
 
 /** Runtime env for a panel-driven mutation in one workspace. */

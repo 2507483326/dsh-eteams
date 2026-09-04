@@ -9,9 +9,15 @@
  */
 import z from '@deepseek-ai/schemastery';
 
-/** Resolved plugin configuration (all defaults applied). */
+/**
+ * Resolved plugin configuration (all defaults applied).
+ */
 export interface ETeamsResolvedConfig {
-  /** Directory under the session workspace holding team state (default `.eteams`). */
+  /**
+   * State directory. 绝对路径（盘符/UNC）= 全局单库：所有工作区共用这一个
+   * 根（一个 eteams.db / 一份成员库，用户迭代 2026-09-04）；相对路径 =
+   * per-workspace（`<workspace>/<stateDir>`，旧口径）。
+   */
   stateDir: string;
   /** Workspace-relative root for per-team working directories (default `teams`). */
   workRoot: string;

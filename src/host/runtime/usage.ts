@@ -30,7 +30,7 @@ import { parseJsonl } from '../state/events.js';
 import { captainChildTeamOf } from './captainAgent.js';
 import { getSessionTeamId } from './sessionTeam.js';
 import { leaderRowOf } from './notifier.js';
-import type { RuntimeLogger } from './base.js';
+import { stateRootFor, type RuntimeLogger } from './base.js';
 
 // ---------- 行模型（28.3.1） ----------
 
@@ -274,7 +274,9 @@ function warnCwdFallback(): void {
   if (now - lastCwdWarnAt < 60_000) return;
   lastCwdWarnAt = now;
   try {
-    meterLog?.warn('eteams usage: 会话 header.cwd 缺省，usage 归属回退 process.cwd()（1 分钟节流）');
+    meterLog?.warn(
+      'eteams usage: 会话 header.cwd 缺省，usage 归属回退 process.cwd()（1 分钟节流）',
+    );
   } catch {
     // swallow
   }
@@ -411,7 +413,7 @@ function onSessionEvent(session: Session, event: SessionEvent, config: ETeamsRes
   const usage = event.data.usage;
   if (!usage) return;
   const workspace = workspaceOf(session);
-  const root = join(workspace, config.stateDir);
+  const root = stateRootFor(config, workspace);
   const route = routeCache.get(sessionId) ?? null;
   const at = event.time;
   const seq = event.seq;
@@ -459,7 +461,7 @@ function enqueueReconcile(session: Session, config: ETeamsResolvedConfig): void 
 /** Fold one session's log beyond the watermark (usage rows + checkpoint). */
 async function foldSession(session: Session, config: ETeamsResolvedConfig): Promise<void> {
   const workspace = workspaceOf(session);
-  const root = join(workspace, config.stateDir);
+  const root = stateRootFor(config, workspace);
   await ensureCheckpoints(root);
   const sessionId = String(session.id);
   const last = checkpoints.get(root)?.get(sessionId)?.lastSeq ?? 0;
@@ -673,7 +675,10 @@ export function readUsageCalendar(
   // 读主文件 + 归档（28.6.2：上一年数据可能已轮转出主文件），全局 (sessionId,seq)
   // 去重后过滤 teamId/year
   const seen = new Set<string>();
-  const rows = [...readUsageRows(usageFile(stateRoot), true), ...readUsageRows(usageArchiveFile(stateRoot), true)];
+  const rows = [
+    ...readUsageRows(usageFile(stateRoot), true),
+    ...readUsageRows(usageArchiveFile(stateRoot), true),
+  ];
   for (const row of rows) {
     const dedupKey = `${row.sessionId}#${row.seq}`;
     if (seen.has(dedupKey)) continue;
@@ -682,7 +687,8 @@ export function readUsageCalendar(
     if (!row.day.startsWith(`${year}-`)) continue;
     const cell = acc.get(row.day);
     if (cell === undefined) continue; // 防御：越界/畸形 day 丢弃
-    cell.totalTokens += row.inputTokens + row.outputTokens + (row.cacheReadTokens ?? 0) + (row.cacheWriteTokens ?? 0);
+    cell.totalTokens +=
+      row.inputTokens + row.outputTokens + (row.cacheReadTokens ?? 0) + (row.cacheWriteTokens ?? 0);
     cell.inputTokens += row.inputTokens;
     cell.outputTokens += row.outputTokens;
     cell.cacheReadTokens += row.cacheReadTokens ?? 0;
@@ -785,17 +791,17 @@ export function installUsageMeter(ctx: Context, config: ETeamsResolvedConfig): U
 }
 
 /** Eager-load checkpoint maps for every live session's workspace. */
-async function ensureCheckpointsAcross(sessions: Session[], config: ETeamsResolvedConfig): Promise<void> {
+async function ensureCheckpointsAcross(
+  sessions: Session[],
+  config: ETeamsResolvedConfig,
+): Promise<void> {
   await Promise.all(
-    sessions.map((session) => ensureCheckpoints(join(workspaceOf(session), config.stateDir))),
+    sessions.map((session) => ensureCheckpoints(stateRootFor(config, workspaceOf(session)))),
   );
 }
 
 /** Fold every live session through the watermark（装机对账）。 */
-async function reconcileSessions(
-  sessions: Session[],
-  config: ETeamsResolvedConfig,
-): Promise<void> {
+async function reconcileSessions(sessions: Session[], config: ETeamsResolvedConfig): Promise<void> {
   for (const session of sessions) {
     try {
       await foldSession(session, config);

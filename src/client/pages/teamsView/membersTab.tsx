@@ -462,9 +462,8 @@ export function MembersTab({
   // 随名回填；personaMd 留空则手册随后可在详情页补写。
   const [manualSaving, setManualSaving] = useState(false);
   const [manualError, setManualError] = useState<string | null>(null);
-  // 手动创建「随机头像」（用户迭代 2026-09-04）：换过的对仅本地预览——
-  // 保存时随 payload 透传；未换过则不发，宿主落库自动配一枚（hashName
-  // 种子 + 随机 salt，见 roster.ts upsert）。
+  // 手动创建「随机头像」（用户迭代 2026-09-04）：进页即随机一枚预览，按钮
+  // 随时再换；保存时随 payload 落库（roster.ts upsert）。
   const [manualAvatar, setManualAvatar] = useState<{ seed: number; salt: number } | null>(null);
   const saveManual = async (): Promise<void> => {
     const trimmed = name.trim();
@@ -848,8 +847,8 @@ export function MembersTab({
                     返回
                   </Button>
                 </div>
-                {/* 头像行（用户迭代 2026-09-04）：预览 + 随机换一枚——未换过
-                显示名字首字兜底（宿主保存时自动配一枚），换过实时预览。 */}
+                {/* 头像行（用户迭代 2026-09-04）：进页即随机一枚预览，
+                「随机头像」随时再换——保存时随 payload 落库。 */}
                 <div className={cn(FORM_ROW_CLASS, 'mt-2.5')}>
                   <span className={FORM_LABEL_CLASS}>头像</span>
                   <div className="flex items-center gap-2.5">
@@ -997,7 +996,9 @@ export function MembersTab({
                     className={cn('eteams-role-row', ADD_MODE_CARD_CLASS)}
                     onClick={() => {
                       setAiPrefill(null);
-                      setManualAvatar(null); // 新一次手动创建：上次换的头像不带过来
+                      // 进手动创建即随机一枚（用户迭代 2026-09-04）：预览先行，
+                      // 不满意再点「随机头像」换；每次进页都重新随机。
+                      setManualAvatar(rollAvatarPair());
                       setAddMode('manual');
                     }}
                   >

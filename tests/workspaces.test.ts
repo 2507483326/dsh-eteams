@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import { envForAgent } from '../src/host/tools/identity';
 import { locateAgentTeam } from '../src/host/runtime/workspaces';
-import { joinPath, type RuntimeEnv } from '../src/host/runtime/base';
+import { joinPath, stateRootFor, type RuntimeEnv } from '../src/host/runtime/base';
 import { insertTeamRow, withTeamTx, writeTeamInTx } from '../src/host/state/store';
 import { LEADER_NAME } from '../src/host/state/db';
 import { clearSessionTeam, setSessionTeam } from '../src/host/runtime/sessionTeam';
@@ -230,5 +230,23 @@ describe('envForAgent re-point (tool env follows the team workspace)', () => {
       agentOf('s-stranger', wsA),
     ) as RuntimeEnv;
     expect(env.workspace).toBe(wsA);
+  });
+});
+
+describe('stateRootFor (全局单库口径)', () => {
+  it('绝对 stateDir：所有工作区共用同一个全局根', () => {
+    const globalConfig = { stateDir: 'C:/Users/epat/.eteams' } as ETeamsResolvedConfig;
+    expect(stateRootFor(globalConfig, 'C:/eTeam')).toBe('C:/Users/epat/.eteams');
+    expect(stateRootFor(globalConfig, 'C:/Users/epat/test')).toBe(
+      stateRootFor(globalConfig, 'C:/eTeam'),
+    );
+    // 尾随斜杠归一掉，不产生空段。
+    expect(stateRootFor(globalConfig, 'X')).toBe('C:/Users/epat/.eteams');
+  });
+
+  it('相对 stateDir：保持 per-workspace 旧口径', () => {
+    const relConfig = { stateDir: '.eteams' } as ETeamsResolvedConfig;
+    expect(stateRootFor(relConfig, wsA)).toBe(joinPath(wsA, '.eteams'));
+    expect(stateRootFor(relConfig, wsB)).toBe(joinPath(wsB, '.eteams'));
   });
 });

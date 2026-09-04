@@ -28,6 +28,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session';
 import type { ETeamsResolvedConfig } from '../config.js';
 import {
   ETeamsError,
+  stateRootFor,
   stateRootOf,
   type RuntimeContext,
   type RuntimeEnv,
@@ -76,7 +77,7 @@ const CAPTAIN_SOURCE = { kind: 'plugin' as const, plugin: 'dsh-eteams' };
  */
 function captainPersonaOf(env: RuntimeEnv, config: ETeamsResolvedConfig): string {
   const fromRoster = findRosterMember(stateRootOf(env), LEADER_NAME)?.personaMd;
-  const fallback = composeCaptainPersona(env.workspace, config.stateDir).personaMd;
+  const fallback = composeCaptainPersona(stateRootFor(config, env.workspace)).personaMd;
   return captainChildPersona(fromRoster ?? fallback);
 }
 
@@ -151,7 +152,10 @@ export function createCaptainDispatchTool(
       const signal = exec.signal ?? new AbortController().signal;
       // 现状快照随派发现读（docs/26.2 状态驱动）：首轮快照给领队子代理建立
       // 团队上下文；持续子代理后续轮次在既有上下文上续步，快照只作对账。
-      const prompt = captainDispatchPrompt(JSON.stringify(teamView(env, team), null, 1), args.message);
+      const prompt = captainDispatchPrompt(
+        JSON.stringify(teamView(env, team), null, 1),
+        args.message,
+      );
       const persona = captainPersonaOf(env, config);
       const previous = leaderRowOf(team)?.childSessionId ?? '';
       // 先试续聊（含宿主重启后的冷恢复）；失败（会话记录被回收/lineage 不

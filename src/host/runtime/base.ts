@@ -85,9 +85,26 @@ export interface RuntimeEnv {
   signal?: AbortSignal;
 }
 
-/** Absolute state root for an env. */
+/**
+ * 状态根推导唯一入口（用户迭代 2026-09-04 全局单库）：`stateDir` 为绝对
+ * 路径（盘符 / UNC / POSIX 根）时，所有工作区共用这一个根——一个
+ * eteams.db、一份成员库、一份用量台账；相对路径保持 per-workspace 旧口径
+ * （`<workspace>/<stateDir>`，docs/27 原「单库 per workspace」）。
+ */
+export function stateRootFor(
+  config: Pick<ETeamsResolvedConfig, 'stateDir'>,
+  workspacePath: string,
+): string {
+  const dir = config.stateDir;
+  if (/^[a-zA-Z]:[\\/]/.test(dir) || dir.startsWith('\\\\') || dir.startsWith('/')) {
+    return dir.replace(/[\\/]+$/, '');
+  }
+  return joinPath(workspacePath, dir);
+}
+
+/** Absolute state root for an env（绝对 stateDir 时即全局根，见 stateRootFor）。 */
 export function stateRootOf(env: RuntimeEnv): string {
-  return joinPath(env.workspace, env.config.stateDir);
+  return stateRootFor(env.config, env.workspace);
 }
 
 /** Tiny join helper (avoids importing node:path twice in hot paths). */

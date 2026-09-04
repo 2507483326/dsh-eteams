@@ -1,7 +1,7 @@
 /**
  * Captain persona — 项目牧羊人 flavor (agency-agents-zh) + 领队固定纪律,
- * merged with an optional user override file
- * `<workspace>/.eteams/captain-persona.yaml` (docs/05.3, D13). The 领队子代理
+ * merged with an optional user override file `captain-persona.yaml` under
+ * the caller-resolved state root (docs/05.3, D13). The 领队子代理
  * persona band lives in prompts/spawn/captainChild.ts.
  *
  * @module dsh-eteams/prompts/personas/captain
@@ -90,16 +90,13 @@ function unquote(value: string): string {
 
 /**
  * Compose the captain persona: built-in defaults merged with the user
- * override file `<workspace>/.eteams/captain-persona.yaml` when present
- * (docs/05.3). Missing/unparsable file degrades to defaults.
+ * override file `<状态根>/captain-persona.yaml` when present (docs/05.3).
+ * Missing/unparsable file degrades to defaults. 状态根由调用方经
+ * stateRootFor 归一（全局单库下即全局根，不再关心工作区）。
  */
-export function composeCaptainPersona(
-  workspace: string,
-  stateDir: string,
-  executionPrompt?: string,
-): PersonaRecord {
+export function composeCaptainPersona(stateRoot: string, executionPrompt?: string): PersonaRecord {
   const base = defaultCaptainPersona(executionPrompt);
-  const file = join(workspace, stateDir, 'captain-persona.yaml');
+  const file = join(stateRoot, 'captain-persona.yaml');
   if (!existsSync(file)) return base;
   try {
     return mergePersona(base, parsePersonaYaml(readFileSync(file, 'utf8')));

@@ -31,6 +31,7 @@ import { createMemberTools } from './tools/memberTools.js';
 import { installMemberRuntime } from './runtime/members.js';
 import { installUsageMeter } from './runtime/usage.js';
 import { installWebSurface, locateTeam } from './runtime/webui.js';
+import { stateRootFor } from './runtime/base.js';
 import { sessionPersonaSection, sessionIdOfScope } from './runtime/sessionPersona.js';
 import { sessionTeamSection } from './runtime/sessionTeam.js';
 import { CAPTAIN_SECTION_SHORT } from './prompts/system/captain.js';
@@ -254,7 +255,7 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
   registerCommands(ctx, config, log);
 
   // 4) Captain persona digest (D13 override file support).
-  const persona = composeCaptainPersona(process.cwd(), config.stateDir);
+  const persona = composeCaptainPersona(stateRootFor(config, process.cwd()));
   log.info('eteams: captain persona ready (%s)', personaDigest(persona, '领队').slice(0, 60));
 
   // 5) M0 smoke tool.

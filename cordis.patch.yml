@@ -14,9 +14,10 @@
       # open a plain scalar (kept quoted for uniformity with the reference).
       name: 'dsh-eteams'
       config:
-        # Team state lives under `<session workspace>/<stateDir>/` (index.json
-        # + teams/<slug>/... from M1 on).
-        stateDir: .eteams
+        # 状态根（用户迭代 2026-09-04 全局单库）：绝对路径 = 所有工作区共用
+        # 这一个根——一个 eteams.db、一份成员库、一份用量台账；相对路径 =
+        # per-workspace（<workspace>/<stateDir>，旧口径）。
+        stateDir: C:/Users/epat/.eteams
         # Per-team working directory root: `<workspace>/<workRoot>/<team-slug>/`
         # (README.md, tasks/, notes.md — see docs/12).
         workRoot: teams
