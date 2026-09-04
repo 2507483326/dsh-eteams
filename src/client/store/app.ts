@@ -9,8 +9,8 @@
  */
 import { create, type DvaApp } from 'dva-core';
 import type { Store } from 'redux';
-import { recordClientDiag } from '../diagnostics';
-import type { ActivityState } from '../monitor';
+import { recordClientDiag } from '../lib/diagnostics';
+import type { ActivityState } from '../lib/monitor';
 import { models } from './models';
 import type { BuildState } from './models/build';
 import type { RosterState } from './models/roster';

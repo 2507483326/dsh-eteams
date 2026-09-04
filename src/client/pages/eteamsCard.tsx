@@ -27,16 +27,16 @@
 import { type ReactNode } from 'react';
 import { Provider } from 'react-redux';
 import type { Context } from '@deepseek-ai/cordis';
-import { Avatar } from './avatar';
-import { activateETeamsTab } from './bridge';
-import { Badge } from './components/ui/badge';
-import { Button } from './components/ui/button';
-import { Card } from './components/ui/card';
-import { Progress } from './components/ui/progress';
-import { ClientErrorBoundary } from './diagnostics';
-import { useActivityState, type TeamSnapshot } from './monitor';
-import { PHASE_LABELS } from './phaseLabels';
-import { getApp } from './store/app';
+import { Avatar } from '../features/avatar/avatar';
+import { activateETeamsTab } from '../lib/bridge';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
+import { Card } from '../components/ui/card';
+import { Progress } from '../components/ui/progress';
+import { ClientErrorBoundary } from '../lib/diagnostics';
+import { useActivityState, type TeamSnapshot } from '../lib/monitor';
+import { PHASE_LABELS } from '../lib/phaseLabels';
+import { getApp } from '../store/app';
 
 /** Card state folded from the create-team tool events. */
 interface CardState {

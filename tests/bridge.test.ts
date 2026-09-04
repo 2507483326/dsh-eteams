@@ -13,7 +13,7 @@ import {
   ETEAMS_TAB_LABEL,
   stageTeamSignals,
   teamsTabVisible,
-} from '../src/client/bridge';
+} from '../src/client/lib/bridge';
 
 interface FakeElement {
   tag: string;

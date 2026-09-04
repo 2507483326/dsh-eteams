@@ -20,7 +20,7 @@
 import * as React from 'react';
 import * as PopoverPrimitive from '@radix-ui/react-popover';
 
-import { cn } from '../../cn';
+import { cn } from '../../lib/cn';
 import { getPortalContainer } from './portal';
 
 const Popover = PopoverPrimitive.Root;

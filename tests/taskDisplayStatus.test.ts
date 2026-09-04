@@ -9,7 +9,7 @@ import {
   displayStatusOf,
   groupDisplayOf,
   memberTone,
-} from '../src/client/taskDisplayStatus';
+} from '../src/client/features/tasks/taskDisplayStatus';
 
 describe('displayStatusOf（13 态→展示态全表，B.2）', () => {
   it('六档映射逐格对表（key/label/tone）', () => {

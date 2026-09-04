@@ -7,7 +7,7 @@
  * @module dsh-eteams/client/store/models/activity
  */
 import type { DvaModel } from 'dva-core';
-import type { ActivityState, PendingRouteEntry, RoutePatch, RouteTriple } from '../../monitor';
+import type { ActivityState, PendingRouteEntry, RoutePatch, RouteTriple } from '../../lib/monitor';
 
 /** 空快照：形状对齐迁移前 monitor.ts 的 EMPTY，store 初始态即此形状。 */
 const EMPTY: ActivityState = {

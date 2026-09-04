@@ -7,8 +7,8 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { create, type DvaApp, type DvaOptions } from 'dva-core';
-import type { RosterMember } from '../src/client/api';
-import { deleteRosterMember, fetchRoster, saveRosterMember } from '../src/client/api';
+import type { RosterMember } from '../src/client/lib/api';
+import { deleteRosterMember, fetchRoster, saveRosterMember } from '../src/client/lib/api';
 // 副作用引入模型聚合层：roster/build 全量注册面 + regenerator 全局就位
 // （dva-core 的 CJS 构建面 effects 路径依赖裸全局 regeneratorRuntime，
 // 生产路径经 store/app.ts → models/index.ts 安装；直连 model 的本测试
@@ -18,7 +18,7 @@ import { rosterModel, type RosterState } from '../src/client/store/models/roster
 
 // 聚合层同时加载 build model，api mock 需覆盖 roster+build 两侧的导入面
 // （vi.mock 工厂替换整个模块，缺一个绑定即报错）。
-vi.mock('../src/client/api', () => ({
+vi.mock('../src/client/lib/api', () => ({
   fetchRoster: vi.fn(),
   saveRosterMember: vi.fn(),
   deleteRosterMember: vi.fn(),

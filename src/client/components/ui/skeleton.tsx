@@ -15,7 +15,7 @@
  */
 import type * as React from 'react';
 
-import { cn } from '../../cn';
+import { cn } from '../../lib/cn';
 
 function Skeleton({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (

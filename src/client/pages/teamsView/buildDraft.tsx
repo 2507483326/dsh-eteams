@@ -1,0 +1,169 @@
+/**
+ * 构建工作台的草稿数据层（docs/19.6.2 角色构建师）：构建步骤时间线、
+ * 可编辑草稿表单态（DraftEdit/EMPTY_EDIT/fromBuildDraft）、预填命令芯片
+ * 与构建中草稿只读预览、手册骨架合成（handbookSeed/HandbookSource）。
+ * 符号自 eteamsView.tsx 原样搬出（docs/32 32.5.1 纯移动、零行为变更），
+ * 供 teamMembers / membersTab 消费（R1 类型边：HandbookSource/DraftEdit
+ * 一律 import type）。
+ *
+ * @module dsh-eteams/client/pages/teamsView/buildDraft
+ */
+import type { ReactNode } from 'react';
+import type { BuildDraft } from '../../lib/api';
+import { cn } from '../../lib/cn';
+import { Card } from '../../components/ui/card';
+import { BORDER_L1_CLASS, MUTED_CLASS, PANEL_CARD_CLASS, SECTION_TITLE_CLASS } from './shared';
+
+/** 原 styles.detailRow / detailLabel（构建中草稿预览行；--border 下边线；
+ * D22d 数据行 14px/24）。 */
+const DETAIL_ROW_CLASS = `flex gap-2.5 border-b border-solid py-2 text-sm leading-6 ${BORDER_L1_CLASS}`;
+const DETAIL_LABEL_CLASS = 'w-16 shrink-0 pt-px text-xs font-semibold text-muted-foreground';
+/** 原 styles.cmdChip（预填命令芯片：等宽字体 + --border 边框 + --muted 底；
+ * D22d mono 芯片 13px 档）。 */
+const CMD_CHIP_CLASS = `mt-2 break-all rounded-md border border-solid bg-muted px-3 py-2.5 text-[13px] leading-[1.7] font-mono text-muted-foreground ${BORDER_L1_CLASS}`;
+
+/** 构建步骤时间线（docs/19.6.2）——与角色构建师的 eteams_build_report 播报约定一致。 */
+export const BUILD_STEPS = [
+  '收到需求',
+  '查重角色库',
+  '意图访谈',
+  '起草统一手册',
+  '深化领域章节',
+  '完成草稿',
+] as const;
+
+/** Editable draft form state (待确认态). */
+export interface DraftEdit {
+  name: string;
+  role: string;
+  duty: string;
+  style: string;
+  skills: string;
+  executionPrompt: string;
+  personaMd: string;
+  rulesText: string;
+}
+
+export const EMPTY_EDIT: DraftEdit = {
+  name: '',
+  role: '',
+  duty: '',
+  style: '',
+  skills: '',
+  executionPrompt: '',
+  personaMd: '',
+  rulesText: '',
+};
+
+export function fromBuildDraft(d: BuildDraft): DraftEdit {
+  return {
+    name: d.name,
+    role: d.role,
+    duty: d.duty ?? '',
+    style: d.style ?? '',
+    skills: d.skills ?? '',
+    executionPrompt: d.executionPrompt ?? '',
+    personaMd: d.personaMd ?? '',
+    rulesText: (d.rules ?? []).join('\n'),
+  };
+}
+
+/** 预填命令芯片：占位符以品牌色高亮，一眼看出要改哪里。 */
+export function CommandChip({ text }: { text: string }): ReactNode {
+  const parts = text.split(/(【成员名称】|【职责】)/g);
+  return (
+    <div className={CMD_CHIP_CLASS}>
+      {parts.map((p, i) =>
+        p === '【成员名称】' || p === '【职责】' ? (
+          <span key={i} className="font-semibold text-primary">
+            {p}
+          </span>
+        ) : (
+          <span key={i}>{p}</span>
+        ),
+      )}
+    </div>
+  );
+}
+
+/** 预填引导三步（空闲态展示）。 */
+export const PREFILL_STEPS = [
+  '在对话输入框补全两个【】占位符——可顺手追加能力、风格等期望',
+  '回车发送，角色构建师立刻接手（预填行直接回车同样生效）',
+  '回到这里实时看构建；草稿就绪后可修改，点「确认入库」完成',
+] as const;
+
+/** 构建中草稿只读预览（docs/19.6.2）：字段渐次呈现，不可编辑。 */
+export function DraftPreview({ draft }: { draft: BuildDraft }): ReactNode {
+  const rows: [string, string][] = [
+    ['角色名', draft.name],
+    ['角色', draft.role],
+    ['职责边界', draft.duty ?? ''],
+    ['工作风格', draft.style ?? ''],
+    ['能力', draft.skills ?? ''],
+    ['工作纪律', (draft.rules ?? []).join('；')],
+    ['执行提示', draft.executionPrompt ?? ''],
+  ];
+  return (
+    <Card className={cn(PANEL_CARD_CLASS, 'mt-2 p-2.5')}>
+      <div className={SECTION_TITLE_CLASS}>草稿预览（构建中，待确认后可编辑）</div>
+      {rows.map(([label, value]) => (
+        <div key={label} className={DETAIL_ROW_CLASS}>
+          <span className={DETAIL_LABEL_CLASS}>{label}</span>
+          {/* D22d：正文主 = foreground（有值）/ meta = muted（空占位）。 */}
+          <span className={cn(MUTED_CLASS, value.trim() !== '' && 'text-foreground')}>
+            {value.trim() !== '' ? value : '…'}
+          </span>
+        </div>
+      ))}
+    </Card>
+  );
+}
+
+/** 角色（用户反馈：成员更名角色，不再需要标签）：角色库全体条目（先有角色，再组建团队）——列表 / 构建工作台 / 详情。 */
+/**
+ * 手册骨架的结构来源（用户迭代 2026-09 四）：角色库条目与成员视图共用的
+ * 最小字段面——成员视图缺手册（旧成员）时按结构字段合成骨架。
+ */
+export interface HandbookSource {
+  name: string;
+  role: string;
+  personaMd?: string | null;
+  duty?: string | null;
+  style?: string | null;
+  skills?: string | null;
+  rules?: string[] | null;
+  executionPrompt?: string | null;
+}
+
+/**
+ * Synthesize a handbook skeleton from the legacy structured fields so nothing
+ * is lost when the user first edits a member that predates personaMd (the
+ * digest fields themselves are no longer shown — everything lives in the
+ * handbook now, 用户反馈 2026-09).
+ */
+export function handbookSeed(member: HandbookSource): string {
+  if (typeof member.personaMd === 'string' && member.personaMd.trim() !== '') {
+    return member.personaMd;
+  }
+  const lines = [`# ${member.name}`, '', `- **角色**：${member.role}`];
+  const fields: [string, string | null | undefined][] = [
+    ['职责边界', member.duty],
+    ['工作风格', member.style],
+    ['能力', member.skills],
+    ['执行提示', member.executionPrompt],
+  ];
+  for (const [label, value] of fields) {
+    if (typeof value === 'string' && value.trim() !== '')
+      lines.push(`- **${label}**：${value.trim()}`);
+  }
+  if (Array.isArray(member.rules) && member.rules.length > 0) {
+    lines.push(
+      '',
+      '## 工作纪律',
+      ...member.rules.filter((r) => r.trim() !== '').map((r) => `- ${r}`),
+    );
+  }
+  lines.push('', '## 交付标准', '- （待补充）');
+  return lines.join('\n');
+}

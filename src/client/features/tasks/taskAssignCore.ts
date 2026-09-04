@@ -5,7 +5,7 @@
  *
  * @module dsh-eteams/client/taskAssignCore
  */
-import type { TaskSlotInput } from './api';
+import type { TaskSlotInput } from '../../lib/api';
 
 /**
  * 拖拽语义所需的最小任务面（结构类型——TaskView 满足之，测试用 plain 对象

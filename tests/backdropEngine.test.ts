@@ -42,7 +42,7 @@ import {
   withAlpha,
   type StaticOp,
   type Tank,
-} from '../src/client/backdropEngine';
+} from '../src/client/features/backdrop/backdropEngine';
 
 /** 常规画布尺寸（逻辑 px）与格子，测试共用。 */
 const W = 1200;

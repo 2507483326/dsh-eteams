@@ -15,7 +15,7 @@
  */
 import * as React from 'react';
 
-import { cn } from '../../cn';
+import { cn } from '../../lib/cn';
 
 const Input = React.forwardRef<HTMLInputElement, React.ComponentProps<'input'>>(
   ({ className, type, ...props }, ref) => {

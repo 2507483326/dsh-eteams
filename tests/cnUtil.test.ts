@@ -6,7 +6,7 @@
  * 行为契约（shadcn cn 合并惯例，S4 起的组件全走这条路）。
  */
 import { describe, expect, it } from 'vitest';
-import { cn } from '../src/client/cn';
+import { cn } from '../src/client/lib/cn';
 
 describe('cn（clsx + tailwind-merge）', () => {
   it('同组冲突：后写覆盖先写，无关类保留', () => {

@@ -15,7 +15,7 @@
  */
 import { useEffect } from 'react';
 import { useSelector } from 'react-redux';
-import { getApp, type RootState } from './store/app';
+import { getApp, type RootState } from '../store/app';
 
 /** Base URL served by the host web surface. */
 const STATE_URL = '/eteams-api/state';

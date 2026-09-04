@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { DvaAction } from 'dva-core';
-import type { ActivityState, RoutePatch, RouteTriple, TeamSnapshot } from '../src/client/monitor';
+import type { ActivityState, RoutePatch, RouteTriple, TeamSnapshot } from '../src/client/lib/monitor';
 import { getApp } from '../src/client/store/app';
 import { activityModel } from '../src/client/store/models/activity';
 

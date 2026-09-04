@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const WIDGETS_DIR = join(ROOT, 'assets', 'avatar', 'widgets');
-const OUT_FILE = join(ROOT, 'src', 'client', 'avatarWidgets.ts');
+const OUT_FILE = join(ROOT, 'src', 'client', 'features', 'avatar', 'avatarWidgets.ts');
 
 const CATEGORIES = [
   'face',

@@ -23,7 +23,7 @@ import {
   saveRosterMember,
   type NewMemberInput,
   type RosterMember,
-} from '../../api';
+} from '../../lib/api';
 import type { EffectCommands, TakeLatestEffect } from './index';
 
 /** 成员库状态（21.5.3）：列表 + 加载/错误态。 */

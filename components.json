@@ -6,16 +6,16 @@
   "tsx": true,
   "tailwind": {
     "config": "tailwind.config.ts",
-    "css": "src/client/eteams.css",
+    "css": "src/client/styles/eteams.css",
     "baseColor": "neutral",
     "cssVariables": true,
     "prefix": ""
   },
   "aliases": {
     "components": "src/client/components",
-    "utils": "src/client/cn",
+    "utils": "src/client/lib/cn",
     "ui": "src/client/components/ui",
-    "lib": "src/client",
+    "lib": "src/client/lib",
     "hooks": "src/client/hooks"
   }
 }

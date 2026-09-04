@@ -25,7 +25,7 @@
  *
  * @module dsh-eteams/client/heroTeamsButton
  */
-import { recordClientDiag } from './diagnostics';
+import { recordClientDiag } from '../lib/diagnostics';
 
 /**
  * The hero chip row. CSS-module classes are content-hashed

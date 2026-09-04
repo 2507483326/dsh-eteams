@@ -60,9 +60,9 @@ import { Provider } from 'react-redux';
 import { writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives';
 // lucide 深层图标导入（dialog.tsx 先例：深层 .mjs 只进用到的图标）。
 import Plus from 'lucide-react/dist/esm/icons/plus.mjs';
-import { ADD_PEOPLE_TEMPLATE, prefillComposer } from './addPeople';
-import { PHASE_LABELS } from './phaseLabels';
-import { ClientErrorBoundary, recordClientDiag } from './diagnostics';
+import { ADD_PEOPLE_TEMPLATE, prefillComposer } from '../lib/addPeople';
+import { PHASE_LABELS } from '../lib/phaseLabels';
+import { ClientErrorBoundary, recordClientDiag } from '../lib/diagnostics';
 import { enterTeamsPanel } from './teamsPanel';
 import {
   clearSessionPersona,
@@ -72,14 +72,14 @@ import {
   setSessionPersona,
   setSessionTeam,
   type RosterMember,
-} from './api';
-import { useActivityMonitor } from './monitor';
-import { getApp } from './store/app';
-import { Avatar } from './avatar';
-import { cn } from './cn';
-import { Button } from './components/ui/button';
-import { Card } from './components/ui/card';
-import { Tabs, TabsList, TabsTrigger } from './components/ui/tabs';
+} from '../lib/api';
+import { useActivityMonitor } from '../lib/monitor';
+import { getApp } from '../store/app';
+import { Avatar } from '../features/avatar/avatar';
+import { cn } from '../lib/cn';
+import { Button } from '../components/ui/button';
+import { Card } from '../components/ui/card';
+import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs';
 
 /**
  * Owner share of the input-region slots (`InputZone`): the conversation

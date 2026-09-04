@@ -2,8 +2,8 @@
  * Preview entry: render 48 seeded avatars through the real pipeline into
  * #grid (consumed by scripts/avatarPreview.mjs).
  */
-import { generateAvatarOption } from '../src/client/avatarOption';
-import { composeAvatarSvg } from '../src/client/avatarSvg';
+import { generateAvatarOption } from '../src/client/features/avatar/avatarOption';
+import { composeAvatarSvg } from '../src/client/features/avatar/avatarSvg';
 
 const grid = document.getElementById('grid');
 if (grid) {

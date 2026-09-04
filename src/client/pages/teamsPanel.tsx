@@ -54,12 +54,12 @@ import { Provider } from 'react-redux';
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
 // lucide 深层图标导入（dialog.tsx 先例：深层 .mjs 只进用到的图标）。
 import ArrowLeft from 'lucide-react/dist/esm/icons/arrow-left.mjs';
-import { activateETeamsTab, stageTeamSignals, teamsTabVisible } from './bridge';
-import { Button } from './components/ui/button';
-import { ClientErrorBoundary, recordClientDiag } from './diagnostics';
-import { ETeamsView } from './eteamsView';
+import { activateETeamsTab, stageTeamSignals, teamsTabVisible } from '../lib/bridge';
+import { Button } from '../components/ui/button';
+import { ClientErrorBoundary, recordClientDiag } from '../lib/diagnostics';
+import { ETeamsView } from '../eteamsView';
 import { HERO_ROW_SELECTOR } from './heroTeamsButton';
-import { getApp } from './store/app';
+import { getApp } from '../store/app';
 
 /** Landing options for {@link enterTeamsPanel}: which panel view to open. */
 export interface TeamsPanelOptions {

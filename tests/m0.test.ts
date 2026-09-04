@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { resolveConfig } from '../src/host/config';
 import { PLUGIN_ID, PLUGIN_VERSION, STATE_SCHEMA_VERSION, TOOL_PREFIX } from '../src/host/version';
-import { activateETeamsTab, ETEAMS_TAB_LABEL, ETEAMS_VIEW_ID } from '../src/client/bridge';
+import { activateETeamsTab, ETEAMS_TAB_LABEL, ETEAMS_VIEW_ID } from '../src/client/lib/bridge';
 
 describe('config resolution', () => {
   it('applies every default for a bare config', () => {

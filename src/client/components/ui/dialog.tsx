@@ -36,7 +36,7 @@ import * as DialogPrimitive from '@radix-ui/react-dialog';
 // 扩展名——上游无 exports 字段，oxc-resolver 不会为无扩展名 id 试 .mjs。
 import X from 'lucide-react/dist/esm/icons/x.mjs';
 
-import { cn } from '../../cn';
+import { cn } from '../../lib/cn';
 import { getPortalContainer } from './portal';
 
 const Dialog = DialogPrimitive.Root;

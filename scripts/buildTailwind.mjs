@@ -126,7 +126,7 @@ const result = spawnSync(
     '-c',
     'tailwind.config.ts',
     '-i',
-    'src/client/eteams.css',
+    'src/client/styles/eteams.css',
     '-o',
     outputFile,
     '--minify',

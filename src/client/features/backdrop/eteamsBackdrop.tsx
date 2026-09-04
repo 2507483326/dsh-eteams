@@ -41,7 +41,7 @@
  * @module dsh-eteams/client/eteamsBackdrop
  */
 import { useEffect, useRef, type ReactNode } from 'react';
-import { recordClientDiag } from './diagnostics';
+import { recordClientDiag } from '../../lib/diagnostics';
 import {
   COMPOSITE_ALPHA_CAP,
   createHeightField,

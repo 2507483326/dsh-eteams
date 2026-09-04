@@ -175,3 +175,29 @@ export function groupDisplayOf(
   if (views.every((v) => v.key === 'done')) return null;
   return { label: '待指派', tone: 'muted', icon: '', detail: '' };
 }
+
+/**
+ * 顶层状态分组（docs/29 B.3：收敛为展示态分组——分组边界从 13 态并成六档
+ * + cancelled 独立组；行内展示态 pill 与组头同口径，消除「行在『待接取』组
+ * 却显示『等待执行』」的错位）。statuses 仍是 13 态值（行过滤键），tone 沿用
+ * 既有组语义：等待系黄、执行系蓝、成功绿、失败红、初始化/取消灰。
+ */
+export const STATUS_GROUPS: { id: string; label: string; statuses: string[]; tone: Tone }[] = [
+  { id: 'init', label: '初始化', statuses: ['draft'], tone: 'muted' },
+  { id: 'created', label: '已创建', statuses: ['ready'], tone: 'info' },
+  {
+    id: 'waiting',
+    label: '等待执行',
+    statuses: ['assigned', 'blocked', 'paused', 'suspended'],
+    tone: 'warn',
+  },
+  { id: 'doing', label: '进行中', statuses: ['in_progress', 'retrying'], tone: 'info' },
+  { id: 'done', label: '已完成', statuses: ['completed'], tone: 'ok' },
+  {
+    id: 'error',
+    label: '错误',
+    statuses: ['awaiting_decision', 'needs_user', 'failed'],
+    tone: 'err',
+  },
+  { id: 'cancelled', label: '已取消', statuses: ['cancelled'], tone: 'muted' },
+];

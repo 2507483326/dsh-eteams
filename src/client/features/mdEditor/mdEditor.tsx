@@ -83,8 +83,8 @@ import { markdown } from '@codemirror/lang-markdown';
 import { python } from '@codemirror/lang-python';
 import { yaml } from '@codemirror/lang-yaml';
 import mdxEditorCss from '@mdxeditor/editor/style.css';
-import { recordClientDiag } from './diagnostics';
-import { useHostDark } from './useHostDark';
+import { recordClientDiag } from '../../lib/diagnostics';
+import { useHostDark } from '../../hooks/useHostDark';
 
 const T = {
   sunken: 'var(--dsw-alias-bg-layer-2, #edf0f4)',

@@ -5,7 +5,7 @@
  * 环境（无 DOM 拖拽事件合成）覆盖，见完成报告说明。
  */
 import { describe, expect, it } from 'vitest';
-import type { ChainTaskLike } from '../src/client/taskAssignCore';
+import type { ChainTaskLike } from '../src/client/features/tasks/taskAssignCore';
 import {
   boxRendersContent,
   canClearStation,
@@ -14,7 +14,7 @@ import {
   isAssignEditable,
   nextChainAfterDrop,
   readonlyStationMember,
-} from '../src/client/taskAssignCore';
+} from '../src/client/features/tasks/taskAssignCore';
 
 /** 便捷构造：chain 站点（member, stageBrief）。 */
 const st = (member: string, stageBrief = ''): { member: string; stageBrief: string } => ({

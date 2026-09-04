@@ -4,7 +4,7 @@
  * 生效。S7 起轮询快照迁入 store，本文件是后续迁移的行为契约基线。
  */
 import { describe, expect, it } from 'vitest';
-import type { ActivityState } from '../src/client/monitor';
+import type { ActivityState } from '../src/client/lib/monitor';
 import { getApp } from '../src/client/store/app';
 
 describe('dvaApp bootstrap（S6）', () => {

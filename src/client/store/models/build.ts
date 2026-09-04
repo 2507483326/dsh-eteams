@@ -29,7 +29,7 @@ import {
   submitInterview,
   type BuildDraft,
   type BuildSession,
-} from '../../api';
+} from '../../lib/api';
 import type { EffectCommands, TakeLatestEffect } from './index';
 
 /** 一组意图访谈答案（docs/19.16；api.submitInterview 的载荷面）。 */

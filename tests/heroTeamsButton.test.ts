@@ -5,7 +5,7 @@
  * chrome), and stay idempotent when React re-renders the row.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { ensureHeroButton } from '../src/client/heroTeamsButton';
+import { ensureHeroButton } from '../src/client/pages/heroTeamsButton';
 
 interface FakeNode {
   attrs: Record<string, string>;

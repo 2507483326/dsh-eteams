@@ -18,10 +18,10 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
-import { Avatar } from './avatar';
-import { cn } from './cn';
-import type { TaskSlotInput } from './api';
-import type { CaptainView, MemberView, TeamSnapshot, TaskView } from './monitor';
+import { Avatar } from '../avatar/avatar';
+import { cn } from '../../lib/cn';
+import type { TaskSlotInput } from '../../lib/api';
+import type { CaptainView, MemberView, TeamSnapshot, TaskView } from '../../lib/monitor';
 import {
   canClearStation,
   dropTargetMember,

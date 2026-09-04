@@ -25,7 +25,7 @@ import Check from 'lucide-react/dist/esm/icons/check.mjs';
 import ChevronDown from 'lucide-react/dist/esm/icons/chevron-down.mjs';
 import ChevronUp from 'lucide-react/dist/esm/icons/chevron-up.mjs';
 
-import { cn } from '../../cn';
+import { cn } from '../../lib/cn';
 import { getPortalContainer } from './portal';
 
 const Select = SelectPrimitive.Root;

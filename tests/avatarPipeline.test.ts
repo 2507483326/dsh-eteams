@@ -7,9 +7,9 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { AVATAR_LAYER, generateAvatarOption } from '../src/client/avatarOption';
-import { AVATAR_WIDGETS_FINGERPRINT, AVATAR_WIDGET_SVGS } from '../src/client/avatarWidgets';
-import { composeAvatarSvg } from '../src/client/avatarSvg';
+import { AVATAR_LAYER, generateAvatarOption } from '../src/client/features/avatar/avatarOption';
+import { AVATAR_WIDGETS_FINGERPRINT, AVATAR_WIDGET_SVGS } from '../src/client/features/avatar/avatarWidgets';
+import { composeAvatarSvg } from '../src/client/features/avatar/avatarSvg';
 
 describe('generateAvatarOption（种子确定性）', () => {
   it('同 (seed, salt) 两次生成完全一致', () => {

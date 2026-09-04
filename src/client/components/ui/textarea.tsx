@@ -15,7 +15,7 @@
  */
 import * as React from 'react';
 
-import { cn } from '../../cn';
+import { cn } from '../../lib/cn';
 
 const Textarea = React.forwardRef<HTMLTextAreaElement, React.ComponentProps<'textarea'>>(
   ({ className, ...props }, ref) => {

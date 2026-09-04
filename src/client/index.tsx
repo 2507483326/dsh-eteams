@@ -29,16 +29,16 @@
  * @module dsh-eteams/client
  */
 import type { Context } from '@deepseek-ai/cordis';
-import { installCard } from './card';
-import { EteamBuildCard } from './buildCard';
-import { ETEAMS_TAB_LABEL, ETEAMS_VIEW_ID } from './bridge';
-import { installClientDiagnostics, recordClientDiag } from './diagnostics';
+import { installCard } from './pages/eteamsCard';
+import { EteamBuildCard } from './pages/buildCard';
+import { ETEAMS_TAB_LABEL, ETEAMS_VIEW_ID } from './lib/bridge';
+import { installClientDiagnostics, recordClientDiag } from './lib/diagnostics';
 import { ETeamsView } from './eteamsView';
-import { installHeroTeamsButton } from './heroTeamsButton';
-import { installModelCatalog } from './modelCatalog';
-import { ensureEteamsStyles } from './tailwind';
-import { enterTeamsPanel } from './teamsPanel';
-import { TeamsButton } from './teamsButton';
+import { installHeroTeamsButton } from './pages/heroTeamsButton';
+import { installModelCatalog } from './lib/modelCatalog';
+import { ensureEteamsStyles } from './lib/tailwind';
+import { enterTeamsPanel } from './pages/teamsPanel';
+import { TeamsButton } from './pages/teamsButton';
 
 /** Client services required before apply runs. The runner gates every
  * `ctx.<service>` property read against this declaration — touching an

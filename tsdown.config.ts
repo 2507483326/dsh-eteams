@@ -108,8 +108,8 @@ function tailwindCssInline() {
 /**
  * 把 'react-activity-calendar/tooltips.css' 改道为虚拟 JS 模块（字符串导出）。
  * 同 mdxEditorCssInline 手法：单文件 CJS envelope 没有独立 CSS 通道，样式以
- * 字符串进包、运行时注入 <style>（见 src/client/eteamsView.tsx 的 Token 消耗
- * 卡片）。tooltip 经 FloatingPortal 挂在 document.body 根（docs/30 28-M3），
+ * 字符串进包、运行时注入 <style>（见 src/client/pages/teamsView/usageCalendar.tsx
+ * 的 Token 消耗卡片）。tooltip 经 FloatingPortal 挂在 document.body 根（docs/30 28-M3），
  * 注入的样式标签放在 <head>、选择器全局生效即可命中。
  */
 function usageTooltipsCssInline() {

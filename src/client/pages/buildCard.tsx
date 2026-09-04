@@ -16,13 +16,13 @@ import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Provider } from 'react-redux';
 // lucide 深层图标导入（dialog.tsx 先例：深层 .mjs 只进用到的图标）。
 import PenLine from 'lucide-react/dist/esm/icons/pen-line.mjs';
-import { Avatar } from './avatar';
-import { openMemberBuilder } from './bridge';
-import { cn } from './cn';
-import { Badge } from './components/ui/badge';
-import { ClientErrorBoundary } from './diagnostics';
-import { fetchBuildState, type BuildSession } from './api';
-import { getApp } from './store/app';
+import { Avatar } from '../features/avatar/avatar';
+import { openMemberBuilder } from '../lib/bridge';
+import { cn } from '../lib/cn';
+import { Badge } from '../components/ui/badge';
+import { ClientErrorBoundary } from '../lib/diagnostics';
+import { fetchBuildState, type BuildSession } from '../lib/api';
+import { getApp } from '../store/app';
 
 /** Status → (label, toneClass)：语义 token 类（active→business、待确认→
  * warning、已入库→success、放弃→muted-foreground，与原 state-err/warn/
