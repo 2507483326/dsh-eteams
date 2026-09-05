@@ -211,7 +211,7 @@ describe('groupDisplayOf（组卡汇总优先级）', () => {
   });
 });
 
-describe('STATUS_GROUPS（十态一列，组头与行内 pill 同口径）', () => {
+describe('STATUS_GROUPS（十态一列键序规范，十一轮 DA24 后列表平铺无渲染方）', () => {
   it('每态独立成组，label/tone 来自展示态表', () => {
     expect(STATUS_GROUPS.map((g) => g.id)).toEqual(Object.keys(STATUS_LABELS));
     for (const group of STATUS_GROUPS) {

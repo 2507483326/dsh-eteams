@@ -179,6 +179,10 @@ export function groupDisplayOf(
  * wait 待接取 warn / start 执行中 info / paused 已挂起 warn /
  * wait_decision 待决策 warn / wait_user 待用户 warn / completed 已完成 ok /
  * failed 失败 err / cancelled 已取消 muted。
+ *
+ * 十一轮 DA24 后任务列表页平铺小卡栅格，不再按状态分区渲染（本表无运行时
+ * 渲染方）——保留为十态键序的结构化规范（tests/taskDisplayStatus.test.ts
+ * 锁定），后续需要按态聚合时复用。
  */
 export const STATUS_GROUPS: { id: string; label: string; statuses: string[]; tone: Tone }[] = (
   Object.keys(STATUS_LABELS) as string[]

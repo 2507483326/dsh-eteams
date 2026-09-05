@@ -251,3 +251,24 @@ dropRef、children 包 `min-w-0 flex-1`；列表页恢复九轮状态概览无�
 exhaustive-deps warning（memberDialog/taskDrawer，非本次引入）。
 GUI 装机冒烟持续**未验证**（同上口径——把手拖拽调序、把手不可编辑态淡化、
 拖拽与卡身点击互不干扰需装机后在 DSH 面板人工过一遍）。
+
+## 十一轮追加（2026-09-05，DA24 任务主列表平铺小卡栅格）
+
+**用户需求原话**：「任务主列表 不分 对话任务、待指派这种。把任务主列表做成
+团队那种小卡片」。
+
+| 决策 | 内容 |
+| --- | --- |
+| DA24 | ①**撤分区**：「对话任务」区块与 STATUS_GROUPS 十态分区（组头/彩点/计数/精简行）全去——顶层任务不再按 kind/状态拆区块。②**平铺栅格**：团队列表同款容器（Card 面板 + 「任务 n 个」标题行 + CARD_GRID_CLASS 栅格，最小 210px 自适应列），一卡一**顶层任务**（主任务 + 顶层普通任务，快照序混排）。③**小卡三段式**（团队卡同款）：头行（#id 主题截断 + 展示态 pill，retryCount 并入）+ 身体行（主任务 = 小任务进度「x/y 完成 · n 进行中」（draft 只显个数；ready 且有明细叠加汇总 chip）；普通任务 = 指派人，无则不出；阻塞 pill 并入此行）+ 文件夹行。④卡底色/边框/悬停由 `.eteams-task-card` 样式表接管（ROLE_LIST_CSS 增别名选择器与 `.eteams-team-card` 并轨）。⑤整卡点击进详情（主任务 → 主任务详情、普通任务 → 任务详情），无拖拽（十轮 DA23 订正口径不变）；九轮 DA22 口径不变（不列小任务明细） |
+
+改动面：`tasksTab.tsx`（列表 return 块重写——分区/组头/精简行撤除，Card 面板 +
+栅格小卡；TASK_ROW_CLASS/GROUP_CARD_CLASS/dotClass/STATUS_GROUPS 消费点删除）、
+`shared.tsx`（ROLE_LIST_CSS 增 `.eteams-task-card` 别名选择器 + 注释同步）、
+`taskDisplayStatus.ts`（STATUS_GROUPS 注释改「无运行时渲染方的键序规范」）、
+`tests/taskDisplayStatus.test.ts`（describe 题注同步）。零 store/host/纯函数变更。
+
+**十一轮四绿门（2026-09-05）**：typecheck / lint / test（23 文件 **311 用例**全过）/
+build（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿；lint 仅 2 条既有
+exhaustive-deps warning（memberDialog/taskDrawer，非本次引入）。
+GUI 装机冒烟持续**未验证**（同上口径——平铺栅格/小卡三段式/整卡点击进详情需
+装机后在 DSH 面板人工过一遍）。

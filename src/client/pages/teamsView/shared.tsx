@@ -173,10 +173,11 @@ export const CHIP_CLASS = `mr-1 mb-0.5 inline-block rounded-md bg-muted px-2 py-
  * （用户迭代 2026-09 八）。 */
 export const CARD_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(210px,1fr))] gap-3';
 /**
- * 角色/团队列表注入样式表（ROLE_LIST_CSS）消费的主题 token——S12–S14 迁移
- * 后 inline 样式消费面已清空；hover/focus-within/attr 选择器与下面的原生
+ * 角色/团队/任务列表注入样式表（ROLE_LIST_CSS）消费的主题 token——S12–S14
+ * 迁移后 inline 样式消费面已清空；hover/focus-within/attr 选择器与下面的原生
  * details/summary 样式仍需样式表承载（D22f：展开指示的 [open]/::before 规则
- * 无法用工具类表达，同注入这里）。
+ * 无法用工具类表达，同注入这里）。任务主列表小卡（十一轮 DA24）复用团队卡
+ * 同款底色/边框/悬停（.eteams-task-card 别名选择器并轨）。
  * D22a 官网 v3 色板接管：原先经 --dsw-alias-*（DSW 蓝家族）的取值全部改
  * 消费 .eteams-ui 作用域内的语义 token（亮/暗由 eteams.css 统一定值），
  * 浅暗两态都不刺眼；半透明一律 color-mix()（token 色禁 /alpha 的替代路径，
@@ -191,8 +192,8 @@ export const CARD_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(210px,1f
 export const ROLE_LIST_CSS = `
 .eteams-role-row{background:var(--background);border:1px solid var(--border);box-shadow:0 1px 2px rgba(15,23,42,0.05);transition:background .15s ease,border-color .15s ease,box-shadow .15s ease}
 .eteams-role-row:hover{border-color:color-mix(in srgb,var(--foreground) 18%,transparent);background:var(--muted)}
-.eteams-team-card{background:var(--background);border:1px solid var(--border);box-shadow:0 1px 2px rgba(15,23,42,0.05);transition:background .15s ease,border-color .15s ease,box-shadow .15s ease}
-.eteams-team-card:hover{border-color:color-mix(in srgb,var(--foreground) 18%,transparent);background:var(--muted)}
+.eteams-task-card,.eteams-team-card{background:var(--background);border:1px solid var(--border);box-shadow:0 1px 2px rgba(15,23,42,0.05);transition:background .15s ease,border-color .15s ease,box-shadow .15s ease}
+.eteams-task-card:hover,.eteams-team-card:hover{border-color:color-mix(in srgb,var(--foreground) 18%,transparent);background:var(--muted)}
 /* 成员略缩图动效（用户迭代 2026-09 九）：小号头像负间距叠放；滑过整组时
    间距松开（互相挤开），滑过单个头像时它放大浮到顶层——margin/transform
    过渡驱动，JSX 只挂 .eteams-team-avatars 类。 */

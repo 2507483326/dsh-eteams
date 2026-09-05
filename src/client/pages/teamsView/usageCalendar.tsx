@@ -9,6 +9,9 @@
  * GET /usage/calendar，不按团队/归属过滤，workspace 桶一并计入，标题加
  * 「全应用」标注）；meta 行前置「今日 X tokens」——今天那格本就在全年
  * 零填充响应里（usageTodayKey 本地拼装），无需新接口。
+ * 用户迭代 2026-09-05（二）：档位改固定「AI 代码工程师强度」标尺（0 空 +
+ * 10 万/100 万/300 万三道台阶，见 USAGE_LEVEL_STEPS），不再按当年四分位
+ * 相对划分；tooltip 行首带档位名（轻度/常规/高强度/满负荷）。
  *
  * @module dsh-eteams/client/pages/teamsView/usageCalendar
  */
@@ -94,37 +97,32 @@ function usageTodayKey(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-/** 线性插值百分位（28.5.2 四分位档：P25/P50/P75 定 1-4 级）。 */
-function usagePercentile(sorted: readonly number[], p: number): number {
-  if (sorted.length === 0) return 0;
-  const pos = p * (sorted.length - 1);
-  const lower = Math.floor(pos);
-  const upper = Math.ceil(pos);
-  if (lower === upper) return sorted[lower] ?? 0;
-  return (sorted[lower] ?? 0) + ((sorted[upper] ?? 0) - (sorted[lower] ?? 0)) * (pos - lower);
-}
+/** 固定档位标尺（用户迭代 2026-09-05：按 AI 代码工程师的日强度划分，不再
+ * 按当年四分位「自己和自己比」——相对划分下年初数据少时一天峰值日即爆表、
+ * 平常日全灭，且档位随数据漂移）。四档（0 恒空档）：
+ * 轻度 ≤10 万 → 常规 ≤100 万 → 高强度 ≤300 万 → 满负荷 >300 万（>500 万
+ * 同样顶格满负荷色——日历只有 4 个活跃色档）。 */
+const USAGE_LEVEL_STEPS = [100_000, 1_000_000, 3_000_000] as const;
 
-/** 日期 → 0-4 级映射：0 恒空档；正数日按 P25/P50/P75 分四档（28.5.2）。 */
-function usageLevelsOf(days: readonly UsageDay[]): Map<string, number> {
-  const positive = days
-    .map((d) => d.totalTokens)
-    .filter((v) => v > 0)
-    .sort((a, b) => a - b);
-  const p25 = usagePercentile(positive, 0.25);
-  const p50 = usagePercentile(positive, 0.5);
-  const p75 = usagePercentile(positive, 0.75);
-  const levels = new Map<string, number>();
-  for (const day of days) {
-    const v = day.totalTokens;
-    levels.set(day.date, v <= 0 ? 0 : v <= p25 ? 1 : v <= p50 ? 2 : v <= p75 ? 3 : 4);
+/** 档位名（tooltip 行首标注，让「按强度划分」看得见；下标 = 档-1）。 */
+const USAGE_LEVEL_NAMES = ['轻度', '常规', '高强度', '满负荷'] as const;
+
+/** totalTokens → 0-4 档：0 恒空档，正数按固定标尺逐级抬升。 */
+function usageLevelOf(totalTokens: number): number {
+  if (totalTokens <= 0) return 0;
+  let level = 1;
+  for (const step of USAGE_LEVEL_STEPS) {
+    if (totalTokens > step) level += 1;
   }
-  return levels;
+  return level;
 }
 
-/** tooltip 文案（28.5.2 格式）：标题行 + 四分项 + 可选推理行 + 调用次数。 */
+/** tooltip 文案（28.5.2 格式）：行首档位名 + 四分项 + 可选推理行 + 调用次数。 */
 function usageTooltipText(day: UsageDay | undefined, activity: Activity): string {
+  const band =
+    activity.level > 0 ? ` · ${USAGE_LEVEL_NAMES[activity.level - 1] ?? ''}` : '';
   const lines = [
-    `${usageDateLabel(day?.date ?? activity.date)} · ${usageNum(day?.totalTokens ?? 0)} tokens`,
+    `${usageDateLabel(day?.date ?? activity.date)} · ${usageNum(day?.totalTokens ?? 0)} tokens${band}`,
     `输入 ${usageNum(day?.inputTokens ?? 0)} / 输出 ${usageNum(day?.outputTokens ?? 0)} / 缓存读 ${usageNum(
       day?.cacheReadTokens ?? 0,
     )} / 缓存写 ${usageNum(day?.cacheWriteTokens ?? 0)}`,
@@ -203,11 +201,10 @@ export function UsageCalendarCard(): ReactNode {
   const dayByDate = new Map(days.map((d) => [d.date, d]));
   // 今天那格直接来自同一份全年零填充响应——无需新接口；无数据日为 0。
   const todayTotal = dayByDate.get(usageTodayKey())?.totalTokens ?? 0;
-  const levelByDate = usageLevelsOf(days);
   const activities: Activity[] = days.map((d) => ({
     date: d.date,
     count: d.totalTokens,
-    level: levelByDate.get(d.date) ?? 0,
+    level: usageLevelOf(d.totalTokens),
   }));
   // 无数据（totals 全 0）也整年零档渲染（28.5.2），仅补一行说明。
   const hasData = totals !== undefined && totals.totalTokens > 0;

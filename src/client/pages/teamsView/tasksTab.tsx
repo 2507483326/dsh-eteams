@@ -1,13 +1,13 @@
 /**
- * 任务 tab（2026-09-05 九轮 DA22 + 十轮 DA23 修订）：**任务列表页 ↔ 任务
- * 详情页**两级导航，编排全部收进详情页。列表页 = 组卡**状态概览**（头部
- * 信息 + 进度/汇总，不列小任务明细——整个任务列表点进主任务详情看，九轮
- * DA22；**无拖拽**，十轮 DA23 订正）+ 顶层任务分组行；详情页 = 返回条 +
- * 头部卡 + 编排（主任务：新增小任务 + 小任务卡片全套（卡槽/改删/**把手
- * 拖拽调序**——十轮 DA23：只有卡片左上 grip 把手可拖，卡身点击进小任务
- * 详情）+ 成员罗列条；任务：合同/时间线正文 + 卡槽 + 站点行）。导航状态
- * 复用 ui model drawerTaskId（语义 = 详情页选中的任务 id）；依赖
- * taskDrawer（详情正文）、features/tasks（拖拽指派）与 shared。
+ * 任务 tab（2026-09-05 九/十/十一轮 DA22/DA23/DA24 修订）：**任务列表页 ↔
+ * 任务详情页**两级导航，编排全部收进详情页。列表页 = **平铺小卡栅格**（十一
+ * 轮 DA24：不分「对话任务」/状态分区，与团队列表同款 Card 面板 + 任务小卡，
+ * 一卡一顶层任务，整卡点击进详情，无拖拽；不列小任务明细——九轮 DA22）+
+ * 空态行；详情页 = 返回条 + 头部卡 + 编排（主任务：新增小任务 + 小任务卡片
+ * 全套（卡槽/改删/**把手拖拽调序**——十轮 DA23：只有卡片左上 grip 把手可
+ * 拖，卡身点击进小任务详情）+ 成员罗列条；任务：合同/时间线正文 + 卡槽 +
+ * 站点行）。导航状态复用 ui model drawerTaskId（语义 = 详情页选中的任务
+ * id）；依赖 taskDrawer（详情正文）、features/tasks（拖拽指派）与 shared。
  *
  * @module dsh-eteams/client/pages/teamsView/tasksTab
  */
@@ -37,8 +37,9 @@ import {
   depPatchesForReorder,
   executionOrderOf,
 } from '../../features/tasks/taskAssignCore';
-import { STATUS_GROUPS, displayStatusOf, groupDisplayOf, type GroupSummary } from '../../features/tasks/taskDisplayStatus';
+import { displayStatusOf, groupDisplayOf, type GroupSummary } from '../../features/tasks/taskDisplayStatus';
 import { Button } from '../../components/ui/button';
+import { Card } from '../../components/ui/card';
 import {
   Dialog,
   DialogContent,
@@ -51,16 +52,16 @@ import { Textarea } from '../../components/ui/textarea';
 import { TaskDetailContent, TaskStations } from './taskDrawer';
 import {
   BORDER_L1_CLASS,
+  CARD_GRID_CLASS,
   CHIP_CLASS,
   EMPTY_CLASS,
   FormErrorNote,
+  LIST_COUNT_CLASS,
+  LIST_TITLE_CLASS,
   MUTED_CLASS,
+  PANEL_CARD_CLASS,
   Pill,
-  dotClass,
 } from './shared';
-
-/** 原 styles.taskRow（任务行：l1 下边线 / 8px 圆角 / 指针）。 */
-const TASK_ROW_CLASS = `cursor-pointer rounded-[8px] border-b border-solid px-2 py-2.5 ${BORDER_L1_CLASS}`;
 
 /** 七轮 DA20 + 十轮 DA23：小任务卡片——与组卡同观感的全边框卡（挂靠缩进
  * ml-4 保留），左上 grip 把手 = 唯一拖拽源，卡身兼放置目标（拖 A 到 B =
@@ -137,8 +138,10 @@ function SubtaskCard({
   );
 }
 
-/** 列表页组卡（九轮 DA22 状态概览）：整卡点击进主任务详情，无拖拽。 */
-const GROUP_CARD_CLASS = `mb-2.5 cursor-pointer rounded-[8px] border border-solid bg-background px-3 py-2.5 ${BORDER_L1_CLASS}`;
+/** 列表页任务小卡（十一轮 DA24：与团队列表小卡同款三段式——头行（#id 主题
+ * 截断 + 展示态 pill）、身体行（进度/指派 + 阻塞 + 汇总 chip）、文件夹行；
+ * 底色/边框/悬停由 .eteams-task-card 样式表接管，p-3.5 = 卡内高度呼吸感）。 */
+const TASK_CARD_CLASS = 'flex min-w-0 cursor-pointer flex-col gap-2 rounded-xl p-3.5';
 
 /** 展示态徽标（docs/29 B.3 渲染位）：中性 pill（Badge secondary + 6px dot，
  * tone 按展示态逐格对表——29-M3 同桶异色）+ 重试计数 detail 小字。八轮 DA21
@@ -195,11 +198,12 @@ interface TaskEditTarget {
 
 /** 任务 tab：**任务列表页 ↔ 任务详情页**两级导航（八轮 DA21，2026-09-05
 用户拍板「将任务做成任务详情页面和任务列表页面，点击到详情再编排整个任务」；
-九轮 DA22 修订：列表页组卡只承状态概览）。列表页：对话任务区块 = 组卡状态
-概览（头部 + 文件夹 + 进度/汇总 chip；**不列小任务明细**——用户九轮拍板
-「任务卡片不展示任务详情和整个任务列表，需要点击进去再看到整个任务列表」），
-整卡点击进主任务详情；列表上无任何编排 UI（卡槽/罗列条/拖拽/改删按钮全迁
-详情）。
+九轮 DA22 修订：列表不列小任务明细；十一轮 DA24 修订：列表平铺小卡栅格）。
+列表页：与团队列表同款 Card 面板 + **平铺任务小卡栅格**（不分「对话任务」/
+状态分区——用户十一轮拍板「任务主列表不分对话任务、待指派这种，做成团队那种
+小卡片」；一卡一顶层任务，整卡点击进详情；**不列小任务明细**——用户九轮拍板
+「任务卡片不展示任务详情和整个任务列表，需要点击进去再看到整个任务列表」；
+无编排 UI、无拖拽——卡槽/罗列条/改删按钮全迁详情）。
 详情页（导航状态 = ui model drawerTaskId，语义「选中的任务 id」）：
 - 主任务（group）详情 = **整个任务的编排面**：返回条 + 头部卡 + 新增小任务 +
   小任务卡片全套（执行序号/卡槽 TaskAssignDropBox/拖拽调执行顺序/修改删除）
@@ -332,7 +336,6 @@ export function TasksTab({
     }
   };
 
-  const groups = team.tasks.filter((t) => t.kind === 'group');
   // 八轮 DA21 导航：selectedTaskId（ui model drawerTaskId）非空 = 详情页；
   // 选中任务被删（快照里已无此 id）自动回落列表页。
   const selected =
@@ -677,99 +680,85 @@ export function TasksTab({
   return (
     <TaskDndProvider>
       <div>
-        {/* docs/26 对话任务：主任务（任务单）卡概览（八轮 DA21 页面化 +
-        九轮 DA22 概览化：列表页无编排 UI、不列小任务明细——整卡点进
-        主任务详情看整个任务列表，新增/改删/卡槽全在详情页）。 */}
-        {groups.length > 0 && (
-          <div className="mb-3.5">
-            <div className="mb-1 flex items-center gap-1.5 text-sm font-semibold leading-6 text-foreground">
-              <span className={dotClass('info')} />
-              对话任务
-              <span className="text-xs font-normal text-muted-foreground">· {groups.length}</span>
-            </div>
-            {groups.map((group) => {
-              // 九轮 DA22：列表页组卡只承**状态概览**（进度计数 + 汇总 chip），
-              // 不列小任务明细——整个任务列表点进主任务详情页看（用户九轮
-              // 拍板「任务卡片不展示任务详情和整个任务列表」）。计数/汇总与
-              // 顺序无关，无需拓扑排序；十轮 DA23 订正：任务列表页无拖拽。
-              const subs = team.tasks.filter((t) => t.parentId === group.taskId);
-              const done = subs.filter((t) => t.status === 'completed').length;
-              // docs/29 B.2 组卡汇总：ready 且有小任务时叠加汇总 chip（error >
-              // doing > waiting > created；全 completed 不加——进度行已表达）。
-              const summary =
-                group.status === 'ready' && subs.length > 0 ? groupDisplayOf(subs) : null;
-              // draft（批准前拆解中）不做汇总——只显示计数（B.2 规则尾部）。
-              const progressText =
-                group.status === 'draft'
-                  ? `小任务 ${subs.length} 个`
-                  : `小任务 ${done}/${subs.length} 完成`;
-              return (
-                <div
-                  key={group.taskId}
-                  className={GROUP_CARD_CLASS}
-                  onClick={() => setSelectedTaskId(group.taskId)}
-                >
-                  <div>
-                    <strong>#{group.taskId}</strong> {group.subject}
-                    <DisplayStatusPill status={group.status} className="ml-1" />
-                    <span className={cn(MUTED_CLASS, 'ml-1')}>· {progressText}</span>
-                    {summary !== null && <GroupSummaryChip summary={summary} />}
-                  </div>
-                  {group.folder !== null && (
-                    <div className={MUTED_CLASS}>文件夹：{group.folder}/</div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-        {STATUS_GROUPS.map((group) => {
-          // docs/26：主任务（group）在上方「对话任务」区块，小任务挂在组卡内
-          // ——状态分组只列顶层普通任务。
-          const rows = team.tasks.filter(
-            (t) => group.statuses.includes(t.status) && t.parentId === null && t.kind !== 'group',
-          );
-          if (rows.length === 0) return null;
-          return (
-            <div key={group.id} className="mb-3.5">
-              {/* D22e 任务页组头降噪：彩 pill → 中性文字 + 计数 + 彩色 6px dot。 */}
-              <div className="mb-1 flex items-center gap-1.5 text-sm font-semibold leading-6 text-foreground">
-                <span className={dotClass(group.tone)} />
-                {group.label}
-                <span className="text-xs font-normal text-muted-foreground">· {rows.length}</span>
+        {/* 十一轮 DA24：任务主列表**平铺小卡栅格**（用户拍板「任务主列表不分
+        对话任务、待指派这种，做成团队那种小卡片」）——撤掉「对话任务」区块与
+        STATUS_GROUPS 十态分区（组头/彩点/计数全去），顶层任务（主任务 + 顶层
+        普通任务）一卡一任务平铺进团队列表同款 Card 面板栅格；整卡点击进详情
+        （主任务 → 主任务详情、普通任务 → 任务详情），无拖拽（十轮订正）。
+        九轮 DA22 口径不变：不列小任务明细，小任务列表在主任务详情页。 */}
+        {(() => {
+          // 平铺列表 = 全部顶层任务（主任务 + 顶层普通任务，快照序）。
+          const mainTasks = team.tasks.filter((t) => t.parentId === null);
+          if (mainTasks.length === 0) {
+            return (
+              <div className={EMPTY_CLASS}>
+                还没有任务。在对话中把任务交给团队，或计划批准后任务会出现在这里。
               </div>
-              {rows.map((t) => (
-                // 八轮 DA21：列表页顶层任务精简行（站点行/依赖 chips 迁详情），
-                // 点击进任务详情页。
-                <div
-                  key={t.taskId}
-                  className={TASK_ROW_CLASS}
-                  onClick={() => setSelectedTaskId(t.taskId)}
-                >
-                  <div>
-                    <strong>#{t.taskId}</strong> {t.subject}
-                    {/* docs/29 B.3：展示态 pill（retryCount 并入 detail，
-                  顶层行既有「重试 n」标记并入）；assignee 小字保留。 */}
-                    <DisplayStatusPill
-                      status={t.status}
-                      retryCount={t.retryCount}
-                      className="ml-1"
-                    />
-                    {t.blocked && <BlockedPill blockedFrom={t.blockedFrom} />}
-                    {t.assignee !== null && (
-                      <span className={cn(MUTED_CLASS, 'ml-1')}>· {t.assignee}</span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
+            );
+          }
+          return (
+            <Card className={cn(PANEL_CARD_CLASS, 'pb-3')}>
+              <div className="mb-2.5 flex items-center gap-2">
+                <h3 className={LIST_TITLE_CLASS}>任务</h3>
+                <span className={LIST_COUNT_CLASS}>{mainTasks.length} 个</span>
+              </div>
+              <div className={CARD_GRID_CLASS}>
+                {mainTasks.map((t) => {
+                  // 组卡进度：小任务计数与汇总（九轮 DA22 概览口径——只计数
+                  // 不列明细；draft 只显示个数，ready 且有明细时叠加汇总）。
+                  const subs = t.kind === 'group'
+                    ? team.tasks.filter((s) => s.parentId === t.taskId)
+                    : [];
+                  const done = subs.filter((s) => s.status === 'completed').length;
+                  const active = subs.filter((s) => s.status === 'start').length;
+                  const summary =
+                    t.kind === 'group' && t.status === 'ready' && subs.length > 0
+                      ? groupDisplayOf(subs)
+                      : null;
+                  // 身体行：主任务 = 小任务进度（对齐团队卡「任务 x/y 完成 ·
+                  // n 进行中」措辞）；普通任务 = 指派人（无则不出身体行）。
+                  const progress = t.kind === 'group'
+                    ? t.status === 'draft'
+                      ? `小任务 ${subs.length} 个`
+                      : `小任务 ${done}/${subs.length} 完成${active > 0 ? ` · ${active} 进行中` : ''}`
+                    : t.assignee !== null
+                      ? `指派 ${t.assignee}`
+                      : null;
+                  return (
+                    <div
+                      key={t.taskId}
+                      className={cn('eteams-task-card', TASK_CARD_CLASS)}
+                      onClick={() => setSelectedTaskId(t.taskId)}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
+                          #{t.taskId} {t.subject}
+                        </span>
+                        <DisplayStatusPill
+                          status={t.status}
+                          retryCount={t.retryCount}
+                          className="shrink-0"
+                        />
+                      </div>
+                      {(t.blocked || progress !== null || summary !== null) && (
+                        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs">
+                          {t.blocked && <BlockedPill blockedFrom={t.blockedFrom} />}
+                          {progress !== null && (
+                            <span className="text-muted-foreground">{progress}</span>
+                          )}
+                          {summary !== null && <GroupSummaryChip summary={summary} />}
+                        </div>
+                      )}
+                      {t.folder !== null && (
+                        <p className="truncate text-xs text-muted-foreground">文件夹：{t.folder}/</p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
           );
-        })}
-        {team.tasks.length === 0 && (
-          <div className={EMPTY_CLASS}>
-            还没有任务。在对话中把任务交给团队，或计划批准后任务会出现在这里。
-          </div>
-        )}
+        })()}
         {dialogs}
       </div>
     </TaskDndProvider>
