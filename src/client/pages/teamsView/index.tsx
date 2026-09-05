@@ -69,6 +69,7 @@ import {
 } from '../../lib/bridge';
 import { cn } from '../../lib/cn';
 import { ClientErrorBoundary } from '../../lib/diagnostics';
+import { Input } from '../../components/ui/input';
 import { EteamsBackdrop } from '../../features/backdrop/eteamsBackdrop';
 import { fetchAgentActivity } from '../../lib/api';
 import { useActivityMonitor } from '../../lib/monitor';
@@ -359,12 +360,17 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
               底上是黑环，pill 底 token 亮=浅灰/暗=深灰两侧都成立。 */}
             <div className="relative mb-3">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <input
+              {/* 官网 Quick search 签名（S24-2）迁 shadcn Input（docs/43 扫描
+                整改）：覆盖层去边框改 ring、补 8 档左内边距给放大镜让位、
+                焦点环压成官网 sky 档；环色走 --eteams-pill-bg——官网的
+                ring-slate-900/10 字面量在暗色底上是黑环，pill 底 token
+                亮=浅灰/暗=深灰两侧都成立。 */}
+              <Input
                 type="text"
                 value={railQuery}
                 placeholder="筛选"
                 onChange={(e) => setRailQuery(e.target.value)}
-                className="h-9 w-full rounded-md border-0 bg-transparent pl-8 pr-3 text-sm leading-6 text-foreground shadow-sm outline-none [font-family:inherit] ring-1 ring-[color:var(--eteams-pill-bg)] placeholder:text-muted-foreground focus:ring-2 focus:ring-sky-500/60"
+                className="h-9 rounded-md border-0 pr-3 pl-8 text-sm leading-6 text-foreground outline-none [font-family:inherit] ring-1 ring-[color:var(--eteams-pill-bg)] focus-visible:ring-2 focus-visible:ring-sky-500/60"
               />
             </div>
             <h5 className={RAIL_TITLE_CLASS}>团队面板</h5>

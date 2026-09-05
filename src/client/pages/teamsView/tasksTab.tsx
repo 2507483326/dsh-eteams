@@ -647,10 +647,15 @@ export function TasksTab({
                       不进详情页；点击不冒泡到卡。 */}
                         {expandable && (
                           <CollapsibleTrigger asChild>
-                            <button
+                            {/* 展开钮 = shadcn Button ghost icon（docs/43 扫描
+                              整改）：asChild 包钮，有说明或合同 MD 才渲染；
+                              点击不冒泡到卡。 */}
+                            <Button
                               type="button"
+                              variant="ghost"
+                              size="icon"
                               title={expanded ? '收起' : '展开'}
-                              className="mt-0.5 cursor-pointer text-muted-foreground hover:text-foreground"
+                              className="mt-0.5 h-6 w-6 text-muted-foreground hover:text-foreground"
                               onClick={(e) => e.stopPropagation()}
                             >
                               <ChevronDown
@@ -659,7 +664,7 @@ export function TasksTab({
                                   expanded && 'rotate-180',
                                 )}
                               />
-                            </button>
+                            </Button>
                           </CollapsibleTrigger>
                         )}
                         {subMutable && (

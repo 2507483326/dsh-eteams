@@ -1152,16 +1152,18 @@ export function MembersTab({
                       )}
                     </div>
                     {isProtected ? null : (
-                      <button
+                      <Button
                         type="button"
-                        className="eteams-role-del"
+                        variant="outline"
+                        size="sm"
+                        className="text-destructive hover:border-destructive hover:bg-[color:color-mix(in_srgb,var(--destructive)_6%,transparent)] hover:text-destructive"
                         onClick={(e) => {
                           e.stopPropagation();
                           del(m.name);
                         }}
                       >
                         删除
-                      </button>
+                      </Button>
                     )}
                   </div>
                 );

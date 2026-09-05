@@ -216,10 +216,8 @@ export const ROLE_LIST_CSS = `
 .eteams-team-avatars>:first-child{margin-left:0}
 .eteams-team-avatars:hover>*{margin-left:-2px}
 .eteams-team-avatars>*:hover{transform:scale(1.35);z-index:30}
-/* 删除钮（用户迭代 2026-09-03）：常驻显形，不再 hover 才出现——小卡片
-   一行式布局下按钮固定行尾，可见性即可达性；hover 仅保留自身的描边换色。 */
-.eteams-role-del{padding:3px 10px;font-size:12px;border-radius:6px;border:1px solid var(--border);background:var(--background);color:var(--destructive);cursor:pointer;flex-shrink:0;font-family:inherit;line-height:18px;transition:border-color .15s ease,background .15s ease}
-.eteams-role-del:hover{border-color:var(--destructive);background:color-mix(in srgb,var(--destructive) 6%,transparent)}
+/* 删除钮：已迁 shadcn Button（outline sm + destructive 文字，使用位
+   membersTab——docs/43 扫描整改）；类规则随迁删除。 */
 .eteams-role-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .eteams-team-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* 原生 details/summary（构建工作台 ×2，功能性不动）官网化：去 marker +

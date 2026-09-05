@@ -36,13 +36,12 @@ interface CartItem {
   qty: number;
 }
 
-/** 加减步进器按钮样式（添加成员行尾 [−] n [+]）。 */
-const STEP_BTN_CLASS =
-  'inline-flex h-6 w-6 items-center justify-center rounded-md border border-solid bg-transparent text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40';
-
 /**
  * 加减步进器（用户迭代 2026-09 三添加成员行尾）：− 减一份、＋ 加一份，
  * 中间数字 = 该角色已点份数。＋ 禁用时 title 说明名额口径，按钮不吞点击。
+ * 按钮走 shadcn Button outline icon（h-6 w-6 覆盖档）——原手写
+ * STEP_BTN_CLASS 与 outline 变体同观感（描边 + hover 淡底），迁移后焦点环/
+ * 禁用态由组件基类统一。
  */
 function StepButtons({
   qty,
@@ -63,29 +62,33 @@ function StepButtons({
 }): ReactNode {
   return (
     <div className="flex flex-none items-center gap-1.5">
-      <button
+      <Button
         type="button"
+        variant="outline"
+        size="icon"
         aria-label={removeTitle}
         title={removeTitle}
         disabled={removeDisabled}
-        className={STEP_BTN_CLASS}
+        className="h-6 w-6 bg-transparent text-muted-foreground shadow-none hover:text-foreground disabled:opacity-40"
         onClick={onRemove}
       >
         <Minus className="h-3.5 w-3.5" />
-      </button>
+      </Button>
       <span className="w-5 text-center text-sm font-semibold tabular-nums text-foreground">
         {qty}
       </span>
-      <button
+      <Button
         type="button"
+        variant="outline"
+        size="icon"
         aria-label={addTitle}
         title={addTitle}
         disabled={addDisabled}
-        className={STEP_BTN_CLASS}
+        className="h-6 w-6 bg-transparent text-muted-foreground shadow-none hover:text-foreground disabled:opacity-40"
         onClick={onAdd}
       >
         <Plus className="h-3.5 w-3.5" />
-      </button>
+      </Button>
     </div>
   );
 }

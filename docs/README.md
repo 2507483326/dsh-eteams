@@ -44,6 +44,7 @@
 | 40   | [40 每日 Token 消耗入库](40-usage-db-daily-tables.md)         | 每日消耗入 SQLite 两表（已实施，DB 即唯一存储）：usage_detail 明细（一次调用一行，recordUsage 单事务写入）+ usage_daily_total 总和（一天一行，增量 upsert）；无文件台账、无对账、历史不回补（存量台账 2026-09-05 人工导入过一次）；沿用库约定无 UNIQUE、版本号不 bump、客户端零改动 |
 | 41   | [41 Markdown 渲染 Typeset 排版](41-md-typeset.md)             | shadcn/typeset 手工端口进 eteams.css（(0,3,0) 特异性纪律 + not-typeset 逃生门 + 宿主中和表），MarkdownDoc 包装组件替换四处只读渲染点，暗色经 D22a 语义 token 零分支；41.6 验收记录（四绿门 + 实测计算样式 + 宿主内未验证声明） |
 | 42   | [42 编辑模式代码块塌陷与语言下拉错位](42-md-editor-codemirror-dedupe.md) | 根因不是定位：构建产物双实例化 @codemirror/state 等七包（npm 顶层真实目录 vs pnpm 商店），LanguageSupport instanceof 失配致 CodeMirror 永不挂载、代码块塌成 ~28px 空条；tsdown alias 六包统一到 @mdxeditor/editor 解析链（pnpm 商店真理源），产物单实例、体积 −0.45 MB、门禁全绿；遗留隐患：lang-* 未声明依赖 + npm/pnpm 混装土壤 |
+| 43   | [43 shadcn/ui 组件清单与用件规则](43-shadcn-component-catalog.md) | 官方组件全集快照（表单/展示/浮层三组 50+ 件）；本仓 15 个 vendored 组件清单与统一适配约定（cn 相对导入、/alpha 改 color-mix、border 补 border-solid、自管 portal）；用件规则：chrome 控件必用组件、列表行/菜单行/导航链接/画布投放点保留手写；2026-09-05 全仓扫描结论与四处整改记录（步进器/角色卡删除钮/侧栏搜索框/小任务展开钮迁 shadcn 组件） |
 
 ## 决策记录（2026-02 与用户确认）
 
