@@ -8,18 +8,15 @@
 import type { TaskRecord } from '../../model/types.js';
 import { stationProgress } from '../../model/taskMachine.js';
 
-/** Render the contract section of a task (docs/07.3.1). */
+/** Render the contract section of a task (docs/07.3.1；十六轮 DA29：合同为
+ * 一篇 Markdown 全文（task.contractMd），邮件/工具透传原文——旧四数组
+ * （验收标准/范围内/范围外/交付物）已合并，段落结构由写合同的一方组织）。 */
 export function renderContract(task: TaskRecord): string {
   const lines: string[] = [];
   if (task.description) lines.push(`任务说明：${task.description}`);
-  if (task.acceptance && task.acceptance.length > 0) {
-    lines.push('验收标准：', ...task.acceptance.map((a, i) => `  ${i + 1}. ${a}`));
+  if (task.contractMd !== undefined && task.contractMd.trim() !== '') {
+    lines.push('任务合同：', '', task.contractMd.trim());
   }
-  if (task.inScope && task.inScope.length > 0) lines.push(`允许改动：${task.inScope.join('、')}`);
-  if (task.outOfScope && task.outOfScope.length > 0)
-    lines.push(`禁止改动：${task.outOfScope.join('、')}`);
-  if (task.deliverables && task.deliverables.length > 0)
-    lines.push(`交付物：${task.deliverables.join('、')}`);
   if (task.idempotencyNote) lines.push(`幂等说明：${task.idempotencyNote}`);
   if (task.dependencies.length > 0)
     lines.push(`前置依赖：${task.dependencies.join('、')}（产物见对应任务文件夹）`);

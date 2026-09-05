@@ -13,4 +13,6 @@
 /.tmp-harness
 /.tmp-repro
 /.tmp-board-preview
+/.tmp-typeset-preview
+/.tmp-mdx-repro
 /teams

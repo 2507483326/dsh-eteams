@@ -1,6 +1,50 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import path from 'node:path';
 
 const external = [/^@deepseek-ai\//, 'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client'];
+
+/**
+ * CodeMirror 依赖去重（编辑模式代码块 CodeMirror 挂不上的根因修复）。
+ *
+ * node_modules 里同名包存在两套实体：pnpm 商店（node_modules/.pnpm/…，
+ * @mdxeditor/editor 经其 peer 链解析到这套）与 npm 安装留下的顶层真实目录
+ * （node_modules/@codemirror/…——src 直接 import 的 @codemirror/lang-* 不在
+ * package.json 声明里，只能落在这批顶层副本上）。rolldown 按解析路径计
+ * 模块，两套各打一份 → lang-* 的 LanguageSupport（基于顶层 state/view）
+ * 塞进 mdxeditor 的 CodeMirror（基于商店 state/view）后 instanceof 全部
+ * 失配：进代码块即抛 "Unrecognized extension value … two copies of
+ * @codemirror/state are loaded"，CodeMirror 永远挂不上，代码块塌成 ~28px
+ * 空条（2026-09-05 用户报告「编辑模式下代码块语言下拉错位」的根因——
+ * chip/弹层悬在塌陷块上）。顶层副本还落后于商店：state 6.7.1 vs 6.7.2、
+ * view 6.43.9 vs 6.43.10（.npmrc 沙箱里 npm 与 pnpm 混装的长期隐患）。
+ *
+ * 修法：把双份且跨模块传类实例的包统一别名到 @mdxeditor/editor 的解析链
+ * （pnpm 商店 = pnpm-lock.yaml 真理源）。构建期动态 resolve，不硬编码
+ * .pnpm 哈希路径；被孤儿化的顶层副本随摇树消失。@marijn/find-cluster-break、
+ * style-mod、w3c-keyname 亦双份但无跨边界类实例，交给摇树即可，不在此列。
+ */
+function codemirrorDedupeAlias(): Record<string, string> {
+  const requireFromMdx = createRequire(
+    createRequire(import.meta.url).resolve('@mdxeditor/editor'),
+  );
+  return Object.fromEntries(
+    [
+      '@codemirror/state',
+      '@codemirror/view',
+      '@codemirror/language',
+      '@codemirror/autocomplete',
+      '@lezer/common',
+      '@lezer/highlight',
+    ].map((id) => {
+      // 落到包根（dist/index.cjs → 包根），让 rolldown 按 conditionNames
+      // 自行挑 ESM 入口，与商店区域的模块形态保持一致。
+      let dir = path.dirname(requireFromMdx.resolve(id));
+      while (!existsSync(path.join(dir, 'package.json'))) dir = path.dirname(dir);
+      return [id, dir.split(path.sep).join('/')];
+    }),
+  );
+}
 
 /**
  * 把 '@mdxeditor/editor/style.css' 改道为虚拟 JS 模块（字符串导出）。
@@ -161,6 +205,7 @@ export default [
     clean: false,
     outExtensions: () => ({ js: '.js' }),
     plugins: [mdxEditorCssInline(), usageTooltipsCssInline(), tailwindCssInline()],
+    alias: codemirrorDedupeAlias(),
     // lexical 的 default 分支（.mjs）带 top-level await（运行时在 dev/prod
     // 间二选一），CJS 输出不支持 TLA。rolldown 对 import 语句默认用
     // ["import","node","default"] 解析 exports——'node' 命中 @lexical/react

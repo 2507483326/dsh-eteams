@@ -1,4 +1,4 @@
-# Claude Code Agent Loop 深度研究（提示词管理 / 流程管理 / 架构）
+# Claude Code Agent Loop 深度研究（提示词管理 / 流程管理 / 架构 / 协作）
 
 研究对象：`C:\Users\epat\Downloads\Claude-Code-main`（Claude Code 源码快照），以
 `src/query.ts`（主循环，约 1730 行）为中心，深入其背后全部支撑模块。研究日期：2026-09-04。
@@ -23,6 +23,7 @@ eTeam 是 DSH 插件：原始模型循环（流式采样、消息数组管理、
 | [02-flow-management.md](02-flow-management.md) | 循环骨架与具名转移、消息裁剪流水线、工具编排与配对卫生、压缩梯、恢复梯、消息队列 | 想改 eTeam 唤醒/重试/状态机/守卫的人 |
 | [03-architecture.md](03-architecture.md) | Tool 接口契约、工具注册表、deps/config 模式、fork 缓存共享、API 请求层 | 想改 eTeam 工具面/子代理装配的人 |
 | [04-task-checklist.md](04-task-checklist.md) | **最终交付**：eTeam 编排层整体优化的任务与实施清单，分期（先必要后优化）+ 等级（P0–P3），含现状依据、改动点、验收标准 | 执行优化的人 |
+| [05-agent-awareness-and-collaboration.md](05-agent-awareness-and-collaboration.md) | 各 agent 如何感知彼此（花名册/身份/上下文/消息/结果/进度六面）与四条协作通道（派生简报/消息信箱/任务列表/结构化协议），含感知经济账单与给 eTeam 的 8 条协作设计原则 | 想改 eTeam 成员/领队协作协议与手册文案的人 |
 
 四篇文档各自自含，不依赖彼此的行号或结论；04 的每一条都带自己的「现状 / 依据 / 动作 / 验收」，
 可以单独拿去开工。
@@ -55,6 +56,20 @@ eTeam 是 DSH 插件：原始模型循环（流式采样、消息数组管理、
 
 - `src/utils/toolResultStorage.ts`、`src/services/compact/cachedMicrocompact.ts`（B 类机制）
 - `src/tools/AgentTool/`（子代理装配）、`src/utils/attachments.ts`（附件包装，抽查 isMeta/system-reminder）
+
+05 的证据基础（协作主题，2026-09-05 补读）：
+
+- `src/tools/AgentTool/prompt.ts`、`builtInAgents.ts`、`AgentTool.tsx`、`runAgent.ts`、
+  `forkSubagent.ts`、`resumeAgent.ts`、`agentMemory.ts` — 派生四路、简报纪律、恢复重建
+- `src/tools/SendMessageTool/`（工具与提示词）— 路由链、结构化协议、排队与复活
+- `src/utils/teammateMailbox.ts`、`utils/attachments.ts` 信箱段、`utils/swarm/`
+  （inProcessRunner、teammateInit、teammatePromptAddendum、spawnMultiAgent）— 信箱底座
+- `src/tools/TeamCreateTool/prompt.ts`、`TaskCreateTool/`、`utils/tasks.ts`（抽查）—
+  团队手册、任务认领
+- `src/tasks/LocalAgentTask/LocalAgentTask.tsx`、`tools/TaskOutputTool/`、
+  `tools/TaskStopTool/`、`services/AgentSummary/agentSummary.ts` — 通知信封、进度感知
+- `src/coordinator/coordinatorMode.ts`、`constants/tools.ts`（deny 列表）— 协调者模式、
+  能力拓扑
 
 ## 与 docs/37 的关系
 

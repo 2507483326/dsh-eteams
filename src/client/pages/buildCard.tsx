@@ -17,7 +17,7 @@ import { Provider } from 'react-redux';
 // lucide 深层图标导入（dialog.tsx 先例：深层 .mjs 只进用到的图标）。
 import PenLine from 'lucide-react/dist/esm/icons/pen-line.mjs';
 import { Avatar } from '../features/avatar/avatar';
-import { openMemberBuilder } from '../lib/bridge';
+import { openMemberBuilder, userClickedSince } from '../lib/bridge';
 import { cn } from '../lib/cn';
 import { Badge } from '../components/ui/badge';
 import { ClientErrorBoundary } from '../lib/diagnostics';
@@ -55,29 +55,6 @@ const SPINNER_CLASS =
  * 只跳一次，用户之后可以自由切回对话 tab。
  */
 let jumpedSessionAt: number | null = null;
-/** 用户最后一次点击的时间戳（capture）：会话开启之后的任何点击 = 接管导航。 */
-let lastUserClickAt = 0;
-if (typeof document !== 'undefined') {
-  const flag = '__eteamsClickLatch__';
-  const g = globalThis as Record<string, unknown>;
-  if (g[flag] !== true) {
-    g[flag] = true;
-    // 任何用户点击都记时间戳：自动跳转仅当「会话开启（startedAt）之后用户
-    // 没有点过任何东西」才允许。判定与宿主 tab 的标记结构完全解耦（存在
-    // button[role=tab] 与旧版 leaf div 两种变体，按选择器匹配会漏——漏掉的
-    // 那次点击之后，受理竞态窗口内的重试跳转就会把用户从对话拽回团队）。
-    // 发送动作发生在会话创建之前，不影响本次跳转资格；我们自己
-    // openMemberBuilder 的程序化点击也落在跳转之后，只影响同会话的后续
-    // 跳转（本就不存在）。
-    document.addEventListener(
-      'click',
-      () => {
-        lastUserClickAt = Date.now();
-      },
-      true,
-    );
-  }
-}
 
 /**
  * The in-conversation card for `/eteam` command runs. The keyed slot owner is
@@ -130,7 +107,12 @@ export function EteamBuildCard(props: { node?: unknown }): ReactNode {
             s !== null &&
             s.status === 'active' &&
             Date.now() - s.startedAt < 20_000 &&
-            lastUserClickAt < s.startedAt &&
+            // 用户接管判定（docs/19.16 自动跳转让位）：startedAt 之后点过
+            // 任何东西就不再拽人。判定读 bridge 的全局点击锁存——bundle 装载
+            // 即挂监听，用户先点进对话、卡片模块才首次求值的「刚创建」时序
+            // 下，那次点击也能记上（此前锁存挂卡片模块，迟生 0 值让判定
+            // 失灵 → 点了对话又被拽回团队，再点一次才稳住）。
+            !userClickedSince(s.startedAt) &&
             jumpedSessionAt !== s.startedAt
           ) {
             jumpedSessionAt = s.startedAt;
@@ -236,7 +218,8 @@ export function EteamBuildCard(props: { node?: unknown }): ReactNode {
                   (shown.status === 'active' || shown.status === 'awaiting_confirmation') ? (
                   shown.status === 'active' && showInterviewPending ? (
                     // 访谈未答 = 阶段代理按设计已结束回合，不是卡死——别转圈装忙。
-                    <span>意图访谈待作答——点开回答后自动续跑</span>
+                    // 作答入口在主会话（本卡片所在会话）的 ask_user_question 选择框。
+                    <span>意图访谈待作答——在本会话作答后自动续跑</span>
                   ) : (
                     <>
                       <span className={SPINNER_CLASS} />

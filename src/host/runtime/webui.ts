@@ -162,11 +162,9 @@ function taskView(t: TaskRecord, team: TeamState, groupOutcomes?: Map<number, st
     parentId: t.parentId ?? null,
     folder: taskDirRel(team, t),
     description: t.description ?? null,
-    // 合同四数组 + 幂等说明（docs/35 §3#7：任务补合同四数组）。
-    acceptance: t.acceptance ?? [],
-    inScope: t.inScope ?? [],
-    outOfScope: t.outOfScope ?? [],
-    deliverables: t.deliverables ?? [],
+    // 合同 MD 全文（十六轮 DA29：原四数组合并为一篇 Markdown）+ 幂等说明
+    // （docs/35 §3#7）。
+    contractMd: t.contractMd ?? null,
     idempotencyNote: t.idempotencyNote ?? null,
     // 阻塞徽标（docs/36 建议 1）：wait + blockedFrom 非空 = 物化阻塞。
     blocked: t.blockedFrom !== undefined,
@@ -1637,10 +1635,7 @@ export function installWebSurface(
                   contract: {
                     subject: task.subject,
                     description: task.description ?? null,
-                    acceptance: task.acceptance ?? [],
-                    inScope: task.inScope ?? [],
-                    outOfScope: task.outOfScope ?? [],
-                    deliverables: task.deliverables ?? [],
+                    contractMd: task.contractMd ?? null,
                     idempotencyNote: task.idempotencyNote ?? null,
                     chain: task.chain,
                   },

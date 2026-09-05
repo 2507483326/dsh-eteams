@@ -178,13 +178,14 @@ export interface TaskRecord {
   /** 父任务 id：小任务挂靠的父任务；null = 大任务。 */
   parentId: number | null;
   description?: string;
-  /** 验收标准（task.acceptance JSON 数组）。 */
-  acceptance?: string[];
-  /** 范围内（task.in_scope）。 */
-  inScope?: string[];
-  /** 范围外（task.out_of_scope）。 */
-  outOfScope?: string[];
-  deliverables?: string[];
+  /**
+   * 任务合同全文（task.contract_md，Markdown）。十六轮 DA29：原四数组
+   * （验收标准/范围内/范围外/交付物）合并为一篇 MD 统一管理——工具写入
+   * （eteams_create_task/eteams_update_task 的 contractMd 参数）、面板渲染
+   * （MarkdownText）、派发邮件与 contract.md 均透传原文；旧库/旧导入由
+   * contractMdFromLegacyArrays 合成回填。
+   */
+  contractMd?: string;
   idempotencyNote?: string;
   /** 依赖前置任务 id 列表（task.depend_tasks）。 */
   dependencies: number[];

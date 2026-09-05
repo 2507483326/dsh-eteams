@@ -14,7 +14,9 @@
  * 撤、去灰改描边钮）、底栏每卡常驻且加「详情」按钮（删除仍仅可删的卡渲染）；
  * 十五轮 DA28 修订：底栏状态 pill 加 --border 描边并压平 hover 淡底（badge
  * secondary 80% 淡化的同色 hover 压平）、文件夹行改幽灵文字钮融入卡片（border/
- * 底色/内边距全去，常规字色 + hover 下划线）；
+ * 底色/内边距全去，常规字色 + hover 下划线）；十六轮 DA29 修订：主任务详情页
+ * 小任务卡加**展开钮**（有说明/合同 MD 的卡可展开，就地显示说明 + 合同 MD
+ * 只读渲染，不进详情页——合同四数组已合并为一篇 Markdown，task.contractMd）；
  * 不列小任务明细——九轮
  * DA22）+ 空态行；详情页 = 返回条 + 头部卡 + 编排（主任务：新增小任务 +
  * 小任务卡片全套（卡槽/改删/**把手拖拽调序**——十轮 DA23：只有卡片左上
@@ -29,6 +31,7 @@ import { useState, type ReactNode } from 'react';
 import { useDrag, useDrop } from 'react-dnd';
 import Plus from 'lucide-react/dist/esm/icons/plus.mjs';
 import ArrowLeft from 'lucide-react/dist/esm/icons/arrow-left.mjs';
+import ChevronDown from 'lucide-react/dist/esm/icons/chevron-down.mjs';
 import GripVertical from 'lucide-react/dist/esm/icons/grip-vertical.mjs';
 import {
   createTeamTask,
@@ -65,11 +68,13 @@ import {
 import { Input } from '../../components/ui/input';
 import { Textarea } from '../../components/ui/textarea';
 import { TaskDetailContent, TaskStations } from './taskDrawer';
+import { MarkdownDoc } from './markdownDoc';
 import {
   BORDER_L1_CLASS,
   CHIP_CLASS,
   EMPTY_CLASS,
   FormErrorNote,
+  LINE_CLASS,
   LIST_COUNT_CLASS,
   LIST_TITLE_CLASS,
   MUTED_CLASS,
@@ -304,6 +309,14 @@ export function TasksTab({
   // 展示（宿主 404/400/500 原样透出——文件夹缺失等）。
   const [folderBusy, setFolderBusy] = useState<number | null>(null);
   const [folderError, setFolderError] = useState<{ taskId: number; message: string } | null>(null);
+  // 十六轮 DA29 小任务展开瞬态：展开态的小任务 id 列表（多开互不影响）。
+  // 展开内容 = 任务说明 + 合同 MD（MarkdownDoc 只读渲染，docs/41），就地看不进详情页。
+  const [expandedSubIds, setExpandedSubIds] = useState<number[]>([]);
+  const toggleSub = (taskId: number): void => {
+    setExpandedSubIds((cur) =>
+      cur.includes(taskId) ? cur.filter((id) => id !== taskId) : [...cur, taskId],
+    );
+  };
   const editingTask = editTarget !== null && editTarget.task !== null ? editTarget.task : null;
 
   const openEdit = (group: TaskView, task: TaskView | null): void => {
@@ -603,6 +616,9 @@ export function TasksTab({
             // docs/29 DA5/DA13：可编辑窗口内成员框承整链（boxCoversChain）
             // ——站点行与框内容重合，抑制 TaskStations。
             const suppressStations = boxCoversChain(t);
+            // 十六轮 DA29：有说明或合同 MD 的卡才可展开，展开就地看正文。
+            const expandable = t.description !== null || t.contractMd !== null;
+            const expanded = expandable && expandedSubIds.includes(t.taskId);
             return (
               <div key={t.taskId}>
                 <SubtaskCard
@@ -624,6 +640,23 @@ export function TasksTab({
                       className="flex shrink-0 items-center gap-1.5"
                       onClick={(e) => e.stopPropagation()}
                     >
+                      {/* 十六轮 DA29：展开钮（有说明或合同 MD 才渲染）——就地
+                      展开，不进详情页；点击不冒泡到卡。 */}
+                      {expandable && (
+                        <button
+                          type="button"
+                          title={expanded ? '收起' : '展开'}
+                          className="mt-0.5 cursor-pointer text-muted-foreground hover:text-foreground"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleSub(t.taskId);
+                          }}
+                        >
+                          <ChevronDown
+                            className={cn('h-4 w-4 transition-transform', expanded && 'rotate-180')}
+                          />
+                        </button>
+                      )}
                       {subMutable && (
                         <div className="flex shrink-0 gap-1.5">
                           <Button
@@ -646,6 +679,19 @@ export function TasksTab({
                       )}
                     </div>
                   </div>
+                  {/* 十六轮 DA29：展开区（说明 + 合同 MD 只读渲染）——点击不
+                    冒泡到卡，不误进详情页。 */}
+                  {expanded && (
+                    <div
+                      className="mt-1.5 border-t border-solid pt-2"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {t.description !== null && (
+                        <div className={LINE_CLASS}>说明：{t.description}</div>
+                      )}
+                      {t.contractMd !== null && <MarkdownDoc text={t.contractMd} />}
+                    </div>
+                  )}
                   {/* docs/29 A.8（四轮 DA17）：成员卡槽在任务卡下方独立一行
                     （拖拽指派 drop target；点击不冒泡到卡）。 */}
                   <div className="mt-1.5" onClick={(e) => e.stopPropagation()}>

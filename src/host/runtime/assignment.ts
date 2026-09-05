@@ -126,10 +126,8 @@ export async function createTask(
     /** docs/26：拆解小任务、挂到对应组任务下（成员槽 = chain 站点）。 */
     parentTaskId?: number;
     description?: string;
-    acceptance?: string[];
-    inScope?: string[];
-    outOfScope?: string[];
-    deliverables?: string[];
+    /** 合同 MD 全文（十六轮 DA29：原四数组合并为一篇 Markdown）。 */
+    contractMd?: string;
     idempotencyNote?: string;
     dependencies?: number[];
     chain?: { member: string; stageBrief: string }[];
@@ -187,10 +185,7 @@ export async function createTask(
       parentId: parent !== undefined ? parent.id : null,
       subject: subject.trim(),
       description: params.description,
-      acceptance: params.acceptance,
-      inScope: params.inScope,
-      outOfScope: params.outOfScope,
-      deliverables: params.deliverables,
+      contractMd: params.contractMd,
       idempotencyNote: params.idempotencyNote,
       dependencies: deps,
       chain,
@@ -228,10 +223,8 @@ export async function updateTask(
     taskId: number;
     subject?: string;
     description?: string;
-    acceptance?: string[];
-    inScope?: string[];
-    outOfScope?: string[];
-    deliverables?: string[];
+    /** 合同 MD 全文（十六轮 DA29：原四数组合并为一篇 Markdown）。 */
+    contractMd?: string;
     idempotencyNote?: string;
     dependencies?: number[];
     chain?: { member: string; stageBrief: string }[];
@@ -267,10 +260,7 @@ export async function updateTask(
     if (params.subject !== undefined && params.subject.trim() !== '')
       task.subject = params.subject.trim();
     if (params.description !== undefined) task.description = params.description;
-    if (params.acceptance !== undefined) task.acceptance = params.acceptance;
-    if (params.inScope !== undefined) task.inScope = params.inScope;
-    if (params.outOfScope !== undefined) task.outOfScope = params.outOfScope;
-    if (params.deliverables !== undefined) task.deliverables = params.deliverables;
+    if (params.contractMd !== undefined) task.contractMd = params.contractMd;
     if (params.idempotencyNote !== undefined) task.idempotencyNote = params.idempotencyNote;
     task.updatedAt = tx.now;
     emit(tx, team.id, who.actor, 'task.updated', {

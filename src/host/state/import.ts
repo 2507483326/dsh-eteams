@@ -17,6 +17,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
+import { contractMdFromLegacyArrays } from '../model/contract.js';
 import { sanitizeKey } from '../model/taskMachine.js';
 import type {
   Actor,
@@ -100,10 +101,13 @@ interface LegacyTask {
   kind?: 'group' | 'task';
   parentId?: string;
   description?: string;
+  /** 旧合同四数组（十六轮 DA29 已合并为 contractMd 单字段；导入时合成回填）。 */
   acceptance?: string[];
   inScope?: string[];
   outOfScope?: string[];
   deliverables?: string[];
+  /** 合同 MD 全文（v2 导出格式；与四数组并存时优先）。 */
+  contractMd?: string;
   idempotencyNote?: string;
   dependencies?: string[];
   chain?: Array<{ member: string; stageBrief: string }>;
@@ -773,9 +777,9 @@ function importLegacyTeam(
   const insertTask = db.prepare(
     'INSERT INTO task (task_id, team_id, parent_id, subject, description, depend_tasks, ' +
       'member_chain_list, chain_cursor, status, current_member, current_member_id, retry_count, ' +
-      'status_note, acceptance, in_scope, out_of_scope, deliverables, idempotency_note, ' +
+      'status_note, contract_md, idempotency_note, ' +
       'blocked_from, work_dir, completed_time, created_time, update_time) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   );
   const insertAttempt = db.prepare(
     'INSERT INTO attempts (attempt_id, team_id, task_id, kind, member, status, token, ' +
@@ -809,10 +813,15 @@ function importLegacyTeam(
       t.assignee ?? null,
       t.retryCount ?? 0,
       t.suspendNote ?? null,
-      t.acceptance !== undefined ? JSON.stringify(t.acceptance) : null,
-      t.inScope !== undefined ? JSON.stringify(t.inScope) : null,
-      t.outOfScope !== undefined ? JSON.stringify(t.outOfScope) : null,
-      t.deliverables !== undefined ? JSON.stringify(t.deliverables) : null,
+      // 合同 MD（十六轮 DA29）：新格式直取 contractMd；旧格式由四数组合成。
+      t.contractMd ??
+        contractMdFromLegacyArrays({
+          acceptance: t.acceptance,
+          inScope: t.inScope,
+          outOfScope: t.outOfScope,
+          deliverables: t.deliverables,
+        }) ??
+        null,
       t.idempotencyNote ?? null,
       blockedFrom,
       legacyTaskDir(base, t, taskId, parentId, parentSubject),

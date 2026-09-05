@@ -68,6 +68,7 @@
 | DA26 | 列表卡**内容对齐、小任务 0、目录标签回补、路径截断收窄**（2026-09-05 十三轮拍板） | 用户原话「任务卡片内容对齐，没有小任务就显示0，而且目录两个字没有了，路径太长了截断大部分的」：①**内容行顶格对齐**——`BlockedPill` 不再内建 `ml-1`（ml-1 移到 className 由调用位补：详情页两处行内文字流场景传 `ml-1`，列表卡独立行顶格与其它行左缘齐）；底栏 `mt-auto` 沉底——同一栅格行内内容行数不同的卡，删除栏齐平在卡底；②**每卡必有进度行**——进度行从「主任务才渲染」改为**无条件渲染**（行结构跨卡统一）：主任务沿用 小任务 N 个（draft）/ N/M 完成 · n 进行中；无小任务的顶层普通任务显 **「小任务 0」**（用户拍板「没有小任务就显示0」；有指派人追加 「 · 指派 X」）；③**「目录」标签回补**——十二轮裸路径后用户发现「目录两个字没有了」，文件夹行恢复两字标签：**「目录 末段/」**（只显示 `folder.split('/').pop()` 末段），全路径进悬停 title（「在文件管理器中打开：<全路径>」）；④**路径截断收窄**——十二轮整条路径 truncate 截掉大部分，本轮只显末段后不再长截断 |
 | DA27 | 列表卡**状态入底栏（圆角 2px）、进度三计数着色、工作目录标签钮、详情按钮**（2026-09-05 十四轮拍板） | 用户原话「1. 状态挪到卡片的左边下面，圆角改成 2px  2。目录样式调整一下，就显示工作目录就行，别显示具体路径了，别用灰色打底了不好看／2. 别小任务 个了，改成 共 x 个任务，已完成 x , 未完成 x 数字用颜色标识一下／3. 删除旁边加一个详情按钮」：①**展示态 pill 挪到卡底栏左侧**——「左边下面」按用户十二轮「下面放删除按钮」同词汇解作卡底栏：底栏改左右分栏（justify-between），左 = 状态 pill、右 = 按钮；**圆角改 2px** 指该状态 pill（`Pill` 增 `className` 透传、`DisplayStatusPill` 增 `pillClassName`，底栏位传 `rounded-[2px]` 压过 rounded-full；其余 pill 调用位不动）；头行只剩主题。②**进度行改三分计数**——「共 x 个任务，已完成 x，未完成 x」统一格式（原「小任务 N 个 / N/M 完成 · n 进行中 / 小任务 N」三分支废止，「进行中」计数不再单列），数字着色：已完成 `text-success` 绿、未完成 `text-warning` 琥珀、总数走行底灰；顶层普通任务指派人尾注保留。③**文件夹行改「工作目录」标签钮**——只留四字标签（十三轮的末段路径也撤），完整路径仅存 title 悬浮提示；样式去灰色弱化文案（muted + 点线下划线废止），改常规字色描边小按钮（border 走 `.eteams-ui` 的 --border 缺省、hover 淡底、self-start 不占满行）。④**底栏每卡常驻 + 详情按钮**——删除按钮右侧旁新增「详情」outline 钮（整卡点击进详情的显式等价入口，每卡都有）；删除仍仅可删的卡渲染（deletableOf 口径不变）；底栏从「仅可删的卡渲染」改为每卡渲染（mt-auto 沉底对齐因此覆盖全部卡） |
 | DA28 | 底栏状态 pill **描边去 hover 淡底**、工作目录改**幽灵文字钮融入卡片**（2026-09-05 十五轮拍板） | 用户原话「1. 优化一下左下角状态的样式，去掉放上去变淡，加上边框／2. 工作目录还是不协调，修改一下更好融入卡片」：①**底栏状态 pill**——加 `--border` 描边（`BORDER_L1_CLASS` 经 tailwind-merge 压过 shadcn Badge 的 `border-transparent`）并**压平 hover 淡底**（Badge 悬停淡底 = secondary 80% 淡化，D19c color-mix 任意值实现）→ 同色 hover `hover:bg-[color:var(--eteams-pill-bg)]`，悬停后底色不变）；`Pill`/`DisplayStatusPill` 的 className/pillClassName 透传链沿用十四轮。②**文件夹行工作目录钮**——十四轮的描边小按钮（border/底色/内边距）「还是不协调」，撤掉按钮外壳改**幽灵文字钮**：常规字色（text-foreground）+ hover 下划线，与卡内其它文字行同权重、不再像外来件；文案「工作目录」四字与完整路径 title 悬停提示不变 |
+| DA29 | 合同**四数组并一 MD**（DB 单字段 + 全链路 MD 渲染）+ 小任务卡**展开钮**（2026-09-05 十六轮拍板） | 用户原话「1. 任务的验收标准、范围内、交付物 改成MD渲染，然后数据库中任务 任务的验收标准、范围内、交付物 合并为一个字段。统一用MD管理／2. 每个小任务加上一个展开功能」：①**DB 合并**——task 表原四列（acceptance/in_scope/out_of_scope/deliverables，JSON 串数组）合并为**一列 `contract_md`**（Markdown 全文；DB_SCHEMA_VERSION 1→2，旧库在 getDb 连接时 `ALTER TABLE ADD COLUMN` + 按 `contractMdFromLegacyArrays` 合成回填，旧四列物理残留不再读写；新库 DDL 直接新形状）；内存 TaskRecord 四数组字段撤除、改 `contractMd?: string`。②**全链路透传 MD**——领队工具 `eteams_create_task`/`eteams_update_task` 的四个 strArr 参数收敛为一个 `contractMd` 字符串参数（MD 整篇写入/整篇替换）；派发邮件与成员工具的 `renderContract` 把 contractMd 原文透传（`任务合同：`标题 + 原文）；contract.md 文档（docs.ts `## 合同` 段）同源透传；任务看板 / webui 快照 TaskView / track 路由 contract 载荷改带 `contractMd`；旧 team.json 导入：`contractMd` 字段直取，无则由四数组合成。③**面板 MD 渲染**——任务/小任务详情页正文（TaskDetailContent）撤 `ContractList` 四组平文列表，改 `MarkdownText` 只读渲染（成员手册同款原语，宿主注入）；主任务详情页小任务卡新增**展开钮**（ChevronDown 图标钮，有 description 或 contractMd 的卡才渲染；点击就地展开**说明 + 合同 MD**（border-t 分区 + MarkdownText），再点收起，展开态 stopPropagation 不误进详情页；expandedSubIds 瞬态多开互不影响）。解读（非用户原话）：用户点名三字段，**范围外（outOfScope）一并合入**同一篇 MD（合同四段一体，单独留下会破「统一用MD管理」）；旧数组→MD 的段落结构（## 验收标准 编号列表 / ## 允许改动 / ## 禁止改动 / ## 交付物）由宿主合成器定稿 |
 
 ## A.2 依赖选型与 DndProvider 层级
 
@@ -205,7 +206,7 @@ refreshActivitySoon() → /state（≤1s 轮询命中）   行内 FormErrorNote 
 
 可编辑窗口内框承整链（DA5），一律**抑制** `TaskStations` 的重复渲染（`boxCoversChain` 纯函数；站点行与框 chips 内容重合，E13）；开跑后（`chainCursor ≥ 0`）恢复 `TaskStations` + 框只读承单站。多站容器空白处 / chip 点击 = 打开「修改」弹窗（主题/说明等，键盘 Enter/Space 同路径；六轮 DA19 起弹窗不再编排链），空框点击 = 「＋」多选面板（A.7）。
 
-### A.5.2 界面草图（2026-09-05 八轮 DA21 页面化 + 九轮 DA22 列表概览化 + 十轮 DA23 小任务卡把手 + 十一轮 DA24 平铺小卡 + 十二轮 DA25 卡片加大/分行/文件夹可点击/底栏删除 + 十三轮 DA26 对齐/小任务 0/目录标签 + 十四轮 DA27 状态入底栏/进度三计数/工作目录钮/详情钮 + 十五轮 DA28 状态 pill 描边/工作目录幽灵钮：列表页 ↔ 详情页；四轮卡槽下置 + 七轮卡片化口径并入详情页草图）
+### A.5.2 界面草图（2026-09-05 八轮 DA21 页面化 + 九轮 DA22 列表概览化 + 十轮 DA23 小任务卡把手 + 十一轮 DA24 平铺小卡 + 十二轮 DA25 卡片加大/分行/文件夹可点击/底栏删除 + 十三轮 DA26 对齐/小任务 0/目录标签 + 十四轮 DA27 状态入底栏/进度三计数/工作目录钮/详情钮 + 十五轮 DA28 状态 pill 描边/工作目录幽灵钮 + 十六轮 DA29 小任务卡展开钮：列表页 ↔ 详情页；四轮卡槽下置 + 七轮卡片化口径并入详情页草图）
 
 **列表页（十一轮 DA24 平铺小卡栅格 + 十二轮 DA25 修订 + 十三轮 DA26 修订 + 十四轮 DA27 修订 + 十五轮 DA28 修订：底栏左状态 pill（圆角 2px + --border 描边 + hover 不变色）、进度行共/已完成/未完成三计数着色、工作目录幽灵文字钮（hover 下划线）、底栏加详情钮；与团队列表同款容器、不分「对话任务」/状态分区、无拖拽）**：
 
@@ -238,13 +239,13 @@ refreshActivitySoon() → /state（≤1s 轮询命中）   行内 FormErrorNote 
 │ · 小任务 2/3 完成                                                        │
 │ [＋ 新增小任务]                                                          │
 │                                                                          │
-│ ┌ ⠿ 1. #t2 登录页设计 ◌ 已创建 ─ [修改] [删除] ┐←小任务卡片               │
+│ ┌ ⠿ 1. #t2 登录页设计 ◌ 已创建 ─ [⌄] [修改] [删除] ┐←小任务卡片           │
 │ │ ↑ 十轮 DA23：把手 = 唯一拖拽源          ┌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┐  （七轮     │
-│ │ ┌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┐  │ (◉张三)×  (◍李四)× [＋多选] ╎ DA20：   │
-│ │ ╎                                 ╎  └╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┘  拖 A 到   │
-│ │ └╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┘   B=调执行顺序）             │        │
+│ │   ⌄ = 十六轮展开钮（有说明/合同才渲染）  │ (◉张三)×  (◍李四)× [＋多选] ╎ DA20：   │
+│ │   展开后 border-t 分区就地显示：         └╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┘  拖 A 到   │
+│ │   说明：… ＋ 合同 MD（MarkdownText 渲染）                      B=调执行顺序）│
 │ └──────────────────────────────────────────┘                             │
-│ （卡身点击 → 小任务详情页；把手不可编辑态淡化；卡槽/按钮点击不冒泡）       │
+│ （卡身点击 → 小任务详情页；把手不可编辑态淡化；卡槽/按钮/展开区点击不冒泡）│
 │ ─────────────────────────────────────────────────────                   │
 │ 团队成员                                                                 │
 │ ┌────────┐ ┌────────┐ ┌──────────┐ ┌╌╌╌╌╌╌╌╌┐                           │
@@ -260,7 +261,7 @@ refreshActivitySoon() → /state（≤1s 轮询命中）   行内 FormErrorNote 
 │ ← 返回列表                                                              │
 │ ┌ #t3 接口联调 ● 进行中 · · 李四 ┐                                       │
 │ 挂靠：#t7-101 登录页改版                                                 │
-│ ┌ 验收标准 / 范围内 / 范围外 / 交付物（合同四数组，空组不渲染）┐          │
+│ ┌ 任务合同（contractMd 一篇 Markdown，MarkdownText 渲染；无则不渲染）┐   │
 │ │ 状态说明 / 幂等说明 / 产出 / 尝试时间线（track 拉取）        │←正文     │
 │ │ ✔张三 → ●李四      站点 1/2                                 │          │
 │ └────────────────────────────────────────────────────────────┘          │
@@ -436,6 +437,7 @@ group 自身只有 draft/ready/completed（+cancelled）四态可达（taskMachi
 | 十三轮（2026-09-05，DA26 对齐/小任务 0/目录标签/路径截断收窄） | `tasksTab.tsx`：①`BlockedPill` 增 `className` prop、**ml-1 不再内建**（详情页两处行内文字流调用位补 `className="ml-1"`，列表卡独立行顶格与其它行左缘齐）；②进度行**无条件渲染**（`const progress` 三分支：主任务 draft = 小任务 N 个、主任务非 draft = N/M 完成 · n 进行中、顶层普通任务 = 小任务 N（指派人并入同行）——无小任务显「小任务 0」，用户拍板「没有小任务就显示0」）；③文件夹行恢复**「目录」两字标签** + 只显示末段路径（`folder.split('/').pop()/`，全路径进 title「在文件管理器中打开：<全路径>」）；④底栏 `mt-auto` 沉底（同栅格行内容行数不同的卡删除栏齐平）；头注/卡片常量/区块注释同步。零 store/host/api/纯函数变更（312 用例） |
 | 十四轮（2026-09-05，DA27 状态入底栏/进度三计数/工作目录钮/详情钮） | `shared.tsx`：`Pill` 增 `className` 透传（tailwind-merge 压过基础圆角/底色，其余调用位不传观感不变）；`tasksTab.tsx`：①头行只剩主题（展示态 pill 挪出），`DisplayStatusPill` 增 `pillClassName` 直通内层 Pill；②底栏重构为每卡常驻左右分栏（justify-between）——左 = 状态 pill（`rounded-[2px]` 用户拍板「圆角改成 2px」，「左边下面」按十二轮「下面放删除按钮」同词汇解作卡底栏），右 = 「详情」outline 钮（新增，`setSelectedTaskId` 显式入口）+ 「删除」钮（仍仅 `deletableOf` 通过的卡渲染）；③进度行改三分计数 JSX：共 N 个任务，已完成 N（`text-success`）/未完成 N（`text-warning`），数字着色、总数走行底灰，「进行中」计数不再单列（`active` 变量删除），指派人尾注保留；④文件夹行改「工作目录」四字描边小按钮（self-start、border 走 `.eteams-ui` --border 缺省、hover 淡底；末段路径文案撤除，完整路径仅存 title）；头注/卡片常量/区块注释同步。零 store/host/api/纯函数变更（312 用例） |
 | 十五轮（2026-09-05，DA28 状态 pill 描边/工作目录幽灵钮） | `tasksTab.tsx`：①底栏状态 pill `pillClassName` 叠加 `BORDER_L1_CLASS` 描边（tailwind-merge 压过 Badge `border-transparent`）+ `hover:bg-[color:var(--eteams-pill-bg)]` 同色 hover（压平 Badge `hover:bg-secondary/80` 淡底，悬停底色不变）——用户「去掉放上去变淡，加上边框」；②文件夹行工作目录钮撤外壳（border/bg-background/px/py/transition 全去）改幽灵文字钮（text-foreground + underline-offset-2 hover:underline）——用户「还是不协调，修改一下更好融入卡片」；头注/卡片常量/区块注释同步。零 store/host/api/纯函数变更（314 用例——工作区另有并行新增的 rolebuilder-resume 回归 2 例，非本轮改动面） |
+| 十六轮（2026-09-05，DA29 合同并一 MD + 小任务展开） | **本轮动数据模型（DB + host + client 全链）**。`src/host/model/contract.ts`（新）：`contractMdFromLegacyArrays`（旧四数组 → 一篇 MD 合成器，段落 = ## 验收标准 编号 / ## 允许改动 / ## 禁止改动 / ## 交付物）；`model/types.ts`：TaskRecord 四数组字段撤除 → `contractMd?: string`；`state/schema.sql` + `state/db.ts`（SCHEMA_SQL 同步）：task 表四列 → `contract_md TEXT` 单列、DB_SCHEMA_VERSION 1→2，getDb 增 `migrateTaskContractMd`（table_info 探测 → ALTER ADD COLUMN + 旧列数据合成回填，幂等；新库 DDL 已是新形状直接跳过）；`state/store.ts`：task SELECT/INSERT 换 contract_md（jsonArrayOrUndefined/jsonArrayOrNull 助手删除）；`state/import.ts`：LegacyTask 增 `contractMd?`，INSERT 换 contract_md 列（contractMd 直取 ?? 四数组合成）；`runtime/assignment.ts`：create/update 参数四数组 → `contractMd?: string`；`tools/captainTools.ts`：eteams_create_task/eteams_update_task 四个 strArr 参数 → `contractMd` 单字符串参数（描述注明分节写法）、task_board 输出 `acceptance: []` → `contractMd: t.contractMd ?? null`；`prompts/handoff/mails.ts`：renderContract 改透传 contractMd 原文（`任务合同：` + 空行 + 原文；description/幂等说明/前置依赖行保留）——contract.md 文档与成员工具（claim/my_tasks 的 contract 字段）同源受益；`runtime/webui.ts`：taskView 与 track contract 载荷四数组 → `contractMd: t.contractMd ?? null`；client 侧 `lib/monitor.ts`：TaskView 四数组 → `contractMd: string | null`；`pages/teamsView/taskDrawer.tsx`：`ContractList` 四组平文列表撤除 → `ContractMd`（MarkdownText 只读渲染，`任务合同：`标签行）；`pages/teamsView/tasksTab.tsx`：主任务详情页小任务卡加**展开钮**（ChevronDown，`expandable = description/contractMd 有其一`，expandedSubIds 瞬态多开）+ 展开区（border-t 分区：说明行 + MarkdownText 合同 MD；stopPropagation 不误进详情页）；`tests/lifecycle.test.ts`：create_task 参数换 contractMd + 增 `sub.contractMd` 回读锁；`tests/store.test.ts`：增 v1→v2 迁移回归 1 例（v1 形状旧库建表插四列旧数据 → getDb 触发迁移，锁 contract_md 四节齐全 + 重开幂等不变）（317 用例——本轮新增迁移回归 1 例，其余为并行流增例） |
 
 预计新增 client 组件：`TaskAssignDropBox`（成员框）、`MemberDragChip`（成员罗列条 chip）、`TeamMemberStrip`（罗列条容器）、`DisplayStatusPill`（展示态徽标）。
 

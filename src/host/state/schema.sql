@@ -1,5 +1,6 @@
 -- =====================================================================
--- ETeams SQLite schema v1（db_schema_version = 1；docs/27 定稿版）
+-- ETeams SQLite schema v2（db_schema_version = 2；docs/27 定稿版 + 十六轮
+-- DA29 合同合并：task 四数组列 → contract_md 单列，旧库经 getDb 迁移回填）
 -- 主键 = 每张表自己的编号列，统一 INTEGER 自增（schema_meta 例外：key 即主键）
 -- 时间列一律 *_time 结尾（Unix 毫秒）；每张表末尾 created_time / update_time
 -- 枚举 = TEXT（合法值写在列注释里）；JSON = TEXT 存 JSON 字符串
@@ -87,10 +88,7 @@ CREATE TABLE IF NOT EXISTS task (
   current_member_id INTEGER,             -- 当前执行成员 ID（member.member_id）
   retry_count       INTEGER NOT NULL DEFAULT 0,  -- 当前执行人连续失败次数（换人清零）
   status_note       TEXT,                -- 当前状态说明（挂起原因等也并在这列）
-  acceptance        TEXT,                -- 验收标准（JSON 字符串数组，如 ["登录返回 200 和 token"]）
-  in_scope          TEXT,                -- 范围内（JSON 字符串数组，如 ["src/api/login.ts 及其测试"]）
-  out_of_scope      TEXT,                -- 范围外（JSON 字符串数组，防越界）
-  deliverables      TEXT,                -- 交付物（JSON 字符串数组）
+  contract_md       TEXT,                -- 任务合同全文（Markdown，十六轮 DA29：原 acceptance/in_scope/out_of_scope/deliverables 四数组列合并——验收标准/允许改动/禁止改动/交付物统一写在这篇 MD 里；旧库由 getDb 迁移 ALTER + 回填，旧四列物理残留不再读写）
   idempotency_note  TEXT,                -- 幂等说明（重跑安全的前提，派发提示词渲染）
   blocked_from      TEXT,                -- 阻塞前的状态（10 态之一）；解除阻塞时还原到它，NULL=未阻塞
   work_dir          TEXT,                -- 任务工作目录（相对工作区；建任务时分配，分配后固定——撞名 -N 后缀有状态，不可重推导）

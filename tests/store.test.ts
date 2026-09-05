@@ -1,11 +1,7 @@
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LockMap, teamLockKey } from '../src/host/state/lock';
 import {
@@ -22,7 +18,7 @@ import {
   withTeamTx,
   writeTeam,
 } from '../src/host/state/store';
-import { LEADER_NAME } from '../src/host/state/db';
+import { LEADER_NAME, closeDb, dbDirOf, dbFileOf, getDb } from '../src/host/state/db';
 import { cleanupTempWorkspace } from './support/tmpWorkspace';
 import type { TeamState } from '../src/host/model/types';
 
@@ -224,5 +220,80 @@ describe('event journal', () => {
     expect(events[0]?.type).toBe('plan.approved');
     expect(events[0]?.seq).toBe(42);
     expect(lastEventSeq(root, teamId)).toBe(42);
+  });
+});
+
+// 十六轮 DA29：task 合同四数组列 → contract_md 单列（DB v1→v2）。旧库在
+// getDb 首次连接时 ALTER + 按旧列数据合成回填；全新库 DDL 即新形状、迁移
+// 零操作（lifecycle 的 contractMd 回读锁覆盖新库路径，这里只锁迁移）。
+describe('v1→v2 task contract migration (DA29)', () => {
+  const V1_TASK_DDL = `CREATE TABLE task (
+    task_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_id INTEGER NOT NULL,
+    parent_id INTEGER,
+    subject TEXT NOT NULL,
+    description TEXT,
+    depend_tasks TEXT NOT NULL DEFAULT '[]',
+    member_chain_list TEXT NOT NULL DEFAULT '[]',
+    chain_cursor INTEGER NOT NULL DEFAULT -1,
+    status TEXT NOT NULL DEFAULT 'draft',
+    current_member TEXT,
+    current_member_id INTEGER,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    status_note TEXT,
+    acceptance TEXT,
+    in_scope TEXT,
+    out_of_scope TEXT,
+    deliverables TEXT,
+    idempotency_note TEXT,
+    blocked_from TEXT,
+    work_dir TEXT,
+    completed_time INTEGER,
+    created_time INTEGER NOT NULL,
+    update_time INTEGER NOT NULL
+  );`;
+
+  it('backfills contract_md from legacy four-array columns on connect', () => {
+    const legacyRoot = mkdtempSync(join(tmpdir(), 'eteams-mig-'));
+    try {
+      mkdirSync(dbDirOf(legacyRoot), { recursive: true });
+      const legacy = new DatabaseSync(dbFileOf(legacyRoot));
+      legacy.exec(V1_TASK_DDL);
+      legacy
+        .prepare(
+          "INSERT INTO task (task_id, team_id, subject, depend_tasks, member_chain_list, " +
+            "chain_cursor, status, retry_count, acceptance, in_scope, out_of_scope, deliverables, " +
+            "created_time, update_time) VALUES (1, 1, '导出模块', '[]', '[]', -1, 'ready', 0, " +
+            "?, ?, ?, ?, 1, 1)",
+        )
+        .run(
+          JSON.stringify(['支持 CSV 导出', '支持 JSON 导出']),
+          JSON.stringify(['src/export']),
+          JSON.stringify(['导入功能']),
+          JSON.stringify(['export 模块与单测']),
+        );
+      legacy.close();
+
+      const db = getDb(legacyRoot);
+      const row = db.prepare('SELECT contract_md FROM task WHERE task_id = 1').get() as {
+        contract_md: string | null;
+      };
+      expect(row.contract_md).toContain('## 验收标准');
+      expect(row.contract_md).toContain('1. 支持 CSV 导出');
+      expect(row.contract_md).toContain('## 允许改动');
+      expect(row.contract_md).toContain('## 禁止改动');
+      expect(row.contract_md).toContain('## 交付物');
+
+      // 幂等：关连接重开（迁移重入）不重复改写、不报错。
+      closeDb(legacyRoot);
+      const again = getDb(legacyRoot);
+      const reread = again.prepare('SELECT contract_md FROM task WHERE task_id = 1').get() as {
+        contract_md: string | null;
+      };
+      expect(reread.contract_md).toBe(row.contract_md);
+      closeDb(legacyRoot);
+    } finally {
+      cleanupTempWorkspace(legacyRoot);
+    }
   });
 });

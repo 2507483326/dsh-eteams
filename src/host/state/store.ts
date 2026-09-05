@@ -236,22 +236,6 @@ export function resolveTeamId(db: DatabaseSync, key: TeamKey): number | undefine
   return selectTeamRow(db, key)?.team_id;
 }
 
-/** JSON 数组列 → 内存数组（NULL = 未填；'[]' = 空数组，两者不混）。 */
-function jsonArrayOrUndefined(raw: string | null): string[] | undefined {
-  if (raw === null) return undefined;
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? (parsed.map(String) as string[]) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** 内存数组 → JSON 数组列（undefined = NULL；空数组照存 '[]'）。 */
-function jsonArrayOrNull(value: string[] | undefined): string | null {
-  return value === undefined ? null : JSON.stringify(value);
-}
-
 /** member 表行（班底；TeamState.members 只装 team_id = 本队的行）。 */
 function loadMembers(db: DatabaseSync, teamId: number): MemberRecord[] {
   const rows = db
@@ -404,8 +388,8 @@ function loadTasks(
   const taskRows = db
     .prepare(
       'SELECT task_id, parent_id, subject, description, depend_tasks, member_chain_list, ' +
-        'chain_cursor, status, current_member, retry_count, status_note, acceptance, in_scope, ' +
-        'out_of_scope, deliverables, idempotency_note, blocked_from, work_dir, completed_time, ' +
+        'chain_cursor, status, current_member, retry_count, status_note, contract_md, ' +
+        'idempotency_note, blocked_from, work_dir, completed_time, ' +
         'created_time, update_time FROM task WHERE team_id = ? ORDER BY task_id',
     )
     .all(teamId) as Array<{
@@ -420,10 +404,7 @@ function loadTasks(
     current_member: string | null;
     retry_count: number;
     status_note: string | null;
-    acceptance: string | null;
-    in_scope: string | null;
-    out_of_scope: string | null;
-    deliverables: string | null;
+    contract_md: string | null;
     idempotency_note: string | null;
     blocked_from: string | null;
     work_dir: string | null;
@@ -451,10 +432,7 @@ function loadTasks(
       subject: row.subject,
       parentId: row.parent_id,
       ...(row.description !== null ? { description: row.description } : {}),
-      ...(row.acceptance !== null ? { acceptance: jsonArrayOrUndefined(row.acceptance) } : {}),
-      ...(row.in_scope !== null ? { inScope: jsonArrayOrUndefined(row.in_scope) } : {}),
-      ...(row.out_of_scope !== null ? { outOfScope: jsonArrayOrUndefined(row.out_of_scope) } : {}),
-      ...(row.deliverables !== null ? { deliverables: jsonArrayOrUndefined(row.deliverables) } : {}),
+      ...(row.contract_md !== null ? { contractMd: row.contract_md } : {}),
       ...(row.idempotency_note !== null ? { idempotencyNote: row.idempotency_note } : {}),
       dependencies,
       chain,
@@ -586,9 +564,9 @@ export function writeTeamInTx(tx: TeamTx, state: TeamState): void {
   const insTask = db.prepare(
     'INSERT INTO task (task_id, team_id, parent_id, subject, description, depend_tasks, ' +
       'member_chain_list, chain_cursor, status, current_member, current_member_id, retry_count, ' +
-      'status_note, acceptance, in_scope, out_of_scope, deliverables, idempotency_note, ' +
+      'status_note, contract_md, idempotency_note, ' +
       'blocked_from, work_dir, completed_time, created_time, update_time) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   );
   for (const t of state.tasks) {
     insTask.run(
@@ -604,10 +582,7 @@ export function writeTeamInTx(tx: TeamTx, state: TeamState): void {
       t.assignee ?? null,
       t.retryCount,
       t.statusNote ?? null,
-      jsonArrayOrNull(t.acceptance),
-      jsonArrayOrNull(t.inScope),
-      jsonArrayOrNull(t.outOfScope),
-      jsonArrayOrNull(t.deliverables),
+      t.contractMd ?? null,
       t.idempotencyNote ?? null,
       t.blockedFrom ?? null,
       t.workDir ?? null,

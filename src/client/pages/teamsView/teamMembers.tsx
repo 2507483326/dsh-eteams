@@ -8,7 +8,6 @@
  */
 import { useState, type ReactNode } from 'react';
 import ArrowLeft from 'lucide-react/dist/esm/icons/arrow-left.mjs';
-import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives';
 import { syncMemberToRoster, updateMemberPersona } from '../../lib/api';
 import {
   refreshActivitySoon,
@@ -25,6 +24,7 @@ import { MEMBER_STATUS_LABELS, memberTone } from '../../features/tasks/taskDispl
 import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
 import { ModelRoutePicker } from './modelRoutePicker';
+import { MarkdownDoc } from './markdownDoc';
 import { handbookSeed, type HandbookSource } from './buildDraft';
 import {
   BORDER_L1_CLASS,
@@ -488,7 +488,7 @@ export function MemberDetailView({
         </div>
         {draft === null ? (
           <>
-            <MarkdownText text={display} />
+            <MarkdownDoc text={display} />
             {savedNote && <div className={cn(MUTED_CLASS, 'mt-1')}>✓ 已保存到成员详情</div>}
             {syncedNote && (
               <div className={cn(MUTED_CLASS, 'mt-1')}>✓ 已同步到角色「{view.name}」</div>

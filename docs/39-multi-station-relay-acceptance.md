@@ -357,3 +357,40 @@ build（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿；lint 仅 2
 既有 exhaustive-deps warning（memberDialog/taskDrawer，非本次引入）。
 GUI 装机冒烟持续**未验证**（同上口径——状态 pill 描边与 hover 不变色、工作
 目录幽灵文字钮需装机后在 DSH 面板人工过一遍）。
+
+## 十六轮追加（2026-09-05，DA29 合同并一 MD + 小任务展开）
+
+**用户需求原话**：「1. 任务的验收标准、范围内、交付物 改成MD渲染，然后数据库中
+任务 任务的验收标准、范围内、交付物 合并为一个字段。统一用MD管理／2. 每个小任务
+加上一个展开功能」。
+
+| 决策 | 内容 |
+| --- | --- |
+| DA29 | ①**DB 合并**：task 表四列（acceptance/in_scope/out_of_scope/deliverables，JSON 串数组）合并为**一列 `contract_md`**（Markdown 全文）——DB_SCHEMA_VERSION 1→2；旧库迁移在 getDb 连接时做（`migrateTaskContractMd`：PRAGMA table_info 探测 → `ALTER TABLE task ADD COLUMN contract_md TEXT` + 旧四列数据经 `contractMdFromLegacyArrays` 合成回填，幂等可重入；旧四列物理残留、此后不再读写；全新库 DDL 直接新形状，迁移零操作）。②**全链路统一 MD**：内存 TaskRecord 四数组撤除改 `contractMd?: string`；领队工具 eteams_create_task/eteams_update_task 四个 strArr 参数收敛为 `contractMd` 单字符串（整篇写入/整篇替换）；renderContract（派发邮件/成员工具 claim/my_tasks 的 contract 字段）与 docs.ts contract.md `## 合同` 段透传原文；webui 快照 TaskView 与 track 路由 contract 载荷改带 contractMd；旧 team.json 导入 contractMd 直取、无则由四数组合成。③**面板 MD 渲染**：任务/小任务详情正文（TaskDetailContent）撤 ContractList 四组平文列表，改 **MarkdownText** 只读渲染（`@deepseek-ai/dsh-client-ui-primitives`，成员手册同款原语）。④**小任务展开钮**：主任务详情页小任务卡头部行尾加 ChevronDown 图标钮（有 description 或 contractMd 的卡才渲染；展开/收起互切、旋转过渡），展开区 border-t 分区就地显示**说明 + 合同 MD**（MarkdownText），展开态点击不冒泡进详情页；expandedSubIds 瞬态（多开互不影响），零 store 结构变更 |
+
+解读（非用户原话，验收对照口径）：用户点名「验收标准、范围内、交付物」三字段，
+**范围外（out_of_scope）一并合入**同一篇 MD——合同四段一体，单独留下会破
+「统一用MD管理」；旧数组 → MD 的段落结构（`## 验收标准` 编号列表 / `## 允许
+改动` / `## 禁止改动` / `## 交付物` 清单）由宿主合成器（model/contract.ts）定稿。
+
+改动面：`src/host/model/contract.ts`（新，合成器）、`model/types.ts`（TaskRecord）、
+`state/schema.sql` + `state/db.ts`（SCHEMA_SQL 逐字同步 + v2 迁移）、
+`state/store.ts`（task 读写两端 + 删 jsonArray 助手）、`state/import.ts`（旧
+team.json 导入）、`runtime/assignment.ts`（create/update 参数）、
+`tools/captainTools.ts`（create/update 工具参数 + task_board 输出）、
+`prompts/handoff/mails.ts`（renderContract 透传 MD）、`runtime/webui.ts`
+（taskView + track contract 载荷）、`client/lib/monitor.ts`（TaskView）、
+`client/pages/teamsView/taskDrawer.tsx`（ContractMd/MarkdownText）、
+`client/pages/teamsView/tasksTab.tsx`（展开钮 + 展开区 + ChevronDown 深层导入）、
+`tests/lifecycle.test.ts`（create 参数换 contractMd + contractMd 回读锁 1 处）。
+**本轮动 DB schema（v1→v2）与领队工具入参形状**——旧装机会在首次连接时自动迁移。
+
+**十六轮四绿门（2026-09-05）**：typecheck / lint（0 error，2 条既有
+exhaustive-deps warning）/ test（23 文件 **317 用例**全过——十四…十五轮时点
+314，并行流随 08bf08c「细节修复」增 webui 用例，本轮另增 v1→v2 迁移回归
+1 例至 317）/ build
+（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿。
+GUI 装机冒烟持续**未验证**（同上口径——MD 渲染观感、小任务展开交互、旧库
+迁移回填需装机后在 DSH 面板人工过一遍；其中旧库迁移由 getDb 幂等迁移承载，
+tests/store.test.ts 迁移回归锁回填内容与重开幂等，tests/lifecycle.test.ts
+锁新库路径 contractMd 回读）。

@@ -740,15 +740,14 @@ export function createCaptainTools(
   const createTaskTool = defineTool({
     name: 'eteams_create_task',
     description:
-      '创建任务：一句主题 + 合同（description/acceptance/inScope/outOfScope/deliverables/idempotencyNote）+ 显式 dependencies + 可选执行链 chain。对话任务拆解（docs/26）：传 parentTaskId 把本任务挂为对应主任务（任务单）下的小任务——chain 站点即成员槽，成员按序接力；小任务文件夹落在主任务文件夹 sub/ 下。',
+      '创建任务：一句主题 + 合同（description/contractMd/idempotencyNote，合同统一写在一篇 Markdown 里：验收标准/允许改动/禁止改动/交付物分节）+ 显式 dependencies + 可选执行链 chain。对话任务拆解（docs/26）：传 parentTaskId 把本任务挂为对应主任务（任务单）下的小任务——chain 站点即成员槽，成员按序接力；小任务文件夹落在主任务文件夹 sub/ 下。',
     parameters: {
       subject: strR('任务主题（一句话，作为文件夹 slug）'),
       parentTaskId: int('父主任务号（对话任务拆解：挂到对应任务单下）'),
       description: str('任务说明'),
-      acceptance: strArr('验收标准（逐条可核对）'),
-      inScope: strArr('允许改动的范围'),
-      outOfScope: strArr('明确非目标'),
-      deliverables: strArr('交付物'),
+      contractMd: str(
+        '任务合同全文（Markdown）：## 验收标准（编号列表）/ ## 允许改动 / ## 禁止改动 / ## 交付物 分节统一写在这篇 MD 里',
+      ),
       idempotencyNote: str('幂等说明（重跑安全的前提）'),
       dependencies: intArr('依赖任务号列表'),
       chain: chainParam(),
@@ -835,10 +834,7 @@ export function createCaptainTools(
       taskId: intR('任务号'),
       subject: str('新主题'),
       description: str('任务说明'),
-      acceptance: strArr('验收标准'),
-      inScope: strArr('允许改动范围'),
-      outOfScope: strArr('非目标'),
-      deliverables: strArr('交付物'),
+      contractMd: str('新合同全文（Markdown 整篇替换：验收标准/允许改动/禁止改动/交付物分节）'),
       idempotencyNote: str('幂等说明'),
       dependencies: intArr('依赖任务号（整体替换）'),
       chain: chainParam(),
@@ -1165,7 +1161,7 @@ export function createCaptainTools(
           ...taskSummary(t),
           dependencies: t.dependencies,
           description: t.description ?? null,
-          acceptance: t.acceptance ?? [],
+          contractMd: t.contractMd ?? null,
           attempts: t.attempts.map((a) => ({
             id: a.id,
             kind: a.kind,

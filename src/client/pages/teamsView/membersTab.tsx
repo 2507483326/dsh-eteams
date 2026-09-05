@@ -14,11 +14,10 @@ import PenLine from 'lucide-react/dist/esm/icons/pen-line.mjs';
 import {
   IconPlusOutline16,
   IconSparkle16,
-  MarkdownText,
   writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives';
 import { ADD_PEOPLE_TEMPLATE, type PrefillOutcome } from '../../lib/addPeople';
-import type { InterviewQuestion, RosterMember } from '../../lib/api';
+import type { RosterMember } from '../../lib/api';
 import type { TeamSnapshot } from '../../lib/monitor';
 import { cn } from '../../lib/cn';
 import { Avatar } from '../../features/avatar/avatar';
@@ -40,8 +39,8 @@ import {
   type DraftEdit,
 } from './buildDraft';
 import { MemberDialog } from './memberDialog';
+import { MarkdownDoc } from './markdownDoc';
 import {
-  BORDER_L1_CLASS,
   CARD_GRID_CLASS,
   CHIP_CLASS,
   EMPTY_CLASS,
@@ -404,38 +403,12 @@ export function MembersTab({
     refreshBuild();
   };
 
-  // 意图访谈作答（docs/19.16）：后台构建代理把问题写进会话，工作台渲染为
-  // 选项问卷；提交后宿主把答案经 followup 发回代理继续构建。
-  const [interviewPick, setInterviewPick] = useState<Record<string, string[]>>({});
-  // 提交失败要可见（父会话不在线 / 网络问题），不再静默吞掉——否则用户
-  // 提交后看不到任何反馈，构建看起来像假卡死。
+  // 意图访谈作答只走主会话（用户反馈 2026-09-05「访谈怎么放到创建页面去了」）：
+  // 问题经 steer 弹给主代理（ask_user_question 选择框落在对话里，提交走
+  // eteams_interview_answer），工作台不再渲染平行问卷——此前的
+  // interviewPick/togglePick/submitInterviewAnswers 随之撤除。
+  // 重启代理等操作失败要可见（父会话不在线 / 网络问题），不再静默吞掉。
   const [interviewError, setInterviewError] = useState<string | null>(null);
-  const togglePick = (id: string, label: string, multi: boolean): void => {
-    setInterviewPick((prev) => {
-      const cur = prev[id] ?? [];
-      if (cur.includes(label)) {
-        return { ...prev, [id]: cur.filter((x) => x !== label) };
-      }
-      return { ...prev, [id]: multi ? [...cur, label] : [label] };
-    });
-  };
-  const submitInterviewAnswers = async (questions: InterviewQuestion[]): Promise<void> => {
-    const answers = questions
-      .map((q) => ({ id: q.id, choice: (interviewPick[q.id] ?? []).join('、') }))
-      .filter((a) => a.choice !== '');
-    if (answers.length === 0) return;
-    setConfirming(true);
-    setInterviewError(null);
-    // S10：作答改发 `build/submitInterview`；失败 reject → 显式提示
-    // （提交失败不再静默的迁移前要求保持不变）。
-    try {
-      await dispatch({ type: 'build/submitInterview', payload: answers });
-    } catch (e) {
-      setInterviewError(e instanceof Error ? e.message : String(e));
-    }
-    setConfirming(false);
-    refreshBuild();
-  };
   // 手动重启构建代理（用户迭代）：不答题也能派新代理重新核查/重新出题。
   const restartBuildAgent = async (): Promise<void> => {
     setConfirming(true);
@@ -570,7 +543,7 @@ export function MembersTab({
                       {build.draft?.name !== undefined && build.draft.name !== ''
                         ? ` · ${build.draft.name}`
                         : ''}
-                      ——答案提交后自动续跑
+                      ——到主会话作答后自动续跑
                     </>
                   ) : build.draft?.name !== undefined && build.draft.name !== '' ? (
                     `角色构建师工作中 · ${build.draft.name}…`
@@ -600,106 +573,24 @@ export function MembersTab({
                 </Button>
               </div>
               {build.interview !== undefined && build.interview.answers === undefined && (
-                // 意图访谈问卷（docs/19.16）：后台代理的问题在这里作答，
-                // 提交后宿主把答案发回代理继续构建。
+                // 意图访谈去工作台化（用户反馈 2026-09-05「访谈怎么放到创建
+                // 页面去了」）：作答只走主会话——宿主已把问题经 steer 弹给主
+                // 代理（ask_user_question 选择框落在对话里，提交走
+                // eteams_interview_answer），工作台只提示去处，不再渲染平行
+                // 问卷（两套入口让用户在哪答都不确定）。
                 <div className="mb-1 mt-2.5 rounded-[10px] border border-solid border-primary px-3 py-2.5">
                   <div className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
                     <PenLine className="h-4 w-4 text-primary" />
-                    意图访谈——请作答
+                    意图访谈——到主会话作答
                   </div>
                   <div className={MUTED_CLASS}>
-                    阶段代理是一次性的，前任已收工；提交答案会立即派出新代理继续，或点「重启代理」重新出题。
+                    问题已发到发起 /eteam 的对话——回到主会话，在弹出的选择框里逐题作答，答完构建自动继续。没看到选择框？点「重启代理」重新出题。
                   </div>
-                  {(() => {
-                    const qs = build.interview.questions;
-                    const answered = qs.filter(
-                      (q) => (interviewPick[q.id] ?? []).length > 0,
-                    ).length;
-                    if (answered >= qs.length) return null;
-                    return (
-                      <div className="mt-1.5 text-xs font-semibold text-warning">
-                        每题至少选一项才能提交——已答 {answered}/{qs.length}
-                        {answered === qs.length - 1
-                          ? '，还差 1 题'
-                          : `，还差 ${qs.length - answered} 题`}
-                      </div>
-                    );
-                  })()}
-                  {build.interview.questions.map((q) => {
-                    const picked = interviewPick[q.id] ?? [];
-                    const done = picked.length > 0;
-                    return (
-                      <div key={q.id} className="mt-2.5">
-                        {q.header !== undefined && q.header !== '' && (
-                          <div className={MUTED_CLASS}>{q.header}</div>
-                        )}
-                        <div className="text-sm font-semibold leading-6 text-foreground">
-                          {q.question}
-                          {q.multi === true && (
-                            <span className="ml-1.5 inline-flex w-fit items-center rounded-full bg-business-tint px-2 py-0.5 align-middle text-xs font-medium text-[color:var(--eteams-brand-ink)]">
-                              可多选
-                            </span>
-                          )}
-                          {!done && <span className="text-primary"> ·</span>}
-                        </div>
-                        <div className="mt-[5px] flex flex-col gap-1">
-                          {q.options.map((o) => {
-                            const active = picked.includes(o.label);
-                            return (
-                              <button
-                                key={o.label}
-                                type="button"
-                                onClick={() => togglePick(q.id, o.label, q.multi === true)}
-                                className={cn(
-                                  'cursor-pointer rounded-md border border-solid px-2.5 py-1.5 text-left text-sm leading-6 text-inherit',
-                                  active
-                                    ? 'border-primary bg-business-tint'
-                                    : `bg-transparent ${BORDER_L1_CLASS}`,
-                                )}
-                              >
-                                <div className={active ? 'font-semibold' : 'font-normal'}>
-                                  {o.label}
-                                </div>
-                                {o.description !== undefined && o.description !== '' && (
-                                  <div className={MUTED_CLASS}>{o.description}</div>
-                                )}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    );
-                  })}
-                  <div className="mt-2.5 flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      disabled={
-                        confirming ||
-                        build.interview.questions.some(
-                          (q) => (interviewPick[q.id] ?? []).length === 0,
-                        )
-                      }
-                      title={
-                        build.interview.questions.some(
-                          (q) => (interviewPick[q.id] ?? []).length === 0,
-                        )
-                          ? '每题至少选一项后才能提交'
-                          : undefined
-                      }
-                      onClick={() => void submitInterviewAnswers(build.interview?.questions ?? [])}
-                    >
-                      提交回答
-                    </Button>
-                    {/* R1-F6：state-err-primary 是宿主包中不存在的死变量（迁移前
-                    遗留写法，恒走字面兜底、暗色无法随主题翻档）——错误色统一走
-                    destructive token（与 FORM_ERROR_CLASS 等错误面同源）。 */}
-                    {interviewError !== null && (
-                      <div className="mt-2 text-xs leading-5 text-destructive">
-                        ⚠️ {interviewError}
-                      </div>
-                    )}
-                    <span className={MUTED_CLASS}>提交后构建代理自动继续。</span>
-                  </div>
+                  {interviewError !== null && (
+                    <div className="mt-2 text-xs leading-5 text-destructive">
+                      ⚠️ {interviewError}
+                    </div>
+                  )}
                 </div>
               )}
               <div className="mb-1 mt-2.5">
@@ -1166,7 +1057,7 @@ export function MembersTab({
           {detailEditing ? (
             <MdEditor value={detailDraftMd} onChange={setDetailDraftMd} minHeight={220} />
           ) : (
-            <MarkdownText text={handbookSeed(detail)} />
+            <MarkdownDoc text={handbookSeed(detail)} />
           )}
         </Card>
         {team !== undefined && detailMemberView !== null && (

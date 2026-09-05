@@ -12,10 +12,12 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { AvatarRecord, ModelRouteSnapshot, PersonaRecord } from '../model/types.js';
+import { contractMdFromLegacyArrays } from '../model/contract.js';
 import { fallbackExecutionPrompt, PERSONA_FRAMEWORK_VERSION } from '../prompts/personas/framework.js';
 
-/** Current db schema version (docs/27：与 team.json 结构版本互不相干，从 1 起步). */
-export const DB_SCHEMA_VERSION = 1;
+/** Current db schema version (docs/27：与 team.json 结构版本互不相干，从 1 起步).
+ * v2（十六轮 DA29）：task 合同四数组列合并为 contract_md 单列。 */
+export const DB_SCHEMA_VERSION = 2;
 
 /**
  * 领队保留名（docs/27）：task_members 领队行 `name` 固定值，领队行查找
@@ -89,8 +91,53 @@ export function getDb(stateRoot: string): DatabaseSync {
   db.exec('PRAGMA synchronous = NORMAL;');
   db.exec('PRAGMA busy_timeout = 3000;');
   db.exec(loadSchemaSql());
+  migrateTaskContractMd(db);
   connections.set(stateRoot, db);
   return db;
+}
+
+/**
+ * v1→v2 迁移（十六轮 DA29）：合同四数组列合并为 contract_md 单列。全新库
+ * 的 DDL 已是新形状（table_info 首列即存在，跳过）；v1 旧库 ALTER 补列后
+ * 把旧四列的数据回填进 contract_md（合成一篇 MD；四列物理残留、此后不再
+ * 读写）。幂等：contract_md 已存在的库只补 NULL 行，已回填行不重写。
+ */
+function migrateTaskContractMd(db: DatabaseSync): void {
+  const columns = (
+    db.prepare('PRAGMA table_info(task)').all() as Array<{ name: string }>
+  ).map((c) => c.name);
+  if (columns.length === 0) return; // task 表都不存在：全新库 DDL 尚未建表（不会发生，防御）
+  if (!columns.includes('contract_md')) {
+    db.exec('ALTER TABLE task ADD COLUMN contract_md TEXT;');
+  }
+  const legacyColumns = ['acceptance', 'in_scope', 'out_of_scope', 'deliverables'].filter((n) =>
+    columns.includes(n),
+  );
+  if (legacyColumns.length === 0) return; // 全新库（v2 DDL）：无旧列可回填
+  const rows = db
+    .prepare(
+      `SELECT task_id, ${legacyColumns.join(', ')} FROM task WHERE contract_md IS NULL`,
+    )
+    .all() as Array<Record<string, string | number | null>>;
+  const parseArray = (raw: string | null | undefined): string[] | undefined => {
+    if (raw === null || raw === undefined) return undefined;
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      return Array.isArray(parsed) ? parsed.map(String) : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const backfill = db.prepare('UPDATE task SET contract_md = ? WHERE task_id = ?');
+  for (const row of rows) {
+    const md = contractMdFromLegacyArrays({
+      acceptance: parseArray(row['acceptance'] as string | null | undefined),
+      inScope: parseArray(row['in_scope'] as string | null | undefined),
+      outOfScope: parseArray(row['out_of_scope'] as string | null | undefined),
+      deliverables: parseArray(row['deliverables'] as string | null | undefined),
+    });
+    if (md !== undefined) backfill.run(md, row.task_id as number);
+  }
 }
 
 /** 关闭并丢弃该状态根的缓存连接（测试收尾 / 状态根失效时用）。 */
@@ -119,7 +166,8 @@ function loadSchemaSql(): string {
 
 // === SCHEMA_SQL BEGIN（由 schema.sql 生成，逐字一致） ===
 const SCHEMA_SQL = `-- =====================================================================
--- ETeams SQLite schema v1（db_schema_version = 1；docs/27 定稿版）
+-- ETeams SQLite schema v2（db_schema_version = 2；docs/27 定稿版 + 十六轮
+-- DA29 合同合并：task 四数组列 → contract_md 单列，旧库经 getDb 迁移回填）
 -- 主键 = 每张表自己的编号列，统一 INTEGER 自增（schema_meta 例外：key 即主键）
 -- 时间列一律 *_time 结尾（Unix 毫秒）；每张表末尾 created_time / update_time
 -- 枚举 = TEXT（合法值写在列注释里）；JSON = TEXT 存 JSON 字符串
@@ -207,10 +255,7 @@ CREATE TABLE IF NOT EXISTS task (
   current_member_id INTEGER,             -- 当前执行成员 ID（member.member_id）
   retry_count       INTEGER NOT NULL DEFAULT 0,  -- 当前执行人连续失败次数（换人清零）
   status_note       TEXT,                -- 当前状态说明（挂起原因等也并在这列）
-  acceptance        TEXT,                -- 验收标准（JSON 字符串数组，如 ["登录返回 200 和 token"]）
-  in_scope          TEXT,                -- 范围内（JSON 字符串数组，如 ["src/api/login.ts 及其测试"]）
-  out_of_scope      TEXT,                -- 范围外（JSON 字符串数组，防越界）
-  deliverables      TEXT,                -- 交付物（JSON 字符串数组）
+  contract_md       TEXT,                -- 任务合同全文（Markdown，十六轮 DA29：原 acceptance/in_scope/out_of_scope/deliverables 四数组列合并——验收标准/允许改动/禁止改动/交付物统一写在这篇 MD 里；旧库由 getDb 迁移 ALTER + 回填，旧四列物理残留不再读写）
   idempotency_note  TEXT,                -- 幂等说明（重跑安全的前提，派发提示词渲染）
   blocked_from      TEXT,                -- 阻塞前的状态（10 态之一）；解除阻塞时还原到它，NULL=未阻塞
   work_dir          TEXT,                -- 任务工作目录（相对工作区；建任务时分配，分配后固定——撞名 -N 后缀有状态，不可重推导）

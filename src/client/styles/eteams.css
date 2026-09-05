@@ -31,6 +31,10 @@
  *
  * mini-preflight（docs/24 D22c）：preflight 关闭的 UA 默认代价在本文件内做
  * 作用域代偿（盒模型/边框/间距/光标复位），见下方标注块。
+ *
+ * Typeset 端口（docs/41）：文件末尾 `@layer components` 段——shadcn/typeset
+ * 手工平铺，MD 只读渲染面（宿主 MarkdownText，`typeset eteams-md` 包装）换吃
+ * D22a 语义 token，(0,3,0) 特异性纪律，暗色零分支。
  */
 @tailwind base;
 @tailwind components;
@@ -175,7 +179,9 @@
    * 且 list-style 根本未声明，标记全靠 UA；CSS Modules 哈希根类本文件无法
    * 寻址）——任何 ul/ol 复位都会掏空只读 markdown 的列表缩进/标记。本仓库
    * 自有源码零 <ul>/<ol>（侧栏「列表」是 div+button），复位无收益；后续
-   * 表面需要时用 list-none 等工具类显式表达。
+   * 表面需要时用 list-none 等工具类显式表达。宿主 MarkdownText 面的列表
+   * 排版自 docs/41 起由文末「Typeset 端口」段 (0,3,0) 全量接管（含
+   * padding/list-style），本段仍不动 ul/ol。
    */
   .eteams-ui,
   .eteams-ui :not(:where(.eteams-mdx, .eteams-mdx *)),
@@ -217,5 +223,519 @@
   .eteams-ui,
   .eteams-ui * {
     border-color: var(--border);
+  }
+}
+
+/*
+ * Typeset 端口（docs/41）：shadcn/typeset（ui.shadcn.com/docs/components/base/
+ * typography；canonical = shadcn-ui/ui@main apps/v4/app/(app)/(typeset)/typeset.css
+ * @ 7c9eaba，2026-09-05 实抓）手工平铺进本文件。MD 只读渲染面（宿主
+ * MarkdownText，四处消费点经 markdownDoc.tsx 的 `typeset eteams-md` 包装）从
+ * 宿主 --dsw-* 换吃上方 D22a 语义 token。
+ *
+ * 纪律（docs/41 §41.3）：
+ * - 元素选择器恒 `.eteams-ui .eteams-md.typeset :where(X):not(:where(逃生门))`
+ *   = (0,3,0)：:where() 与 :not(:where()) 均贡献 0，恒压宿主面最强普通规则
+ *   (0,2,1)，且不依赖注入顺序（宿主 CSS Modules 注入时机不在本仓控制内）。
+ *   代价：工具类 (0,2,0) 在 typeset 子树内输给端口规则——消费点不对 md 元素
+ *   挂工具类，not-typeset 逃生门可用。
+ * - 逃生门 = canonical 四项（.not-typeset / [data-not-typeset] 及其后代）+
+ *   .md-code-block 两项：宿主 CodeBlock 是完整组件（banner/shiki/自带
+ *   !important），端口 pre/code 规则全量豁免。
+ * - 内根复位 `.eteams-md.typeset > :first-child { font: inherit; color: inherit }`：
+ *   宿主内根复声明 font/color 截断继承（第一堵墙），结构寻址不依赖 CSS Modules
+ *   哈希类名（其不可寻址，D22c 注释先例）。
+ * - 间距只走 margin-block-start 单向流（streaming 稳定，canonical 原则）；
+ *   暗色零分支（token 经 .eteams-ui 语义层换值，D22a 不变式）。
+ * - 对 canonical 的偏差（删 <48rem 放大、链接色 --primary、hr / li>p / 表格
+ *   单元格 / a:focus 焦点环四处宿主中和）全部记录在 docs/41 §41.3.7 偏差表。
+ */
+@layer components {
+  /* 容器 + 三控制（builder 的 typeset-eteams preset 并入，docs/41 §41.3.6）。
+     13px/1.7 对齐 mdEditor .eteams-mdx-content 面板密度，读/编同密度。 */
+  .eteams-ui .eteams-md.typeset {
+    --typeset-size: 13px;
+    --typeset-leading: 1.7;
+    --typeset-flow: 1.25em;
+    /* 字体与派生 token：canonical 引 --font-heading/--font-mono/--color-*，
+       这里重绑 D22a token（docs/41 §41.3.5）；color-mix 仅作 token 缺级兜底。 */
+    --typeset-font-body: inherit;
+    --typeset-font-heading: var(--eteams-font-sans);
+    --typeset-font-mono: var(--eteams-font-mono);
+    --typeset-muted: var(
+      --muted-foreground,
+      color-mix(in oklab, currentColor 60%, transparent)
+    );
+    --typeset-rule: var(
+      --border,
+      color-mix(in oklab, currentColor 20%, transparent)
+    );
+
+    font-family: var(--typeset-font-body);
+    /* 偏差#1：canonical 基础档 calc(size*1.125) + <48rem media 复位 1×，桌面
+       面板（含窄侧栏）非手机场景，直接 1× 恒定密度。 */
+    font-size: var(--typeset-size);
+    line-height: var(--typeset-leading);
+    color: var(--foreground, currentColor);
+    overflow-wrap: break-word;
+    /* 老 Chromium 忽略；首子 margin-block-start: 0 规则组兜底。 */
+    margin-trim: block-start;
+  }
+
+  /* 内根复位（docs/41 §41.3.3，第二堵墙）：宿主 .markdown 在元素上复声明
+     font/color，容器排版传不进去；(0,4,0) 结构寻址复位为继承。font: inherit
+     作为 CSS-wide 关键字覆盖全部 font 长手（含 font-feature-settings，
+     .eteams-ui 的 cv 档经继承流入）；min-width/overflow-wrap 等宿主其余声明保留。 */
+  .eteams-ui .eteams-md.typeset > :first-child {
+    font: inherit;
+    color: inherit;
+  }
+
+  /* 段落：单向流。 */
+  .eteams-ui .eteams-md.typeset :where(p):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    margin-block-start: var(--typeset-flow);
+    margin-block-end: 0;
+  }
+
+  /* 标题：色/族/字重 + margin-block-end 0（尺寸/上距按档跟随）。 */
+  .eteams-ui .eteams-md.typeset
+    :where(h1, h2, h3, h4, h5, h6):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    color: var(--foreground, currentColor);
+    font-family: var(--typeset-font-heading);
+    font-weight: 600;
+    margin-block-end: 0;
+  }
+  .eteams-ui .eteams-md.typeset :where(h1):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    font-size: 1.75em;
+    line-height: 1.3;
+    margin-block-start: var(--typeset-flow);
+  }
+  .eteams-ui .eteams-md.typeset :where(h2):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    font-size: 1.25em;
+    line-height: 1.4;
+    margin-block-start: calc(var(--typeset-flow) * 1.4);
+  }
+  .eteams-ui .eteams-md.typeset :where(h3):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    font-size: 1.125em;
+    line-height: 1.45;
+    margin-block-start: var(--typeset-flow);
+  }
+  .eteams-ui .eteams-md.typeset :where(h4):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    font-size: 1em;
+    line-height: 1.5;
+    margin-block-start: var(--typeset-flow);
+  }
+  .eteams-ui .eteams-md.typeset :where(h5):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    font-size: 0.875em;
+    line-height: 1.5;
+    font-weight: 500;
+    color: var(--typeset-muted);
+    margin-block-start: calc(var(--typeset-flow) / 0.875);
+  }
+  .eteams-ui .eteams-md.typeset :where(h6):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    font-size: 0.8125em;
+    line-height: 1.5;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--typeset-muted);
+    margin-block-start: calc(var(--typeset-flow) / 0.8125);
+  }
+  .eteams-ui .eteams-md.typeset :where([id]):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    scroll-margin-block-start: var(--typeset-flow);
+  }
+
+  /* 标题后首个元素吃 1em 收口；标题内 code 缩档。 */
+  .eteams-ui .eteams-md.typeset
+    :where(h1 + *, h2 + *, h3 + *, h4 + *, h5 + *, h6 + *):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    margin-block-start: 1em;
+  }
+  .eteams-ui .eteams-md.typeset
+    :where(:is(h1, h2, h3, h4) :is(code)):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    font-size: 0.9em;
+  }
+
+  /* 链接：偏差#2——色用 --primary（sky 面板语言）替代 canonical 的 inherit，
+     下划线 30% mix、hover 全色不变。 */
+  .eteams-ui .eteams-md.typeset :where(a):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    color: var(--primary, currentColor);
+    font-weight: 500;
+    text-decoration-line: underline;
+    text-decoration-color: color-mix(in oklab, currentColor 30%, transparent);
+  }
+  .eteams-ui .eteams-md.typeset :where(a:hover):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    text-decoration-color: currentColor;
+  }
+  .eteams-ui .eteams-md.typeset :where(a:focus-visible):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    outline: 2px solid var(--ring, currentColor);
+    outline-offset: 2px;
+    border-radius: 0.125em;
+    /* 偏差#8：中和宿主 a:focus-visible 的宿主蓝 box-shadow，避免双焦点环。 */
+    box-shadow: none;
+  }
+  .eteams-ui .eteams-md.typeset
+    :where(:is(h1, h2, h3, h4, h5, h6) :is(a)):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    font-weight: inherit;
+  }
+}
+
+/* Typeset 端口·续（docs/41 §41.3.7#9 canonical 全量保留段）：行内语义、列表、
+   任务列表、disclosures、kbd、dl、行内 code、pre、引用、hr、footnotes、math、
+   媒体。表格段与首子收口组在下一段。 */
+@layer components {
+  .eteams-ui .eteams-md.typeset :where(strong, b):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    font-weight: 600;
+  }
+  .eteams-ui .eteams-md.typeset
+    :where(:is(h1, h2, h3, h4) :is(strong, b)):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    font-weight: 600;
+  }
+  .eteams-ui .eteams-md.typeset :where(mark):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    background-color: color-mix(in oklab, oklch(0.86 0.17 95) 40%, transparent);
+    color: inherit;
+    padding: 0.05em 0.15em;
+    border-radius: 0.2em;
+  }
+  .eteams-ui .eteams-md.typeset :where(abbr[title]):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    text-decoration-line: underline;
+    text-decoration-style: dotted;
+    text-underline-offset: 0.2em;
+    cursor: help;
+  }
+  .eteams-ui .eteams-md.typeset :where(del, s):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    color: var(--typeset-muted);
+    text-decoration-line: line-through;
+  }
+  .eteams-ui .eteams-md.typeset :where(sup, sub):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    font-size: 0.75em;
+    line-height: 0;
+    position: relative;
+    vertical-align: baseline;
+  }
+  .eteams-ui .eteams-md.typeset :where(sup):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    top: -0.5em;
+  }
+  .eteams-ui .eteams-md.typeset :where(sub):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    bottom: -0.25em;
+  }
+  .eteams-ui .eteams-md.typeset :where(sup a):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    text-decoration-line: none;
+    font-weight: 500;
+  }
+
+  /* 列表。 */
+  .eteams-ui .eteams-md.typeset :where(ul):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    list-style-type: disc;
+  }
+  .eteams-ui .eteams-md.typeset :where(ol):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    list-style-type: decimal;
+  }
+  .eteams-ui .eteams-md.typeset :where(ul ul):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    list-style-type: circle;
+  }
+  .eteams-ui .eteams-md.typeset :where(ul ul ul):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    list-style-type: square;
+  }
+  .eteams-ui .eteams-md.typeset :where(ol[type='a' i]):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    list-style-type: lower-alpha;
+  }
+  .eteams-ui .eteams-md.typeset :where(ol[type='i' i]):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    list-style-type: lower-roman;
+  }
+  .eteams-ui .eteams-md.typeset :where(ol[type='A' s]):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    list-style-type: upper-alpha;
+  }
+  .eteams-ui .eteams-md.typeset :where(ol[type='I' s]):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    list-style-type: upper-roman;
+  }
+  .eteams-ui .eteams-md.typeset :where(ul, ol):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    margin-block-start: var(--typeset-flow);
+    margin-block-end: 0;
+    padding-inline-start: 1.5em;
+  }
+  .eteams-ui .eteams-md.typeset :where(li):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    margin-block-start: 0.5em;
+    padding-inline-start: 0.4em;
+  }
+  .eteams-ui .eteams-md.typeset
+    :where(li > p, li > ul, li > ol):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    margin-block-start: 0.5em;
+  }
+  /* 偏差#6：中和宿主 li > p { margin: 8px 0 } 的 block-end 8px 残留。 */
+  .eteams-ui .eteams-md.typeset :where(li > p):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    margin-block-end: 0;
+  }
+  .eteams-ui .eteams-md.typeset :where(ul > li):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *))::marker {
+    color: var(--typeset-muted);
+  }
+  .eteams-ui .eteams-md.typeset :where(ol > li):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *))::marker {
+    color: var(--typeset-muted);
+  }
+
+  /* GFM 任务列表。 */
+  .eteams-ui .eteams-md.typeset :where(ul.contains-task-list):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    list-style-type: none;
+    padding-inline-start: 0.25em;
+  }
+  .eteams-ui .eteams-md.typeset
+    :where(li.task-list-item > input[type='checkbox']):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    margin-inline-end: 0.5em;
+    vertical-align: -0.1em;
+    accent-color: var(--primary, currentColor);
+  }
+
+  /* Disclosures。 */
+  .eteams-ui .eteams-md.typeset :where(details):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    margin-block-start: var(--typeset-flow);
+    margin-block-end: 0;
+  }
+  .eteams-ui .eteams-md.typeset :where(summary):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    cursor: pointer;
+    font-weight: 500;
+  }
+  .eteams-ui .eteams-md.typeset :where(summary):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *))::marker {
+    color: var(--typeset-muted);
+  }
+
+  /* 键盘按键。 */
+  .eteams-ui .eteams-md.typeset :where(kbd):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    font-family: inherit;
+    font-size: 0.85em;
+    font-weight: 500;
+    border: 1px solid var(--typeset-rule);
+    border-block-end-width: 2px;
+    border-radius: min(calc(var(--radius, 0.5em) * 0.6), 0.35em);
+    padding: 0.0625em 0.35em;
+  }
+
+  /* 定义列表。 */
+  .eteams-ui .eteams-md.typeset :where(dl):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    margin-block-start: var(--typeset-flow);
+    margin-block-end: 0;
+  }
+  .eteams-ui .eteams-md.typeset :where(dt):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    font-weight: 500;
+    margin-block-start: 1em;
+  }
+  .eteams-ui .eteams-md.typeset :where(dt + dt):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    margin-block-start: 0.25em;
+  }
+  .eteams-ui .eteams-md.typeset :where(dd):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    margin-block-start: 0.25em;
+    margin-inline-start: 0;
+    padding-inline-start: 1em;
+    color: var(--typeset-muted);
+  }
+
+  /* 行内 code chip。宿主 :not(pre)>code 的 font-size: 0.875em !important 压过
+     下方 0.85em（0.875em≈0.85em 视觉等价，docs/41 §41.3.8 接受项）。 */
+  .eteams-ui .eteams-md.typeset :where(:not(pre) > code):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    background-color: var(--muted, color-mix(in oklab, currentColor 8%, transparent));
+    font-family: var(--typeset-font-mono);
+    font-size: 0.85em;
+    border-radius: min(calc(var(--radius, 0.5em) * 0.6), 0.35em);
+    padding: 0.125em 0.3em;
+  }
+
+  /* 代码块：md-code-block 全量豁免（逃生门），只管裸 pre（渲染器当前不发射）。 */
+  .eteams-ui .eteams-md.typeset :where(pre):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    background-color: var(--muted, color-mix(in oklab, currentColor 8%, transparent));
+    font-family: var(--typeset-font-mono);
+    font-size: 0.875em;
+    line-height: 1.5;
+    tab-size: 2;
+    direction: ltr;
+    border-radius: var(--radius, 0.5em);
+    padding: 0.75em 1em;
+    overflow-x: auto;
+    margin-block-start: calc(var(--typeset-flow) / 0.875);
+    margin-block-end: 0;
+  }
+  .eteams-ui .eteams-md.typeset :where(pre code):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    background-color: transparent;
+    font-family: inherit;
+    font-size: inherit;
+    padding: 0;
+    border-radius: 0;
+  }
+
+  /* 引用。 */
+  .eteams-ui .eteams-md.typeset :where(blockquote):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    border-inline-start: 2px solid var(--typeset-rule);
+    padding-inline-start: 1em;
+    margin-block-start: var(--typeset-flow);
+    margin-block-end: 0;
+    margin-inline: 0;
+  }
+
+  /* 分隔线。偏差#5：中和宿主 hr 的 height: 1px + background（否则与端口
+     border 叠成 2px 双线）。 */
+  .eteams-ui .eteams-md.typeset :where(hr):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    border: 0;
+    border-block-start: 1px solid var(--typeset-rule);
+    margin-block-start: calc(var(--typeset-flow) * 2.4);
+    margin-block-end: 0;
+    height: auto;
+    background: transparent;
+  }
+  .eteams-ui .eteams-md.typeset
+    :where(hr + h1, hr + h2, hr + h3, hr + h4):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    margin-block-start: var(--typeset-flow);
+  }
+
+  /* GFM footnotes。 */
+  .eteams-ui .eteams-md.typeset :where(.footnotes, [data-footnotes]):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    margin-block-start: calc(var(--typeset-flow) * 2);
+    border-block-start: 1px solid var(--typeset-rule);
+    padding-block-start: var(--typeset-flow);
+    font-size: 0.875em;
+    color: var(--typeset-muted);
+  }
+
+  /* Math（KaTeX 不发射 <math>，零代价预留）。 */
+  .eteams-ui .eteams-md.typeset :where(math[display='block']):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    margin-block-start: var(--typeset-flow);
+    margin-block-end: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-block: 0.25em;
+  }
+
+  /* 媒体。 */
+  .eteams-ui .eteams-md.typeset :where(img, video):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    border-radius: var(--radius, 0.5em);
+    max-width: 100%;
+    height: auto;
+    margin-block-start: var(--typeset-flow);
+    margin-block-end: 0;
+  }
+  .eteams-ui .eteams-md.typeset :where(p img):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    margin-block-start: 0;
+  }
+  .eteams-ui .eteams-md.typeset :where(figure):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    margin-block-start: var(--typeset-flow);
+    margin-block-end: 0;
+    margin-inline: 0;
+  }
+  .eteams-ui .eteams-md.typeset :where(figcaption, caption):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    color: var(--typeset-muted);
+    font-size: 0.875em;
+    text-align: center;
+    margin-block-start: calc(0.75em / 0.875);
+  }
+  .eteams-ui .eteams-md.typeset :where(caption):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    caption-side: bottom;
+  }
+
+  /* 表格。分隔线落在单元格上（append-safe）：table 上 border-block-end 收底、
+     单元格 border-block-start 画行线。偏差#7：thead th / tbody,tfoot 单元格
+     增补 border-bottom: 0 + font: inherit，中和宿主 .tableScroll th/td 的
+     alias 底边线（separate 折叠下与端口顶线叠成 2px 双线）与宿主表格字体
+     token。 */
+  .eteams-ui .eteams-md.typeset :where(table):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    max-width: 100%;
+    font-size: 1em;
+    line-height: 1.5;
+    font-variant-numeric: tabular-nums;
+    border-collapse: separate;
+    border-spacing: 0;
+    border-block-end: 1px solid var(--typeset-rule);
+    margin-block-start: var(--typeset-flow);
+    margin-block-end: 0;
+  }
+
+  /* typeset-scroll 宽块横滚（宿主 .tableScroll 已承担表格滚动，规则闲置预留）。 */
+  .eteams-ui .eteams-md.typeset :where(.typeset-scroll):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    overflow-x: auto;
+    margin-block-start: var(--typeset-flow);
+  }
+  .eteams-ui .eteams-md.typeset :where(.typeset-scroll > *):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    margin-block-start: 0;
+  }
+  .eteams-ui .eteams-md.typeset :where(.typeset-scroll table):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    width: max-content;
+    max-width: none;
+  }
+  .eteams-ui .eteams-md.typeset :where(thead th):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    font-weight: 500;
+    text-align: start;
+    white-space: nowrap;
+    padding: 0.65em 1em;
+    /* 偏差#7（docs/41 §41.3.7）：中和宿主 .tableScroll th 的 alias 底边线与
+       表格字体 token。 */
+    border-bottom: 0;
+    font: inherit;
+  }
+  .eteams-ui .eteams-md.typeset
+    :where(:is(tbody, tfoot) :is(td, th)):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    padding: 0.75em 1em;
+    text-align: start;
+    vertical-align: top;
+    border-block-start: 1px solid var(--typeset-rule);
+    /* 偏差#7：同 thead th。 */
+    border-bottom: 0;
+    font: inherit;
+  }
+  .eteams-ui .eteams-md.typeset :where(tbody th, tfoot th):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    font-weight: 500;
+  }
+  .eteams-ui .eteams-md.typeset :where(th:first-child, td:first-child):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    padding-inline-start: 0;
+  }
+  .eteams-ui .eteams-md.typeset
+    :where(th[align='center'], td[align='center']):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    text-align: center;
+  }
+  .eteams-ui .eteams-md.typeset
+    :where(th[align='right'], td[align='right']):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    text-align: end;
+  }
+
+  /* 列表项内的块吃列表的紧凑节奏。 */
+  .eteams-ui .eteams-md.typeset
+    :where(li > blockquote, li > table, li > figure):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    margin-block-start: 0.5em;
+  }
+  .eteams-ui .eteams-md.typeset :where(li > pre):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    margin-block-start: calc(0.5em / 0.875);
+  }
+
+  @media print {
+    .eteams-ui .eteams-md.typeset
+      :where(pre, table, blockquote, figure):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+      break-inside: avoid;
+    }
+    .eteams-ui .eteams-md.typeset
+      :where(h1, h2, h3, h4):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+      break-after: avoid;
+    }
+  }
+
+  /* 强制色彩模式剥掉 code 底色，改给边框。 */
+  @media (forced-colors: active) {
+    .eteams-ui .eteams-md.typeset
+      :where(:not(pre) > code):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+      border: 1px solid;
+    }
+  }
+
+  /* 首子不加上距（单向流收口），最后声明以赢平局。第三选择器组：嵌套容器的
+     首子（li/blockquote/td/th/dd/figure 内）。 */
+  .eteams-ui .eteams-md.typeset
+    > :where(:first-child):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)),
+  .eteams-ui .eteams-md.typeset
+    > :where(:first-child)
+    > :where(:first-child):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)),
+  .eteams-ui .eteams-md.typeset
+    :where(
+      li > :first-child,
+      blockquote > :first-child,
+      td > :first-child,
+      th > :first-child,
+      dd > :first-child,
+      figure > :first-child,
+      figure > picture > img
+    ):not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *, .md-code-block, .md-code-block *)) {
+    margin-block-start: 0;
   }
 }

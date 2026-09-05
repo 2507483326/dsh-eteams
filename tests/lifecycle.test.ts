@@ -228,9 +228,11 @@ describe('lifecycle (offline full flow)', () => {
     const task = await cap<{ ok: true; taskId: number; status: string }>('eteams_create_task', {
       subject: '调研导出方案并实现',
       parentTaskId: groupId,
-      acceptance: ['支持 CSV 导出', '支持 JSON 导出', '单测覆盖'],
-      inScope: ['src/export'],
-      outOfScope: ['导入功能'],
+      // 十六轮 DA29：合同四数组（acceptance/inScope/outOfScope/deliverables）
+      // 合并为一篇 Markdown（contractMd），工具参数同步收敛。
+      contractMd: ['## 验收标准', '', '1. 支持 CSV 导出', '2. 支持 JSON 导出', '3. 单测覆盖'].join(
+        '\n',
+      ),
       chain: [
         { member: 'Alice', stageBrief: '产出选型结论与接口约定' },
         { member: 'Bob', stageBrief: '按约定实现导出模块与单测' },
@@ -251,6 +253,8 @@ describe('lifecycle (offline full flow)', () => {
     const sub = teamAfterCreate.tasks.find((t) => t.id === subId)!;
     expect(group.parentId).toBeNull();
     expect(sub.parentId).toBe(groupId);
+    // 十六轮 DA29：合同单字段回读（contract_md 列原样装回）。
+    expect(sub.contractMd).toContain('支持 CSV 导出');
     expect(existsSync(join(workspace, 'teams', '导出功能团队', 'README.md'))).toBe(true);
     expect(existsSync(join(workspace, sub.workDir!, 'contract.md'))).toBe(true);
     expect(existsSync(join(workspace, sub.workDir!, 'notes.md'))).toBe(true);

@@ -88,11 +88,9 @@ export interface TaskView {
   folder: string | null;
   /** 任务说明/合同摘要（docs/26 面板编辑弹窗回填）；null = 无。旧运行时缺省 null。 */
   description: string | null;
-  /** 合同四数组（docs/35 §3#7）：验收标准/范围内/范围外/交付物。 */
-  acceptance: string[];
-  inScope: string[];
-  outOfScope: string[];
-  deliverables: string[];
+  /** 任务合同全文（Markdown；十六轮 DA29：原合同四数组合并为一篇 MD）。
+   * null = 无。旧运行时快照缺省 null。 */
+  contractMd: string | null;
   /** 幂等说明（重复执行的界定）；null = 无。 */
   idempotencyNote: string | null;
   /** 物化阻塞（docs/36 建议 1）：wait + blockedFrom 非空 = 被前置任务阻塞。 */

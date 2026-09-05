@@ -41,6 +41,41 @@ let pendingGotoRoster = false;
 /** Pending team selection (teamId) — consumed once on panel mount. */
 let pendingSelectTeam: string | null = null;
 
+/**
+ * 用户最后一次点击的时间戳（capture）。挂在 bundle 装载即求值的本模块——
+ * 不挂 buildCard：卡片模块要等对话里第一张构建卡片挂载才求值，「刚创建」
+ * 时用户先点进对话、卡片模块才诞生，那次点击记不上，`lastUserClickAt`
+ * 恒为 0，「用户点过就不再自动跳转」的接管判定失灵 → 卡片把刚到对话的
+ * 用户又拽回团队（用户反馈 2026-09-05「点了对话又跳回团队，再点击才能
+ * 跳回」＝ docs/19 自动跳转让位的老毛病）。capture 监听全量记点击，宿主
+ * tab 的标记结构存在 button[role=tab] 与旧版 leaf div 两种变体，按选择器
+ * 匹配会漏——漏掉的点击之后，受理竞态窗口内的重试跳转就会闪跳拽人。
+ */
+let lastUserClickAt = 0;
+if (typeof document !== 'undefined') {
+  const flag = '__eteamsClickLatch__';
+  const g = globalThis as Record<string, unknown>;
+  if (g[flag] !== true) {
+    g[flag] = true;
+    document.addEventListener(
+      'click',
+      () => {
+        lastUserClickAt = Date.now();
+      },
+      true,
+    );
+  }
+}
+
+/**
+ * Whether the user has clicked anything at/after `since`（自动跳转的接管
+ * 判定）：buildCard 仅当本函数为 false（startedAt 之后用户什么都没点过）
+ * 才允许「发送即跳转」。
+ */
+export function userClickedSince(since: number): boolean {
+  return lastUserClickAt >= since;
+}
+
 /** Whether a jump request is waiting; consumes it (one-shot). */
 export function consumePendingGotoAdd(): boolean {
   const value = pendingGotoAdd;

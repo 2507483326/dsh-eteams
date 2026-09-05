@@ -1,11 +1,13 @@
 /**
- * 任务详情内容（docs/13.3 任务）：合同四数组 + 产出/尝试时间线 + 执行链
+ * 任务详情内容（docs/13.3 任务）：合同 MD + 产出/尝试时间线 + 执行链
  * 站点行。符号自 eteamsView.tsx 原样搬出（docs/32 32.5.1 纯移动）。
  * 2026-09-05 八轮（DA21 任务页拆列表页 + 详情页）：原 S13 shadcn Dialog
  * 抽屉**页面化**——详情内容改为内联组件 TaskDetailContent 由任务详情页
  * 消费（标题/状态头由详情页渲染，本组件只承正文）；TaskStations 导出不变。
- * docs/35 §3#7：合同四数组（验收标准/范围内/范围外/交付物）+ 幂等说明 +
- * 物理阻塞来源进详情；任务号全库自增（docs/27），显示口径 #N。
+ * docs/35 §3#7：合同 + 幂等说明 + 物理阻塞来源进详情；任务号全库自增
+ * （docs/27），显示口径 #N。十六轮 DA29：合同四数组（验收标准/范围内/
+ * 范围外/交付物）合并为一篇 Markdown（task.contractMd），详情区改
+ * MarkdownText 只读渲染（MarkdownDoc typeset 包装，docs/41；成员手册同款原语）。
  *
  * @module dsh-eteams/client/pages/teamsView/taskDrawer
  */
@@ -14,6 +16,7 @@ import { ATTEMPT_STATUS_LABELS } from '../../features/tasks/taskDisplayStatus';
 import { cn } from '../../lib/cn';
 import { relativeTime, type TaskView, type TeamSnapshot } from '../../lib/monitor';
 import { GLYPH_TONE_CLASS, LINE_CLASS, MUTED_CLASS } from './shared';
+import { MarkdownDoc } from './markdownDoc';
 
 /** 原 styles.attempt（执行线路尝试条目：--border 左描边）。 */
 const ATTEMPT_CLASS = 'my-2.5 border-l-2 border-solid border-border py-0.5 pl-3';
@@ -35,17 +38,15 @@ interface TrackBody {
   }[];
 }
 
-/** 合同区的一组条目（四数组共用渲染；空数组整组不渲染）。 */
-function ContractList({ title, items }: { title: string; items: string[] }): ReactNode {
-  if (items.length === 0) return null;
+/** 合同区（十六轮 DA29）：contractMd 一篇 Markdown 经 MarkdownDoc（MarkdownText
+ * + typeset 排版包装，docs/41）只读
+ * 渲染（成员手册同款原语）；空串/null 整段不渲染。 */
+function ContractMd({ text }: { text: string }): ReactNode {
+  if (text.trim() === '') return null;
   return (
     <div className="my-1">
-      <span className="text-xs font-semibold text-muted-foreground">{title}：</span>
-      {items.map((item, i) => (
-        <div key={i} className="pl-2 text-muted-foreground">
-          · {item}
-        </div>
-      ))}
+      <span className="text-xs font-semibold text-muted-foreground">任务合同：</span>
+      <MarkdownDoc text={text} />
     </div>
   );
 }
@@ -82,10 +83,11 @@ export function TaskStations({ task }: { task: TaskView }): ReactNode {
 }
 
 /**
- * 任务详情正文（八轮 DA21 页面化）：合同四数组 + 状态说明/阻塞 + 产出 +
- * 尝试时间线。标题/状态头由任务详情页渲染（tasksTab），本组件只承正文；
- * 挂载即拉取 track（attempts 全量），随快照水位（最新事件 seq）回拉。
- * 原 S13 shadcn Dialog 抽屉随页面化撤除（零残留）。
+ * 任务详情正文（八轮 DA21 页面化）：合同 MD（十六轮 DA29 由四数组改一篇
+ * Markdown）+ 状态说明/阻塞 + 产出 + 尝试时间线。标题/状态头由任务详情页
+ * 渲染（tasksTab），本组件只承正文；挂载即拉取 track（attempts 全量），
+ * 随快照水位（最新事件 seq）回拉。原 S13 shadcn Dialog 抽屉随页面化撤除
+ * （零残留）。
  */
 export function TaskDetailContent({
   team,
@@ -119,15 +121,10 @@ export function TaskDetailContent({
         <div className="text-warning">阻塞中：前置任务 #{task.blockedFrom} 未完成。</div>
       )}
       {task.statusNote !== null && <div className={LINE_CLASS}>状态说明：{task.statusNote}</div>}
-        {task.acceptance.length > 0 && (
-          <ContractList title="验收标准" items={task.acceptance} />
-        )}
-        <ContractList title="范围内" items={task.inScope} />
-        <ContractList title="范围外" items={task.outOfScope} />
-        <ContractList title="交付物" items={task.deliverables} />
-        {task.idempotencyNote !== null && (
-          <div className={MUTED_CLASS}>幂等说明：{task.idempotencyNote}</div>
-        )}
+      {task.contractMd !== null && <ContractMd text={task.contractMd} />}
+      {task.idempotencyNote !== null && (
+        <div className={MUTED_CLASS}>幂等说明：{task.idempotencyNote}</div>
+      )}
         {task.outcome !== null && <div className={LINE_CLASS}>产出：{task.outcome}</div>}
         {(track?.attempts ?? [])
           .slice()
