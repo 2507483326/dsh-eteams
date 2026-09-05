@@ -98,7 +98,13 @@ shadcn/ui 不是 npm 组件库，而是「把组件源码拷进你的仓库」�
 | tabs.tsx | new-york tabs（Radix） | 同上 | teamsButton 弹层页签 |
 | popover.tsx | new-york popover（Radix） | 同上 | modelRoutePicker、taskAssign |
 | progress.tsx | new-york progress（Radix） | 同上 | eteamsCard |
-| collapsible.tsx | new-york collapsible（Radix） | 同上 | tasksTab 小任务展开 |
+| collapsible.tsx | new-york collapsible（Radix） | 同上 | 暂无消费方（预留；小任务展开已升级 Accordion） |
+| accordion.tsx | new-york accordion（Radix） | cn 相对导入；去上游内嵌 ChevronDown（触发位 asChild 自带图标钮）；Header 补 `m-0`（preflight 关闭下压住 Radix Header h3 的 UA 边距）；动画 keyframes 随件补进 tailwind.config.ts | tasksTab 小任务展开（十八轮 DA31） |
+| tooltip.tsx | new-york tooltip（Radix） | cn 相对导入；Tooltip **内嵌 TooltipProvider**（本仓多表面各自成树、无全局根可挂 Provider——Radix Root 缺 Provider 直接抛错，内嵌让调用位自足；代价是跨提示 skip-delay 协调不保留）；Content 强制挂自管 portal 容器（getPortalContainer，dialog.tsx 同款） | 暂无消费方（预留；二十轮撤回——悬浮提示回归原生 title=，十九轮的 hint.tsx 组合件删除） |
+| toast.tsx | new-york toast（Radix） | cn 相对导入；X 走深层 `.mjs` 导入；`border` 补 `border-solid`；`text-foreground/50` 改 color-mix（token 色禁 /alpha）；Viewport 就地渲染无 portal——**Toaster 必须挂 `.eteams-ui` 子树内** | 经 ui/toaster.tsx 消费（挂载位 = teamsView/index.tsx 面板根） |
+| toaster.tsx | new-york toaster | 文案本地化（关闭 sr-only）；渲染 useToast 全局单例 store | teamsView/index.tsx |
+| pagination.tsx | new-york pagination | cn 相对导入；类型自足（size 内联联合）；MoreHorizontal 深层导入（lucide-icon.d.ts 增补声明）；PaginationLink 以 **Slot 承 asChild**（上游 `<a>` 链接语义 → 无路由面板，消费位 asChild 包 `<Button>`，非 asChild 仍渲染 `<a>`）；Previous/Next 去上游内嵌箭头（中文文字钮观感）；aria-label 本地化 | membersTab 角色列表分页（十九轮） |
+| hooks/useToast.ts | new-york use-toast hook | camelCase 文件名（hooks/ 目录 eslint 强制）；toast() 全局单例 store——任意表面可发、挂了 Toaster 的树渲染 | membersTab（复制反馈）、teamMembers（保存/同步反馈） |
 | separator.tsx | new-york separator（Radix） | 同上 | 暂无消费方（预留） |
 | skeleton.tsx | new-york skeleton | 同上 | 暂无消费方（预留） |
 | portal.ts | 本仓自研 | Radix Dialog 容器重定向 | dialog.tsx |
@@ -120,6 +126,9 @@ shadcn/ui 不是 npm 组件库，而是「把组件源码拷进你的仓库」�
 3. **下拉选择** → `<Select>`（Radix）；`<select>` 原生件禁止。
 4. **弹窗** → `<Dialog>` 系；确认类弹窗语义上等同 Dialog 现用法（标题+描述+取消/确认），不必另引 Alert Dialog。
 5. **页签** → `<Tabs>`；进度 → `<Progress>`；横幅 → `<Alert>`；徽标 → `<Badge>`；卡片容器 → `<Card>`；受控折叠 → `<Collapsible>`；浮层 → `<Popover>`。
+6. **悬浮提示** → 原生 `title=` 属性（**二十轮用户拍板**：撤回十九轮的 Hint/Tooltip 迁移，恢复原生浏览器提示——`hint.tsx` 随之删除，`tooltip.tsx` 转预留件；十九轮的「原生 title= 禁止」规则废止）。条件提示直接 `title={cond ? 'a' : undefined}`；禁用态控件收不到 pointer 事件、原生提示同样不弹（与十九轮前行为一致，不改）。
+7. **操作结果轻提示** → `toast()`（useToast 全局 store + ui/toaster.tsx）；就地瞬时文案（「✓ 已复制 2 秒」这类状态翻转/下方小字）禁止——结果反馈统一浮层 toast（成功 default / 失败 destructive）。表单校验错误仍走就地 `<Alert>`（FormErrorNote，用户视线在表单内）。
+8. **分页** → `<Pagination>` 骨架（PaginationContent/Item + Previous/Next asChild 包 `<Button>`）；计数 pill 作 PaginationItem 中位内容。
 
 **保留手写的场景**（均为 list-item / 画布语义，不是 chrome 控件；shadcn 无对应件或组件语义不匹配）：
 
@@ -144,9 +153,15 @@ shadcn/ui 不是 npm 组件库，而是「把组件源码拷进你的仓库」�
 | teamsView/addMembersDialog.tsx 购物车步进器 ×2 | 手写 `STEP_BTN_CLASS` 图标钮（−/＋） | `<Button variant="outline" size="icon" className="h-6 w-6 …">`，删类常量 |
 | teamsView/membersTab.tsx 角色卡删除钮 ×1 | 手写按钮挂 `.eteams-role-del` 注入 CSS | `<Button variant="outline" size="sm" className="…text-destructive…">`，删 shared.tsx 的 `.eteams-role-del` CSS 规则 |
 | teamsView/index.tsx 宽栏快捷搜索 ×1 | 裸 `<input>` + 手写 ring 类 | `<Input>` + ring 覆盖层（`border-0 ring-1 … pl-8`，保留官网 quick-search 签名） |
-| teamsView/tasksTab.tsx 小任务展开钮 ×1 | 裸 `<button>` 包 ChevronDown | `<Button variant="ghost" size="icon" className="h-6 w-6 …">`（CollapsibleTrigger asChild 内） |
+| teamsView/tasksTab.tsx 小任务展开钮 ×1 | 裸 `<button>` 包 ChevronDown | `<Button variant="ghost" size="icon" className="h-6 w-6 …">`（展开机制见十八轮增补） |
 
 **核对后保留手写**（按 43.3 规则，非漏网）：modelRoutePicker 菜单行与触发器 ×10、taskAssign 投放点/多选行/chip × ×3、teamsButton 列表行/清除钮 ×3、membersTab 选择卡 ×2、index 侧栏导航钮 ×2、tasksTab 返回条/工作目录钮 ×2。
+
+**十八轮 DA31 增补（2026-09-05，用户拍板「小任务列表展开用 Accordion」）**：主任务详情页的小任务列表展开由逐卡 shadcn Collapsible + 手写多开状态升级为 **shadcn Accordion**（`type="multiple"` + `value=expandedSubIds`，多开状态机交给组件；触发钮/展开位/拖拽结构不变）。Accordion 按官方 Manual 流程新增 vendor：registry JSON 的 `dependencies` 声明 `@radix-ui/react-accordion`，随件安装——与库内 dialog/select/tabs 等件的依赖结构完全一致（shadcn 组件源码 = Radix 原语 + cva + Tailwind，见 43.1 前言）。适配注记见 43.2 表；collapsible.tsx 随之空出转为预留件；shared.tsx 注入样式表里已死的 details/summary 规则一并清除。
+
+**十九轮增补（2026-09-05，用户拍板「能用组件的就用组件——Pagination/Tooltip/Toast 全迁 + 全仓重扫」）**：43.6 初版的三个「核对后不迁」全部翻案接线。**Pagination**：membersTab 分页迁 `<Pagination>` 骨架（Previous/Next asChild 包 Button，`<a>` 链接语义经 Slot 改道——button.tsx Comp 同款模式）；**Tooltip**：vendor tooltip.tsx（内嵌 Provider + 自管 portal），新增 hint.tsx 条件组合件，全仓 20+ 处原生 `title=` 迁 Hint（含 react-dnd 拖拽 chip/把手、行头、步进钮、菜单项、头像栈——Slot 与拖拽 ref 合并实测兼容）；**Toast**：vendor toast.tsx + toaster.tsx + hooks/useToast.ts，Toaster 挂团队面板根，membersTab 复制反馈（按钮标签翻转撤除）与 teamMembers 保存/同步反馈（就地小字撤除）迁 `toast()`。重扫另清三处冗余 title（modelRoutePicker 失败行与 StationPicker 已在链中行——提示与可见文案完全重复，直接删；avatar.tsx 内嵌 title 撤除——防与使用位提示嵌套双弹）。
+
+**二十轮增补（2026-09-05，用户拍板「原来的 title 换成 Hint 组件，换回来，重新用 title」）**：十九轮的 Tooltip/Hint 迁移整体撤回——全部悬浮提示位（含十九轮删除的三处冗余 title）恢复原生 `title=` 属性，`hint.tsx` 删除、`tooltip.tsx` 转预留件（tooltip 依赖与 vendor 文件保留，出现样式化提示需求再启用）。toast 迁移与 Pagination 迁移不受影响，维持十九轮状态。
 
 ## 43.5 如何新增 vendor 一个组件
 
@@ -155,3 +170,50 @@ shadcn/ui 不是 npm 组件库，而是「把组件源码拷进你的仓库」�
 3. 需要新 Radix 依赖时装 devDependency（react-dnd 同款打进 envelope），lucide 图标走深层 `.mjs` 导入（主入口会拖全量图标进包）。
 4. 若组件含样式文件，走 tsdown 虚拟 CSS 模块字符串内联（usageCalendar 先例）。
 5. `components.json` 的 aliases 已按真实路径登记，无需改动。
+
+## 43.6 一对一检索表（官方组件 ↔ 本仓使用面，2026-09-05 全盘核对）
+
+官方组件全集（43.1）逐件对照本仓代码的结论。判据：43.3 用件规则——chrome 控件必用组件；列表行/菜单行/导航链接/画布投放点/微型贴片钮保留手写。
+
+**已接线（20 件，components/ui/ + hooks/）**
+
+| 组件 | 消费位 |
+| --- | --- |
+| Accordion | tasksTab 小任务列表展开（多开受控，DA31） |
+| Alert | boardTab 待决策横幅（warning 变体）、shared FormErrorNote（destructive）、membersTab 表单错误 |
+| Badge | shared Pill（状态徽标 + 彩点）、eteamsCard/buildCard 阶段徽标 |
+| Button | 全部 chrome 按钮位（弹窗底钮/卡底栏/步进器/分页/移出/删除…10+ 文件） |
+| Card | 各 tab 面板卡（PANEL_CARD_CLASS 覆盖层）×9 文件 |
+| Collapsible | 暂无（预留；原小任务展开位已升级 Accordion） |
+| Dialog | 任务编辑/删除确认、添加成员、创建团队、汇报记录等全部弹窗 |
+| Input | 弹窗表单、rail 快捷搜索、构建工作台 |
+| Pagination | membersTab 角色列表分页（Previous/Next asChild + 计数 pill，十九轮） |
+| Popover | modelRoutePicker（模型二级菜单）、taskAssign（成员多选） |
+| Progress | eteamsCard 进度条 |
+| Select | reportsTab 成员筛选、teamTab 等 |
+| Tabs | teamsButton 弹层页签（下划线三态覆盖层） |
+| Textarea | tasksTab 小任务编辑弹窗 |
+| Toast / Toaster | membersTab 复制反馈、teamMembers 保存/同步反馈（十九轮；Toaster 挂 teamsView 面板根） |
+| Tooltip | 暂无消费方（预留；二十轮撤回——悬浮提示回归原生 title=） |
+| Separator / Skeleton | 暂无（预留件，见下） |
+| portal.ts（自研） | Dialog/Tooltip Content 容器重定向（不逃出 `.eteams-ui` 作用域） |
+
+**核对后不迁（组件存在，但现实现等价或迁移属行为重写）**
+
+| 官方组件 | 本仓现状 | 结论 |
+| --- | --- | --- |
+| Alert Dialog | 删除确认 = Dialog（标题+描述+取消/确认） | 语义等价，不另引件 |
+| Avatar | features/avatar（vue-color-avatar SVG 移植） | 领域件，非中性头像，不换 |
+| Command / Combobox | modelRoutePicker 双钻面板 | 对话 ModelSelect 同构 + 键盘巡航（自定义交互），cmdk 重写属行为迁移 |
+| Dropdown Menu / Context Menu / Menubar | 无操作菜单场景；菜单行语义见保留手写清单 | 无对应位 |
+| Switch / Checkbox / Radio Group / Slider | 无布尔开关/多选/滑杆场景（成员多选走卡槽，领队恢复走步进器） | 无对应位 |
+| Sheet / Drawer | 详情已页面化（任务详情页），汇报记录用 Dialog | 无对应位 |
+| Scroll Area | 原生 overflow-y-auto（宿主滚动条统一） | Radix 滚动条样式包体不划算，不迁 |
+| Skeleton | 加载位是文字行（「角色库加载中…」「正在刷新模型列表…」） | 骨架屏降信息量；件保留预留，出现卡片栅格加载场景再接 |
+| Separator | 分区线均为容器 border-t/b（行内分区） | 无独立分隔线位；件保留预留 |
+| Empty | EMPTY_CLASS（虚线框空态） | 官方件在 v4 registry（本仓 new-york v3 基线），现类等价 |
+| Typography | 官网排版经 docs/41 typeset 端口（eteams.css） | 已有等价体系 |
+| Field / Form / Label | 表单为单字段行（FORM_LABEL_CLASS） | Radix Label 无增益 |
+| Hover Card / Navigation Menu / Breadcrumb / Data Table / Chart / Calendar / Date Picker / Carousel / Aspect Ratio / Resizable / Input OTP / Kbd / Toggle / Toggle Group / Button Group / Sidebar | 无对应场景 | 出现需求再 vendor |
+
+结论：**chrome 控件与官方组件一一对应的位全部已接线**（Pagination/Toast 十九轮补齐；Tooltip 迁移二十轮撤回——悬浮提示按用户拍板回归原生 `title=`）；其余保留位全部有记录在案的语义/观感理由，出现新场景按 43.5 流程补件即可。

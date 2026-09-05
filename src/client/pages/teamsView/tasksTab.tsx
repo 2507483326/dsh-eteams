@@ -19,6 +19,19 @@
  * 只读渲染，不进详情页——合同四数组已合并为一篇 Markdown，task.contractMd）；
  * 十七轮 DA30 修订：展开改用 **shadcn Collapsible**（Radix 受控开合），展开
  * 内容从卡头行下挪到**成员卡槽下面**（用户拍板「出现的文字会在卡槽下面」）。
+ * 十八轮 DA31 修订：展开机制升级 **shadcn Accordion**（Radix 多开受控，
+ * type="multiple" + value=expandedSubIds——多开状态机交给组件；触发钮/
+ * 展开位/拖拽结构不变，docs/43 一对一检索）；十九轮 DA32 修订：展开钮挪到
+ * 按钮组**最右侧**（修改/删除之后）+ ghost hover 底色压平（hover:bg-transparent
+ * 覆盖 hover:bg-accent，用户拍板「放到最右侧，不要这个背景色」）；二十轮
+ * DA33 修订：主任务详情页**头部卡收三件**——成员罗列条上移入卡与任务标题
+ * 同卡（用户拍板「把团队成员放到上面去和任务标题放一起」）、进度行改任务
+ * 卡片同款三计数（共 x 个任务，已完成 x，未完成 x，数字着色）、卡片下面
+ * 加「任务列表」节标题（detailHeader 增 optional extra 槽，任务/小任务详情
+ * 页不传保持原观感）；二十一轮 DA34 修订：「任务列表」标题行改 flex——新增
+ * 小任务钮靠右同排（用户拍板「任务列表右侧是新增任务」），小任务卡撤七轮
+ * 挂靠缩进 ml-4（用户拍板「下面的任务列表左边不留空隙」，改删错误行随卡
+ * 对齐）。
  * 不列小任务明细——九轮
  * DA22）+ 空态行；详情页 = 返回条 + 头部卡 + 编排（主任务：新增小任务 +
  * 小任务卡片全套（卡槽/改删/**把手拖拽调序**——十轮 DA23：只有卡片左上
@@ -74,10 +87,11 @@ import {
 import { Input } from '../../components/ui/input';
 import { Textarea } from '../../components/ui/textarea';
 import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '../../components/ui/collapsible';
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from '../../components/ui/accordion';
 import { TaskDetailContent, TaskStations } from './taskDrawer';
 import { MarkdownDoc } from './markdownDoc';
 import {
@@ -94,10 +108,11 @@ import {
   TASK_GRID_CLASS,
 } from './shared';
 
-/** 七轮 DA20 + 十轮 DA23：小任务卡片——与组卡同观感的全边框卡（挂靠缩进
- * ml-4 保留），左上 grip 把手 = 唯一拖拽源，卡身兼放置目标（拖 A 到 B =
- * A 搬到 B 的执行位）。 */
-const SUBTASK_CARD_CLASS = `mt-1.5 ml-4 cursor-pointer rounded-[8px] border border-solid bg-background px-3 py-2.5 ${BORDER_L1_CLASS}`;
+/** 七轮 DA20 + 十轮 DA23：小任务卡片——与组卡同观感的全边框卡，左上 grip
+ * 把手 = 唯一拖拽源，卡身兼放置目标（拖 A 到 B = A 搬到 B 的执行位）。
+ * 二十一轮 DA34：七轮的挂靠缩进 ml-4 撤除（用户拍板「下面的任务列表左边
+ * 不留空隙」——卡片化后小任务卡已不在组卡内嵌套，缩进无嵌套语义）。 */
+const SUBTASK_CARD_CLASS = `mt-1.5 cursor-pointer rounded-[8px] border border-solid bg-background px-3 py-2.5 ${BORDER_L1_CLASS}`;
 
 /** 小任务卡片（七轮 DA20 调序 + 十轮 DA23 把手化）：**只有左上 grip 把手
  * 可拖**（'eteams-subtask'，draft/ready 才可拖，不可编辑态把手淡化），
@@ -313,9 +328,10 @@ export function TasksTab({
   // 展示（宿主 404/400/500 原样透出——文件夹缺失等）。
   const [folderBusy, setFolderBusy] = useState<number | null>(null);
   const [folderError, setFolderError] = useState<{ taskId: number; message: string } | null>(null);
-  // 十七轮 DA30 小任务展开瞬态：展开态的小任务 id 列表（多开互不影响）。
-  // 开合交互由 shadcn Collapsible（Radix）受控承载，展开内容 = 任务说明 +
-  // 合同 MD（MarkdownDoc 只读渲染，docs/41），渲染在成员卡槽下面。
+  // 十八轮 DA31 小任务展开瞬态：展开态的小任务 id 列表（多开互不影响）。
+  // 开合交互由 shadcn Accordion（Radix，type="multiple" 受控多开）承载，
+  // 展开内容 = 任务说明 + 合同 MD（MarkdownDoc 只读渲染，docs/41），
+  // 渲染在成员卡槽下面。
   const [expandedSubIds, setExpandedSubIds] = useState<number[]>([]);
   const editingTask = editTarget !== null && editTarget.task !== null ? editTarget.task : null;
 
@@ -438,7 +454,10 @@ export function TasksTab({
     </button>
   );
   // 详情页头部卡（主任务/任务共用：#id 主题 + 展示态 pill + blocked + assignee）。
-  const detailHeader = (task: TaskView): ReactNode => (
+  // 二十轮 DA33：主任务详情页增 extra 槽——进度三计数/汇总 chip/成员罗列条
+  // 收进卡内（用户拍板「把团队成员放到上面去和任务标题放一起」）；任务详情页
+  // 不传保持原观感。
+  const detailHeader = (task: TaskView, extra?: ReactNode): ReactNode => (
     <div
       className={cn('rounded-[8px] border border-solid bg-background px-3 py-2.5', BORDER_L1_CLASS)}
     >
@@ -451,6 +470,7 @@ export function TasksTab({
         )}
       </div>
       {task.folder !== null && <div className={MUTED_CLASS}>文件夹：{task.folder}/</div>}
+      {extra}
     </div>
   );
   // 详情页成员罗列条（八轮 DA21：编排收进详情，罗列条随编排走——仅
@@ -577,56 +597,71 @@ export function TasksTab({
     const mutable = selected.status === 'draft' || selected.status === 'ready';
     // docs/29 B.2 组卡汇总：ready 且有小任务时叠加汇总 chip。
     const summary = selected.status === 'ready' && subs.length > 0 ? groupDisplayOf(subs) : null;
-    const progressText =
-      selected.status === 'draft'
-        ? `小任务 ${subs.length} 个`
-        : `小任务 ${done}/${subs.length} 完成`;
     return (
       <TaskDndProvider>
         <div>
           {backBar}
-          {detailHeader(selected)}
-          <div className={cn(MUTED_CLASS, 'mt-1')}>
-            · {progressText}
-            {summary !== null && <GroupSummaryChip summary={summary} />}
-          </div>
-          {mutable && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="mt-1.5"
-              onClick={() => openEdit(selected, null)}
-            >
-              <Plus className="h-3.5 w-3.5" />
-              新增小任务
-            </Button>
+          {/* 二十轮 DA33：头部卡收三件（用户拍板「把团队成员放到上面去和
+            任务标题放一起」）——①进度行改**任务卡片同款三计数**（共 x 个
+            任务，已完成 x，未完成 x，数字着色 success/warning；原「· 小任务
+            n/m 完成」行与 draft 特例撤除）；②汇总 chip 随行入卡（ready 时，
+            B.2 判据不变）；③成员罗列条上移入卡（TeamMemberStrip 自带
+            border-t 分区，仍是小任务卡槽的拖拽源，渲染判据不变）。 */}
+          {detailHeader(
+            selected,
+            <>
+              <div className="mt-1 text-xs text-muted-foreground">
+                共 {subs.length} 个任务，已完成 <span className="text-success">{done}</span>
+                ，未完成 <span className="text-warning">{subs.length - done}</span>
+              </div>
+              {summary !== null && <GroupSummaryChip summary={summary} />}
+              {detailStrip(subs.some((t) => t.status === 'draft' || t.status === 'ready'))}
+            </>,
           )}
-          {subs.map((t, subIndex) => {
-            const subMutable = t.status === 'draft' || t.status === 'ready';
-            // docs/29 DA5/DA13：可编辑窗口内成员框承整链（boxCoversChain）
-            // ——站点行与框内容重合，抑制 TaskStations。
-            const suppressStations = boxCoversChain(t);
-            // 十七轮 DA30：有说明或合同 MD 的卡才可展开，展开就地看正文。
-            const expandable = t.description !== null || t.contractMd !== null;
-            const expanded = expandable && expandedSubIds.includes(t.taskId);
-            return (
-              <div key={t.taskId}>
-                <SubtaskCard
-                  task={t}
-                  onReorder={(from, to) => void submitReorder(from, to)}
-                  onOpen={() => setSelectedTaskId(t.taskId)}
-                >
-                  {/* 十七轮 DA30：小任务卡身包一层 shadcn Collapsible（Radix
-                    受控开合，open 仍由 expandedSubIds 瞬态多开驱动）——触发钮
-                    在卡头行，展开内容渲染在成员卡槽下面。 */}
-                  <Collapsible
-                    open={expanded}
-                    onOpenChange={(open) =>
-                      setExpandedSubIds((cur) =>
-                        open ? [...cur, t.taskId] : cur.filter((id) => id !== t.taskId),
-                      )
-                    }
+          {/* 二十轮 DA33：卡片下面加「任务列表」节标题（用户拍板「卡片下面
+            加标题 任务列表」）——小任务编排区从此有标题。二十一轮 DA34
+            修订（用户拍板「任务列表右侧是新增任务」）：标题行改 flex——
+            标题居左（LIST_TITLE_CLASS 自带 flex-1 占满）、新增小任务钮
+            靠右同排（列表页「任务 n 个」表头行同构）。 */}
+          <div className="mt-1.5 flex items-center gap-3">
+            <div className={LIST_TITLE_CLASS}>任务列表</div>
+            {mutable && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => openEdit(selected, null)}
+              >
+                <Plus className="h-3.5 w-3.5" />
+                新增小任务
+              </Button>
+            )}
+          </div>
+          {/* 十八轮 DA31：小任务列表展开升级 **shadcn Accordion**（Radix
+            多开受控——type="multiple" + value=expandedSubIds，多开互不影响
+            由组件承载；原逐卡 Collapsible + 手写开合状态机撤除）。触发钮/
+            展开位/拖拽结构不变：AccordionItem 替代原包装 div（键与改删错误
+            行原位保留），上游默认 border-b 以 border-b-0 压平（卡片自带
+            mt 间距）；不展开位（卡槽/站点行）仍在 Item 内、内容区外。 */}
+          <Accordion
+            type="multiple"
+            value={expandedSubIds.map(String)}
+            onValueChange={(v) => setExpandedSubIds(v.map(Number))}
+          >
+            {subs.map((t, subIndex) => {
+              const subMutable = t.status === 'draft' || t.status === 'ready';
+              // docs/29 DA5/DA13：可编辑窗口内成员框承整链（boxCoversChain）
+              // ——站点行与框内容重合，抑制 TaskStations。
+              const suppressStations = boxCoversChain(t);
+              // 十七轮 DA30：有说明或合同 MD 的卡才可展开，展开就地看正文。
+              const expandable = t.description !== null || t.contractMd !== null;
+              const expanded = expandedSubIds.includes(t.taskId);
+              return (
+                <AccordionItem key={t.taskId} value={String(t.taskId)} className="border-b-0">
+                  <SubtaskCard
+                    task={t}
+                    onReorder={(from, to) => void submitReorder(from, to)}
+                    onOpen={() => setSelectedTaskId(t.taskId)}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div>
@@ -642,31 +677,6 @@ export function TasksTab({
                         className="flex shrink-0 items-center gap-1.5"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        {/* 十七轮 DA30：展开钮 = shadcn CollapsibleTrigger
-                      （asChild 包钮，有说明或合同 MD 才渲染）——就地展开，
-                      不进详情页；点击不冒泡到卡。 */}
-                        {expandable && (
-                          <CollapsibleTrigger asChild>
-                            {/* 展开钮 = shadcn Button ghost icon（docs/43 扫描
-                              整改）：asChild 包钮，有说明或合同 MD 才渲染；
-                              点击不冒泡到卡。 */}
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              title={expanded ? '收起' : '展开'}
-                              className="mt-0.5 h-6 w-6 text-muted-foreground hover:text-foreground"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <ChevronDown
-                                className={cn(
-                                  'h-4 w-4 transition-transform',
-                                  expanded && 'rotate-180',
-                                )}
-                              />
-                            </Button>
-                          </CollapsibleTrigger>
-                        )}
                         {subMutable && (
                           <div className="flex shrink-0 gap-1.5">
                             <Button
@@ -687,6 +697,26 @@ export function TasksTab({
                             </Button>
                           </div>
                         )}
+                        {expandable && (
+                          /* 十九轮 DA32：展开钮挪到按钮组**最右侧**（用户拍板
+                          「放到最右侧」——修改/删除之后），hover 底色压平
+                          （用户拍板「不要这个背景色」——ghost 变体的
+                          hover:bg-accent 被 hover:bg-transparent 覆盖）。
+                          aria-expanded 驱动上游 rotate-180，图标随开合自转；
+                          点击不冒泡到卡。 */
+                          <AccordionTrigger asChild>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              title={expanded ? '收起' : '展开'}
+                              className="mt-0.5 h-6 w-6 text-muted-foreground hover:bg-transparent hover:text-foreground"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <ChevronDown className="h-4 w-4 transition-transform" />
+                            </Button>
+                          </AccordionTrigger>
+                        )}
                       </div>
                     </div>
                     {/* docs/29 A.8（四轮 DA17）：成员卡槽在任务卡下方独立一行
@@ -704,10 +734,11 @@ export function TasksTab({
                       />
                     </div>
                     {!suppressStations && <TaskStations task={t} />}
-                    {/* 十七轮 DA30：展开内容渲染在**成员卡槽下面**（用户拍板
-                    「出现的文字会在卡槽下面」）——说明 + 合同 MD 只读渲染，
-                    点击不冒泡到卡，不误进详情页。 */}
-                    <CollapsibleContent
+                    {/* 展开内容渲染在**成员卡槽下面**（十七轮用户拍板「出现的
+                    文字会在卡槽下面」）——说明 + 合同 MD 只读渲染，点击不冒泡
+                    到卡，不误进详情页。AccordionContent 关态即卸载（原
+                    CollapsibleContent 同口径）。 */}
+                    <AccordionContent
                       className="mt-1.5 border-t border-solid pt-2"
                       onClick={(e) => e.stopPropagation()}
                     >
@@ -715,19 +746,18 @@ export function TasksTab({
                         <div className={LINE_CLASS}>说明：{t.description}</div>
                       )}
                       {t.contractMd !== null && <MarkdownDoc text={t.contractMd} />}
-                    </CollapsibleContent>
-                  </Collapsible>
-                </SubtaskCard>
-                {assignError !== null && assignError.taskId === t.taskId && (
-                  <FormErrorNote className="ml-4">{assignError.message}</FormErrorNote>
-                )}
-                {reorderError !== null && reorderError.taskId === t.taskId && (
-                  <FormErrorNote className="ml-4">{reorderError.message}</FormErrorNote>
-                )}
-              </div>
-            );
-          })}
-          {detailStrip(subs.some((t) => t.status === 'draft' || t.status === 'ready'))}
+                    </AccordionContent>
+                  </SubtaskCard>
+                  {assignError !== null && assignError.taskId === t.taskId && (
+                    <FormErrorNote>{assignError.message}</FormErrorNote>
+                  )}
+                  {reorderError !== null && reorderError.taskId === t.taskId && (
+                    <FormErrorNote>{reorderError.message}</FormErrorNote>
+                  )}
+                </AccordionItem>
+              );
+            })}
+          </Accordion>
           {dialogs}
         </div>
       </TaskDndProvider>

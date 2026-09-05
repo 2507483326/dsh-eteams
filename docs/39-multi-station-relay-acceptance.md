@@ -421,3 +421,81 @@ exhaustive-deps warning：memberDialog.tsx:38 / taskDrawer.tsx:117）/ test
 build（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿。
 GUI 装机冒烟持续**未验证**（Radix Collapsible 的展开/收起交互、展开内容
 「卡槽下面」的观感需装机后在 DSH 面板人工过一遍）。
+
+## 十九轮追加（2026-09-05，DA32 小任务展开钮最右侧 + hover 底色压平）
+
+用户原话：
+
+> 小任务 展开按钮放到最右侧，不要这个背景色
+
+背景：十七轮（DA30）以 shadcn Collapsible 落地展开后，并行流的组件目录批次
+（docs/43）又把展开机制升级为 shadcn Accordion（十八轮 DA31——逐卡 Collapsible
+撤除，`<Accordion type="multiple">` 受控多开 + AccordionItem/AccordionTrigger/
+AccordionContent，触发钮包 ghost 图标 Button + Hint 悬浮提示；该轮随 docs/43
+批次落地，本文与 docs/29 已回补决策行）。本轮在此基础上继续两处修订。
+
+| 项 | 拍板 |
+| --- | --- |
+| 展开钮位置 | 从按钮组首位挪到**最右侧**（修改→删除→⌄；用户拍板「放到最右侧」；不可编辑卡无修改/删除时展开钮本就独居右端，观感一致） |
+| 背景色 | ghost 变体图标 Button 的悬停底色 `hover:bg-accent` 即用户所指背景色——`className` 叠 `hover:bg-transparent` 经 tailwind-merge 压平，悬停只剩字色 muted→foreground 变化、无底色块（用户拍板「不要这个背景色」） |
+
+改动面：`src/client/pages/teamsView/tasksTab.tsx`（触发钮 JSX 挪位 + className）。
+零 host/store/纯函数变更；十八轮 DA31 为并行流批次（四绿门随该批次记录）。
+
+**十九轮四绿门（2026-09-05）**：typecheck / lint（0 error，2 条既有
+exhaustive-deps warning：memberDialog.tsx:38 / taskDrawer.tsx:117）/ test
+（23 文件 **317 用例**全过，用例数持平）/ build
+（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿。
+GUI 装机冒烟持续**未验证**（展开钮最右位观感、悬停无底色需装机后在 DSH
+面板人工过一遍）。
+
+## 二十轮追加（2026-09-05，DA33 主任务详情页头部卡收三件 + 「任务列表」节标题）
+
+用户原话：
+
+> 任务详情页面把团队成员放到上面去和任务标题放一起，下面的小任务也改成 和任务卡片一样 共 x 个任务 已完成 未完成。然后卡片下面加标题  任务列表
+
+背景：本轮只动**主任务（group）详情页**（即有团队成员条与小任务列表的页面）。
+三处拍板逐条落地：
+
+| 项 | 拍板 |
+| --- | --- |
+| 团队成员位置 | 罗列条（TeamMemberStrip，自带 border-t 分区）从页面底部上移进**头部卡**，与任务标题同卡——`detailHeader` 增 optional `extra` 槽（渲染在文件夹行后）；仍是小任务卡槽的拖拽源，渲染判据不变（存在 draft/ready 小任务才渲染）；任务/小任务详情页不传 extra，保持原观感 |
+| 小任务进度显示 | 原头部卡外「· 小任务 n/m 完成」行（含 draft 特例）撤除，改任务列表卡（DA27）同款三计数行「共 x 个任务，已完成 x，未完成 x」，收进头部卡内（进度行本就说小任务，与列表卡结构同构），数字着色 success/warning；汇总 chip（B.2 判据：ready 且有小任务）随行入卡 |
+| 节标题 | 头部卡与「＋ 新增小任务」按钮之间插「任务列表」节标题（LIST_TITLE_CLASS 字号，列表页「任务」表头同款），小任务编排区从此有节名 |
+
+改动面：`src/client/pages/teamsView/tasksTab.tsx`（detailHeader 增 extra 槽、
+主任务详情页 return 块重排、页面底部 detailStrip 调用位删除、节标题插入）。
+小任务卡（展开/卡槽/把手）与任务/小任务详情页均未动。零 host/store/纯函数变更。
+
+**二十轮四绿门（2026-09-05）**：typecheck / lint（0 error，2 条既有
+exhaustive-deps warning：memberDialog.tsx:38 / taskDrawer.tsx:117）/ test
+（23 文件 **317 用例**全过，用例数持平）/ build
+（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿。
+GUI 装机冒烟持续**未验证**（罗列条入卡后的头部卡观感、三计数行、节标题
+位置需装机后在 DSH 面板人工过一遍）。
+
+## 二十一轮追加（2026-09-05，DA34 「任务列表」标题行新增钮靠右 + 小任务卡撤缩进）
+
+用户原话：
+
+> 任务列表右侧是新增任务，下面的任务列表左边不留空隙
+
+背景：二十轮 DA33 在主任务详情页加了「任务列表」节标题后，本轮两处版式
+修订：
+
+| 项 | 拍板 |
+| --- | --- |
+| 新增任务位置 | 「任务列表」标题与「＋ 新增小任务」钮合并为一行——标题居左（LIST_TITLE_CLASS 自带 flex-1 占满）、钮靠右同排（列表页「任务 n 个」表头行同构；钮的独立 mt-1.5 撤除，行整体 mt-1.5） |
+| 列表左空隙 | 小任务卡 SUBTASK_CARD_CLASS 撤七轮 DA20 的挂靠缩进 `ml-4`（mt-1.5 卡间距保留）——卡片化后小任务卡已不在组卡内嵌套，缩进无嵌套语义；卡与头部卡/标题左缘齐平；组内改删错误行（FormErrorNote）随卡对齐同步撤 ml-4 |
+
+改动面：`src/client/pages/teamsView/tasksTab.tsx`（标题行 flex 重排 +
+SUBTASK_CARD_CLASS 撤 ml-4 + 改删错误行撤 ml-4）。任务/小任务详情页未动。
+零 host/store/纯函数变更。
+
+**二十一轮四绿门（2026-09-05）**：typecheck / lint（0 error，2 条既有
+exhaustive-deps warning：memberDialog.tsx:38 / taskDrawer.tsx:117）/ test
+（23 文件 **317 用例**全过，用例数持平）/ build
+（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿。
+GUI 装机冒烟持续**未验证**（标题行同排观感、卡左缘齐平需装机后在 DSH
+面板人工过一遍）。

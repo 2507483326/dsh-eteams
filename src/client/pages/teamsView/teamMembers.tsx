@@ -23,6 +23,7 @@ import { MdEditor } from '../../features/mdEditor/mdEditor';
 import { MEMBER_STATUS_LABELS, memberTone } from '../../features/tasks/taskDisplayStatus';
 import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
+import { toast } from '../../hooks/useToast';
 import { ModelRoutePicker } from './modelRoutePicker';
 import { MarkdownDoc } from './markdownDoc';
 import { handbookSeed, type HandbookSource } from './buildDraft';
@@ -202,7 +203,6 @@ export function MemberCard({
             <div className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
               {activity !== undefined && (
                 <span
-                  title={activity === 'running' ? '子代理运行中' : '子代理已完结'}
                   className={
                     activity === 'running'
                       ? // 状态点光晕（D22f）：green-100 死字面量改 color-mix
@@ -211,6 +211,7 @@ export function MemberCard({
                         'h-[7px] w-[7px] shrink-0 rounded-full bg-success shadow-[0_0_0_3px_color-mix(in_srgb,var(--success)_15%,transparent)]'
                       : 'h-[7px] w-[7px] shrink-0 rounded-full bg-muted-foreground'
                   }
+                  title={activity === 'running' ? '子代理运行中' : '子代理已完结'}
                 />
               )}
               {m.name}
@@ -282,8 +283,6 @@ export function MemberDetailView({
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [savedNote, setSavedNote] = useState(false);
-  const [syncedNote, setSyncedNote] = useState(false);
 
   const memberRow =
     target.kind === 'member' ? team.members.find((m) => m.name === target.name) : undefined;
@@ -357,8 +356,8 @@ export function MemberDetailView({
     try {
       await updateMemberPersona(team.teamId, target.name, text);
       setDraft(null);
-      setSavedNote(true);
-      setTimeout(() => setSavedNote(false), 2500);
+      // 保存反馈迁 shadcn toast()（docs/43 十九轮；原就地瞬时行 2.5s 撤除）。
+      toast({ title: '✓ 已保存到成员详情' });
       refreshActivitySoon();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -379,8 +378,8 @@ export function MemberDetailView({
     try {
       await syncMemberToRoster(team.teamId, target.name, text);
       if (draft !== null) setDraft(null); // 编辑中的草稿已一并落库
-      setSyncedNote(true);
-      setTimeout(() => setSyncedNote(false), 2500);
+      // 同步反馈迁 shadcn toast()（docs/43 十九轮；原就地瞬时行 2.5s 撤除）。
+      toast({ title: `✓ 已同步到角色「${view.name}」` });
       refreshActivitySoon();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -460,8 +459,8 @@ export function MemberDetailView({
                 size="sm"
                 variant="outline"
                 disabled={syncing}
-                title="把当前手册写回角色库同名角色（无同名角色时按成员新建）；编辑中的草稿会一并保存"
                 onClick={() => void syncToRole()}
+                title="把当前手册写回角色库同名角色（无同名角色时按成员新建）；编辑中的草稿会一并保存"
               >
                 同步到角色
               </Button>
@@ -478,8 +477,8 @@ export function MemberDetailView({
                 size="sm"
                 variant="outline"
                 disabled={saving || syncing}
-                title="把当前手册写回角色库同名角色（无同名角色时按成员新建）"
                 onClick={() => void syncToRole()}
+                title="把当前手册写回角色库同名角色（无同名角色时按成员新建）"
               >
                 同步到角色
               </Button>
@@ -487,13 +486,7 @@ export function MemberDetailView({
           )}
         </div>
         {draft === null ? (
-          <>
-            <MarkdownDoc text={display} />
-            {savedNote && <div className={cn(MUTED_CLASS, 'mt-1')}>✓ 已保存到成员详情</div>}
-            {syncedNote && (
-              <div className={cn(MUTED_CLASS, 'mt-1')}>✓ 已同步到角色「{view.name}」</div>
-            )}
-          </>
+          <MarkdownDoc text={display} />
         ) : (
           <MdEditor value={draft} onChange={setDraft} minHeight={260} />
         )}

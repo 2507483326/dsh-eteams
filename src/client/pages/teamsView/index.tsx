@@ -70,6 +70,7 @@ import {
 import { cn } from '../../lib/cn';
 import { ClientErrorBoundary } from '../../lib/diagnostics';
 import { Input } from '../../components/ui/input';
+import { Toaster } from '../../components/ui/toaster';
 import { EteamsBackdrop } from '../../features/backdrop/eteamsBackdrop';
 import { fetchAgentActivity } from '../../lib/api';
 import { useActivityMonitor } from '../../lib/monitor';
@@ -346,6 +347,11 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
       {/* 背景板（docs/22 S22-4）：absolute inset-0 打底，纯装饰零交互；壳
         relative 盖上（两个定位元素按 DOM 序 painting），内容永远可读。 */}
       <EteamsBackdrop />
+      {/* shadcn Toaster（docs/43 十九轮）：操作结果轻提示（成员保存/同步、
+        剪贴板反馈——原就地瞬时文案迁 toast()）。Radix Toast Viewport 就地
+        渲染无 portal，必须在 .eteams-ui 子树内；store 是模块级单例，
+        useToast().toast() 任意处发、这里统一渲染（其它表面自挂自渲染）。 */}
+      <Toaster />
       {/* 卡片化样式（用户反馈）：角色/团队卡片与删除按钮的悬停态一次注入，
         面板内与整页团队页共用同一渲染根，注入一次即可。 */}
       <style>{ROLE_LIST_CSS}</style>

@@ -189,10 +189,11 @@ export const CARD_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(210px,1f
 export const TASK_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3';
 /**
  * 角色/团队/任务列表注入样式表（ROLE_LIST_CSS）消费的主题 token——S12–S14
- * 迁移后 inline 样式消费面已清空；hover/focus-within/attr 选择器与下面的原生
- * details/summary 样式仍需样式表承载（D22f：展开指示的 [open]/::before 规则
- * 无法用工具类表达，同注入这里）。任务主列表小卡（十一轮 DA24）复用团队卡
- * 同款底色/边框/悬停（.eteams-task-card 别名选择器并轨）。
+ * 迁移后 inline 样式消费面已清空；hover/focus-within/attr 选择器仍需样式表
+ * 承载（D22f：伪类规则无法用工具类表达，同注入这里）。任务主列表小卡
+ * （十一轮 DA24）复用团队卡同款底色/边框/悬停（.eteams-task-card 别名选择
+ * 器并轨）。原生 details/summary 样式已随展开面迁移 shadcn Accordion 删除
+ * （docs/43 一对一检索核对，2026-09-05）。
  * D22a 官网 v3 色板接管：原先经 --dsw-alias-*（DSW 蓝家族）的取值全部改
  * 消费 .eteams-ui 作用域内的语义 token（亮/暗由 eteams.css 统一定值），
  * 浅暗两态都不刺眼；半透明一律 color-mix()（token 色禁 /alpha 的替代路径，
@@ -220,11 +221,7 @@ export const ROLE_LIST_CSS = `
    membersTab——docs/43 扫描整改）；类规则随迁删除。 */
 .eteams-role-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .eteams-team-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* 原生 details/summary（构建工作台 ×2，功能性不动）官网化：去 marker +
-   「▸」展开指示随 open 旋转；必须带 .eteams-ui 前缀——style 标签按文档流
-   注入但 CSS 本身是全局的，无前缀会漏进宿主页面。 */
-.eteams-ui details>summary{cursor:pointer;user-select:none;list-style:none}
-.eteams-ui details>summary::-webkit-details-marker{display:none}
-.eteams-ui details>summary::before{content:'▸';display:inline-block;margin-right:6px;color:var(--muted-foreground);transition:transform .15s ease}
-.eteams-ui details[open]>summary::before{transform:rotate(90deg)}
+/* 原生 details/summary 样式（构建工作台展开指示）已随展开面迁移 shadcn
+   Accordion/Collapsible 删除——全仓已无 <details> 消费位（docs/43 一对一
+   检索核对）。 */
 `;

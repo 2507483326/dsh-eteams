@@ -26,6 +26,14 @@ import { Alert } from '../../components/ui/alert';
 import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
 import { Input } from '../../components/ui/input';
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationNext,
+  PaginationPrevious,
+} from '../../components/ui/pagination';
+import { toast } from '../../hooks/useToast';
 import { useDispatch, useSelector } from 'react-redux';
 import type { RootState } from '../../store/app';
 import {
@@ -338,7 +346,11 @@ export function MembersTab({
         type: 'build/confirmBuild',
         payload: {
           name: draftEdit.name.trim(),
-          role: draftEdit.role.trim(),
+          // 名字即身份（与手动创建同口径）：角色输入框已撤（用户反馈
+          // 2026-09-05「去掉角色名下面的角色输入框」），role 空时随名回填
+          // ——host 契约要求非空 role。
+          role:
+            draftEdit.role.trim() !== '' ? draftEdit.role.trim() : draftEdit.name.trim(),
           duty: draftEdit.duty,
           style: draftEdit.style,
           skills: draftEdit.skills,
@@ -360,9 +372,12 @@ export function MembersTab({
       // 已入库卡下线（用户迭代 2026-09-04）：确认成功即回「AI 创建 / 手动
       // 创建」方式选择页——再建一个从方式卡走；预填状态一并清掉，上一轮
       // 的「已填充到对话输入框」横幅不再残留。
+      // 直接跳角色列表（用户反馈 2026-09-05）：入库后用户要看的是新角色
+      // 落进列表，不是方式选择页——与手动创建保存后同款落点。
       setAddMode('choose');
       setAiPrefill(null);
       onDeleted();
+      setView('list');
     } catch (e) {
       setFormError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -435,16 +450,20 @@ export function MembersTab({
   const prefillAi = (): void => {
     setAiPrefill(onPrefillAddPeople());
   };
-  // 复制反馈（用户反馈 2026-09-05 第二批）：writeClipboard 回传是否真的写进
-  // 剪贴板——成功亮「✓ 已复制」、失败亮「复制失败」各 2 秒（此前点了零反
-  // 馈）。计时器挂 ref：重复点击先清旧的，卸载后不误触 setState。
-  const [copyState, setCopyState] = useState<'idle' | 'ok' | 'fail'>('idle');
-  const copyTimer = useRef<number | null>(null);
+  // 复制反馈（docs/43 十九轮）：writeClipboard 回传是否真的写进剪贴板——
+  // 结果迁 shadcn toast()（成功 ✓ 已复制 / 失败 destructive 档；原按钮
+  // 标签翻转「✓ 已复制 2 秒」随迁撤除，就地瞬时文案的组件化收口）。
   const copyTemplate = async (): Promise<void> => {
     const ok = await writeClipboard(ADD_PEOPLE_TEMPLATE).catch(() => false);
-    setCopyState(ok ? 'ok' : 'fail');
-    if (copyTimer.current !== null) window.clearTimeout(copyTimer.current);
-    copyTimer.current = window.setTimeout(() => setCopyState('idle'), 2000);
+    toast(
+      ok
+        ? { title: '✓ 已复制', description: '去对话输入框粘贴发送。' }
+        : {
+            title: '复制失败',
+            description: '剪贴板写入被拒绝——请手动选择命令文本复制。',
+            variant: 'destructive',
+          },
+    );
   };
 
   // 手动创建（用户迭代 2026-09-03）：面板直连名册保存（`roster/saveRoster`
@@ -623,19 +642,12 @@ export function MembersTab({
           {build !== null && build.status === 'awaiting_confirmation' && build.draft !== null && (
             <div>
               <div className={cn('flex items-center gap-2', LINE_CLASS, 'font-semibold')}>
-                {draftAvatarPair !== undefined && (
-                  <Avatar
-                    name={draftEdit.name.trim() !== '' ? draftEdit.name.trim() : build.draft.name}
-                    seed={draftAvatarPair.seed}
-                    salt={draftAvatarPair.salt}
-                    size={30}
-                  />
-                )}
                 草稿已就绪——可直接修改，确认后入库
               </div>
               {formError !== null && <FormErrorNote>{formError}</FormErrorNote>}
               {/* 头像行（用户迭代 2026-09-04）：预览 + 随机换一枚，与下方
-              角色名/角色/手册同一表单节奏（label 在上、控件在下）。 */}
+              角色名/手册同一表单节奏（label 在上、控件在下）。页头标题旁的
+              头像已撤（用户反馈 2026-09-05）——下方头像行就是它的去处。 */}
               <div className={cn(FORM_ROW_CLASS, 'mt-2')}>
                 <span className={FORM_LABEL_CLASS}>头像</span>
                 <div className="flex items-center gap-2.5">
@@ -668,13 +680,6 @@ export function MembersTab({
                 />
               </div>
               <div className={FORM_ROW_CLASS}>
-                <span className={FORM_LABEL_CLASS}>角色</span>
-                <Input
-                  value={draftEdit.role}
-                  onChange={(e) => setDraftEdit({ ...draftEdit, role: e.target.value })}
-                />
-              </div>
-              <div className={FORM_ROW_CLASS}>
                 <span className={FORM_LABEL_CLASS}>
                   人设手册（统一 Markdown：frontmatter + 身份/使命/规则/领域专章/沟通风格）
                 </span>
@@ -686,9 +691,7 @@ export function MembersTab({
               <div className="mt-2 flex items-center gap-2">
                 <Button
                   size="sm"
-                  disabled={
-                    confirming || draftEdit.name.trim() === '' || draftEdit.role.trim() === ''
-                  }
+                  disabled={confirming || draftEdit.name.trim() === ''}
                   onClick={() => void confirmDraft()}
                 >
                   <IconPlusOutline16 />
@@ -857,14 +860,13 @@ export function MembersTab({
                 ))}
                 {/* 填充/复制两钮常驻（用户反馈 2026-09-05 第二批「点填充按
                 钮就都消失了」）：填充成功不再收走按钮行——复制仍随时可用；
-                复制带「✓ 已复制」瞬时反馈（writeClipboard 回传 false 时亮
-                「复制失败」，不假装成功）。 */}
+                复制反馈迁 shadcn toast()（docs/43 十九轮，按钮标签不再翻转）。 */}
                 <div className="mt-2.5 flex items-center gap-2">
                   <Button size="sm" onClick={prefillAi}>
                     {aiPrefill === 'set' ? '重新填充' : '填充'}
                   </Button>
                   <Button size="sm" variant="secondary" onClick={() => void copyTemplate()}>
-                    {copyState === 'ok' ? '✓ 已复制' : copyState === 'fail' ? '复制失败' : '复制'}
+                    复制
                   </Button>
                   {aiPrefill !== 'set' && (
                     <span className={cn(MUTED_CLASS, 'mt-0')}>
@@ -1170,27 +1172,42 @@ export function MembersTab({
               })}
             </div>
             {totalPages > 1 && (
-              <div className="mt-2.5 flex items-center justify-center gap-3">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={safePage === 0}
-                  onClick={() => setPage(safePage - 1)}
-                >
-                  上一页
-                </Button>
-                <span className={PAGE_PILL_CLASS}>
-                  第 {safePage + 1} / {totalPages} 页 · 共 {filtered.length} 个
-                </span>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={safePage >= totalPages - 1}
-                  onClick={() => setPage(safePage + 1)}
-                >
-                  下一页
-                </Button>
-              </div>
+              /* shadcn Pagination（docs/43 十九轮一对一检索整改）：nav/ul/li
+              语义骨架，Previous/Next asChild 包 Button（无路由面板——上游
+              <a> 链接语义经 Slot 改道）；中位计数 pill 照旧。 */
+              <Pagination className="mt-2.5">
+                <PaginationContent>
+                  <PaginationItem>
+                    <PaginationPrevious asChild>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={safePage === 0}
+                        onClick={() => setPage(safePage - 1)}
+                      >
+                        上一页
+                      </Button>
+                    </PaginationPrevious>
+                  </PaginationItem>
+                  <PaginationItem>
+                    <span className={PAGE_PILL_CLASS}>
+                      第 {safePage + 1} / {totalPages} 页 · 共 {filtered.length} 个
+                    </span>
+                  </PaginationItem>
+                  <PaginationItem>
+                    <PaginationNext asChild>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={safePage >= totalPages - 1}
+                        onClick={() => setPage(safePage + 1)}
+                      >
+                        下一页
+                      </Button>
+                    </PaginationNext>
+                  </PaginationItem>
+                </PaginationContent>
+              </Pagination>
             )}
           </>
         )}

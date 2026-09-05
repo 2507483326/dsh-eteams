@@ -159,3 +159,15 @@ declare module 'lucide-react/dist/esm/icons/grip-vertical.mjs' {
   >;
   export default GripVertical;
 }
+
+// docs/43 十九轮增补：Pagination 分页省略号的 MoreHorizontal。同款深层导入
+// 纪律（一个图标只进一个模块）。
+declare module 'lucide-react/dist/esm/icons/more-horizontal.mjs' {
+  import type { ForwardRefExoticComponent, RefAttributes } from 'react';
+  import type { LucideProps } from 'lucide-react';
+
+  const MoreHorizontal: ForwardRefExoticComponent<
+    Omit<LucideProps, 'ref'> & RefAttributes<SVGSVGElement>
+  >;
+  export default MoreHorizontal;
+}
