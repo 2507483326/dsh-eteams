@@ -6,7 +6,7 @@
  * @module dsh-eteams/client/pages/teamsView/tasksTab
  */
 import { useState, type ReactNode } from 'react';
-import Minus from 'lucide-react/dist/esm/icons/minus.mjs';
+import { useDrag, useDrop } from 'react-dnd';
 import Plus from 'lucide-react/dist/esm/icons/plus.mjs';
 import {
   createTeamTask,
@@ -16,8 +16,19 @@ import {
 } from '../../lib/api';
 import { cn } from '../../lib/cn';
 import { refreshActivitySoon, type TaskView, type TeamSnapshot } from '../../lib/monitor';
-import { TaskAssignDropBox, TaskDndProvider, TeamMemberStrip } from '../../features/tasks/taskAssign';
-import { boxRendersContent, clearedChain } from '../../features/tasks/taskAssignCore';
+import {
+  SUBTASK_DRAG_TYPE,
+  TaskAssignDropBox,
+  TaskDndProvider,
+  TeamMemberStrip,
+  type SubtaskDragItem,
+} from '../../features/tasks/taskAssign';
+import {
+  boxCoversChain,
+  chainAfterRemove,
+  depPatchesForReorder,
+  executionOrderOf,
+} from '../../features/tasks/taskAssignCore';
 import { STATUS_GROUPS, displayStatusOf, groupDisplayOf, type GroupSummary } from '../../features/tasks/taskDisplayStatus';
 import { Button } from '../../components/ui/button';
 import {
@@ -29,28 +40,83 @@ import {
 } from '../../components/ui/dialog';
 import { Input } from '../../components/ui/input';
 import { Textarea } from '../../components/ui/textarea';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '../../components/ui/select';
 import { TaskDrawer, TaskStations } from './taskDrawer';
 import {
   BORDER_L1_CLASS,
   CHIP_CLASS,
   EMPTY_CLASS,
-  FORM_LABEL_CLASS,
   FormErrorNote,
   MUTED_CLASS,
   Pill,
-  SELECT_NONE,
   dotClass,
 } from './shared';
 
 /** 原 styles.taskRow（任务行：l1 下边线 / 8px 圆角 / 指针）。 */
 const TASK_ROW_CLASS = `cursor-pointer rounded-[8px] border-b border-solid px-2 py-2.5 ${BORDER_L1_CLASS}`;
+
+/** 七轮 DA20：小任务卡片——与组卡同观感的全边框卡（挂靠缩进 ml-4 保留），
+ * 兼作拖拽源/放置目标（拖 A 到 B = A 搬到 B 的执行位）。 */
+const SUBTASK_CARD_CLASS = `mt-1.5 ml-4 cursor-pointer rounded-[8px] border border-solid bg-background px-3 py-2.5 ${BORDER_L1_CLASS}`;
+
+/** 小任务卡片（七轮 DA20）：拖拽源（eteams-subtask，draft/ready 才可拖）+
+ * 放置目标（同父兄弟卡才亮；drop 时 onReorder 以最新快照现算依赖改写补丁，
+ * 非乐观更新）。拖拽中半透明、悬停 ring 高亮；执行序号徽标由调用方渲染；
+ * 点击整卡 = 开合详情抽屉（拖拽不触发 click）。 */
+function SubtaskCard({
+  task,
+  onReorder,
+  onToggle,
+  children,
+}: {
+  task: TaskView;
+  onReorder: (fromTaskId: number, toTaskId: number) => void;
+  onToggle: () => void;
+  children: ReactNode;
+}): ReactNode {
+  const editable = task.status === 'draft' || task.status === 'ready';
+  const [{ isDragging }, dragRef] = useDrag<
+    SubtaskDragItem,
+    unknown,
+    { isDragging: boolean }
+  >(
+    () => ({
+      type: SUBTASK_DRAG_TYPE,
+      item: { taskId: task.taskId, parentId: task.parentId, editable },
+      canDrag: () => editable,
+      collect: (monitor) => ({ isDragging: monitor.isDragging() }),
+    }),
+    [task.taskId, task.parentId, editable],
+  );
+  const [{ isOver }, dropRef] = useDrop<SubtaskDragItem, unknown, { isOver: boolean }>(
+    () => ({
+      accept: SUBTASK_DRAG_TYPE,
+      canDrop: (item) =>
+        item.editable &&
+        item.taskId !== task.taskId &&
+        item.parentId === task.parentId &&
+        editable,
+      drop: (item) => onReorder(item.taskId, task.taskId),
+      collect: (monitor) => ({ isOver: monitor.isOver() && monitor.canDrop() }),
+    }),
+    [task.taskId, task.parentId, editable, onReorder],
+  );
+  return (
+    <div
+      ref={(node) => {
+        dragRef(node);
+        dropRef(node);
+      }}
+      className={cn(
+        SUBTASK_CARD_CLASS,
+        isDragging && 'opacity-50',
+        isOver && 'ring-1 ring-primary',
+      )}
+      onClick={onToggle}
+    >
+      {children}
+    </div>
+  );
+}
 
 /** 展示态徽标（docs/29 B.3 渲染位）：中性 pill（Badge secondary + 6px dot，
  * tone 按展示态逐格对表——29-M3 同桶异色）+ 重试计数 detail 小字。TaskDrawer
@@ -97,14 +163,9 @@ function GroupSummaryChip({ summary }: { summary: GroupSummary }): ReactNode {
   );
 }
 
-/** 成员槽编辑行（任务编辑弹窗内的一站草稿）。 */
-interface SlotDraft {
-  member: string;
-  stageBrief: string;
-}
-
 /** 任务编辑/新增弹窗目标（docs/26）：group = 挂靠的主任务（任务单）；
- * task = 被编辑的小任务，null = 新增小任务。 */
+ * task = 被编辑的小任务，null = 新增小任务。六轮 DA19：弹窗不再编排链
+ * （成员槽编辑段撤除）——链增删调序只走任务行下方卡槽（＋多选/×/拖动）。 */
 interface TaskEditTarget {
   group: TaskView;
   task: TaskView | null;
@@ -115,13 +176,16 @@ interface TaskEditTarget {
 TaskDrawer），开合仍走 ui model 的 setExpandedTask。
 docs/26 对话任务：顶部「对话任务」区块渲染 kind==='group' 的主任务（任务
 单）卡 + 嵌套小任务行；小任务在 draft/ready（未领取）时面板可改删——修
-改弹窗（主题/说明/成员槽编辑）与删除确认弹窗，主任务卡内可新增小任务。
-编辑/删除弹窗为组件内瞬态 useState，不入 ui model；保存/删除成功后
-refreshActivitySoon 立即回拉快照。
+改弹窗（主题/说明；六轮 DA19 起不再编排链）与删除确认弹窗，主任务卡内可
+新增小任务。编辑/删除弹窗为组件内瞬态 useState，不入 ui model；保存/删除
+成功后 refreshActivitySoon 立即回拉快照。
 docs/29 拖拽指派：根包 TaskDndProvider（单实例）；每张组卡下方成员罗列条
-（拖拽源）+ 小任务行尾成员框（TaskAssignDropBox，drop=下一待执行站快捷位，
-整链重发 updateTeamTask、非乐观更新）；assignBusy/assignError 瞬态同
-editBusy/editError 模式，错误就地 FormErrorNote。 */
+（拖拽源）+ 小任务行下方成员卡槽（TaskAssignDropBox，链编排唯一入口——
+拖放追加/替换/调序、＋多选、×移除；整链重发 updateTeamTask、非乐观更新）；
+assignBusy/assignError 瞬态同 editBusy/editError 模式，错误就地 FormErrorNote。
+七轮 DA20：小任务渲染为全边框卡片（SubtaskCard），按执行序（兄弟依赖拓扑序）
+展示并带序号；拖 A 卡到 B 卡 = 调执行顺序（depPatchesForReorder 现算依赖
+改写补丁，逐发 updateTeamTask({dependencies})），reorderError 同模式。 */
 export function TasksTab({
   team,
   now,
@@ -136,7 +200,6 @@ export function TasksTab({
   const [editTarget, setEditTarget] = useState<TaskEditTarget | null>(null);
   const [editSubject, setEditSubject] = useState('');
   const [editDesc, setEditDesc] = useState('');
-  const [editSlots, setEditSlots] = useState<SlotDraft[]>([]);
   const [editBusy, setEditBusy] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<TaskView | null>(null);
@@ -146,15 +209,17 @@ export function TasksTab({
   // taskId 定位（框禁用 + 透明度），error 单槽记录受影响小任务（行内展示）。
   const [assignBusy, setAssignBusy] = useState<number | null>(null);
   const [assignError, setAssignError] = useState<{ taskId: number; message: string } | null>(null);
+  // 七轮 DA20 拖卡调执行顺序瞬态：补丁按序逐发（dependencies 整体替换），
+  // error 记落点卡（行内展示，同 assignError 模式）。
+  const [reorderError, setReorderError] = useState<{ taskId: number; message: string } | null>(
+    null,
+  );
   const editingTask = editTarget !== null && editTarget.task !== null ? editTarget.task : null;
 
   const openEdit = (group: TaskView, task: TaskView | null): void => {
     setEditTarget({ group, task });
     setEditSubject(task?.subject ?? '');
     setEditDesc(task?.description ?? '');
-    setEditSlots(
-      task === null ? [] : task.chain.map((s) => ({ member: s.member, stageBrief: s.stageBrief })),
-    );
     setEditError(null);
   };
   const closeEdit = (): void => {
@@ -164,10 +229,8 @@ export function TasksTab({
   const saveEdit = async (): Promise<void> => {
     const target = editTarget;
     if (target === null) return;
-    // 未选成员的空站点丢弃；chain 整体替换——未动的站原样重发。
-    const chain: TaskSlotInput[] = editSlots
-      .filter((s) => s.member !== '')
-      .map((s) => ({ member: s.member, stageBrief: s.stageBrief.trim() }));
+    // 六轮 DA19：弹窗不再编排链——update 不发 chain（host 不改链，卡槽为
+    // 链编排唯一入口）；新增不带 chain（建后经卡槽添加）。
     setEditBusy(true);
     setEditError(null);
     try {
@@ -176,13 +239,11 @@ export function TasksTab({
           subject: editSubject.trim(),
           ...(editDesc.trim() !== '' ? { description: editDesc.trim() } : {}),
           parentTaskId: target.group.taskId,
-          ...(chain.length > 0 ? { chain } : {}),
         });
       } else {
         await updateTeamTask(team.teamId, target.task.taskId, {
           subject: editSubject.trim(),
           description: editDesc.trim(),
-          chain,
         });
       }
       setEditTarget(null);
@@ -224,6 +285,24 @@ export function TasksTab({
     }
   };
 
+  // 拖卡调执行顺序（七轮 DA20）：补丁由 depPatchesForReorder 以当前快照现算
+  // （兄弟依赖线性链改写，只含 deps 实际变化且 draft/ready 的卡），按序逐发
+  // updateTeamTask({dependencies})——非乐观更新；部分失败也回拉快照对齐。
+  const submitReorder = async (fromTaskId: number, toTaskId: number): Promise<void> => {
+    const patches = depPatchesForReorder(team.tasks, fromTaskId, toTaskId);
+    if (patches === null) return;
+    setReorderError(null);
+    try {
+      for (const patch of patches) {
+        await updateTeamTask(team.teamId, patch.taskId, { dependencies: patch.dependencies });
+      }
+      refreshActivitySoon();
+    } catch (e) {
+      setReorderError({ taskId: toTaskId, message: e instanceof Error ? e.message : String(e) });
+      refreshActivitySoon();
+    }
+  };
+
   const groups = team.tasks.filter((t) => t.kind === 'group');
   // docs/29 DA2：DndProvider 只包 TasksTab（消费面唯一，单实例单 Provider，
   // 随 tab 卸载销毁；1s 轮询只换数据不重挂 Provider）。
@@ -240,7 +319,11 @@ export function TasksTab({
               <span className="text-xs font-normal text-muted-foreground">· {groups.length}</span>
             </div>
             {groups.map((group) => {
-              const subs = team.tasks.filter((t) => t.parentId === group.taskId);
+              // 七轮 DA20：小任务按执行序展示（兄弟依赖拓扑序，创建序平局）——
+              // 计数/汇总与顺序无关，修复「数量没有变化」的口径不变。
+              const subs = executionOrderOf(
+                team.tasks.filter((t) => t.parentId === group.taskId),
+              );
               const done = subs.filter((t) => t.status === 'completed').length;
               const mutable = group.status === 'draft' || group.status === 'ready';
               // docs/29 B.2 组卡汇总：ready 且有小任务时叠加汇总 chip（error >
@@ -281,21 +364,25 @@ export function TasksTab({
                       新增小任务
                     </Button>
                   )}
-                  {subs.map((t) => {
+                  {subs.map((t, subIndex) => {
                     const subMutable = t.status === 'draft' || t.status === 'ready';
-                    // docs/29 A.5.1：单站点（chain≤1）且框有内容时站点行与框
-                    // 内容重合——抑制 TaskStations；多站点保留（框只承下一站）。
-                    const suppressStations = t.chain.length === 1 && boxRendersContent(t);
+                    // docs/29 DA5/DA13：可编辑窗口内成员框承整链（boxCoversChain）
+                    // ——站点行与框内容重合，抑制 TaskStations；开跑/冻结后框只
+                    // 承单站，站点行照常。
+                    const suppressStations = boxCoversChain(t);
                     return (
                       <div key={t.taskId}>
-                        <div
-                          className={cn(TASK_ROW_CLASS, 'ml-4')}
-                          onClick={() =>
+                        <SubtaskCard
+                          task={t}
+                          onReorder={(from, to) => void submitReorder(from, to)}
+                          onToggle={() =>
                             setExpandedTask(expandedTask === t.taskId ? null : t.taskId)
                           }
                         >
                           <div className="flex items-start justify-between gap-2">
                             <div>
+                              {/* 七轮 DA20：执行序号（executionOrderOf 位次）。 */}
+                              <span className={cn(MUTED_CLASS, 'mr-0.5')}>{subIndex + 1}.</span>
                               <strong>#{t.taskId}</strong> {t.subject}
                               <DisplayStatusPill status={t.status} className="ml-1" />
                               {t.blocked && <BlockedPill blockedFrom={t.blockedFrom} />}
@@ -327,22 +414,30 @@ export function TasksTab({
                                   </Button>
                                 </div>
                               )}
-                              {/* docs/29 A.8：行尾成员框（拖拽指派 drop target；
-                            框自身对不可渲染情形返回 null——空链只读等）。 */}
-                              <TaskAssignDropBox
-                                task={t}
-                                members={team.members}
-                                busy={assignBusy === t.taskId}
-                                onAssign={(chain) => void submitAssignChain(t.taskId, chain)}
-                                onClear={() => void submitAssignChain(t.taskId, clearedChain(t))}
-                                onOpenEdit={() => openEdit(group, t)}
-                              />
                             </div>
                           </div>
+                          {/* docs/29 A.8（四轮 DA17）：成员卡槽移到任务行下方独立
+                            一行（拖拽指派 drop target；框自身对不可渲染情形返回
+                            null——空链只读等）。点击不冒泡到行（不触发展开）。 */}
+                          <div className="mt-1.5" onClick={(e) => e.stopPropagation()}>
+                            <TaskAssignDropBox
+                              task={t}
+                              members={team.members}
+                              busy={assignBusy === t.taskId}
+                              onAssign={(chain) => void submitAssignChain(t.taskId, chain)}
+                              onRemoveStation={(index) =>
+                                void submitAssignChain(t.taskId, chainAfterRemove(t, index))
+                              }
+                              onOpenEdit={() => openEdit(group, t)}
+                            />
+                          </div>
                           {!suppressStations && <TaskStations task={t} />}
-                        </div>
+                        </SubtaskCard>
                         {assignError !== null && assignError.taskId === t.taskId && (
                           <FormErrorNote className="ml-4">{assignError.message}</FormErrorNote>
+                        )}
+                        {reorderError !== null && reorderError.taskId === t.taskId && (
+                          <FormErrorNote className="ml-4">{reorderError.message}</FormErrorNote>
                         )}
                         {expandedTask === t.taskId && (
                           <TaskDrawer
@@ -431,9 +526,9 @@ export function TasksTab({
           </div>
         )}
 
-        {/* docs/26 小任务编辑/新增弹窗：主题 + 说明 + 成员槽（站点按序接力）。
-      新增时空表单；修改时按当前值回填（成员槽从执行链展开）。host 校验
-      成员在团/合同冻结（领取后），错误就地显示。 */}
+        {/* docs/26 小任务编辑/新增弹窗：主题 + 说明（六轮 DA19：成员槽编辑
+      段撤除——链编排只走任务行下方卡槽：＋多选 / × / chip 拖动调序）。
+      新增时空表单。host 校验合同冻结（领取后），错误就地显示。 */}
         <Dialog
           open={editTarget !== null}
           onOpenChange={(next) => {
@@ -446,8 +541,8 @@ export function TasksTab({
                 {editingTask !== null ? `修改 #${editingTask.taskId}` : '新增小任务'}
               </DialogTitle>
               <DialogDescription className={MUTED_CLASS}>
-                挂靠任务单 #{editTarget?.group.taskId ?? ''}（{editTarget?.group.subject ?? ''}）；
-                成员槽按序接力，站点留空可跳过。
+                挂靠任务单 #{editTarget?.group.taskId ?? ''}（{editTarget?.group.subject ?? ''}
+                ）；成员接力请在任务行下方的卡槽中拖放或点「＋」添加。
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-2.5">
@@ -463,67 +558,6 @@ export function TasksTab({
                 placeholder="说明 / 验收要点（可空）"
                 onChange={(e) => setEditDesc(e.target.value)}
               />
-              <div>
-                <span className={FORM_LABEL_CLASS}>成员槽（按序接力）</span>
-                {editSlots.map((s, i) => (
-                  <div key={i} className="mt-1.5 flex items-center gap-1.5">
-                    <Select
-                      value={s.member === '' ? SELECT_NONE : s.member}
-                      onValueChange={(v) =>
-                        setEditSlots((list) =>
-                          list.map((x, j) =>
-                            j === i ? { ...x, member: v === SELECT_NONE ? '' : v } : x,
-                          ),
-                        )
-                      }
-                    >
-                      <SelectTrigger className="h-[30px] w-[42%] shrink-0 px-2.5 text-[12px] font-medium">
-                        <SelectValue placeholder="— 成员 —" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value={SELECT_NONE} className="text-[12px]">
-                          — 成员 —
-                        </SelectItem>
-                        {team.members.map((m) => (
-                          <SelectItem key={m.name} value={m.name} className="text-[12px]">
-                            {m.name}（{m.role}）
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Input
-                      className="h-[30px] min-w-0 flex-1 px-2.5 text-[12px]"
-                      value={s.stageBrief}
-                      placeholder="该站产出 / 交接物"
-                      onChange={(e) =>
-                        setEditSlots((list) =>
-                          list.map((x, j) => (j === i ? { ...x, stageBrief: e.target.value } : x)),
-                        )
-                      }
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      className="h-[30px] w-[30px] shrink-0"
-                      aria-label="移除站点"
-                      onClick={() => setEditSlots((list) => list.filter((_, j) => j !== i))}
-                    >
-                      <Minus className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                ))}
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="mt-1.5"
-                  onClick={() => setEditSlots((list) => [...list, { member: '', stageBrief: '' }])}
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  添加站点
-                </Button>
-              </div>
               {editError !== null && <FormErrorNote>{editError}</FormErrorNote>}
               <div className="flex items-center justify-end gap-2 pt-1">
                 <Button

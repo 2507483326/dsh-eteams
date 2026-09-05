@@ -448,12 +448,17 @@ export function MembersTab({
     refreshBuild();
   };
 
-  // AI 创建入口（方式选择卡 / 重试填充 / 再建一个共用）：此刻才把命令预填
-  // 进对话输入框（onPrefillAddPeople → addPeople.prefillComposer），面板不
-  // 自动发送；结果落 aiPrefill 驱动 AI 创建页的状态行。
+  // AI 创建入口（方式选择卡共用）：进页不直接填充对话框（用户迭代
+  // 2026-09-05）——页面上给「填充 / 复制」两个按钮，点「填充」（prefillAi
+  // → onPrefillAddPeople → addPeople.prefillComposer）此刻才把命令预填进
+  // 对话输入框；结果落 aiPrefill 驱动状态行。每次进页重置预填态，两个
+  // 按钮重新出现（已填充过的横幅不跨进入残留）。
   const fillAi = (): void => {
-    setAiPrefill(onPrefillAddPeople());
+    setAiPrefill(null);
     setAddMode('ai');
+  };
+  const prefillAi = (): void => {
+    setAiPrefill(onPrefillAddPeople());
   };
 
   // 手动创建（用户迭代 2026-09-03）：面板直连名册保存（`roster/saveRoster`
@@ -811,14 +816,22 @@ export function MembersTab({
               </div>
             </div>
           )}
-          {build !== null && build.status === 'cancelled' && (
-            // 已放弃的构建：上下文（步骤/草稿/需求）都保存在会话里，
-            // 「继续构建」唤醒后台代理从中断处接着跑（docs/19.16）。
+          {build !== null && build.status === 'cancelled' && addMode === 'ai' && (
+            // 已放弃的构建（用户迭代 2026-09-05：只在 AI 创建页出现，并标出
+            // 在建角色——草稿名优先，没起名就退回原始需求）：上下文（步骤/
+            // 草稿/需求）都保存在会话里，「继续构建」唤醒后台代理从中断处
+            // 接着跑（docs/19.16）。
             <Card className={PANEL_CARD_CLASS}>
               <div className="flex items-center gap-2">
-                <div className={cn(LINE_CLASS, 'my-0 font-semibold')}>已放弃本次构建</div>
+                <div className={cn(LINE_CLASS, 'my-0 font-semibold')}>
+                  已放弃本次构建
+                  {build.draft?.name !== undefined && build.draft.name !== ''
+                    ? ` · ${build.draft.name}`
+                    : ''}
+                </div>
                 <Pill tone="muted">已中断</Pill>
               </div>
+              {build.request !== '' && <div className={MUTED_CLASS}>需求：{build.request}</div>}
               {build.note !== '' && <div className={MUTED_CLASS}>{build.note}</div>}
               <div className="mt-2 flex items-center gap-2">
                 <Button size="sm" disabled={confirming} onClick={() => void resume()}>
@@ -903,8 +916,9 @@ export function MembersTab({
                 </div>
               </div>
             ) : addMode === 'ai' ? (
-              // AI 创建（用户迭代 2026-09-03）：点「AI 创建」此刻才把命令填
-              // 进对话输入框，回车发送后回到本页实时看构建。
+              // AI 创建（用户迭代 2026-09-05）：进页不直接填充对话框——先给
+              // 「填充 / 复制」两个按钮，点「填充」才把命令填进对话输入框，
+              // 回车发送后回到本页实时看构建。
               <div>
                 <div className="flex items-center gap-2">
                   <span className="inline-flex text-primary">
@@ -943,9 +957,27 @@ export function MembersTab({
                     提示：已模拟「键入 /eteam +
                     空格」完成命令认领（claimed）——补全两个【】占位符后直接回车即可；编辑正文时命令高亮收起属正常行为。
                   </div>
+                ) : aiPrefill === null ? (
+                  // 未填充态（用户迭代 2026-09-05）：进页先给「填充 / 复制」
+                  // 两个按钮——点「填充」此刻才写对话输入框，不点不动输入框。
+                  <div className="mt-2.5 flex items-center gap-2">
+                    <Button size="sm" onClick={prefillAi}>
+                      填充
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => void writeClipboard(ADD_PEOPLE_TEMPLATE)}
+                    >
+                      复制
+                    </Button>
+                    <span className={cn(MUTED_CLASS, 'mt-0')}>
+                      点「填充」把命令填进对话输入框，或复制后去对话粘贴发送。
+                    </span>
+                  </div>
                 ) : (
                   <div className="mt-2.5 flex items-center gap-2">
-                    <Button size="sm" variant="secondary" onClick={fillAi}>
+                    <Button size="sm" variant="secondary" onClick={prefillAi}>
                       重试填充
                     </Button>
                     <Button
@@ -986,7 +1018,7 @@ export function MembersTab({
                     <span className="min-w-0 flex-1">
                       <span className="block text-sm font-semibold text-foreground">AI 创建</span>
                       <span className="mt-0.5 block text-xs leading-5 text-muted-foreground">
-                        把命令填进对话输入框，角色构建师在对话里帮你补全人设；草稿就绪后回来确认入库。
+                        进入后点「填充」把命令填进对话输入框（或复制去粘贴），角色构建师在对话里帮你补全人设；草稿就绪后回来确认入库。
                       </span>
                     </span>
                     <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />

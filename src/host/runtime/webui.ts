@@ -1073,11 +1073,7 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               }
               const { team, workspacePath } = located;
               const chain = readChainParam(body.chain);
-              const parentTaskIdRaw = str(body.parentTaskId, '');
-              const parentTaskId =
-                parentTaskIdRaw !== '' && Number.isFinite(Number(parentTaskIdRaw))
-                  ? Number(parentTaskIdRaw)
-                  : undefined;
+              const parentTaskId = readTaskIdParam(body.parentTaskId);
               try {
                 const task = await createTask(
                   envFor(ctx, config, workspacePath),
@@ -1114,6 +1110,7 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               }
               const { team, workspacePath } = located;
               const chain = readChainParam(body.chain);
+              const dependencies = readDependenciesParam(body.dependencies);
               const taskId = Number.parseInt(segments[3] ?? '', 10);
               try {
                 const task = await updateTask(
@@ -1126,6 +1123,7 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                       ? { description: str(body.description) }
                       : {}),
                     ...(chain !== undefined ? { chain } : {}),
+                    ...(dependencies !== undefined ? { dependencies } : {}),
                   },
                 );
                 sendJson(res, 200, { ok: true, taskId: task.id });
@@ -1643,6 +1641,39 @@ function readChainParam(value: unknown): { member: string; stageBrief: string }[
     >;
     return { member: str(record.member, ''), stageBrief: str(record.stageBrief, '') };
   });
+}
+
+/**
+ * Coerce a client-supplied task id (主任务挂靠 parentTaskId 等) into a finite
+ * number — JSON 发 number、字符串数字都收，其余（空串/缺省/非数）一律 undefined。
+ * 七轮修复：此前走 str() 只收字符串，客户端发的 JSON number 被静默丢弃，
+ * 小任务全部落到顶层（挂靠失败）。
+ */
+function readTaskIdParam(value: unknown): number | undefined {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed === '') return undefined;
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Coerce a client-supplied dependencies array (小任务执行顺序 = 兄弟依赖链,
+ * 七轮 DA20) into number[] — 元素收 number 或数字串，非数组 = undefined
+ * （调用方省略该字段）；含任何非法元素整包拒绝（undefined），避免半改写。
+ */
+function readDependenciesParam(value: unknown): number[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const ids: number[] = [];
+  for (const entry of value) {
+    const id = readTaskIdParam(entry);
+    if (id === undefined) return undefined;
+    ids.push(id);
+  }
+  return ids;
 }
 
 /** Parse a JSON object body; throws on non-object payloads. */

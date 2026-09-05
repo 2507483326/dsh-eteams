@@ -1128,6 +1128,47 @@ describe('conversation task workflow (docs/26)', () => {
     const unknownDialog = await h.get(`/eteams-api/team/${teamId}/member/Ghost/dialog`);
     expect(unknownDialog.code).toBe(404);
   });
+
+  it('accepts numeric parentTaskId and rewrites dependencies via the update route (七轮 DA20)', async () => {
+    const h = await installFull();
+    const created = await h.post('/eteams-api/team', { name: '顺序团队', sessionId: 'cap-conv' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    const group = ((await h.call!('eteams_submit_task', { subject: '主任务' })) as { taskId: number })
+      .taskId;
+
+    // 七轮修复回归锁：客户端（api.ts）发 JSON number，此前路由 str() 只收
+    // 字符串 → parentTaskId 被静默丢弃 → 小任务落到顶层（挂靠失败、主任务
+    // 计数不变）。number 与数字串都要挂上。
+    const first = await h.post(`/eteams-api/team/${teamId}/task`, {
+      subject: '第一步',
+      parentTaskId: group,
+    });
+    expect(first.code).toBe(200);
+    const firstId = json<{ taskId: number }>(first.body).taskId;
+    const second = await h.post(`/eteams-api/team/${teamId}/task`, {
+      subject: '第二步',
+      parentTaskId: group,
+    });
+    const secondId = json<{ taskId: number }>(second.body).taskId;
+    let team = readTeam(teamId);
+    expect(team.tasks.find((t) => t.id === firstId)!.parentId).toBe(group);
+    expect(team.tasks.find((t) => t.id === secondId)!.parentId).toBe(group);
+
+    // 执行顺序通道：update 路由透传 dependencies（整体替换 + wouldCycle 校验）。
+    const dep = await h.post(`/eteams-api/team/${teamId}/task/${secondId}/update`, {
+      dependencies: [firstId],
+    });
+    expect(dep.code).toBe(200);
+    team = readTeam(teamId);
+    expect(team.tasks.find((t) => t.id === secondId)!.dependencies).toEqual([firstId]);
+
+    // 畸形依赖载荷与既有 panel 通道同口径：整包视为缺省（不改字段）。
+    const badDeps = await h.post(`/eteams-api/team/${teamId}/task/${secondId}/update`, {
+      dependencies: ['第一步', {}],
+    });
+    expect(badDeps.code).toBe(200);
+    expect(readTeam(teamId).tasks.find((t) => t.id === secondId)!.dependencies).toEqual([firstId]);
+  });
 });
 
 describe('GET /board 跨团队聚合 (docs/35 §6 Q1/Q3/Q4/Q5/Q9)', () => {

@@ -336,11 +336,16 @@ export async function createTeamTask(
   return { taskId: typeof body.taskId === 'number' ? body.taskId : Number(body.taskId ?? 0) };
 }
 
-/** Update an unclaimed task (subject/description/成员槽). */
+/** Update an unclaimed task (subject/description/成员槽/依赖 = 执行顺序, 七轮 DA20). */
 export async function updateTeamTask(
   teamId: string,
   taskId: number,
-  payload: { subject?: string; description?: string; chain?: TaskSlotInput[] },
+  payload: {
+    subject?: string;
+    description?: string;
+    chain?: TaskSlotInput[];
+    dependencies?: number[];
+  },
 ): Promise<void> {
   await requestJson(
     `${API_BASE}/team/${encodeURIComponent(teamId)}/task/${taskId}/update`,
@@ -351,6 +356,7 @@ export async function updateTeamTask(
         ...(payload.subject !== undefined ? { subject: payload.subject } : {}),
         ...(payload.description !== undefined ? { description: payload.description } : {}),
         ...(payload.chain !== undefined ? { chain: payload.chain } : {}),
+        ...(payload.dependencies !== undefined ? { dependencies: payload.dependencies } : {}),
       }),
     },
   );

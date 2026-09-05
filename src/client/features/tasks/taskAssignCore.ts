@@ -1,6 +1,13 @@
 /**
  * 小任务拖拽指派——纯逻辑层（docs/29 A.3.1）：drop 只产生「chain 全量替换」
  * （DA3/DA10：与「修改」弹窗的保存同构，复用 updateTeamTask，无新通道）。
+ * 2026-09-04 二轮（DA13 多人接力槽位）：空白处 drop=追加站点（stationIndex
+ * 缺省）、chip drop=定点替换（stationIndex 显式）、全链同名去重、chip ×=
+ * 逐站移除；可编辑窗口内框承整链（boxCoversChain 抑制 TaskStations）。
+ * 2026-09-05 六轮（DA19 链编排收进卡槽）：chip 拖动调序（chainAfterReorder）、
+ * 「＋」点开多选追加（chainAfterAppendMany）——弹窗不再做链编排。
+ * 2026-09-05 七轮（DA20 卡片拖拽调执行顺序）：兄弟依赖链语义——
+ * executionOrderOf（拓扑展示序）+ depPatchesForReorder（拖卡→依赖改写补丁）。
  * 本模块不 import React，可被 vitest 直测（tests/taskAssign.test.ts）。
  *
  * @module dsh-eteams/client/taskAssignCore
@@ -27,47 +34,100 @@ export function isAssignEditable(task: ChainTaskLike): boolean {
   return (task.status === 'draft' || task.status === 'ready') && task.chainCursor === -1;
 }
 
-/** 下一待执行站点 index（E7：chainCursor+1；可编辑窗口内恒为 0）。 */
-export function nextPendingIndex(task: ChainTaskLike): number {
-  return task.chainCursor + 1;
-}
-
 /**
- * drop → 新链（A.3.1 规则表）：
+ * drop → 新链（A.3.1 规则表，二轮 DA13）：
  * - 不可编辑 → null（不注册 drop target，双保险）；
- * - 目标站点成员与拖入成员同名 → null（DA8 去重：不发请求，no-op）；
- * - chain 为空 → 追加 `{member, stageBrief:''}` 单站（update 通道空 brief 合法，
- *   E4/29.5 冲突①）；
- * - 有链 → 以**当前快照的 chain**为底替换下一待执行站成员、stageBrief 原值
- *   保留，其余站点原样——整链重发（A.3.1：不缓存旧 chain，drop 时现算）。
+ * - 拖入成员与链内**任一站点**同名 → null（DA8 二轮：全链去重——接力链同
+ *   一成员占两站无意义且防误操作；不发请求，组件给出 200ms 微反馈）；
+ * - `stationIndex` 缺省（空白处 drop）= 末尾追加 `{member, stageBrief:''}`
+ *   （update 通道空 brief 合法，E4/29.5 冲突①）——**接力链不设上限**（DA15
+ *   曾限 2 站，2026-09-05 四轮拍板废止）；
+ * - `stationIndex` 显式（chip drop）= 定点替换该站成员、stageBrief 原值保留；
+ *   越界（快照中途变化）→ null（no-op，不误追加）。
  * 返回 null = no-op（不发请求）。
  */
-export function nextChainAfterDrop(task: ChainTaskLike, member: string): TaskSlotInput[] | null {
-  if (!isAssignEditable(task)) return null;
-  const index = nextPendingIndex(task);
-  const target = task.chain[index];
-  if (target !== undefined && target.member === member) return null;
+export function nextChainAfterDrop(
+  task: ChainTaskLike,
+  member: string,
+  stationIndex?: number,
+): TaskSlotInput[] | null {
+  if (!isAssignEditable(task) || task.chain.some((s) => s.member === member)) return null;
   const chain: TaskSlotInput[] = task.chain.map((s) => ({
     member: s.member,
     stageBrief: s.stageBrief,
   }));
-  if (target === undefined) {
+  if (stationIndex === undefined) {
     chain.push({ member, stageBrief: '' });
-  } else {
-    chain[index] = { member, stageBrief: target.stageBrief };
+    return chain;
   }
+  const replaced: { member: string; stageBrief: string } | undefined = task.chain[stationIndex];
+  if (replaced === undefined) return null;
+  chain[stationIndex] = { member, stageBrief: replaced.stageBrief };
   return chain;
 }
 
-/** 框内 × 的出现条件（DA4/A.3.1 移除行：仅单站链，清空=整链重发为空链，
- * 回到「领队自由指派」；多站点移除走「修改」弹窗）。 */
-export function canClearStation(task: ChainTaskLike): boolean {
-  return isAssignEditable(task) && task.chain.length <= 1;
+/** chip × 的出现条件（可编辑窗口内任意站可移除；整链重排走「修改」弹窗）。 */
+export function canRemoveStation(task: ChainTaskLike): boolean {
+  return isAssignEditable(task);
 }
 
-/** 清空站点的新链（空链任务回到领队自由指派，docs/06 §6.7 合法）。 */
-export function clearedChain(_task: ChainTaskLike): TaskSlotInput[] {
-  return [];
+/** 移除站点后的新链（末站移除即空链，回「领队自由指派」，docs/06 §6.7 合法）。 */
+export function chainAfterRemove(task: ChainTaskLike, index: number): TaskSlotInput[] {
+  return task.chain
+    .filter((_, i) => i !== index)
+    .map((s) => ({ member: s.member, stageBrief: s.stageBrief }));
+}
+
+/**
+ * 卡槽内 chip 拖动调序（2026-09-05 六轮拍板 DA19）：把 `fromIndex` 站搬到
+ * `toIndex` 站的位置（数组搬移——被拖站占目标位、其余顺移，stageBrief 随站
+ * 走）。from===to（自拖自放）或越界（快照中途变化）→ null（no-op，不重发）。
+ */
+export function chainAfterReorder(
+  task: ChainTaskLike,
+  fromIndex: number,
+  toIndex: number,
+): TaskSlotInput[] | null {
+  if (!isAssignEditable(task) || fromIndex === toIndex) return null;
+  if (fromIndex < 0 || toIndex < 0) return null;
+  if (fromIndex >= task.chain.length || toIndex >= task.chain.length) return null;
+  const moved = task.chain[fromIndex];
+  if (moved === undefined) return null;
+  const chain: TaskSlotInput[] = task.chain
+    .filter((_, i) => i !== fromIndex)
+    .map((s) => ({ member: s.member, stageBrief: s.stageBrief }));
+  chain.splice(toIndex, 0, { member: moved.member, stageBrief: moved.stageBrief });
+  return chain;
+}
+
+/**
+ * 「＋」点开的成员多选追加（六轮 DA19）：按勾选顺序逐个末尾追加
+ * `{member, stageBrief:''}`（update 通道空 brief 合法，E4/29.5 冲突①）；
+ * 已在链中的名字过滤跳过（DA8 全链去重同源），一个都不新增 → null
+ * （no-op，不发请求）。
+ */
+export function chainAfterAppendMany(
+  task: ChainTaskLike,
+  members: readonly string[],
+): TaskSlotInput[] | null {
+  if (!isAssignEditable(task)) return null;
+  const existing = new Set(task.chain.map((s) => s.member));
+  const fresh = members.filter((m) => !existing.has(m));
+  if (fresh.length === 0) return null;
+  return [
+    ...task.chain.map((s) => ({ member: s.member, stageBrief: s.stageBrief })),
+    ...fresh.map((m) => ({ member: m, stageBrief: '' })),
+  ];
+}
+
+/**
+ * 罗列条工号徽章文案（2026-09-05 五轮拍板 DA18）：host 发 `ET-0001` 格式串
+ * （docs/21），徽章只显数字——剥 `ET-` 前缀；其余格式原样保留（不猜格式）；
+ * null/空串（legacy 成员）→ null 不渲染徽章。
+ */
+export function employeeBadgeOf(employeeId: string | null | undefined): string | null {
+  if (employeeId === null || employeeId === undefined || employeeId === '') return null;
+  return employeeId.replace(/^ET-/, '');
 }
 
 /**
@@ -82,12 +142,112 @@ export function readonlyStationMember(task: ChainTaskLike): string | null {
   return task.chain[index]?.member ?? null;
 }
 
-/** 框是否有可渲染内容（决定单站点 TaskStations 的抑制，A.5.1）。 */
-export function boxRendersContent(task: ChainTaskLike): boolean {
-  return isAssignEditable(task) || readonlyStationMember(task) !== null;
+/**
+ * 可编辑窗口内框承整链（DA5/DA13）→ TasksTab 抑制 TaskStations 重复渲染；
+ * 空链时 TaskStations 本就渲染 null，无需抑制。
+ */
+export function boxCoversChain(task: ChainTaskLike): boolean {
+  return isAssignEditable(task) && task.chain.length > 0;
 }
 
-/** 下一待执行站的当前成员（可编辑框内 chip 渲染 / 去重判断）；无站返回 null。 */
-export function dropTargetMember(task: ChainTaskLike): string | null {
-  return task.chain[nextPendingIndex(task)]?.member ?? null;
+/**
+ * 小任务卡片拖拽调执行顺序（2026-09-05 七轮拍板 DA20）所需的最小任务面：
+ * TaskView 满足之，测试用 plain 对象即可构造。执行顺序 = **兄弟依赖链**
+ * （host 靠 dependencies 物化阻塞 wait/blockedFrom 强制先后，docs/36），
+ * 故「卡片也能拖拽调执行顺序」落地为依赖改写补丁，不是新增排序通道。
+ */
+export interface OrderableTaskLike {
+  taskId: number;
+  parentId: number | null;
+  status: string;
+  dependencies: readonly number[];
 }
+
+/** 执行顺序补丁（updateTeamTask 的 dependencies 整体替换载荷）。 */
+export interface TaskDependencyPatch {
+  taskId: number;
+  dependencies: number[];
+}
+
+/** 执行顺序重排的可编辑窗口与 host updateTask 的依赖闸同口径：draft/ready。 */
+function isOrderEditable(task: OrderableTaskLike): boolean {
+  return task.status === 'draft' || task.status === 'ready';
+}
+
+/**
+ * 兄弟小任务的展示执行顺序：对兄弟集（同 parentId，含 null 顶层）内的依赖做
+ * 分层拓扑排序（Kahn，逐轮按输入序=创建序平局），兄弟集外的依赖（外部依赖）
+ * 不参与兄弟排序；环/悬空引用（防御，host 侧 wouldCycle 本应杜绝）把剩余
+ * 按输入序直接追加，绝不丢任务。
+ */
+export function executionOrderOf<T extends OrderableTaskLike>(tasks: readonly T[]): T[] {
+  const siblingIds = new Set(tasks.map((t) => t.taskId));
+  const ordered: T[] = [];
+  const emitted = new Set<number>();
+  let remaining = [...tasks];
+  while (remaining.length > 0) {
+    const ready = remaining.filter((t) =>
+      t.dependencies.every((d) => !siblingIds.has(d) || emitted.has(d)),
+    );
+    if (ready.length === 0) {
+      ordered.push(...remaining);
+      break;
+    }
+    for (const task of ready) {
+      ordered.push(task);
+      emitted.add(task.taskId);
+    }
+    remaining = remaining.filter((t) => !emitted.has(t.taskId));
+  }
+  return ordered;
+}
+
+/**
+ * 拖卡 fromTaskId 到 toTaskId 位置后的依赖改写补丁（七轮 DA20）：
+ * - 同 parentId 的兄弟才可互拖；from===to、任一卡不在列表、任一卡不可编辑
+ *   （已领取/冻结，host 依赖闸同口径）→ null（no-op）；
+ * - 现执行序（executionOrderOf）内做数组搬移（同六轮 chip 口径：被拖卡占
+ *   目标位、其余顺移）；
+ * - 按新执行序把兄弟依赖重写为**线性链**（第 k 位依赖第 k-1 位），各卡保留
+ *   兄弟集外的外部依赖；
+ * - 只返回 deps 实际变化且仍可编辑（draft/ready）的补丁——已领取/冻结的兄弟
+ *   不改写（host 会拒），其链位滑动属已知口径（docs/29 A.7）；
+ * - 全部无变化 → null（不发请求）。
+ */
+export function depPatchesForReorder(
+  tasks: readonly OrderableTaskLike[],
+  fromTaskId: number,
+  toTaskId: number,
+): TaskDependencyPatch[] | null {
+  if (fromTaskId === toTaskId) return null;
+  const byId = new Map(tasks.map((t) => [t.taskId, t]));
+  const from = byId.get(fromTaskId);
+  const to = byId.get(toTaskId);
+  if (!from || !to) return null;
+  if (from.parentId !== to.parentId) return null;
+  if (!isOrderEditable(from) || !isOrderEditable(to)) return null;
+  const siblings = tasks.filter((t) => t.parentId === from.parentId);
+  const order = executionOrderOf(siblings);
+  const fromPos = order.findIndex((t) => t.taskId === fromTaskId);
+  const toPos = order.findIndex((t) => t.taskId === toTaskId);
+  if (fromPos < 0 || toPos < 0) return null;
+  const moved = order[fromPos]!;
+  const next = order.filter((_, i) => i !== fromPos);
+  next.splice(toPos, 0, moved);
+  const siblingIds = new Set(siblings.map((t) => t.taskId));
+  const patches: TaskDependencyPatch[] = [];
+  next.forEach((task, position) => {
+    if (!isOrderEditable(task)) return;
+    const external = task.dependencies.filter((d) => !siblingIds.has(d));
+    const prev = position > 0 ? next[position - 1]!.taskId : undefined;
+    const deps =
+      prev === undefined || external.includes(prev) ? [...external] : [...external, prev];
+    const changed =
+      deps.length !== task.dependencies.length ||
+      deps.some((d) => !task.dependencies.includes(d));
+    if (!changed) return;
+    patches.push({ taskId: task.taskId, dependencies: deps });
+  });
+  return patches.length > 0 ? patches : null;
+}
+
