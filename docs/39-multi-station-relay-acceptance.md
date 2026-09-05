@@ -394,3 +394,30 @@ GUI 装机冒烟持续**未验证**（同上口径——MD 渲染观感、小任
 迁移回填需装机后在 DSH 面板人工过一遍；其中旧库迁移由 getDb 幂等迁移承载，
 tests/store.test.ts 迁移回归锁回填内容与重开幂等，tests/lifecycle.test.ts
 锁新库路径 contractMd 回读）。
+
+## 十七轮追加（2026-09-05，DA30 小任务展开 shadcn 化 + 展开内容下移卡槽下）
+
+用户原话（十六轮追加的同日续单）：
+
+> 小任务加上展开功能使用 https://ui.shadcn.com/ 组件来做，出现的文字会在卡槽下面
+
+拍板（DA30）：十六轮的小任务展开交互改用 **shadcn/ui Collapsible** 组件实现；
+展开出现的文字渲染在**成员卡槽下面**。
+
+| 项 | 拍板 |
+| --- | --- |
+| 展开交互组件 | shadcn/ui Collapsible——新 vendoring `src/client/components/ui/collapsible.tsx`（Radix `@radix-ui/react-collapsible` 的 Root/Trigger/Content 直出，dialog/popover 同款手动 vendoring 惯例）；`package.json` devDependencies 增 `@radix-ui/react-collapsible@^1.1.20`（tsdown 照常打包进 client envelope，external 清单不含 radix） |
+| 卡身结构 | 小任务卡身包一层 `Collapsible`（受控 `open` 仍由 expandedSubIds 瞬态多开驱动，`onOpenChange` 回写；十六轮手写 toggleSub 删除）；卡头行展开钮改 `CollapsibleTrigger asChild` 包原 ChevronDown 钮；expandable 判据（有说明或合同 MD 才渲染触发钮）、箭头 rotate-180、点击 stopPropagation 防误进详情页保持 |
+| 展开内容位置 | 十六轮展开区在「卡头行 ↔ 成员卡槽」之间；本轮 `CollapsibleContent` 挪到**成员卡槽（TaskAssignDropBox）+ 站点行（TaskStations）之后**、卡内最底——用户拍板「出现的文字会在卡槽下面」。内容本体不变：说明行 + 合同 MD（MarkdownDoc 只读渲染）+ border-t 分区 |
+
+改动面：`src/client/components/ui/collapsible.tsx`（新）、`package.json` +
+`pnpm-lock.yaml`（新依赖）、`src/client/pages/teamsView/tasksTab.tsx`（Collapsible
+包裹 + 触发钮/内容件替换 + 展开内容下移）。零 host/store/纯函数变更——本轮
+纯 client 交互件替换与布局调整。
+
+**十七轮四绿门（2026-09-05）**：typecheck / lint（0 error，2 条既有
+exhaustive-deps warning：memberDialog.tsx:38 / taskDrawer.tsx:117）/ test
+（23 文件 **317 用例**全过，用例数与十六轮持平——纯交互件替换无新测试面）/
+build（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿。
+GUI 装机冒烟持续**未验证**（Radix Collapsible 的展开/收起交互、展开内容
+「卡槽下面」的观感需装机后在 DSH 面板人工过一遍）。

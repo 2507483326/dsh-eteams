@@ -17,6 +17,8 @@
  * 底色/内边距全去，常规字色 + hover 下划线）；十六轮 DA29 修订：主任务详情页
  * 小任务卡加**展开钮**（有说明/合同 MD 的卡可展开，就地显示说明 + 合同 MD
  * 只读渲染，不进详情页——合同四数组已合并为一篇 Markdown，task.contractMd）；
+ * 十七轮 DA30 修订：展开改用 **shadcn Collapsible**（Radix 受控开合），展开
+ * 内容从卡头行下挪到**成员卡槽下面**（用户拍板「出现的文字会在卡槽下面」）。
  * 不列小任务明细——九轮
  * DA22）+ 空态行；详情页 = 返回条 + 头部卡 + 编排（主任务：新增小任务 +
  * 小任务卡片全套（卡槽/改删/**把手拖拽调序**——十轮 DA23：只有卡片左上
@@ -55,7 +57,11 @@ import {
   depPatchesForReorder,
   executionOrderOf,
 } from '../../features/tasks/taskAssignCore';
-import { displayStatusOf, groupDisplayOf, type GroupSummary } from '../../features/tasks/taskDisplayStatus';
+import {
+  displayStatusOf,
+  groupDisplayOf,
+  type GroupSummary,
+} from '../../features/tasks/taskDisplayStatus';
 import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
 import {
@@ -67,6 +73,11 @@ import {
 } from '../../components/ui/dialog';
 import { Input } from '../../components/ui/input';
 import { Textarea } from '../../components/ui/textarea';
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '../../components/ui/collapsible';
 import { TaskDetailContent, TaskStations } from './taskDrawer';
 import { MarkdownDoc } from './markdownDoc';
 import {
@@ -105,11 +116,7 @@ function SubtaskCard({
   children: ReactNode;
 }): ReactNode {
   const editable = task.status === 'draft' || task.status === 'ready';
-  const [{ isDragging }, dragRef] = useDrag<
-    SubtaskDragItem,
-    unknown,
-    { isDragging: boolean }
-  >(
+  const [{ isDragging }, dragRef] = useDrag<SubtaskDragItem, unknown, { isDragging: boolean }>(
     () => ({
       type: SUBTASK_DRAG_TYPE,
       item: { taskId: task.taskId, parentId: task.parentId, editable },
@@ -122,10 +129,7 @@ function SubtaskCard({
     () => ({
       accept: SUBTASK_DRAG_TYPE,
       canDrop: (item) =>
-        item.editable &&
-        item.taskId !== task.taskId &&
-        item.parentId === task.parentId &&
-        editable,
+        item.editable && item.taskId !== task.taskId && item.parentId === task.parentId && editable,
       drop: (item) => onReorder(item.taskId, task.taskId),
       collect: (monitor) => ({ isOver: monitor.isOver() && monitor.canDrop() }),
     }),
@@ -309,14 +313,10 @@ export function TasksTab({
   // 展示（宿主 404/400/500 原样透出——文件夹缺失等）。
   const [folderBusy, setFolderBusy] = useState<number | null>(null);
   const [folderError, setFolderError] = useState<{ taskId: number; message: string } | null>(null);
-  // 十六轮 DA29 小任务展开瞬态：展开态的小任务 id 列表（多开互不影响）。
-  // 展开内容 = 任务说明 + 合同 MD（MarkdownDoc 只读渲染，docs/41），就地看不进详情页。
+  // 十七轮 DA30 小任务展开瞬态：展开态的小任务 id 列表（多开互不影响）。
+  // 开合交互由 shadcn Collapsible（Radix）受控承载，展开内容 = 任务说明 +
+  // 合同 MD（MarkdownDoc 只读渲染，docs/41），渲染在成员卡槽下面。
   const [expandedSubIds, setExpandedSubIds] = useState<number[]>([]);
-  const toggleSub = (taskId: number): void => {
-    setExpandedSubIds((cur) =>
-      cur.includes(taskId) ? cur.filter((id) => id !== taskId) : [...cur, taskId],
-    );
-  };
   const editingTask = editTarget !== null && editTarget.task !== null ? editTarget.task : null;
 
   const openEdit = (group: TaskView, task: TaskView | null): void => {
@@ -393,10 +393,7 @@ export function TasksTab({
   // （兄弟集按同 parentId 从传入数组取），线性链改写只含 deps 实际变化且
   // draft/ready 的卡，按序逐发 updateTeamTask({dependencies})——非乐观更新；
   // 部分失败也回拉快照对齐。
-  const submitReorder = async (
-    fromTaskId: number,
-    toTaskId: number,
-  ): Promise<void> => {
+  const submitReorder = async (fromTaskId: number, toTaskId: number): Promise<void> => {
     const patches = depPatchesForReorder(team.tasks, fromTaskId, toTaskId);
     if (patches === null) return;
     setReorderError(null);
@@ -428,9 +425,7 @@ export function TasksTab({
   // 八轮 DA21 导航：selectedTaskId（ui model drawerTaskId）非空 = 详情页；
   // 选中任务被删（快照里已无此 id）自动回落列表页。
   const selected =
-    selectedTaskId === null
-      ? null
-      : (team.tasks.find((t) => t.taskId === selectedTaskId) ?? null);
+    selectedTaskId === null ? null : (team.tasks.find((t) => t.taskId === selectedTaskId) ?? null);
   // 返回列表条（详情页顶部；ArrowLeft + 可点击文字）。
   const backBar = (
     <button
@@ -445,10 +440,7 @@ export function TasksTab({
   // 详情页头部卡（主任务/任务共用：#id 主题 + 展示态 pill + blocked + assignee）。
   const detailHeader = (task: TaskView): ReactNode => (
     <div
-      className={cn(
-        'rounded-[8px] border border-solid bg-background px-3 py-2.5',
-        BORDER_L1_CLASS,
-      )}
+      className={cn('rounded-[8px] border border-solid bg-background px-3 py-2.5', BORDER_L1_CLASS)}
     >
       <div>
         <strong>#{task.taskId}</strong> {task.subject}
@@ -463,8 +455,7 @@ export function TasksTab({
   );
   // 详情页成员罗列条（八轮 DA21：编排收进详情，罗列条随编排走——仅
   // 存在可放置任务（draft/ready）时渲染，作为卡槽的拖拽源）。
-  const detailStrip = (show: boolean): ReactNode =>
-    show ? <TeamMemberStrip team={team} /> : null;
+  const detailStrip = (show: boolean): ReactNode => (show ? <TeamMemberStrip team={team} /> : null);
 
   // 共用弹窗（列表/详情两页都挂）：编辑/新增 + 删除确认。瞬态 useState
   // 不入 ui model；host 校验合同冻结（领取后），错误就地显示。
@@ -616,7 +607,7 @@ export function TasksTab({
             // docs/29 DA5/DA13：可编辑窗口内成员框承整链（boxCoversChain）
             // ——站点行与框内容重合，抑制 TaskStations。
             const suppressStations = boxCoversChain(t);
-            // 十六轮 DA29：有说明或合同 MD 的卡才可展开，展开就地看正文。
+            // 十七轮 DA30：有说明或合同 MD 的卡才可展开，展开就地看正文。
             const expandable = t.description !== null || t.contractMd !== null;
             const expanded = expandable && expandedSubIds.includes(t.taskId);
             return (
@@ -626,63 +617,92 @@ export function TasksTab({
                   onReorder={(from, to) => void submitReorder(from, to)}
                   onOpen={() => setSelectedTaskId(t.taskId)}
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <span className={cn(MUTED_CLASS, 'mr-0.5')}>{subIndex + 1}.</span>
-                      <strong>#{t.taskId}</strong> {t.subject}
-                      <DisplayStatusPill status={t.status} className="ml-1" />
-                      {t.blocked && <BlockedPill blockedFrom={t.blockedFrom} className="ml-1" />}
-                      {t.assignee !== null && (
-                        <span className={cn(MUTED_CLASS, 'ml-1')}>· {t.assignee}</span>
-                      )}
+                  {/* 十七轮 DA30：小任务卡身包一层 shadcn Collapsible（Radix
+                    受控开合，open 仍由 expandedSubIds 瞬态多开驱动）——触发钮
+                    在卡头行，展开内容渲染在成员卡槽下面。 */}
+                  <Collapsible
+                    open={expanded}
+                    onOpenChange={(open) =>
+                      setExpandedSubIds((cur) =>
+                        open ? [...cur, t.taskId] : cur.filter((id) => id !== t.taskId),
+                      )
+                    }
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <span className={cn(MUTED_CLASS, 'mr-0.5')}>{subIndex + 1}.</span>
+                        <strong>#{t.taskId}</strong> {t.subject}
+                        <DisplayStatusPill status={t.status} className="ml-1" />
+                        {t.blocked && <BlockedPill blockedFrom={t.blockedFrom} className="ml-1" />}
+                        {t.assignee !== null && (
+                          <span className={cn(MUTED_CLASS, 'ml-1')}>· {t.assignee}</span>
+                        )}
+                      </div>
+                      <div
+                        className="flex shrink-0 items-center gap-1.5"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {/* 十七轮 DA30：展开钮 = shadcn CollapsibleTrigger
+                      （asChild 包钮，有说明或合同 MD 才渲染）——就地展开，
+                      不进详情页；点击不冒泡到卡。 */}
+                        {expandable && (
+                          <CollapsibleTrigger asChild>
+                            <button
+                              type="button"
+                              title={expanded ? '收起' : '展开'}
+                              className="mt-0.5 cursor-pointer text-muted-foreground hover:text-foreground"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <ChevronDown
+                                className={cn(
+                                  'h-4 w-4 transition-transform',
+                                  expanded && 'rotate-180',
+                                )}
+                              />
+                            </button>
+                          </CollapsibleTrigger>
+                        )}
+                        {subMutable && (
+                          <div className="flex shrink-0 gap-1.5">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => openEdit(selected, t)}
+                            >
+                              修改
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setDeleteTarget(t)}
+                            >
+                              删除
+                            </Button>
+                          </div>
+                        )}
+                      </div>
                     </div>
-                    <div
-                      className="flex shrink-0 items-center gap-1.5"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      {/* 十六轮 DA29：展开钮（有说明或合同 MD 才渲染）——就地
-                      展开，不进详情页；点击不冒泡到卡。 */}
-                      {expandable && (
-                        <button
-                          type="button"
-                          title={expanded ? '收起' : '展开'}
-                          className="mt-0.5 cursor-pointer text-muted-foreground hover:text-foreground"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleSub(t.taskId);
-                          }}
-                        >
-                          <ChevronDown
-                            className={cn('h-4 w-4 transition-transform', expanded && 'rotate-180')}
-                          />
-                        </button>
-                      )}
-                      {subMutable && (
-                        <div className="flex shrink-0 gap-1.5">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => openEdit(selected, t)}
-                          >
-                            修改
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setDeleteTarget(t)}
-                          >
-                            删除
-                          </Button>
-                        </div>
-                      )}
+                    {/* docs/29 A.8（四轮 DA17）：成员卡槽在任务卡下方独立一行
+                    （拖拽指派 drop target；点击不冒泡到卡）。 */}
+                    <div className="mt-1.5" onClick={(e) => e.stopPropagation()}>
+                      <TaskAssignDropBox
+                        task={t}
+                        members={team.members}
+                        busy={assignBusy === t.taskId}
+                        onAssign={(chain) => void submitAssignChain(t.taskId, chain)}
+                        onRemoveStation={(index) =>
+                          void submitAssignChain(t.taskId, chainAfterRemove(t, index))
+                        }
+                        onOpenEdit={() => openEdit(selected, t)}
+                      />
                     </div>
-                  </div>
-                  {/* 十六轮 DA29：展开区（说明 + 合同 MD 只读渲染）——点击不
-                    冒泡到卡，不误进详情页。 */}
-                  {expanded && (
-                    <div
+                    {!suppressStations && <TaskStations task={t} />}
+                    {/* 十七轮 DA30：展开内容渲染在**成员卡槽下面**（用户拍板
+                    「出现的文字会在卡槽下面」）——说明 + 合同 MD 只读渲染，
+                    点击不冒泡到卡，不误进详情页。 */}
+                    <CollapsibleContent
                       className="mt-1.5 border-t border-solid pt-2"
                       onClick={(e) => e.stopPropagation()}
                     >
@@ -690,23 +710,8 @@ export function TasksTab({
                         <div className={LINE_CLASS}>说明：{t.description}</div>
                       )}
                       {t.contractMd !== null && <MarkdownDoc text={t.contractMd} />}
-                    </div>
-                  )}
-                  {/* docs/29 A.8（四轮 DA17）：成员卡槽在任务卡下方独立一行
-                    （拖拽指派 drop target；点击不冒泡到卡）。 */}
-                  <div className="mt-1.5" onClick={(e) => e.stopPropagation()}>
-                    <TaskAssignDropBox
-                      task={t}
-                      members={team.members}
-                      busy={assignBusy === t.taskId}
-                      onAssign={(chain) => void submitAssignChain(t.taskId, chain)}
-                      onRemoveStation={(index) =>
-                        void submitAssignChain(t.taskId, chainAfterRemove(t, index))
-                      }
-                      onOpenEdit={() => openEdit(selected, t)}
-                    />
-                  </div>
-                  {!suppressStations && <TaskStations task={t} />}
+                    </CollapsibleContent>
+                  </Collapsible>
                 </SubtaskCard>
                 {assignError !== null && assignError.taskId === t.taskId && (
                   <FormErrorNote className="ml-4">{assignError.message}</FormErrorNote>
@@ -840,9 +845,8 @@ export function TasksTab({
                 {mainTasks.map((t) => {
                   // 组卡进度：小任务计数与汇总（九轮 DA22 概览口径——只计数
                   // 不列明细；draft 只显示个数，ready 且有明细时叠加汇总）。
-                  const subs = t.kind === 'group'
-                    ? team.tasks.filter((s) => s.parentId === t.taskId)
-                    : [];
+                  const subs =
+                    t.kind === 'group' ? team.tasks.filter((s) => s.parentId === t.taskId) : [];
                   const done = subs.filter((s) => s.status === 'completed').length;
                   const summary =
                     t.kind === 'group' && t.status === 'ready' && subs.length > 0
