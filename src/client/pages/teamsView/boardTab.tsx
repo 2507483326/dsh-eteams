@@ -76,10 +76,11 @@ export function BoardTab({
         </Alert>
       )}
       {/* docs/28 看板 · 每日 Token 消耗日历（全年格子 + 悬浮明细；用户迭代
-      2026-09-04 置顶，卡片规格 + 日历居中见 usageCalendar）。取数 hooks
-      都在子组件内部——子组件只在有团队时挂载，早退分支不会打断任何 hook 序
-      （docs/30 28-M2 的「hooks 在早退前」约束等价成立）。 */}
-      <UsageCalendarCard teamId={team.teamId} />
+      2026-09-05 数据源改全应用口径——GET /usage/calendar，卡自取数不依赖
+      teamId）。取数 hooks 都在子组件内部——子组件只在有团队时挂载，早退
+      分支不会打断任何 hook 序（docs/30 28-M2 的「hooks 在早退前」约束等价
+      成立）。 */}
+      <UsageCalendarCard />
       <Card className={PANEL_CARD_CLASS}>
         <div className={SECTION_TITLE_CLASS}>最近动态</div>
         {/* D22f：事件流去满宽下边线，改留白分组（列表 space-y-1 + 行 py-1.5）。 */}

@@ -146,3 +146,16 @@ declare module 'lucide-react/dist/esm/icons/chevron-left.mjs' {
   >;
   export default ChevronLeft;
 }
+
+// 用户迭代 2026-09-05 增补：主任务详情页小任务卡片的拖拽把手（GripVertical，
+// 十轮 DA23——只有把手可拖，卡身点击进详情）。同款深层导入纪律（一个图标
+// 只进一个模块）。
+declare module 'lucide-react/dist/esm/icons/grip-vertical.mjs' {
+  import type { ForwardRefExoticComponent, RefAttributes } from 'react';
+  import type { LucideProps } from 'lucide-react';
+
+  const GripVertical: ForwardRefExoticComponent<
+    Omit<LucideProps, 'ref'> & RefAttributes<SVGSVGElement>
+  >;
+  export default GripVertical;
+}

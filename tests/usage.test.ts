@@ -1,12 +1,14 @@
 /**
- * docs/28 usage meter tests: attribution priority (28.3.2), live append +
- * route folding, watermark reconcile/dedup (28.3.4), rotation (28.6.1) and
- * the aggregation API (28.4). Fake host ctx captures the firehose listeners
- * installed by installUsageMeter (E18 same-shape).
+ * docs/40 usage meter tests: attribution priority, live write-through into
+ * the two SQLite tables (usage_detail + usage_daily_total), both read scopes
+ * and root merging. The file ledger / watermark / rotation machinery is gone
+ * - a negative test pins that no usage files appear on disk. Fake host ctx
+ * captures the firehose listener installed by installUsageMeter (E18
+ * same-shape).
  *
  * @module dsh-eteams/tests/usage
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Context } from '@deepseek-ai/cordis';
@@ -19,19 +21,15 @@ import { setSessionTeam } from '../src/host/runtime/sessionTeam';
 import {
   dayKeyOf,
   installUsageMeter,
+  readAppUsageCalendar,
   readUsageCalendar,
   registerMemberSession,
   resetUsageMeterForTests,
-  rotateUsage,
-  usageArchiveFile,
-  usageCheckpointFile,
-  usageFile,
   usageWritesIdle,
-  type UsageMeterHandle,
-  type UsageRecord,
 } from '../src/host/runtime/usage';
+import { getDb, LEADER_NAME } from '../src/host/state/db';
+import { recordUsage, type UsageRecord } from '../src/host/state/usageStore';
 import { insertTeamRow, withTeamTx, writeTeam } from '../src/host/state/store';
-import { LEADER_NAME } from '../src/host/state/db';
 import { cleanupTempWorkspace } from './support/tmpWorkspace';
 
 let root: string;
@@ -41,20 +39,18 @@ const config: ETeamsResolvedConfig = resolveConfig({ stateDir: '.eteams' });
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'eteams-usage-'));
   stateRoot = join(root, '.eteams');
-  // 逐项写 usage.jsonl 的用例需要目录先在（meter 写路径自带 mkdir）。
-  mkdirSync(stateRoot, { recursive: true });
   resetUsageMeterForTests();
 });
 
 afterEach(() => {
   resetUsageMeterForTests();
-  // SQLite 连接先关（本套件只在领队归属测试落库）再删目录——退避重试兜住
-  // 刚写完的 usage 文件被扫描短暂占住的情形（tests/support/tmpWorkspace）。
+  // Close the SQLite connection before deleting the directory (getDb caches
+  // per state root; on Windows an open connection blocks rmSync with EPERM).
   cleanupTempWorkspace(root);
 });
 
-/** SQLite 契约播种：team 行 + 领队实例行（usage 的领队归属读领队行
- * mainSessionId，team.captainSessionId 字段已随锚点迁走，docs/36 建议 3）。 */
+/** SQLite seed: team row + leader instance row (usage captain attribution
+ * matches the leader row's mainSessionId on disk). */
 async function seedTeam(name: string, leaderSession: string): Promise<number> {
   let teamId = 0;
   withTeamTx(stateRoot, undefined, (tx) => {
@@ -92,47 +88,35 @@ async function seedTeam(name: string, leaderSession: string): Promise<number> {
 // ---------- fake host ctx (capturing firehose) ----------
 
 interface MeterHarness {
-  handle: UsageMeterHandle;
   emit(session: Session, event: SessionEvent): void;
-  emitCreated(session: Session): void;
-  setSessions(list: Session[]): void;
 }
 
-function installMeter(sessions: Session[] = []): MeterHarness {
+function installMeter(): MeterHarness {
   const listeners = new Map<string, (...args: unknown[]) => unknown>();
-  let live: Session[] = sessions;
   const ctx = {
     on(name: unknown, listener: (...args: unknown[]) => unknown): void {
       listeners.set(String(name), listener);
     },
     logger: { info(): void {}, warn(): void {} },
-    sessions: { list: (): Session[] => live },
   };
-  const handle = installUsageMeter(ctx as unknown as Context, config);
+  installUsageMeter(ctx as unknown as Context, config);
   return {
-    handle,
     emit: (session, event) => {
       listeners.get('session/event')?.(session, event);
-    },
-    emitCreated: (session) => {
-      listeners.get('session/created')?.(session);
-    },
-    setSessions: (list) => {
-      live = list;
     },
   };
 }
 
-function makeSession(id: string, events: SessionEvent[] = [], cwd = root): Session {
+function makeSession(id: string): Session {
   return {
     id,
-    header: { version: 1, id, createdAt: 0, cwd },
-    events,
+    header: { version: 1, id, createdAt: 0, cwd: root },
+    events: [],
     firstLiveSeq: 0,
   } as unknown as Session;
 }
 
-/** assistant/message carrying usage（TokenUsage 子集按测试需要给）。 */
+/** assistant/message carrying usage (TokenUsage subset as needed). */
 function usageEvent(
   seq: number,
   at: number,
@@ -156,27 +140,67 @@ function headerEvent(provider: string, model: string): SessionEvent {
   } as unknown as SessionEvent;
 }
 
-/** Local-noon timestamps → dayKeyOf lands on the same local date deterministically. */
+/** Local-noon timestamps: dayKeyOf lands on the same local date. */
 function noon(year: number, month: number, day: number): number {
   return new Date(year, month - 1, day, 12, 0, 0).getTime();
 }
 
-/** 365/366 as the zero-filled grid builds it (28.4). */
+/** 365/366 as the zero-filled grid builds it. */
 function daysInYear(year: number): number {
   let total = 0;
   for (let month = 0; month < 12; month += 1) total += new Date(year, month + 1, 0).getDate();
   return total;
 }
 
-function readRows(file: string): UsageRecord[] {
-  if (!existsSync(file)) return [];
-  return readFileSync(file, 'utf8')
-    .split('\n')
-    .filter((line) => line.trim() !== '')
-    .map((line) => JSON.parse(line) as UsageRecord);
+type DetailRow = Record<string, unknown>;
+
+/** All usage_detail rows in insertion order. */
+function detailRows(): DetailRow[] {
+  return getDb(stateRoot)
+    .prepare('SELECT * FROM usage_detail ORDER BY usage_detail_id')
+    .all() as DetailRow[];
 }
 
-// ---------- 归属优先级（28.3.2） ----------
+/** The usage_daily_total row for one day (undefined when absent). */
+function totalRow(day: string): DetailRow | undefined {
+  return getDb(stateRoot).prepare('SELECT * FROM usage_daily_total WHERE day = ?').get(day) as
+    | DetailRow
+    | undefined;
+}
+
+/** Seed one detail row straight through the write path (recordUsage). */
+function seedRow(partial: {
+  sessionId: string;
+  seq: number;
+  teamId: string | null;
+  roleKind: UsageRecord['roleKind'];
+  at: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens?: number | null;
+  cacheWriteTokens?: number | null;
+  reasoningTokens?: number | null;
+}): void {
+  const row: UsageRecord = {
+    at: partial.at,
+    day: dayKeyOf(partial.at),
+    sessionId: partial.sessionId,
+    seq: partial.seq,
+    teamId: partial.teamId,
+    memberName: null,
+    roleKind: partial.roleKind,
+    provider: null,
+    model: null,
+    inputTokens: partial.inputTokens,
+    outputTokens: partial.outputTokens,
+    cacheReadTokens: partial.cacheReadTokens ?? null,
+    cacheWriteTokens: partial.cacheWriteTokens ?? null,
+    reasoningTokens: partial.reasoningTokens ?? null,
+  };
+  recordUsage(getDb(stateRoot), row);
+}
+
+// ---------- attribution priority ----------
 
 describe('attribution priority', () => {
   it('member registry wins with memberName', async () => {
@@ -187,15 +211,16 @@ describe('attribution priority', () => {
       usageEvent(1, noon(2025, 6, 15), { inputTokens: 10, outputTokens: 5 }),
     );
     await usageWritesIdle();
-    const rows = readRows(usageFile(stateRoot));
+    const rows = detailRows();
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
-      sessionId: 'mem-1',
-      teamId: 'team-a',
-      memberName: 'Alice',
-      roleKind: 'member',
+      session_id: 'mem-1',
+      team_key: 'team-a',
+      member_name: 'Alice',
+      role_kind: 'member',
       day: '2025-06-15',
     });
+    expect(totalRow('2025-06-15')).toMatchObject({ calls: 1, total_tokens: 15 });
   });
 
   it('captain-child registry resolves before conversation binding', async () => {
@@ -207,26 +232,23 @@ describe('attribution priority', () => {
       usageEvent(1, noon(2025, 6, 15), { inputTokens: 1, outputTokens: 1 }),
     );
     await usageWritesIdle();
-    const rows = readRows(usageFile(stateRoot));
-    expect(rows[0]?.roleKind).toBe('captain-child');
-    expect(rows[0]?.teamId).toBe('team-b');
-    expect(rows[0]?.memberName).toBeNull();
+    const rows = detailRows();
+    expect(rows[0]?.role_kind).toBe('captain-child');
+    expect(rows[0]?.team_key).toBe('team-b');
+    expect(rows[0]?.member_name).toBeNull();
   });
 
   it('captain session matches the leader row mainSessionId on disk', async () => {
-    const teamId = await seedTeam('丙队', 'cap-9');
+    const teamId = await seedTeam('bing-dui', 'cap-9');
     const meter = installMeter();
     meter.emit(
       makeSession('cap-9'),
       usageEvent(1, noon(2025, 6, 15), { inputTokens: 2, outputTokens: 2 }),
     );
     await usageWritesIdle();
-    const rows = readRows(usageFile(stateRoot));
-    expect(rows[0]).toMatchObject({
-      teamId: String(teamId),
-      roleKind: 'captain',
-      memberName: null,
-    });
+    const rows = detailRows();
+    expect(rows[0]).toMatchObject({ team_key: String(teamId), role_kind: 'captain' });
+    expect(rows[0]?.member_name).toBeNull();
   });
 
   it('panel binding (conversation) beats workspace bucket', async () => {
@@ -237,8 +259,7 @@ describe('attribution priority', () => {
       usageEvent(1, noon(2025, 6, 15), { inputTokens: 3, outputTokens: 4 }),
     );
     await usageWritesIdle();
-    const rows = readRows(usageFile(stateRoot));
-    expect(rows[0]).toMatchObject({ teamId: 'team-d', roleKind: 'conversation' });
+    expect(detailRows()[0]).toMatchObject({ team_key: 'team-d', role_kind: 'conversation' });
   });
 
   it('unattributable sessions land in the workspace bucket (teamId null)', async () => {
@@ -248,12 +269,12 @@ describe('attribution priority', () => {
       usageEvent(1, noon(2025, 6, 15), { inputTokens: 9, outputTokens: 9 }),
     );
     await usageWritesIdle();
-    const rows = readRows(usageFile(stateRoot));
-    expect(rows[0]).toMatchObject({ teamId: null, roleKind: 'workspace', memberName: null });
+    const rows = detailRows();
+    expect(rows[0]).toMatchObject({ team_key: null, role_kind: 'workspace', member_name: null });
   });
 });
 
-// ---------- 记账与路线折叠 ----------
+// ---------- live accounting ----------
 
 describe('live accounting', () => {
   it('folds provider/model from request/header and skips usage-less messages', async () => {
@@ -268,16 +289,23 @@ describe('live accounting', () => {
       data: {},
     } as unknown as SessionEvent);
     await usageWritesIdle();
-    const rows = readRows(usageFile(stateRoot));
+    const rows = detailRows();
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       provider: 'deepseek',
       model: 'v3.2',
-      inputTokens: 100,
-      outputTokens: 20,
-      cacheReadTokens: null,
-      cacheWriteTokens: null,
-      reasoningTokens: null,
+      input_tokens: 100,
+      output_tokens: 20,
+      total_tokens: 120,
+      cache_read_tokens: null,
+      cache_write_tokens: null,
+      reasoning_tokens: null,
+    });
+    expect(totalRow('2025-06-15')).toMatchObject({
+      input_tokens: 100,
+      output_tokens: 20,
+      total_tokens: 120,
+      calls: 1,
     });
   });
 
@@ -293,134 +321,73 @@ describe('live accounting', () => {
       }),
     );
     await usageWritesIdle();
-    const rows = readRows(usageFile(stateRoot));
+    const rows = detailRows();
     expect(rows[0]).toMatchObject({
-      inputTokens: 0,
-      outputTokens: 7,
-      cacheReadTokens: null,
-      cacheWriteTokens: null,
-      reasoningTokens: 512,
+      input_tokens: 0,
+      output_tokens: 7,
+      total_tokens: 7,
+      cache_read_tokens: null,
+      cache_write_tokens: null,
+      reasoning_tokens: 512,
     });
-  });
-});
-
-// ---------- 水位对账（28.3.4） ----------
-
-describe('watermark reconcile', () => {
-  it('folds live sessions once, persists checkpoints, and skips refolds', async () => {
-    const session = makeSession('s-3', [
-      usageEvent(1, noon(2025, 6, 15), { inputTokens: 10, outputTokens: 1 }),
-      usageEvent(3, noon(2025, 6, 16), { inputTokens: 20, outputTokens: 2 }),
-    ]);
-    registerMemberSession('s-3', { teamId: 'team-a', memberName: 'Alice' });
-    const meter = installMeter([session]);
-    await meter.handle.reconcileAll();
-    expect(readRows(usageFile(stateRoot))).toHaveLength(2);
-    await meter.handle.flush();
-    expect(JSON.parse(readFileSync(usageCheckpointFile(stateRoot), 'utf8'))).toMatchObject({
-      's-3': { lastSeq: 3 },
-    });
-    // 重启模拟：内存清空后按水位文件重折 → 无新行（种子不重发 + 水位）
-    resetUsageMeterForTests();
-    await meter.handle.reconcileAll();
-    expect(readRows(usageFile(stateRoot))).toHaveLength(2);
+    expect(totalRow('2025-06-15')).toMatchObject({ reasoning_tokens: 512, total_tokens: 7 });
   });
 
-  it('persists the checkpoint of live rows via flush()', async () => {
-    // 会话在装机会话清单里 → reconcileAll 先装在 checkpoint map（loader 完成）
-    const meter = installMeter([makeSession('s-4')]);
-    registerMemberSession('s-4', { teamId: 'team-a', memberName: 'Bob' });
-    await meter.handle.reconcileAll();
+  it('increments the day-total row across events of the same day', async () => {
+    const meter = installMeter();
+    registerMemberSession('s-inc', { teamId: 'team-a', memberName: 'Alice' });
     meter.emit(
-      makeSession('s-4'),
-      usageEvent(5, noon(2025, 6, 15), { inputTokens: 1, outputTokens: 1 }),
+      makeSession('s-inc'),
+      usageEvent(1, noon(2025, 6, 15), { inputTokens: 10, outputTokens: 1 }),
     );
-    await meter.handle.flush();
-    expect(JSON.parse(readFileSync(usageCheckpointFile(stateRoot), 'utf8'))).toMatchObject({
-      's-4': { lastSeq: 5 },
+    meter.emit(
+      makeSession('s-inc'),
+      usageEvent(2, noon(2025, 6, 15), { inputTokens: 20, outputTokens: 2, cacheReadTokens: 5 }),
+    );
+    await usageWritesIdle();
+    expect(detailRows()).toHaveLength(2);
+    expect(totalRow('2025-06-15')).toMatchObject({
+      input_tokens: 30,
+      output_tokens: 3,
+      cache_read_tokens: 5,
+      total_tokens: 38,
+      calls: 2,
     });
-    // 水位在盘：重启后对账不再重折该事件（读侧也无重复行）
-    resetUsageMeterForTests();
-    meter.setSessions([
-      makeSession('s-4', [usageEvent(5, noon(2025, 6, 15), { inputTokens: 1, outputTokens: 1 })]),
-    ]);
-    await meter.handle.reconcileAll();
-    expect(readRows(usageFile(stateRoot))).toHaveLength(1);
   });
 
-  it('read-side (sessionId, seq) dedup hides repeated folds from aggregation', async () => {
-    const base = {
-      at: noon(2025, 6, 15),
-      day: '2025-06-15',
-      sessionId: 's-5',
-      seq: 9,
-      teamId: 'team-a',
-      memberName: 'Alice',
-      roleKind: 'member',
-      provider: null,
-      model: null,
-      inputTokens: 100,
-      outputTokens: 10,
-      cacheReadTokens: null,
-      cacheWriteTokens: null,
-      reasoningTokens: null,
-    } satisfies UsageRecord;
-    writeFileSync(usageFile(stateRoot), `${JSON.stringify(base)}\n${JSON.stringify(base)}\n`);
-    const calendar = readUsageCalendar(stateRoot, 'team-a', 2025);
-    expect(calendar.totals.inputTokens).toBe(100);
-    expect(calendar.totals.calls).toBe(1);
+  it('writes no ledger/watermark/archive files (DB is the sole storage)', async () => {
+    const meter = installMeter();
+    meter.emit(
+      makeSession('s-1'),
+      usageEvent(1, noon(2025, 6, 15), { inputTokens: 10, outputTokens: 5 }),
+    );
+    await usageWritesIdle();
+    expect(detailRows()).toHaveLength(1);
+    expect(existsSync(join(stateRoot, 'usage.jsonl'))).toBe(false);
+    expect(existsSync(join(stateRoot, 'usage-checkpoint.json'))).toBe(false);
+    expect(existsSync(join(stateRoot, 'usage-archive.jsonl'))).toBe(false);
   });
 });
 
-// ---------- 聚合（28.4） ----------
+// ---------- read scopes ----------
 
-describe('readUsageCalendar', () => {
+describe('readUsageCalendar (team scope)', () => {
   it('aggregates by day across months and filters year/team', () => {
-    const row = (
-      sessionId: string,
-      teamId: string | null,
-      at: number,
-      day: string,
-      input: number,
-      output: number,
-      seq = 1,
-      extra: Partial<UsageRecord> = {},
-    ): UsageRecord => ({
-      at,
-      day,
-      sessionId,
-      seq,
-      teamId,
-      memberName: null,
-      roleKind: teamId === null ? 'workspace' : 'captain',
-      provider: null,
-      model: null,
-      inputTokens: input,
-      outputTokens: output,
-      cacheReadTokens: null,
-      cacheWriteTokens: null,
-      reasoningTokens: null,
-      ...extra,
+    seedRow({
+      sessionId: 'a1', seq: 1, teamId: 'team-a', roleKind: 'member',
+      at: noon(2025, 6, 15), inputTokens: 100, outputTokens: 10,
+      cacheReadTokens: 50, cacheWriteTokens: 25, reasoningTokens: 512,
     });
-    const rows: UsageRecord[] = [
-      row('a1', 'team-a', noon(2025, 6, 15), '2025-06-15', 100, 10, 1, {
-        cacheReadTokens: 50,
-        cacheWriteTokens: 25,
-        reasoningTokens: 512,
-      }),
-      row('a2', 'team-a', noon(2025, 6, 15), '2025-06-15', 200, 20, 2),
-      row('a3', 'team-a', noon(2025, 7, 1), '2025-07-01', 300, 30, 3),
-      row('a4', 'team-b', noon(2025, 7, 2), '2025-07-02', 999, 1, 4),
-      row('a5', null, noon(2024, 2, 1), '2024-02-01', 500, 50, 5),
-    ];
-    writeFileSync(usageFile(stateRoot), rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
+    seedRow({ sessionId: 'a2', seq: 2, teamId: 'team-a', roleKind: 'member', at: noon(2025, 6, 15), inputTokens: 200, outputTokens: 20 });
+    seedRow({ sessionId: 'a3', seq: 3, teamId: 'team-a', roleKind: 'member', at: noon(2025, 7, 1), inputTokens: 300, outputTokens: 30 });
+    seedRow({ sessionId: 'a4', seq: 4, teamId: 'team-b', roleKind: 'member', at: noon(2025, 7, 2), inputTokens: 999, outputTokens: 1 });
+    seedRow({ sessionId: 'a5', seq: 5, teamId: null, roleKind: 'workspace', at: noon(2024, 2, 1), inputTokens: 500, outputTokens: 50 });
     const calendar = readUsageCalendar(stateRoot, 'team-a', 2025);
-    // 2025 全年 365 格（非闰年）零填充
-    expect(calendar.days).toHaveLength(365);
+    expect(calendar.days).toHaveLength(365); // 2025 is not a leap year
     const june15 = calendar.days.find((d) => d.date === '2025-06-15');
     expect(june15).toMatchObject({
       date: '2025-06-15',
-      totalTokens: 405,
+      totalTokens: 405, // reasoning (512) is excluded from totalTokens
       inputTokens: 300,
       outputTokens: 30,
       cacheReadTokens: 50,
@@ -428,8 +395,6 @@ describe('readUsageCalendar', () => {
       reasoningTokens: 512,
       calls: 2,
     });
-    // reasoning 不计入 totalTokens（28.3.3）
-    expect(june15?.totalTokens).toBe(100 + 10 + 50 + 25 + 200 + 20);
     expect(calendar.totals).toMatchObject({
       totalTokens: 405 + 330,
       inputTokens: 600,
@@ -438,12 +403,54 @@ describe('readUsageCalendar', () => {
       firstDay: '2025-06-15',
       lastDay: '2025-07-01',
     });
-    // 别的年份 / 别的团队不串桶
+    // Other years / other teams stay in their own buckets.
     const y2024 = readUsageCalendar(stateRoot, 'team-a', 2024);
     expect(y2024.totals.totalTokens).toBe(0);
     const b2025 = readUsageCalendar(stateRoot, 'team-b', 2025);
     expect(b2025.totals.inputTokens).toBe(999);
     expect(b2025.days).toHaveLength(365);
+  });
+
+  it('app scope counts every row; team scope filters by teamId', () => {
+    seedRow({ sessionId: 'w1', seq: 1, teamId: null, roleKind: 'workspace', at: noon(2025, 6, 15), inputTokens: 900, outputTokens: 0 });
+    seedRow({ sessionId: 'm1', seq: 2, teamId: 'team-a', roleKind: 'member', at: noon(2025, 6, 15), inputTokens: 100, outputTokens: 0 });
+    seedRow({ sessionId: 'cap', seq: 3, teamId: 'team-a', roleKind: 'captain', at: noon(2025, 6, 15), inputTokens: 500, outputTokens: 0 });
+    seedRow({ sessionId: 'cv', seq: 4, teamId: 'team-b', roleKind: 'conversation', at: noon(2025, 6, 15), inputTokens: 700, outputTokens: 0 });
+    const app = readAppUsageCalendar([stateRoot], 2025);
+    expect(app.totals.inputTokens).toBe(2200);
+    expect(app.totals.calls).toBe(4);
+    const teamA = readUsageCalendar(stateRoot, 'team-a', 2025);
+    expect(teamA.totals.inputTokens).toBe(600);
+    expect(teamA.totals.calls).toBe(2);
+  });
+
+  it('merges per-root calendars for the app scope', () => {
+    seedRow({ sessionId: 'r1', seq: 1, teamId: null, roleKind: 'workspace', at: noon(2025, 6, 15), inputTokens: 100, outputTokens: 0 });
+    const rootB = mkdtempSync(join(tmpdir(), 'eteams-usage-b-'));
+    try {
+      recordUsage(getDb(join(rootB, '.eteams')), {
+        at: noon(2025, 6, 15),
+        day: '2025-06-15',
+        sessionId: 'r2',
+        seq: 1,
+        teamId: null,
+        memberName: null,
+        roleKind: 'workspace',
+        provider: null,
+        model: null,
+        inputTokens: 40,
+        outputTokens: 0,
+        cacheReadTokens: null,
+        cacheWriteTokens: null,
+        reasoningTokens: null,
+      });
+      const app = readAppUsageCalendar([stateRoot, join(rootB, '.eteams')], 2025);
+      expect(app.totals.inputTokens).toBe(140);
+      expect(app.totals.calls).toBe(2);
+      expect(app.days.find((d) => d.date === '2025-06-15')?.totalTokens).toBe(140);
+    } finally {
+      cleanupTempWorkspace(rootB);
+    }
   });
 
   it('returns a zero-filled full-year grid for a future year (not 404)', () => {
@@ -453,116 +460,11 @@ describe('readUsageCalendar', () => {
     expect(calendar.totals.totalTokens).toBe(0);
     expect(calendar.totals.firstDay).toBeNull();
   });
-
-  it('merges archived rows after rotation (read side)', async () => {
-    const oldAt = noon(2024, 1, 1);
-    const newAt = noon(2026, 6, 1);
-    const oldRow: UsageRecord = {
-      at: oldAt,
-      day: dayKeyOf(oldAt),
-      sessionId: 'r-1',
-      seq: 1,
-      teamId: 'team-a',
-      memberName: null,
-      roleKind: 'captain',
-      provider: null,
-      model: null,
-      inputTokens: 111,
-      outputTokens: 0,
-      cacheReadTokens: null,
-      cacheWriteTokens: null,
-      reasoningTokens: null,
-    };
-    const newRow: UsageRecord = { ...oldRow, at: newAt, day: dayKeyOf(newAt), seq: 2, inputTokens: 222 };
-    writeFileSync(usageFile(stateRoot), `${JSON.stringify(oldRow)}\n${JSON.stringify(newRow)}\n`);
-    // 双阈值：老行（>730 天）搬出 → 归档；新行保留
-    const rotated = await rotateUsage(stateRoot);
-    expect(rotated).toBe(true);
-    expect(existsSync(usageArchiveFile(stateRoot))).toBe(true);
-    expect(readRows(usageFile(stateRoot))).toHaveLength(1);
-    expect(readRows(usageArchiveFile(stateRoot))).toHaveLength(1);
-    // 聚合仍能看到轮转出的老行（主文件 + 归档合并读，28.6.2）
-    expect(readUsageCalendar(stateRoot, 'team-a', 2024).totals.inputTokens).toBe(111);
-    expect(readUsageCalendar(stateRoot, 'team-a', 2026).totals.inputTokens).toBe(222);
-  });
-
-  it('size threshold moves older rows and keeps the tail', async () => {
-    const bigAt = noon(2025, 5, 1);
-    const big: UsageRecord = {
-      at: bigAt,
-      day: dayKeyOf(bigAt),
-      sessionId: 'sz',
-      seq: 5,
-      teamId: 'team-a',
-      memberName: null,
-      roleKind: 'workspace',
-      provider: null,
-      model: 'x'.repeat(400_000),
-      inputTokens: 1,
-      outputTokens: 0,
-      cacheReadTokens: null,
-      cacheWriteTokens: null,
-      reasoningTokens: null,
-    };
-    const rows: UsageRecord[] = [1, 2, 3, 4, 5].map((seq) => ({
-      ...big,
-      seq,
-      day: `2025-04-${String(seq).padStart(2, '0')}`,
-      at: noon(2025, 4, seq),
-    }));
-    writeFileSync(usageFile(stateRoot), rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
-    // maxBytes=1 → overSize；尾部保留到 KEEP_BYTES 预算（约 3 行大行）即停
-    const rotated = await rotateUsage(stateRoot, { maxBytes: 1 });
-    expect(rotated).toBe(true);
-    const kept = readRows(usageFile(stateRoot));
-    const archived = readRows(usageArchiveFile(stateRoot));
-    expect(kept.length + archived.length).toBe(5);
-    expect(kept.length).toBeGreaterThan(0);
-    expect(archived.length).toBeGreaterThan(0);
-    // 保留段是最新行（seq 递增序），搬出段是头部老行
-    expect(kept[0]!.seq).toBe(archived.length + 1);
-    expect(kept[kept.length - 1]!.seq).toBe(5);
-    // 聚合合并读：搬出行仍可见
-    expect(readUsageCalendar(stateRoot, 'team-a', 2025).totals.calls).toBe(5);
-  });
-
-  it('no rotation on a young small file', async () => {
-    const now = Date.now();
-    const row: UsageRecord = {
-      at: now,
-      day: dayKeyOf(now),
-      sessionId: 'now',
-      seq: 1,
-      teamId: null,
-      memberName: null,
-      roleKind: 'workspace',
-      provider: null,
-      model: null,
-      inputTokens: 1,
-      outputTokens: 0,
-      cacheReadTokens: null,
-      cacheWriteTokens: null,
-      reasoningTokens: null,
-    };
-    writeFileSync(usageFile(stateRoot), `${JSON.stringify(row)}\n`);
-    expect(await rotateUsage(stateRoot)).toBe(false);
-    expect(existsSync(usageArchiveFile(stateRoot))).toBe(false);
-  });
 });
 
-// ---------- 安装面（E18 同型） ----------
+// ---------- install surface (E18 same-shape) ----------
 
 describe('installUsageMeter', () => {
-  it('session/created triggers a fold of that session', async () => {
-    const meter = installMeter();
-    registerMemberSession('s-6', { teamId: 'team-a', memberName: 'Alice' });
-    meter.emitCreated(
-      makeSession('s-6', [usageEvent(2, noon(2025, 6, 15), { inputTokens: 5, outputTokens: 5 })]),
-    );
-    await usageWritesIdle();
-    expect(readRows(usageFile(stateRoot))).toHaveLength(1);
-  });
-
   it('listener failures never escape (meter never breaks sessions)', () => {
     const meter = installMeter();
     expect(() =>

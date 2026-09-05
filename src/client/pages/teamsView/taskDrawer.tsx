@@ -1,33 +1,22 @@
 /**
- * 任务详情抽屉（docs/13.3 任务）：执行链站点行 + 合同四数组 + 产出/尝试
- * 时间线 Dialog。符号自 eteamsView.tsx 原样搬出（docs/32 32.5.1 纯移动），
- * 供 tasksTab 消费（依赖方向：tasksTab → taskDrawer → shared）。
+ * 任务详情内容（docs/13.3 任务）：合同四数组 + 产出/尝试时间线 + 执行链
+ * 站点行。符号自 eteamsView.tsx 原样搬出（docs/32 32.5.1 纯移动）。
+ * 2026-09-05 八轮（DA21 任务页拆列表页 + 详情页）：原 S13 shadcn Dialog
+ * 抽屉**页面化**——详情内容改为内联组件 TaskDetailContent 由任务详情页
+ * 消费（标题/状态头由详情页渲染，本组件只承正文）；TaskStations 导出不变。
  * docs/35 §3#7：合同四数组（验收标准/范围内/范围外/交付物）+ 幂等说明 +
- * 物理阻塞来源进详情头；任务号全库自增（docs/27），显示口径 #N。
+ * 物理阻塞来源进详情；任务号全库自增（docs/27），显示口径 #N。
  *
  * @module dsh-eteams/client/pages/teamsView/taskDrawer
  */
 import { useEffect, useState, type ReactNode } from 'react';
-import { ATTEMPT_STATUS_LABELS, STATUS_LABELS } from '../../features/tasks/taskDisplayStatus';
+import { ATTEMPT_STATUS_LABELS } from '../../features/tasks/taskDisplayStatus';
 import { cn } from '../../lib/cn';
 import { relativeTime, type TaskView, type TeamSnapshot } from '../../lib/monitor';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '../../components/ui/dialog';
 import { GLYPH_TONE_CLASS, LINE_CLASS, MUTED_CLASS } from './shared';
 
 /** 原 styles.attempt（执行线路尝试条目：--border 左描边）。 */
 const ATTEMPT_CLASS = 'my-2.5 border-l-2 border-solid border-border py-0.5 pl-3';
-/** 任务详情 Dialog 的调用面覆盖：限宽收高可滚动 + 面板文字基准（portal
- * 容器挂在 body 下，不继承 SHELL 的 14px/前景色，这里显式补齐——D22d 官网
- * prose-sm 档 text-sm leading-6；max-w-xl 压过上游 max-w-lg，rounded-xl 与
- * 上游 sm:rounded-lg 同为 12px）。 */
-const DRAWER_DIALOG_CLASS =
-  'max-h-[70vh] max-w-xl overflow-y-auto rounded-xl text-sm leading-6 text-foreground';
 
 /** GET /team/<id>/task/<taskId>/track 响应（webui track 路由）：attempts 全量
  * + 合同全文（contract 渲染串）——本抽屉只消费 attempts；任务态/合同字段
@@ -93,22 +82,19 @@ export function TaskStations({ task }: { task: TaskView }): ReactNode {
 }
 
 /**
- * S13：任务详情抽屉 → shadcn Dialog。开合状态仍走 ui model：expandedTask
- * === task.taskId 时由 TasksTab 挂载本组件（track 拉取随挂载触发，与迁移前
- * 一致），挂载即 open；Esc/遮罩/关闭钮统一走 onOpenChange → onClose，由
- * 调用点 dispatch ui/setDrawerTask(null) 收起（S9 的显式 null 语义）。
- * 内容结构原样保留（合同 + 产出 + 尝试时间线），仅样式改 Tailwind 类。
+ * 任务详情正文（八轮 DA21 页面化）：合同四数组 + 状态说明/阻塞 + 产出 +
+ * 尝试时间线。标题/状态头由任务详情页渲染（tasksTab），本组件只承正文；
+ * 挂载即拉取 track（attempts 全量），随快照水位（最新事件 seq）回拉。
+ * 原 S13 shadcn Dialog 抽屉随页面化撤除（零残留）。
  */
-export function TaskDrawer({
+export function TaskDetailContent({
   team,
   task,
   now,
-  onClose,
 }: {
   team: TeamSnapshot;
   task: TaskView;
   now: number;
-  onClose: () => void;
 }): ReactNode {
   const [track, setTrack] = useState<TrackBody | null>(null);
   useEffect(() => {
@@ -128,26 +114,11 @@ export function TaskDrawer({
     // 回拉锚点：快照版本号已砍（docs/27），最新事件的 seq 即团队变更水位。
   }, [team.teamId, team.latestEvents.at(-1)?.seq, task.taskId]);
   return (
-    <Dialog
-      open
-      onOpenChange={(next) => {
-        if (!next) onClose();
-      }}
-    >
-      <DialogContent className={DRAWER_DIALOG_CLASS}>
-        <DialogHeader className="space-y-1 text-left">
-          <DialogTitle>
-            #{task.taskId} · {task.subject}
-          </DialogTitle>
-          <DialogDescription className={MUTED_CLASS}>
-            {STATUS_LABELS[task.status] ?? task.status}
-            {task.assignee !== null ? ` · ${task.assignee}` : ''}
-          </DialogDescription>
-        </DialogHeader>
-        {task.blocked && task.blockedFrom !== null && (
-          <div className="text-warning">阻塞中：前置任务 #{task.blockedFrom} 未完成。</div>
-        )}
-        {task.statusNote !== null && <div className={LINE_CLASS}>状态说明：{task.statusNote}</div>}
+    <div className="text-sm leading-6 text-foreground">
+      {task.blocked && task.blockedFrom !== null && (
+        <div className="text-warning">阻塞中：前置任务 #{task.blockedFrom} 未完成。</div>
+      )}
+      {task.statusNote !== null && <div className={LINE_CLASS}>状态说明：{task.statusNote}</div>}
         {task.acceptance.length > 0 && (
           <ContractList title="验收标准" items={task.acceptance} />
         )}
@@ -186,7 +157,6 @@ export function TaskDrawer({
             </div>
           ))}
         {track === null && <div className={MUTED_CLASS}>执行线路加载中…</div>}
-      </DialogContent>
-    </Dialog>
+    </div>
   );
 }

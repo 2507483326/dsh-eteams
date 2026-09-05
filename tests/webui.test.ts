@@ -4,7 +4,7 @@
  * loop, the GET /board cross-team aggregation and the usage-calendar route —
  * all driven offline through the runtime ops with a fake subagent runtime.
  */
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -14,6 +14,8 @@ import { createCaptainTools } from '../src/host/tools/captainTools';
 import { createMemberTools } from '../src/host/tools/memberTools';
 import { installWebSurface, summarizeEvent, teamSnapshot } from '../src/host/runtime/webui';
 import { joinPath } from '../src/host/runtime/base';
+import { getDb } from '../src/host/state/db';
+import { recordUsage, type UsageRecord } from '../src/host/state/usageStore';
 import { readTeamSync } from '../src/host/state/store';
 import { cleanupTempWorkspace } from './support/tmpWorkspace';
 import type { TeamState } from '../src/host/model/types';
@@ -1350,7 +1352,7 @@ describe('usage calendar route (docs/28.4)', () => {
     const created = await h.post('/eteams-api/team', { name: '用量队', sessionId: 'cap-webui' });
     expect(created.code).toBe(200);
     const teamId = json<{ teamId: number }>(created.body).teamId;
-    // 采集面的归属/水位已由 tests/usage.test.ts 覆盖；这里只验证路由组合。
+    // 采集面的归属/入库已由 tests/usage.test.ts 覆盖；这里只验证路由组合。
     const year = new Date().getFullYear();
     const row = {
       at: Date.now(),
@@ -1368,8 +1370,7 @@ describe('usage calendar route (docs/28.4)', () => {
       cacheWriteTokens: null,
       reasoningTokens: null,
     };
-    mkdirSync(join(workspace, '.eteams'), { recursive: true });
-    writeFileSync(join(workspace, '.eteams', 'usage.jsonl'), `${JSON.stringify(row)}\n`);
+    recordUsage(getDb(joinPath(workspace, '.eteams')), row);
     const r = await h.get(`/eteams-api/team/${teamId}/usage/calendar`);
     expect(r.code).toBe(200);
     const parsed = json<{
@@ -1388,6 +1389,48 @@ describe('usage calendar route (docs/28.4)', () => {
     expect(bad.code).toBe(400);
     const missing = await h.get('/eteams-api/team/nope/usage/calendar');
     expect(missing.code).toBe(404);
+  });
+
+  it('serves the app-wide calendar; workspace rows count too', async () => {
+    const h = await installFake();
+    // collectRoots 从工作区注册表取根——先建一支团队把工作区注册进来。
+    await h.post('/eteams-api/team', { name: '应用用量队', sessionId: 'cap-app' });
+    const year = new Date().getFullYear();
+    const row = (seq: number, teamId: string | null, inputTokens: number): UsageRecord => ({
+        at: Date.now(),
+        day: `${year}-01-03`,
+        sessionId: `s${seq}`,
+        seq,
+        teamId,
+        memberName: null,
+        roleKind: teamId === null ? 'workspace' : 'member',
+        provider: 'p',
+        model: 'm',
+        inputTokens,
+        outputTokens: 0,
+        cacheReadTokens: null,
+        cacheWriteTokens: null,
+        reasoningTokens: null,
+      });
+    recordUsage(getDb(joinPath(workspace, '.eteams')), row(1, null, 100));
+    recordUsage(getDb(joinPath(workspace, '.eteams')), row(2, '999', 50));
+    recordUsage(getDb(joinPath(workspace, '.eteams')), row(3, 'no-such-team', 7));
+    const r = await h.get('/eteams-api/usage/calendar');
+    expect(r.code).toBe(200);
+    const parsed = json<{
+      teamId: null;
+      year: number;
+      totals: { totalTokens: number; calls: number };
+      days: { date: string; totalTokens: number }[];
+    }>(r.body);
+    expect(parsed.teamId).toBeNull();
+    expect(parsed.year).toBe(year);
+    // 全应用口径：null 团队（普通对话）与未知 teamId 的行一并计入。
+    expect(parsed.totals.totalTokens).toBe(157);
+    expect(parsed.totals.calls).toBe(3);
+    expect(parsed.days.find((d) => d.date === `${year}-01-03`)?.totalTokens).toBe(157);
+    const bad = await h.get('/eteams-api/usage/calendar?year=abcd');
+    expect(bad.code).toBe(400);
   });
 });
 

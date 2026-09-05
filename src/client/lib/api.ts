@@ -543,10 +543,25 @@ export interface UsageCalendar {
   totals: UsageTotals;
 }
 
+/** GET /usage/calendar response — 全应用口径，无 teamId。 */
+export interface AppUsageCalendar {
+  teamId: null;
+  year: number;
+  serverTime: number;
+  days: UsageDay[];
+  totals: UsageTotals;
+}
+
 /** Fetch one team's daily token-usage calendar (year defaults to current). */
 export async function fetchUsageCalendar(teamId: string, year?: number): Promise<UsageCalendar> {
   const params = year === undefined ? '' : `?year=${year}`;
   return (await requestJson(
     `${API_BASE}/team/${encodeURIComponent(teamId)}/usage/calendar${params}`,
   )) as UsageCalendar;
+}
+
+/** Fetch the whole app's daily token-usage calendar (year defaults to current). */
+export async function fetchAppUsageCalendar(year?: number): Promise<AppUsageCalendar> {
+  const params = year === undefined ? '' : `?year=${year}`;
+  return (await requestJson(`${API_BASE}/usage/calendar${params}`)) as AppUsageCalendar;
 }

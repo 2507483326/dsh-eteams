@@ -47,7 +47,8 @@ import { Popover, PopoverAnchor, PopoverContent } from '../../components/ui/popo
  * 'eteams-member'=罗列条成员 chip（drop=追加/替换）；'eteams-station'=卡槽内
  * 站点 chip（六轮 DA19：drop 到另一 chip=调序，容器不接受该类型——空白处
  * 落点无目标即 not-allowed，语义「调序只能 chip→chip」）；'eteams-subtask'=
- * 小任务卡片（七轮 DA20：drop 到另一张卡=调整执行顺序，依赖改写补丁）。 */
+ * 小任务卡片**把手**（七轮 DA20 调序 + 十轮 DA23 把手化：drop 到另一张卡=
+ * 调整执行顺序，依赖改写补丁——只有卡片左上 grip 图标可拖，卡身不可拖）。 */
 export const MEMBER_DRAG_TYPE = 'eteams-member';
 export const STATION_DRAG_TYPE = 'eteams-station';
 export const SUBTASK_DRAG_TYPE = 'eteams-subtask';

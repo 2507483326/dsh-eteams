@@ -5,6 +5,10 @@
  * 用户迭代 2026-09-04：置看板顶部；样式回归 docs/28 28.5.2 卡片规格
  * （PANEL_CARD_CLASS 卡壳），日历与 meta 行居中显示；格子无装饰扁平化
  * （renderBlock 去包内 hairline 描边，见 usageFlatBlock）。
+ * 用户迭代 2026-09-05：数据源改**全应用口径**（fetchAppUsageCalendar →
+ * GET /usage/calendar，不按团队/归属过滤，workspace 桶一并计入，标题加
+ * 「全应用」标注）；meta 行前置「今日 X tokens」——今天那格本就在全年
+ * 零填充响应里（usageTodayKey 本地拼装），无需新接口。
  *
  * @module dsh-eteams/client/pages/teamsView/usageCalendar
  */
@@ -17,7 +21,7 @@ import type { Activity, BlockElement, Labels, ThemeInput } from 'react-activity-
 import usageTooltipsCss from 'react-activity-calendar/tooltips.css';
 import ChevronLeft from 'lucide-react/dist/esm/icons/chevron-left.mjs';
 import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right.mjs';
-import { fetchUsageCalendar, type UsageCalendar, type UsageDay } from '../../lib/api';
+import { fetchAppUsageCalendar, type AppUsageCalendar, type UsageDay } from '../../lib/api';
 import { cn } from '../../lib/cn';
 import { useHostDark } from '../../hooks/useHostDark';
 import { Button } from '../../components/ui/button';
@@ -81,6 +85,13 @@ function usageDateLabel(date: string): string {
   const day = Number(date.slice(8, 10));
   if (!Number.isFinite(month) || !Number.isFinite(day)) return date;
   return `${month}月${day}日`;
+}
+
+/** 当天本地 'yyyy-MM-dd'（与宿主 dayKeyOf 同构的本地字段拼装，绕开
+ * toISOString 的 UTC 歧义——面板与宿主同机，本地时区一致）。 */
+function usageTodayKey(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 /** 线性插值百分位（28.5.2 四分位档：P25/P50/P75 定 1-4 级）。 */
@@ -148,24 +159,23 @@ function usageFlatLegendBlock(block: BlockElement): ReactElement {
  * hooks 全在本组件内部——本组件只在有团队时挂载，BoardTab 早退分支不会
  * 打断任何 hook 序（docs/30 28-M2 约束等价成立）。
  */
-export function UsageCalendarCard({ teamId }: { teamId: string }): ReactNode {
+export function UsageCalendarCard(): ReactNode {
   ensureUsageCalendarStyles();
   const dark = useHostDark();
   const currentYear = new Date().getFullYear();
   const [year, setYear] = useState(currentYear);
-  const [calendar, setCalendar] = useState<UsageCalendar | null>(null);
+  const [calendar, setCalendar] = useState<AppUsageCalendar | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
 
-  // 取数 + 低频轮询（28.5.2）：teamId/year/retry 变化即重拉；60s 间隔仅在
+  // 取数 + 低频轮询（28.5.2）：year/retry 变化即重拉；60s 间隔仅在
   // document 可见时触发；卸载后丢弃迟到响应。loading 不落 state（effect 里
   // 同步 setState 会级联渲染，react-hooks/set-state-in-effect）——首拉 =
   // calendar 仍为 null 即加载中。
   useEffect(() => {
-    if (teamId === '') return;
     let alive = true;
     const fetchOne = (): void => {
-      fetchUsageCalendar(teamId, year)
+      fetchAppUsageCalendar(year)
         .then((body) => {
           if (!alive) return;
           setCalendar(body);
@@ -185,12 +195,14 @@ export function UsageCalendarCard({ teamId }: { teamId: string }): ReactNode {
       alive = false;
       clearInterval(timer);
     };
-  }, [teamId, year, retry]);
+  }, [year, retry]);
 
   const days = calendar?.days ?? [];
   const totals = calendar?.totals;
   // 日期 → 明细查表（tooltip 用；Activity.count 只是视觉计数，真值在这里）。
   const dayByDate = new Map(days.map((d) => [d.date, d]));
+  // 今天那格直接来自同一份全年零填充响应——无需新接口；无数据日为 0。
+  const todayTotal = dayByDate.get(usageTodayKey())?.totalTokens ?? 0;
   const levelByDate = usageLevelsOf(days);
   const activities: Activity[] = days.map((d) => ({
     date: d.date,
@@ -204,7 +216,12 @@ export function UsageCalendarCard({ teamId }: { teamId: string }): ReactNode {
   return (
     <Card className={PANEL_CARD_CLASS}>
       <div className="flex items-center justify-between">
-        <div className={cn(SECTION_TITLE_CLASS, 'mb-0')}>Token 消耗</div>
+        <div className={cn(SECTION_TITLE_CLASS, 'mb-0 flex items-center gap-2')}>
+          Token 消耗
+          {/* 口径标注（2026-09-05 用户迭代：数据源全应用——含普通对话与各
+          团队，非单团队视图）。 */}
+          <span className={cn(MUTED_CLASS, 'text-xs font-normal')}>全应用</span>
+        </div>
         {/* 年份切换：右箭头到未来年禁用（28.5.2——未来年无数据可看）。 */}
         <div className="flex items-center gap-1">
           <Button
@@ -278,9 +295,9 @@ export function UsageCalendarCard({ teamId }: { teamId: string }): ReactNode {
           {error !== null && calendar !== null
             ? `上次刷新失败：${error}`
             : hasData && totals !== undefined
-              ? `全年合计 ${usageNum(totals.totalTokens)} tokens · ${usageNum(totals.calls)} 次调用`
+              ? `今日 ${usageNum(todayTotal)} tokens · 全年合计 ${usageNum(totals.totalTokens)} tokens · ${usageNum(totals.calls)} 次调用`
               : calendar !== null
-                ? '今年还没有记录到消耗——成员执行任务后这里会逐日亮起。'
+                ? `今日 ${usageNum(todayTotal)} tokens · 应用今年还没有消耗——发起对话或成员执行任务后这里会逐日亮起。`
                 : ''}
         </div>
       </div>

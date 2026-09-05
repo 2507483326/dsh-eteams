@@ -1,6 +1,8 @@
 # 28 看板 · 每日 Token 消耗日历
 
-面板「看板」tab 新增「Token 消耗」卡片：GitHub 风格贡献日历（`react-activity-calendar`），按**团队**维度展示每天消耗的 TOKEN 数量。本文回答四个问题：**数据从哪来**（宿主层无 token 统计，必须找到可落地的 seam）、**怎么记**（usage.jsonl 记录模型）、**怎么读**（/eteams-api 聚合路由）、**怎么画**（日历渲染规格）。
+> **存储迁移（2026-09-05）**：记账存储已从本文描述的 JSONL 台账（usage.jsonl + 归档 + 水位对账）整体迁移到 SQLite 两表（`usage_detail` 明细 + `usage_daily_total` 总和），DB 即唯一存储——无文件、无对账、无历史回补（存量台账已于 2026-09-05 人工导入一次）。采集方案（firehose 监听、归属五级、日界快照）、路由与渲染规格仍然有效，仅「怎么记」中的文件写入/轮转/对账细节已被取代；存储现状以 40 号文档为准。
+
+面板「看板」tab 新增「Token 消耗」卡片：GitHub 风格贡献日历（`react-activity-calendar`），**2026-09-05 用户迭代起为全应用口径**——展示整体应用每天消耗的 TOKEN 数量（`GET /usage/calendar`，不按团队/归属过滤；团队维度路由保留供后续钻取）。本文回答四个问题：**数据从哪来**（宿主层无 token 统计，必须找到可落地的 seam）、**怎么记**（usage.jsonl 记录模型）、**怎么读**（/eteams-api 聚合路由）、**怎么画**（日历渲染规格）。
 
 ## 28.1 目标与非目标
 
@@ -113,7 +115,7 @@
 
 - **快照不引用**：归属在**记录时**解析并写死进行内（成员后被移除/改名、会话解绑都不改历史行）——满足「成员跨团队同名/被移除」的可追溯要求；跨团队同名成员由 `teamId + memberName` 双键区分。
 - 领队双形态（主会话 + 领队子代理）都归属团队：日历按团队合计展示，不因双计重复（是两个真实会话各自的真实消耗）；`roleKind` 保留区分能力，供后续明细钻取。
-- `workspace` 桶照记不丢（未来做工作区级视图），但 `GET /team/:id/usage/calendar` 不返回它。
+- `workspace` 桶照记不丢，进**全应用日历**（`GET /usage/calendar`，2026-09-05 用户迭代——看板「Token 消耗」卡展示整体应用每日消耗）；不进团队日历（`GET /team/:id/usage/calendar` 仍按 28.3.2 原语义只聚合归属行）。
 - 冷恢复的子代理会话：`registerContinuableSetup` 在每次 Activation（含 cold resume）都会重跑（这是成员工装现存的正确性前提，`members.ts:227` 注释与 `captainAgent.ts:16-17`「重启后重登记」），身份表随之重建。
 - 工作区解析回退：写入侧按会话 `header.cwd` 解析工作区（先例 `members.ts:237`——该行实为 `child.session?.header?.cwd ?? process.cwd()`，cwd 可缺省且有回退）；usage 写入侧保留同一回退，**回退生效时按 1 分钟节流 warn**，避免 `header.cwd` 缺失的会话被静默错桶（详见 28.6.3）。
 
@@ -163,6 +165,17 @@ GET /eteams-api/team/<teamId>/usage/calendar?year=2026
 - 去重：聚合时对 `(sessionId, seq)` 建内存 Set 跳过重复行；撕裂尾行由 `parseJsonl` 容错。
 - 该路由**不进**客户端 1s 轮询（28.1），故不做增量协议；如后续要实时感，另开 `afterSeq` 增量参数（docs/12.2 `/events` 先例）。
 
+**全应用口径路由（2026-09-05 用户迭代）**：看板「Token 消耗」卡改为展示**整体应用每天消耗的 token**——不按团队/归属过滤，workspace 桶（普通对话、一次性构建子代理）一并计入：
+
+```
+GET /eteams-api/usage/calendar?year=2026
+→ 200 { year, teamId: null, serverTime, days: [...], totals: {...} }   // 结构同团队路由，无 teamId
+```
+
+- 聚合走 `readAppUsageCalendar(roots, year)`（usage.ts 同一核心，`includeRow` 恒真）：`roots` 取 `collectRoots(ctx, config)` 跨工作区合并台账（全局单库 stateDir 下即一个根；多根合并读时去重键带根序号前缀，防跨根 `(sessionId, seq)` 撞键）。
+- `year` 缺省当年、非法值 400、未来年返回零填充格，均同团队路由；不进 1s 轮询（60s 低频轮询同团队路由）。
+- 团队路由 `GET /team/:id/usage/calendar` 保留 28.3.2 原语义（归属行按 teamId 过滤），供后续按团队钻取复用。
+
 ## 28.5 前端设计
 
 ### 28.5.1 依赖：react-activity-calendar 3.2.1（v3，与 React 18 兼容）
@@ -185,7 +198,7 @@ GET /eteams-api/team/<teamId>/usage/calendar?year=2026
 
 ### 28.5.2 「Token 消耗」卡片规格（BoardTab）
 
-位置与容器：`BoardTab`（现 `src/client/pages/teamsView/boardTab.tsx`，原 `src/client/eteamsView.tsx:1000-1146`，结构整改已拆分）**看板顶部**（2026-09-04 用户迭代：位置由「最近动态」卡之后移到看板顶部；样式试过一版去卡壳扁平渲染后定稿——仍按 `Card className={PANEL_CARD_CLASS}` 卡壳渲染，日历与 meta 行在卡内居中显示；组件名 `UsageCalendarCard` 保留），标题行复用 `SECTION_TITLE_CLASS`；meta 行用 `MUTED_CLASS`（类名常量现均在 `src/client/pages/teamsView/shared.tsx`）。数据经新 `fetchUsageCalendar(teamId, year)`（api.ts，`requestJson` 同款，`api.ts:11,53-69`）获取，挂载/切年/切团队/`refreshActivitySoon` 低频触发（60s 可选轮询，`monitor.ts:343` 的 `refreshActivitySoon` 不动）。
+位置与容器：`BoardTab`（现 `src/client/pages/teamsView/boardTab.tsx`，原 `src/client/eteamsView.tsx:1000-1146`，结构整改已拆分）**看板顶部**（2026-09-04 用户迭代：位置由「最近动态」卡之后移到看板顶部；样式试过一版去卡壳扁平渲染后定稿——仍按 `Card className={PANEL_CARD_CLASS}` 卡壳渲染，日历与 meta 行在卡内居中显示；组件名 `UsageCalendarCard` 保留），标题行复用 `SECTION_TITLE_CLASS` 并缀 muted「全应用」口径标注（2026-09-05 用户迭代）；meta 行用 `MUTED_CLASS`（类名常量现均在 `src/client/pages/teamsView/shared.tsx`）。数据经 `fetchAppUsageCalendar(year)`（api.ts，`requestJson` 同款，2026-09-05 起替换 `fetchUsageCalendar`）获取，挂载/切年低频触发（60s 可选轮询，`monitor.ts:343` 的 `refreshActivitySoon` 不动）。
 
 | 项 | 规格 |
 |---|---|
@@ -197,7 +210,8 @@ GET /eteams-api/team/<teamId>/usage/calendar?year=2026
 | level 分级 | 客户端对**当日 `totalTokens>0`** 的天取四分位（P25/P50/P75）→ 1–4 档，0 tokens 恒为 0 档；某年全 0 时全部 level 0（空档色） |
 | tooltip | `tooltips={{ activity: { text: (a) => 分项文案, placement: 'top' } }}`；`text` 闭包内查 `date → day` 映射渲染多行：`9月4日 · 64,220 tokens` + `输入 11,240 / 输出 860 / 缓存读 52,310 / 缓存写 0`（`reasoningTokens>0` 时附「推理 512（可能与输出重叠）」；`calls` 一并展示） |
 | tooltip 样式 | `import tooltipsCss from 'react-activity-calendar/tooltips.css'` 字符串模块注入（mdEditor 先例 `features/mdEditor/mdEditor.tsx:85` + `mdEditorCss.d.ts` shim，新增 `usageCalendarCss.d.ts` 垫片）；该样式自带反色 dark（`.react-activity-calendar__tooltip[data-color-scheme='dark']` 是浅底深字），在 `.eteams-ui` 作用域追加覆写为深底浅字以贴面板。**实现时先确认 tooltip DOM 挂点**：floating-ui tooltip 若渲染在 body 根 portal 而非 `.eteams-ui` 子树内，`.eteams-ui` 作用域选择器不命中——必要时把覆写选择器提到 body 级并以 `data-source` 标记限定（eteams.css 暗色块同为 body 后代选择器可覆盖，实测为准） |
-| 加载/空态 | 拉取中 `loading`（内置骨架闪烁）；`days` 全 0 或 `totals.totalTokens === 0` → 日历照渲（全 0 档）+ 底部 `MUTED_CLASS` 兜底文案「本团队还没有 Token 消耗记录（统计自启用后开始）」；拉取失败 → 卡内 `FormErrorNote`（现 `pages/teamsView/shared.tsx`，原 `eteamsView.tsx:432-447`）+ 日历渲染上次成功数据 |
+| 加载/空态 | 拉取中 `loading`（内置骨架闪烁）；`days` 全 0 或 `totals.totalTokens === 0` → 日历照渲（全 0 档）+ 底部 `MUTED_CLASS` 兜底文案（2026-09-04 用户迭代定稿「今年还没有记录到消耗——成员执行任务后这里会逐日亮起」）；拉取失败 → 卡内 `FormErrorNote`（现 `pages/teamsView/shared.tsx`，原 `eteamsView.tsx:432-447`）+ 日历渲染上次成功数据 |
+| meta 行 | 底部 `MUTED_CLASS` 居中一行（用户迭代 2026-09-05 前置当天数字）：`今日 X tokens · 全年合计 Y tokens · Z 次调用`——今日值直接取全年零填充响应里今天那格（客户端本地拼装日键，与宿主 `dayKeyOf` 同构），无需新接口；拉取失败行显示「上次刷新失败」 |
 | 无团队 | BoardTab 既有空态分支（现 `pages/teamsView/boardTab.tsx`，原 `eteamsView.tsx:1029-1043`）不涉及本卡；**取数 useEffect 必须置于该早退分支之前**（`rules-of-hooks`：hook 不得放在条件 return 之后）——空态分支只是不渲染本卡，hook 照常挂载 |
 
 日历数据源映射：`days` 直接来自 API（服务端已按日聚合），客户端只做 level 分位与 tooltip 查表，不做任何折算——保证「图即真相」。

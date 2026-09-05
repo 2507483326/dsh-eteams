@@ -190,3 +190,64 @@ exports=[apply, inject]`）全绿；lint 仅 2 条既有 exhaustive-deps warning
 （memberDialog/taskDrawer，非本次引入）。
 GUI 装机冒烟持续**未验证**（同上口径——卡片拖拽调序、序号展示、挂靠修复需
 装机后在 DSH 面板人工过一遍）。
+
+## 八轮追加（2026-09-05，DA21 任务页拆列表页 + 详情页）
+
+**用户需求原话**：「将任务做成任务详情页面和任务列表页面，点击到详情再编排整个任务」。
+
+| 决策 | 内容 |
+| --- | --- |
+| DA21 | ①**列表页精简化**：组卡只剩头部信息（#id/主题/展示态/进度/汇总 chip/文件夹）+ 小任务精简行（执行序号/#id/主题/展示态/阻塞/指派，保留 `executionOrderOf` 展示口径）；顶层任务行去掉站点行与依赖 chips；列表上**无任何编排 UI**（新增/改删/卡槽/拖拽/罗列条全撤）。②**详情页两级**：主任务详情 = 整个任务的编排面（返回条 + 头部卡 + 进度 + 新增小任务 + 小任务卡片全套（执行序号/卡槽/拖卡调序/修改删除）+ 成员罗列条单条）；任务/小任务详情 = 返回条 + 头部卡（小任务含修改/删除）+ 挂靠行 + `TaskDetailContent` 正文（合同四数组/状态说明/阻塞/产出/尝试时间线）+ 卡槽 + 站点行 + 依赖 chips + 罗列条。③**导航状态复用** ui model `drawerTaskId`（语义改为「详情页选中的任务 id」，null=列表页；选中任务被删自动回落列表）。④**原 S13 shadcn Dialog 抽屉撤除**：详情正文改内联组件 `TaskDetailContent`（track 拉取/正文渲染原样保留），标题/状态头由详情页渲染；A.5.3「每张组卡下方各一条」的罗列条 placement 随页面化废止（改详情页单条） |
+
+改动面：`taskDrawer.tsx`（Dialog 撤除 → `TaskDetailContent` 内联组件）、`tasksTab.tsx`
+（两级页面 + `dialogs` 共用弹窗 + `selectedTaskId/setSelectedTaskId` 改名 + 列表精简）、
+`index.tsx`（prop 接线与注释同步）、`ui.ts`（`setDrawerTask` 注释同步）、
+`taskDisplayStatus.ts`（`STATUS_LABELS` 改键序规范来源注释）。零新增纯函数、
+零 store 结构变更——本轮纯客户端页面重组。
+
+**八轮四绿门（2026-09-05）**：typecheck / lint / test（23 文件 **314 用例**全过；同工作区并行 usage 流随后加例至 315，非本轮范畴）/
+build（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿；lint 仅 2 条既有
+exhaustive-deps warning（memberDialog/taskDrawer，非本次引入）。
+GUI 装机冒烟持续**未验证**（同上口径——两级导航/详情页编排/精简列表需装机后在
+DSH 面板人工过一遍）。
+
+## 九轮追加（2026-09-05，DA22 列表页组卡概览化）
+
+**用户需求原话**：「团队列表不展示任务详情了，做成一个小卡片，显示任务状态就行」
+（经确认实指任务列表页：「任务列表中的任务卡片不展示任务详情和整个任务列表，
+需要点击进去再看到整个任务列表」）。
+
+| 决策 | 内容 |
+| --- | --- |
+| DA22 | 列表页主任务卡片撤掉八轮的小任务精简行——组卡只承**状态概览**：头部（#id/主题/展示态）+ 进度计数（小任务 n/m 完成）+ 汇总 chip（ready）+ 文件夹；**整个任务列表只在主任务详情页看**（整卡点击进详情，DA21 导航口径不变）。列表组卡不再调 `executionOrderOf`（计数/汇总与顺序无关，改普通 filter）；详情页分支拓扑排序照旧 |
+
+改动面：仅 `tasksTab.tsx`（列表 groups.map 段 + 文件头/TasksTab 注释）。零 store/host/
+纯函数变更，无新增测试（无逻辑变化）。
+
+**九轮四绿门（2026-09-05）**：typecheck / lint（0 error，2 条既有 exhaustive-deps
+warning）/ test（23 文件 **315 用例**全过）/ build（`SMOKE OK: id=dsh-eteams,
+exports=[apply, inject]`）全绿。GUI 装机冒烟持续**未验证**（同上口径）。
+
+## 十轮追加（2026-09-05，DA23 小任务卡把手拖拽；含列表页误加订正）
+
+**用户需求原话**：「团队列表左上角新增一个拖拽图标，只有拖拽图标可以拖拽」
+（初读误为任务列表页主任务卡加把手，实现后用户订正「错了不是任务列表，而是
+小任务列表，任务列表去掉拖拽」）。
+
+| 决策 | 内容 |
+| --- | --- |
+| DA23 | ①**任务列表页无拖拽**：主任务卡保持九轮 DA22 状态概览（整卡点击进详情，展示序普通 filter 无拓扑排序），本轮初版误加的把手/调序已撤除。②**主任务详情页小任务列表**：小任务卡片**左上角新增 grip 把手**（GripVertical，'eteams-subtask' item 不变）——**只有把手是拖拽源**（dragRef 只挂把手 span，canDrag = draft/ready，不可编辑态把手淡化 opacity-40），卡身不可拖。③卡身仍兼**放置目标**（同父兄弟卡可落，悬停 ring 高亮）：拖 A 把手落 B 卡 = 调小任务执行顺序，语义与七轮 DA20 完全一致（兄弟依赖链改写补丁 `depPatchesForReorder`，非乐观更新逐发 `updateTeamTask({dependencies})`）——本轮仅把拖拽源从整卡收窄为把手。④卡身点击 = 进小任务详情页不受影响（HTML5 拖拽不触发 click） |
+
+改动面：`tasksTab.tsx`（`SubtaskCard` 把手化——dragRef 移把手、卡身只挂
+dropRef、children 包 `min-w-0 flex-1`；列表页恢复九轮状态概览无拖拽）、
+`taskAssign.tsx`（拖拽类型注释更新；初版误加的 `GROUP_DRAG_TYPE`/
+`GroupDragItem` 撤除）、`lucide-icon.d.ts`（GripVertical 深层导入声明）、
+`tests/taskAssign.test.ts`（无新增——初版数组限定对照锁随列表拖拽撤除删除）。
+零 store/host/核心纯函数变更。
+
+**十轮四绿门（2026-09-05）**：typecheck / lint / test（23 文件 **311 用例**全过；
+八/九轮时点为 315，并行 usage 流随后调整了 usage 用例数，非本轮范畴）/ build
+（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿；lint 仅 2 条既有
+exhaustive-deps warning（memberDialog/taskDrawer，非本次引入）。
+GUI 装机冒烟持续**未验证**（同上口径——把手拖拽调序、把手不可编辑态淡化、
+拖拽与卡身点击互不干扰需装机后在 DSH 面板人工过一遍）。

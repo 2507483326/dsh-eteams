@@ -49,12 +49,13 @@ export const uiModel: DvaModel<UiState> = {
       selectedTeamId: (payload ?? state.selectedTeamId) as UiState['selectedTeamId'],
     }),
     // S9 抽屉/对话框开关（payload 语义与迁移前 setExpandedTask / setDialogMember
-    // 对齐）：显式 null 是明确的「收起/未选」信号（任务行 toggle 与「— 选择 —」
-    // 都靠 null 关闭），payload 缺省不能像上面那样沿用当前值——那会让 null
+    // 对齐）：显式 null 是明确的「收起/未选」信号（八轮 DA21 后 drawerTaskId
+    // 语义 = 任务详情页选中的任务 id，「返回列表」与「— 选择 —」都靠 null
+    // 关闭），payload 缺省不能像上面那样沿用当前值——那会让 null
     // 关不掉抽屉/对话框，破坏迁移前行为。故 payload 只认 number（任务号已随
     // docs/27 编号数字化，docs/35 §5#11），非 number（含缺省 undefined）一律
     // 归一 null，防御畸形 dispatch 不留悬挂展开态。
-    // 互斥保持迁移前现状：两键相互独立、互不清空对方——抽屉在任务 tab、
+    // 互斥保持迁移前现状：两键相互独立、互不清空对方——任务详情页在任务 tab、
     // 对话框在汇报 tab 渲染，tab 切换天然互斥（onOpenReports 仍只派发
     // setDialogMember + setNav，不额外动 drawerTaskId）。
     setDrawerTask: (state, { payload }) => ({

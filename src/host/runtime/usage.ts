@@ -9,86 +9,44 @@
  * E8 语义、归属矩阵（成员/领队子代理/领队主会话/面板绑定会话/构建子代理）
  * 与 `ctx.sessions.list()` 的覆盖面需真实宿主验证。
  *
- * 存储（28.3）：`<workspace>/.eteams/usage.jsonl` 事件粒度追加写（一次携带
- * usage 的 assistant/message 一行，模块级 Promise 链串行队列保证行序）；
- * `usage-checkpoint.json` 水位做重启对账（28.3.4），读侧按 (sessionId, seq)
- * 去重使重复折叠无害；`usage-archive.jsonl` 承接轮转出的老行（28.6.1）。
+ * 存储（docs/40，2026-09-05 用户迭代简化版）：SQLite 两表即唯一存储——
+ * usage_detail（明细，一次带 usage 的模型回复步一行）+ usage_daily_total
+ * （总和，一天一行，增量 upsert）。无文件台账、无水位对账、无轮转：监听
+ * 器看到的每个事件实时入库（失败节流 warn 降级继续）；重启前的历史不回
+ * 补，存量 usage.jsonl 等文件保留在盘但不再读写。
  *
- * 计量绝不影响会话：监听器同步段只做 Map 读写，append 异步；写路径失败
+ * 计量绝不影响会话：监听器同步段只做 Map 读写，入库走串行队列；写路径失败
  * 吞错 + 1 分钟节流 warn（E7：dsh-session 本就逐监听者 contain）。
  *
  * @module dsh-eteams/runtime/usage
  */
-import { existsSync, readFileSync, statSync } from 'node:fs';
-import { appendFile, mkdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import type { Context } from '@deepseek-ai/cordis';
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session';
 import type { ETeamsResolvedConfig } from '../config.js';
-import { atomicWriteText, listTeams } from '../state/store.js';
-import { parseJsonl } from '../state/events.js';
+import { getDb } from '../state/db.js';
+import {
+  mergeUsageCalendars,
+  readUsageDays,
+  recordUsage,
+  type UsageDayAgg,
+  type UsageRecord,
+  type UsageRoleKind,
+  type UsageTotals,
+} from '../state/usageStore.js';
+import { listTeams } from '../state/store.js';
 import { captainChildTeamOf } from './captainAgent.js';
 import { getSessionTeamId } from './sessionTeam.js';
 import { leaderRowOf } from './notifier.js';
 import { stateRootFor, type RuntimeLogger } from './base.js';
 
-// ---------- 行模型（28.3.1） ----------
+// ---------- 行模型（docs/40；类型本体在 state/usageStore，此处转出兼容） ----------
 
-/** 五级归属角色（28.3.2 优先级表；与 docs/27 投影表口径对齐）。 */
-export type UsageRoleKind = 'captain' | 'captain-child' | 'member' | 'conversation' | 'workspace';
-
-/** usage.jsonl 一行：一次携带 usage 的 assistant/message（记录时打快照）。 */
-export interface UsageRecord {
-  /** event.time（Unix ms）。 */
-  readonly at: number;
-  /** 记录时按宿主本地时区折算的日界（28.6.4）。 */
-  readonly day: string;
-  readonly sessionId: string;
-  /** event.seq —— 读侧去重键之一。 */
-  readonly seq: number;
-  /** 记录时快照；无法归属时 null（workspace 桶，不进团队日历）。 */
-  readonly teamId: string | null;
-  /** 记录时快照；非成员为 null。 */
-  readonly memberName: string | null;
-  readonly roleKind: UsageRoleKind;
-  /** 记录时快照（request/header·context 按会话折叠，28.3.3/E4）。 */
-  readonly provider: string | null;
-  readonly model: string | null;
-  /** 不含缓存的输入（E1：billed input = 三者之和）。 */
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-  /** adapter 未上报时为 null（未知 ≠ 0）。 */
-  readonly cacheReadTokens: number | null;
-  readonly cacheWriteTokens: number | null;
-  /** 不计入 totalTokens（28.3.3：与 output 的重叠语义待装机实测）。 */
-  readonly reasoningTokens: number | null;
-}
-
-// ---------- 文件位置与轮转阈值 ----------
-
-/** usage 台账主文件（工作区级，非 per-team）。 */
-export function usageFile(stateRoot: string): string {
-  return join(stateRoot, 'usage.jsonl');
-}
-
-/** 轮转出的老行归档（聚合时与主文件合并读，28.6.2）。 */
-export function usageArchiveFile(stateRoot: string): string {
-  return join(stateRoot, 'usage-archive.jsonl');
-}
-
-/** 重启对账水位（28.3.4）。 */
-export function usageCheckpointFile(stateRoot: string): string {
-  return join(stateRoot, 'usage-checkpoint.json');
-}
-
-/** 主文件轮转上限（28.6.1 双阈值之一）。 */
-export const USAGE_ROTATE_MAX_BYTES = 2 * 1024 * 1024;
-/** 老行搬出阈值（28.6.1：日历只查当前年 + 上一年）。 */
-export const USAGE_ROTATE_MAX_AGE_DAYS = 730;
-/** 轮转后主文件保留预算（尺寸触发的搬出量，留 25% 增长余量）。 */
-export const USAGE_ROTATE_KEEP_BYTES = Math.floor((USAGE_ROTATE_MAX_BYTES * 3) / 4);
-/** checkpoint 条目按会话最后活跃剪枝（28.3.4）。 */
-export const USAGE_CHECKPOINT_TTL_DAYS = 30;
+export type {
+  UsageRoleKind,
+  UsageRecord,
+  UsageDayAgg,
+  UsageTotals,
+} from '../state/usageStore.js';
 
 // ---------- 会话身份注册表（28.3.2） ----------
 
@@ -197,12 +155,6 @@ export function resetUsageMeterForTests(): void {
   memberSessions.clear();
   routeCache.clear();
   identityCache.clear();
-  checkpoints.clear();
-  checkpointLoaders.clear();
-  for (const timer of checkpointTimers.values()) clearTimeout(timer);
-  checkpointTimers.clear();
-  rowsCache.clear();
-  lastRotateCheck.clear();
 }
 
 // ---------- 串行追加队列（28.3.1 写入纪律） ----------
@@ -226,7 +178,7 @@ function warnThrottled(message: string): void {
 
 /**
  * Enqueue one write task; failures are swallowed + throttled-warned（返回
- * 任务自身的 Promise 供 reconcileAll 显式等待——失败的告警仍由链尾兜）。
+ * 任务自身的 Promise 供测试显式等待——失败的告警仍由链尾兜）。
  */
 function enqueueWrite(task: () => Promise<void>): Promise<void> {
   const run = queueTail.then(task, task);
@@ -282,111 +234,11 @@ function warnCwdFallback(): void {
   }
 }
 
-// ---------- 水位（usage-checkpoint.json，28.3.4） ----------
+// ---------- 记账（SQLite 两表入库，docs/40） ----------
 
-/** 一条水位：会话已折叠到的 seq + 最后活跃时刻（剪枝依据）。 */
-interface CheckpointEntry {
-  lastSeq: number;
-  lastActive: number;
-}
-
-/** root → (sessionId → entry)；惰性从盘加载（loaders 去重并发加载）。 */
-const checkpoints = new Map<string, Map<string, CheckpointEntry>>();
-const checkpointLoaders = new Map<string, Promise<void>>();
-const checkpointTimers = new Map<string, ReturnType<typeof setTimeout>>();
-/** 水位文件写盘去抖：live 行逐行写盘太重，读侧去重使 5s 窗口无害。 */
-const CHECKPOINT_DEBOUNCE_MS = 5000;
-
-/** Load (and prune) one workspace's checkpoint map once. */
-function ensureCheckpoints(root: string): Promise<void> {
-  let loader = checkpointLoaders.get(root);
-  if (loader === undefined) {
-    loader = loadCheckpoints(root).catch(() => undefined);
-    checkpointLoaders.set(root, loader);
-  }
-  return loader;
-}
-
-async function loadCheckpoints(root: string): Promise<void> {
-  const map = new Map<string, CheckpointEntry>();
-  try {
-    const raw = await readFile(usageCheckpointFile(root), 'utf8');
-    const parsed = JSON.parse(raw) as Record<string, { lastSeq?: unknown; lastActive?: unknown }>;
-    for (const [sessionId, entry] of Object.entries(parsed)) {
-      const lastSeq = typeof entry?.lastSeq === 'number' ? entry.lastSeq : 0;
-      const lastActive = typeof entry?.lastActive === 'number' ? entry.lastActive : 0;
-      map.set(sessionId, { lastSeq, lastActive });
-    }
-  } catch {
-    // 缺文件 / 撕裂 JSON：空表起家（对账从 0 折算，读侧去重兜底）
-  }
-  pruneCheckpoints(map);
-  checkpoints.set(root, map);
-}
-
-/** 条目按会话最后活跃剪枝（保留 30 天，28.3.4）。 */
-function pruneCheckpoints(map: Map<string, CheckpointEntry>): void {
-  const cutoff = Date.now() - USAGE_CHECKPOINT_TTL_DAYS * 86_400_000;
-  for (const [sessionId, entry] of map) {
-    if (entry.lastActive < cutoff) map.delete(sessionId);
-  }
-}
-
-/**
- * Advance one session's in-memory watermark（live 行与补折共用，单调 max）。
- * 持久化去抖 5s：宕机窗口内「行已写、水位未及写」由读侧 (sessionId, seq)
- * 去重兜住（28.3.4）。
- */
-function advanceCheckpoint(root: string, sessionId: string, seq: number, at: number): void {
-  const map = checkpoints.get(root);
-  if (map === undefined) return; // loader 未完成：下一个事件再推进
-  const prev = map.get(sessionId);
-  const lastSeq = Math.max(prev?.lastSeq ?? 0, seq);
-  const lastActive = Math.max(prev?.lastActive ?? 0, at);
-  map.set(sessionId, { lastSeq, lastActive });
-  scheduleCheckpointWrite(root);
-}
-
-/**
- * 水位写盘去抖（5s trailing）。unref 定时器不阻塞宿主退出；flush() 会绕过
- * 去抖直接冲刷（测试与关停面）。
- */
-function scheduleCheckpointWrite(root: string): void {
-  if (checkpointTimers.has(root)) return;
-  const timer = setTimeout(() => {
-    checkpointTimers.delete(root);
-    void writeCheckpoints(root);
-  }, CHECKPOINT_DEBOUNCE_MS);
-  timer.unref?.();
-  checkpointTimers.set(root, timer);
-}
-
-/** Serialize one checkpoint map (prune-then-write, atomic whole-file). */
-function serializeCheckpoints(map: Map<string, CheckpointEntry>): string {
-  pruneCheckpoints(map);
-  const out: Record<string, CheckpointEntry> = {};
-  for (const [sessionId, entry] of map) out[sessionId] = entry;
-  return `${JSON.stringify(out)}\n`;
-}
-
-/** Write one workspace's checkpoint file atomically（28.3.4 整写小文件）。 */
-async function writeCheckpoints(root: string): Promise<void> {
-  const map = checkpoints.get(root);
-  if (map === undefined) return;
-  try {
-    await mkdir(root, { recursive: true });
-    await atomicWriteText(usageCheckpointFile(root), serializeCheckpoints(map));
-  } catch (error) {
-    warnThrottled(`eteams usage: 水位写盘失败（对账读侧去重兜底）：${String(error)}`);
-  }
-}
-
-// ---------- 记账（usage.jsonl 追加 + 归属快照） ----------
-
-/** Append one usage row (JSONL, tolerant read on the other side). */
-async function appendUsageRow(root: string, row: UsageRecord): Promise<void> {
-  await mkdir(root, { recursive: true });
-  await appendFile(usageFile(root), `${JSON.stringify(row)}\n`, 'utf8');
+/** Persist one usage row（明细 INSERT + 当日总和增量 upsert，单事务）。 */
+function persistUsageRow(root: string, row: UsageRecord): void {
+  recordUsage(getDb(root), row);
 }
 
 /**
@@ -435,9 +287,7 @@ function onSessionEvent(session: Session, event: SessionEvent, config: ETeamsRes
       cacheWriteTokens: toNullableCount(usage.cacheWriteTokens),
       reasoningTokens: toNullableCount(usage.reasoningTokens),
     };
-    await appendUsageRow(root, row);
-    advanceCheckpoint(root, sessionId, seq, at);
-    void maybeRotate(root);
+    persistUsageRow(root, row);
   });
 }
 
@@ -447,301 +297,40 @@ function toNullableCount(value: number | undefined): number | null {
   return value;
 }
 
-/**
- * 重启对账补折（28.3.4）：session/created（E10）+ 装机 ctx.sessions.list()
- * （E10/E18）。折算「先查水位」，seq > lastSeq 的 assistant/message 才记行；
- * 折算完推进水位到已检查的最大 seq。构造种子不重发（E9）→ 重启天然不双计。
- */
-function enqueueReconcile(session: Session, config: ETeamsResolvedConfig): void {
-  enqueueWrite(async () => {
-    await foldSession(session, config);
-  });
-}
+// ---------- 读取与聚合（docs/40：SQLite 直查） ----------
 
-/** Fold one session's log beyond the watermark (usage rows + checkpoint). */
-async function foldSession(session: Session, config: ETeamsResolvedConfig): Promise<void> {
-  const workspace = workspaceOf(session);
-  const root = stateRootFor(config, workspace);
-  await ensureCheckpoints(root);
-  const sessionId = String(session.id);
-  const last = checkpoints.get(root)?.get(sessionId)?.lastSeq ?? 0;
-  const pendingRows: Omit<UsageRecord, 'teamId' | 'memberName' | 'roleKind'>[] = [];
-  let maxSeq = last;
-  for (const event of session.events) {
-    if (event.seq <= last) continue;
-    if (event.seq > maxSeq) maxSeq = event.seq;
-    if (event.type !== 'assistant/message') continue;
-    const usage = event.data.usage;
-    if (!usage) continue;
-    const route = routeCache.get(sessionId) ?? null;
-    pendingRows.push({
-      at: event.time,
-      day: dayKeyOf(event.time),
-      sessionId,
-      seq: event.seq,
-      provider: route?.provider ?? null,
-      model: route?.model ?? null,
-      inputTokens: Number.isFinite(usage.inputTokens) ? usage.inputTokens : 0,
-      outputTokens: Number.isFinite(usage.outputTokens) ? usage.outputTokens : 0,
-      cacheReadTokens: toNullableCount(usage.cacheReadTokens),
-      cacheWriteTokens: toNullableCount(usage.cacheWriteTokens),
-      reasoningTokens: toNullableCount(usage.reasoningTokens),
-    });
-  }
-  if (pendingRows.length > 0) {
-    // 归属解析一次一批（同会话同身份），写死进行内（28.3.2 快照不引用）：
-    // 占位行补上身份三元组后即为完整 UsageRecord
-    const identity = await resolveIdentity(sessionId, root);
-    const completeRows: UsageRecord[] = pendingRows.map((row) => ({
-      ...row,
-      teamId: identity.teamId,
-      memberName: identity.memberName,
-      roleKind: identity.roleKind,
-    }));
-    for (const row of completeRows) await appendUsageRow(root, row);
-  }
-  // 无 pending 也推进水位（避免每次对账重扫全量日志）
-  advanceCheckpoint(root, sessionId, maxSeq, maxSeq > last ? lastEventTime(session) : Date.now());
-}
-
-/** The session's last event time (checkpoint lastActive source). */
-function lastEventTime(session: Session): number {
-  const events = session.events;
-  return events.length > 0 ? (events[events.length - 1]?.time ?? 0) : 0;
-}
-
-// ---------- 轮转（28.6.1 双阈值） ----------
-
-const lastRotateCheck = new Map<string, number>();
-
-/** 尺寸检查节流（60s 一次 stat），到点才入队轮转任务。 */
-function maybeRotate(root: string): void {
-  const now = Date.now();
-  if (now - (lastRotateCheck.get(root) ?? 0) < 60_000) return;
-  lastRotateCheck.set(root, now);
-  enqueueWrite(async () => {
-    try {
-      if (await rotateUsage(root)) {
-        try {
-          meterLog?.info?.(`eteams usage: usage.jsonl 轮转完成 → usage-archive.jsonl`);
-        } catch {
-          // swallow
-        }
-      }
-    } catch (error) {
-      warnThrottled(`eteams usage: 轮转失败（下次再试）：${String(error)}`);
-    }
-  });
-}
-
-/**
- * 双阈值轮转（28.6.1）：主文件超 2MB 或含 >730 天前的行时，把老行搬入
- * usage-archive.jsonl（atomicWriteText 整写 + 原子交接；轮转间隔内的崩溃
- * 重复搬入由读侧 (sessionId, seq) 去重兜住）。测试可注入小阈值。
- */
-export async function rotateUsage(
-  root: string,
-  opts?: { maxBytes?: number; maxAgeDays?: number },
-): Promise<boolean> {
-  const maxBytes = opts?.maxBytes ?? USAGE_ROTATE_MAX_BYTES;
-  const maxAgeDays = opts?.maxAgeDays ?? USAGE_ROTATE_MAX_AGE_DAYS;
-  const mainFile = usageFile(root);
-  if (!existsSync(mainFile)) return false;
-  const stats = statSync(mainFile);
-  if (stats.size <= 0) return false;
-  const rows = parseJsonl<UsageRecord>(readFileSync(mainFile, 'utf8'));
-  const cutoff = Date.now() - maxAgeDays * 86_400_000;
-  const overSize = stats.size > maxBytes;
-  // 行序即时间序（追加写）。自尾向前扫描决定保留段：老行触界即停（该行及
-  // 更早全搬出）；尺寸触界时保留最新 KEEP_BYTES 内的行。
-  let keepFrom = rows.length;
-  let keptBytes = 0;
-  for (let i = rows.length - 1; i >= 0; i -= 1) {
-    const row = rows[i]!;
-    const size = Buffer.byteLength(JSON.stringify(row)) + 1;
-    if (row.at < cutoff) break;
-    if (overSize && keptBytes + size > USAGE_ROTATE_KEEP_BYTES) break;
-    keptBytes += size;
-    keepFrom = i;
-  }
-  if (keepFrom <= 0) return false; // 无老行可搬（含空文件）：纯 no-op
-  const moved = rows.slice(0, keepFrom);
-  const kept = rows.slice(keepFrom);
-  // 归档 = 既有归档行 + 本次搬出行（整写；崩溃在两写之间 → 主文件仍含老行，
-  // 下次轮转重搬，读侧去重无害）
-  const archiveRows = readUsageRows(usageArchiveFile(root), false);
-  archiveRows.push(...moved);
-  await mkdir(root, { recursive: true });
-  await atomicWriteText(usageArchiveFile(root), serializeRows(archiveRows));
-  await atomicWriteText(mainFile, serializeRows(kept));
-  return true;
-}
-
-/** Serialize rows back to JSONL（空表 → 空文件）。 */
-function serializeRows(rows: readonly UsageRecord[]): string {
-  return rows.length === 0 ? '' : `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`;
-}
-
-// ---------- 读取与聚合（28.4） ----------
-
-/** mtime+size 未变则复用上次解析结果（28.4 进程内缓存兜底高频请求）。 */
-const rowsCache = new Map<string, { mtimeMs: number; size: number; rows: UsageRecord[] }>();
-
-/** Tolerantly read one usage file（撕裂尾行丢弃）；cache=true 走 mtime/size 缓存。 */
-function readUsageRows(file: string, cache: boolean): UsageRecord[] {
-  if (!existsSync(file)) return [];
-  if (cache) {
-    try {
-      const stats = statSync(file);
-      const hit = rowsCache.get(file);
-      if (hit !== undefined && hit.mtimeMs === stats.mtimeMs && hit.size === stats.size) {
-        return hit.rows;
-      }
-      const rows = parseJsonl<UsageRecord>(readFileSync(file, 'utf8'));
-      rowsCache.set(file, { mtimeMs: stats.mtimeMs, size: stats.size, rows });
-      return rows;
-    } catch {
-      return [];
-    }
-  }
-  try {
-    return parseJsonl<UsageRecord>(readFileSync(file, 'utf8'));
-  } catch {
-    return [];
-  }
-}
-
-/** One aggregated calendar day（28.4 响应模型；calls = 记账行数）。 */
-export interface UsageDayAgg {
-  readonly date: string;
-  readonly totalTokens: number;
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-  readonly cacheReadTokens: number;
-  readonly cacheWriteTokens: number;
-  readonly reasoningTokens: number;
-  readonly calls: number;
-}
-
-/** 聚合期间的累加单元（只读输出经 freeze-free 浅拷贝产出）。 */
-interface MutableUsageDay {
-  date: string;
-  totalTokens: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  reasoningTokens: number;
-  calls: number;
-}
-
-/** Year totals（28.4；firstDay/lastDay 为有数据首末日，无数据 null）。 */
-export interface UsageTotals {
-  readonly totalTokens: number;
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-  readonly cacheReadTokens: number;
-  readonly cacheWriteTokens: number;
-  readonly reasoningTokens: number;
-  readonly calls: number;
-  readonly firstDay: string | null;
-  readonly lastDay: string | null;
-}
-
-/** One workspace's calendar aggregate（读取时聚合，不落盘日汇总，28.4）。 */
+/** 团队口径：usage_detail 按 team_key 聚合（全年零填充日格，docs/40）。 */
 export function readUsageCalendar(
   stateRoot: string,
   teamId: string,
   year: number,
 ): { days: UsageDayAgg[]; totals: UsageTotals } {
-  // 全年格子先建齐（无数据日 totalTokens:0，1/1 起至 12/31；未来年同构）
-  const acc = new Map<string, MutableUsageDay>();
-  for (let month = 0; month < 12; month += 1) {
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    for (let day = 1; day <= daysInMonth; day += 1) {
-      const date = `${year}-${pad2(month + 1)}-${pad2(day)}`;
-      acc.set(date, {
-        date,
-        totalTokens: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheReadTokens: 0,
-        cacheWriteTokens: 0,
-        reasoningTokens: 0,
-        calls: 0,
-      });
-    }
-  }
-  // 读主文件 + 归档（28.6.2：上一年数据可能已轮转出主文件），全局 (sessionId,seq)
-  // 去重后过滤 teamId/year
-  const seen = new Set<string>();
-  const rows = [
-    ...readUsageRows(usageFile(stateRoot), true),
-    ...readUsageRows(usageArchiveFile(stateRoot), true),
-  ];
-  for (const row of rows) {
-    const dedupKey = `${row.sessionId}#${row.seq}`;
-    if (seen.has(dedupKey)) continue;
-    seen.add(dedupKey);
-    if (row.teamId !== teamId) continue;
-    if (!row.day.startsWith(`${year}-`)) continue;
-    const cell = acc.get(row.day);
-    if (cell === undefined) continue; // 防御：越界/畸形 day 丢弃
-    cell.totalTokens +=
-      row.inputTokens + row.outputTokens + (row.cacheReadTokens ?? 0) + (row.cacheWriteTokens ?? 0);
-    cell.inputTokens += row.inputTokens;
-    cell.outputTokens += row.outputTokens;
-    cell.cacheReadTokens += row.cacheReadTokens ?? 0;
-    cell.cacheWriteTokens += row.cacheWriteTokens ?? 0;
-    cell.reasoningTokens += row.reasoningTokens ?? 0;
-    cell.calls += 1;
-  }
-  const days = [...acc.values()].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-  const totals = {
-    totalTokens: 0,
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0,
-    reasoningTokens: 0,
-    calls: 0,
-    firstDay: null as string | null,
-    lastDay: null as string | null,
-  };
-  for (const day of days) {
-    totals.totalTokens += day.totalTokens;
-    totals.inputTokens += day.inputTokens;
-    totals.outputTokens += day.outputTokens;
-    totals.cacheReadTokens += day.cacheReadTokens;
-    totals.cacheWriteTokens += day.cacheWriteTokens;
-    totals.reasoningTokens += day.reasoningTokens;
-    totals.calls += day.calls;
-    if (day.totalTokens > 0) {
-      if (totals.firstDay === null) totals.firstDay = day.date;
-      totals.lastDay = day.date;
-    }
-  }
-  return { days, totals };
+  return readUsageDays(getDb(stateRoot), year, { teamId });
+}
+
+/**
+ * 全应用口径（2026-09-05 用户迭代：看板「Token 消耗」卡展示整体应用每天
+ * 的消耗）：usage_daily_total 直读（行即全应用日总和），多根合并。
+ */
+export function readAppUsageCalendar(
+  roots: readonly string[],
+  year: number,
+): { days: UsageDayAgg[]; totals: UsageTotals } {
+  const parts = roots.map((root) => readUsageDays(getDb(root), year));
+  if (parts.length === 1) return parts[0]!;
+  return mergeUsageCalendars(parts);
 }
 
 // ---------- 安装（docs/28.7：src/host/index.ts apply() 调用） ----------
 
-/** Meter handle: serial-queue flush + explicit reconcile（tests / 关停面）。 */
-export interface UsageMeterHandle {
-  /** Await pending writes; flush debounced checkpoints immediately. */
-  flush(): Promise<void>;
-  /** Fold all live sessions now（装机对账的显式入口）。 */
-  reconcileAll(): Promise<void>;
-}
-
 /**
- * Root-scope firehose listener + watermark reconciliation (docs/28.2.3 方案
- * A; E18 dsh-session-persistence 同型先例). 失败一律不外抛：计量绝不影响
- * 会话与装机。
+ * Root-scope firehose listener（docs/28.2.3 方案 A；E18 同型先例）：非
+ * assistant/message·request/* 事件第一行早退。失败一律不外抛——计量绝不
+ * 影响会话与装机。无对账/无 flush（docs/40：重启前历史不回补，写经串行
+ * 队列实时入库，测试用 usageWritesIdle 等排空）。
  */
-export function installUsageMeter(ctx: Context, config: ETeamsResolvedConfig): UsageMeterHandle {
+export function installUsageMeter(ctx: Context, config: ETeamsResolvedConfig): void {
   meterLog = (ctx as unknown as { logger: RuntimeLogger }).logger;
-  // 1) 全进程事件 firehose（untagged listener，E7/E8）
   ctx.on('session/event', (session, event) => {
     try {
       onSessionEvent(session as Session, event as SessionEvent, config);
@@ -749,64 +338,4 @@ export function installUsageMeter(ctx: Context, config: ETeamsResolvedConfig): U
       warnThrottled(`eteams usage: 监听器异常（不影响会话）：${String(error)}`);
     }
   });
-  // 2) 冷恢复会话的种子补折（E9 种子不重发；E10 session/created）
-  ctx.on('session/created', (session) => {
-    try {
-      enqueueReconcile(session as Session, config);
-    } catch (error) {
-      warnThrottled(`eteams usage: session/created 对账失败：${String(error)}`);
-    }
-  });
-  const sessionsOf = (): Session[] => {
-    try {
-      const list = (ctx as unknown as { sessions?: { list(): Session[] } }).sessions?.list();
-      return Array.isArray(list) ? list : [];
-    } catch {
-      return []; // sessions 服务缺失（headless 等）：装机对账跳过
-    }
-  };
-  // 3) 装机对账（E10/E18）：ctx.sessions.list() 的活会话补折——走同一串行
-  //    队列，与 live 行互不乱序。
-  void enqueueWrite(() => reconcileSessions(sessionsOf(), config));
-  return {
-    flush: async () => {
-      await usageWritesIdle();
-      // 绕过去抖直接冲刷水位写盘
-      for (const root of [...checkpointTimers.keys()]) {
-        const timer = checkpointTimers.get(root);
-        if (timer !== undefined) clearTimeout(timer);
-        checkpointTimers.delete(root);
-        await writeCheckpoints(root);
-      }
-    },
-    reconcileAll: async () => {
-      // 与 live 行同串行队列：直接跑会与队列里的 foldSession 并发读同一水位
-      // → 双倍追加（读侧去重能兜，但文件会重复行）。
-      await enqueueWrite(async () => {
-        await ensureCheckpointsAcross(sessionsOf(), config);
-        await reconcileSessions(sessionsOf(), config);
-      });
-    },
-  };
-}
-
-/** Eager-load checkpoint maps for every live session's workspace. */
-async function ensureCheckpointsAcross(
-  sessions: Session[],
-  config: ETeamsResolvedConfig,
-): Promise<void> {
-  await Promise.all(
-    sessions.map((session) => ensureCheckpoints(stateRootFor(config, workspaceOf(session)))),
-  );
-}
-
-/** Fold every live session through the watermark（装机对账）。 */
-async function reconcileSessions(sessions: Session[], config: ETeamsResolvedConfig): Promise<void> {
-  for (const session of sessions) {
-    try {
-      await foldSession(session, config);
-    } catch (error) {
-      warnThrottled(`eteams usage: 对账失败（session ${String(session.id)}）：${String(error)}`);
-    }
-  }
 }

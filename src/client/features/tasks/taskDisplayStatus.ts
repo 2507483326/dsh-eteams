@@ -5,7 +5,8 @@
  * 本模块提供三套展示词表与 tone——纯函数、读取时计算、不落盘、不写状态机。
  *
  * 同时是任务/成员两套展示 tone 与词表的共同家：
- * - `STATUS_LABELS`：任务 10 态精确词表（TaskDrawer 详情头/尝试行精度消费方）。
+ * - `STATUS_LABELS`：任务 10 态精确词表（八轮 DA21 页面化后无直接渲染方，
+ *   仅作十态键序的规范来源——STATUS_GROUPS 按其键序展开）。
  * - `ATTEMPT_STATUS_LABELS`：尝试（AttemptStatus 六态）词表——尝试行状态与
  *   任务态不同源，不复用任务词表。
  * - `MEMBER_STATUS_LABELS`：成员聚合状态词表（staged/ready/working/paused/
@@ -21,7 +22,7 @@
 /** Semantic tone — every status color flows through these five buckets. */
 export type Tone = 'info' | 'ok' | 'warn' | 'err' | 'muted';
 
-/** 任务 10 态精确词表（docs/27 §27.9#11；TaskDrawer/分组头/行内 pill 消费）。 */
+/** 任务 10 态精确词表（docs/27 §27.9#11；八轮 DA21 后仅作键序规范来源）。 */
 export const STATUS_LABELS: Record<string, string> = {
   draft: '草稿',
   ready: '待指派',
@@ -35,7 +36,7 @@ export const STATUS_LABELS: Record<string, string> = {
   cancelled: '已取消',
 };
 
-/** 尝试（AttemptStatus）六态词表（TaskDrawer 尝试行消费；与任务态不同源）。 */
+/** 尝试（AttemptStatus）六态词表（TaskDetailContent 尝试行消费；与任务态不同源）。 */
 export const ATTEMPT_STATUS_LABELS: Record<string, string> = {
   pending_accept: '待接取',
   running: '执行中',

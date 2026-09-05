@@ -29,8 +29,9 @@
  * 详情抽屉升级为 shadcn Dialog（本步 vendoring components/ui/dialog.tsx，
  * 并新增自管 portal 容器 components/ui/portal.ts——Radix 默认 portal 到
  * body 会逃出 `.eteams-ui` 作用域，改挂 body 下 `eteams-ui-portal eteams-ui`
- * 容器）。开合状态不变：expandedTask 仍走 ui model（ui/setDrawerTask），
- * 抽屉仅展开时挂载（track 拉取随挂载触发，同迁移前）、关闭发 null。执行槽
+ * 容器）。开合状态走 ui model（ui/setDrawerTask）；（2026-09-05 八轮 DA21
+ * 页面化后该状态语义 = 详情页选中的任务 id，原 Dialog 抽屉撤除，见
+ * tasksTab/taskDrawer）。执行槽
  * 站点 ✔/●/◌ 结构原样保留，仅类名替换。
  *
  * S14 收尾批次（docs/21-client-ui-stack.md 21.6 / D19b/D19c）：面板壳
@@ -190,7 +191,8 @@ export function ETeamsView(props: ConvViewProps): ReactNode {
  * 迁入 ui model——tab/activeId/expandedTask/dialogMember 经 useSelector 读取
  * （ui.activeNav / ui.selectedTeamId / ui.drawerTaskId / ui.dialogMember），
  * 变更走 useDispatch 发 `ui/setNav` / `ui/setSelectedTeam` / `ui/setDrawerTask`
- * / `ui/setDialogMember`（goto 桥 handler 的目标状态同样）。输入草稿、悬停、
+ * / `ui/setDialogMember`（goto 桥 handler 的目标状态同样；八轮 DA21 后
+ * drawerTaskId 语义 = 任务详情页选中的任务 id）。输入草稿、悬停、
  * openAddTick 信号等组件内瞬态仍留 useState。
  */
 function ETeamsViewBody(props: ConvViewProps): ReactNode {
@@ -199,8 +201,8 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
   // 变量名沿用迁移前语义：tab=侧栏导航，activeId=当前选中团队。
   const tab = useSelector((s: RootState) => s.ui.activeNav);
   const activeId = useSelector((s: RootState) => s.ui.selectedTeamId);
-  // S9：抽屉/对话框开关迁入 ui model——expandedTask=任务详情抽屉展开的
-  // 任务 id，dialogMember=成员对话框选中的成员名。
+  // 八轮 DA21（2026-09-05）：任务页拆列表页 + 详情页，导航状态沿用 ui model
+  // drawerTaskId——expandedTask 语义 = 详情页选中的任务 id（null=列表页）。
   const expandedTask = useSelector((s: RootState) => s.ui.drawerTaskId);
   const dialogMember = useSelector((s: RootState) => s.ui.dialogMember);
   // S10：成员库列表迁入 roster model——useSelector 读、refreshRoster 发
@@ -442,8 +444,8 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
             <TasksTab
               team={team}
               now={now}
-              expandedTask={expandedTask}
-              setExpandedTask={(id) => dispatch({ type: 'ui/setDrawerTask', payload: id })}
+              selectedTaskId={expandedTask}
+              setSelectedTaskId={(id) => dispatch({ type: 'ui/setDrawerTask', payload: id })}
             />
           )}
           {activeTab === 'reports' && team !== undefined && (

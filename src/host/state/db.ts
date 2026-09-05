@@ -364,7 +364,55 @@ CREATE TABLE IF NOT EXISTS task_status_changes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_status_changes_task ON task_status_changes (team_id, task_id, change_time);
-CREATE INDEX IF NOT EXISTS idx_status_changes_time ON task_status_changes (team_id, change_time);`;
+CREATE INDEX IF NOT EXISTS idx_status_changes_time ON task_status_changes (team_id, change_time);
+
+-- ---------------------------------------------------------------------
+-- 11. usage_detail —— Token 消耗明细（一行 = 一次带 usage 的模型回复步）
+--     DB 即唯一存储（docs/40，2026-09-05 简化版：无文件台账、无对账）；
+--     写入 = 本表 INSERT + usage_daily_total 增量 upsert（单事务）。
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS usage_detail (
+  usage_detail_id    INTEGER PRIMARY KEY AUTOINCREMENT,  -- 明细行号，自增
+  day                TEXT NOT NULL,     -- 消耗日 'yyyy-MM-dd'（记录时按宿主本地时区折算）
+  event_time         INTEGER NOT NULL,  -- 事件发生时刻（Unix 毫秒）
+  session_id         TEXT NOT NULL,     -- 会话 ID
+  seq                INTEGER NOT NULL,  -- 会话内事件序号（同会话内单调）
+  team_key           TEXT,              -- 归属团队的台账文本 ID；NULL=工作区桶（普通对话、一次性构建子代理）；松引用，不校验存在
+  member_name        TEXT,              -- 归属成员名；非成员为 NULL
+  role_kind          TEXT NOT NULL,     -- 归属类别：captain / captain-child / member / conversation / workspace
+  provider           TEXT,              -- 模型路线快照：provider 名
+  model              TEXT,              -- 模型路线快照：模型 ID
+  input_tokens       INTEGER NOT NULL DEFAULT 0,   -- 不含缓存的输入
+  output_tokens      INTEGER NOT NULL DEFAULT 0,   -- 输出
+  cache_read_tokens  INTEGER,           -- 缓存读；未上报为 NULL
+  cache_write_tokens INTEGER,           -- 缓存写；未上报为 NULL
+  reasoning_tokens   INTEGER,           -- 思考 token；不计入 total_tokens；未上报为 NULL
+  total_tokens       INTEGER NOT NULL,  -- input + output + cache_read + cache_write
+  created_time       INTEGER NOT NULL,  -- 入库时刻
+  update_time        INTEGER NOT NULL   -- 明细行只插不改，= created_time
+);
+
+CREATE INDEX IF NOT EXISTS idx_usage_detail_session ON usage_detail (session_id, seq);
+CREATE INDEX IF NOT EXISTS idx_usage_detail_day     ON usage_detail (day);
+CREATE INDEX IF NOT EXISTS idx_usage_detail_team    ON usage_detail (team_key, day) WHERE team_key IS NOT NULL;
+
+-- ---------------------------------------------------------------------
+-- 12. usage_daily_total —— 每日消耗总和（一行 = 一天，全应用口径）
+--     写入按事件增量 upsert（不强一致：精确口径随时可 GROUP BY
+--     usage_detail 重查，团队口径即如此直查明细表）。
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS usage_daily_total (
+  day                TEXT PRIMARY KEY,  -- 消耗日 'yyyy-MM-dd'（行即主键，仿 schema_meta 例外）
+  input_tokens       INTEGER NOT NULL DEFAULT 0,
+  output_tokens      INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+  reasoning_tokens   INTEGER NOT NULL DEFAULT 0,
+  total_tokens       INTEGER NOT NULL DEFAULT 0,  -- 明细 total_tokens 之和（增量累计）
+  calls              INTEGER NOT NULL DEFAULT 0,  -- 明细行数（= 调用次数）
+  created_time       INTEGER NOT NULL,  -- 首次写入该日行
+  update_time        INTEGER NOT NULL   -- 最近一次增量
+);`;
 // === SCHEMA_SQL END ===
 
 // --------------------------------------------------------------------------

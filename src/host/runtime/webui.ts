@@ -63,7 +63,7 @@ import {
 import { spawnBuildPhase, spawnContinueAfterAnswers } from './builderPhases.js';
 import { clearSessionPersona, setSessionPersona } from './sessionPersona.js';
 import { clearSessionTeam, setSessionTeam } from './sessionTeam.js';
-import { readUsageCalendar } from './usage.js';
+import { readUsageCalendar, readAppUsageCalendar } from './usage.js';
 import {
   findRosterMemberAcrossWorkspaces,
   locateTeamAcrossWorkspaces,
@@ -1456,6 +1456,33 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
                 teams: await collectTeams(ctx, config),
                 maxMembers: config.maxMembers,
                 serverTime: Date.now(),
+              });
+              return;
+            }
+            // GET /usage/calendar?year=<y> — app-wide daily token calendar
+            // (2026-09-05 user iteration: the board card shows the whole app's
+            // daily consumption — no team/role filter; the workspace bucket
+            // (plain conversations, one-shot build subagents) counts too).
+            // collectRoots merges ledgers across workspaces (one root under the
+            // global stateDir); year validation mirrors the team route.
+            if (segments[0] === 'usage' && segments[1] === 'calendar' && segments.length === 2) {
+              const yearParam = url.searchParams.get('year');
+              const year =
+                yearParam === null || yearParam === ''
+                  ? new Date().getFullYear()
+                  : Number(yearParam);
+              if (!Number.isInteger(year) || year < 2000 || year > 2999) {
+                sendError(res, 400, `year 参数无效（需 2000-2999 的整数）：${String(yearParam)}`);
+                return;
+              }
+              const roots = collectRoots(ctx, config).map((located) => located.root);
+              const calendar = readAppUsageCalendar(roots, year);
+              sendJson(res, 200, {
+                year,
+                teamId: null,
+                serverTime: Date.now(),
+                days: calendar.days,
+                totals: calendar.totals,
               });
               return;
             }
