@@ -23,7 +23,17 @@
  * 更新提示文案（用户拍板「不放到卡片里面，放到卡片下面，左边用小竖线标识
  * 为提示」）；二十四轮 DA37：罗列条**回卡内原位、只留 chips 行**，指派
  * 提示拆出 StripAssignHint 仍置卡下方左竖线块（用户拍板「团队成员还是在
- * 卡片内，只是拖拽成员到下方的成员卡槽完成指派不在」）；
+ * 卡片内，只是拖拽成员到下方的成员卡槽完成指派不在」）；二十五轮 DA38：
+ * 提示块左竖线加粗加色改显眼（用户拍板「左侧的竖线改得显眼一点」——2px
+ * 中性 token 线改 4px 品牌色实线）；多选面板收起修复（用户拍板「点击小
+ * 任务里面的选择成员弹出弹窗后点击小任务空白地方弹窗没有消失」——Radix
+ * 1.1 外出点击关闭是 click 期 deferred，被卡内 stopPropagation 拦断；
+ * 容器空白处点击显式收起 + 卡身防冒泡包装层撤除恢复原生冒泡）；二十六轮
+ * DA39：锚面开合**改回 click 期翻转**（DA38 曾改 pointerdown 抢翻转——
+ * 同交互尾部的焦点默认动作落在 portal 内容之外的锚面上，刚挂载的 Radix
+ * focusin 外出关闭路径立即触发 onDismiss，弹窗一开即收，用户拍板「弹出
+ * 弹窗后马上就消失了」；click 开合在整个交互结束后才挂外出监听，同交互
+ * 不再自伤，点锚面收起由本处显式翻转承担、不依赖 deferred 关闭）；
  * 以拖放时刻最新快照的 chain 为底改后整链重发，DA10 复用
  * updateTeamTask、非乐观更新）。
  *
@@ -271,15 +281,13 @@ export function TeamMemberStrip({ team }: { team: TeamSnapshot }): ReactNode {
  * 不在（卡内）」——提示文案不入罗列条，独立置**头部卡下方**，左小竖线
  * （border-l-2 + pl-3）标识提示语义；渲染判据与罗列条同源（存在可编辑
  * 小任务才渲染），罗列条入卡、提示在卡下，同屏一上一下）。
+ *
+ * 二十五轮 DA38：左竖线加粗加色改显眼（用户拍板「左侧的竖线改得显眼一点」
+ * ——2px 中性 token 线改 4px 品牌色实线，与卡槽虚线的品牌系呼应）。
  */
 export function StripAssignHint(): ReactNode {
   return (
-    <div
-      className={cn(
-        'mt-2 border-l-2 border-solid pl-3 text-xs leading-none text-muted-foreground',
-        BORDER_TOKEN_CLASS,
-      )}
-    >
+    <div className="mt-2 border-l-4 border-solid border-primary pl-3 text-xs leading-none text-muted-foreground">
       拖拽成员到下方的成员卡槽完成指派
     </div>
   );
@@ -415,6 +423,13 @@ export function TaskAssignDropBox({
 
   // 可编辑 + 空链：容器即空槽（拖入 = 追加站点；六轮 DA19：点击/键盘 =
   // 「＋」多选面板——弹窗不再编排链，一轮空框口径的点击行为随之改道）。
+  // 二十五轮 DA38→二十六轮 DA39 修订：开合承载事件从 pointerdown 改回
+  // click（用户拍板「弹出弹窗后马上就消失了」——pointerdown 开合让刚挂载
+  // 的 Radix 外出监听撞上同交互尾部的焦点变化：锚面在 portal 内容之外，
+  // focusin 外出关闭路径立即触发 onDismiss；click 开合在整个交互结束后才
+  // 挂外出监听，同交互不再自伤；点锚面收起由本处显式翻转承担、不依赖
+  // deferred 外出关闭；空白处收起仍由包装层撤除后的原生冒泡 + Radix
+  // deferred click 关闭承载）。
   if (task.chain.length === 0) {
     return (
       <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
@@ -432,7 +447,10 @@ export function TaskAssignDropBox({
             )}
             onClick={(e) => {
               e.stopPropagation();
-              openPicker();
+              // 二十六轮 DA39：开合改回 click 期翻转——按下即翻转让同交互
+              // 尾部的焦点变化落进刚挂载的 Radix 外出监听，弹窗一开即收。
+              if (pickerOpen) setPickerOpen(false);
+              else openPicker();
             }}
             onKeyDown={onKeyPicker}
           >
@@ -469,6 +487,9 @@ export function TaskAssignDropBox({
         )}
         onClick={(e) => {
           e.stopPropagation();
+          // 二十五轮 DA38：弹窗开着时点容器空白处要先收起弹窗再开「修改」
+          // （stopPropagation 拦断了 Radix 的 deferred 外出关闭——显式收起）。
+          if (pickerOpen) setPickerOpen(false);
           onOpenEdit();
         }}
         onKeyDown={onKeyOpen}
@@ -493,7 +514,11 @@ export function TaskAssignDropBox({
             className={cn(APPEND_HINT_CLASS, 'cursor-pointer')}
             onClick={(e) => {
               e.stopPropagation();
-              openPicker();
+              // 二十六轮 DA39：开合改回 click 期翻转（理由同空链锚面——
+              // pointerdown 开合会被同交互尾部的焦点变化触发的 Radix
+              // focusin 外出关闭立即收掉；显式翻转承担点锚面收起）。
+              if (pickerOpen) setPickerOpen(false);
+              else openPicker();
             }}
           >
             {isOver ? '松手追加' : '＋'}

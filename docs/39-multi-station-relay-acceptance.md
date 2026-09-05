@@ -581,3 +581,98 @@ exhaustive-deps warning：memberDialog.tsx:38 / taskDrawer.tsx:117）/ test
 （`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿。
 GUI 装机冒烟持续**未验证**（罗列条回卡、卡下提示块、开始按钮、待开始 pill
 需装机后在 DSH 面板人工过一遍）。
+
+## 二十五轮追加（2026-09-05，DA38：主任务整体开始 + 无领队主会话锚点 + 竖线显眼 + 卡身点击撤除 + 弹窗收起修复）
+
+用户原话：
+
+> 1. 主任务需要加开始按钮，不然整个怎么启动，主任务启动就代表着小任务需要逐个开始执行了
+> 2. 需要判断团队是否含有领队，如果没有领队，主会话窗口就是领队，如果有领队，则从领队开始正式开始执行任务
+> 3. 拖拽成员到下方的成员卡槽完成指派 左侧的竖线改得显眼一点
+> 4. 小任务不需要再点击进入任务详情了，然后点击小任务里面的选择成员弹出弹窗后点击小任务空白地方弹窗没有消失
+
+背景：二十四轮 DA37 给了单个小任务「开始」按钮，但主任务（容器）没有整体
+启动入口；领队移出后的派发锚点无兜底；指派提示块左竖线太淡；小任务卡身
+点击进详情的口径该收；多选面板点空白不消失是交互 bug。本轮四项一并处理：
+
+| 项 | 拍板 |
+| --- | --- |
+| 主任务整体开始 | 主任务详情页「任务列表」标题行加主「开始」钮（ready 且有小任务才渲染）；新宿主 `startGroupTask` 逐卡独立走 `assignTask` 派发核——无链（「需要选择成员」）/链到末站/依赖未满/占用/起会话失败的卡**跳过并回传原因**（200 `{ok, started, skipped}`），不拖累其余；面板行内就地提示（全跳过列原因清单、部分成功带「已开始 N 个小任务，M 个未开始」计数）；单任务路径响应兼容（started=1、skipped 恒空，行为不变） |
+| 无领队锚点 | `captainFor`：有领队（行在且未移出）→ 领队主会话锚点（**从领队开始**，主会话不在册 = undefined 不退化）；无领队（行缺失/已移出）→ **主会话窗口就是领队**——领队行原 main_session_id 的会话仍在册先用（setLeaderRemoved 不改锚点、零迁移），再退化客户端活跃会话心跳（POST /presence，60s 内有效）；锚点会话与领队行不一致时 `ensureSpawned` 先**重锚领队行**（内存快照改、随本次派发写事务落库——成员子代理父会话校验 installMemberRuntime 按领队行判父）；两锚都不在册报错（文案改「领队/主会话窗口不在线」） |
+| 竖线显眼 | `StripAssignHint` 左竖线 `border-l-2` + 中性 token 线改 **`border-l-4` + 品牌色实线**（border-primary，与卡槽高亮同系）；文案/pl-3/渲染判据不变 |
+| 卡身点击撤除 | 小任务卡整卡点击 = 进详情的口径**废止**（用户拍板「小任务不需要再点击进入任务详情了」）：去 cursor-pointer、去 onOpen/onClick，卡身只承担把手拖拽放置目标；按钮簇/卡槽行/展开区三处防冒泡包装层随之清理——**小任务详情页自此无组卡入口**（页面保留，仍服务顶层普通任务；属用户拍板的直接后果，非遗漏） |
+| 弹窗收起修复 | 根因（读 Radix 1.1.23 源码实锤）：Popover 外出点击关闭是 **click 期 deferred**（`deferPointerDownOutside: true`），click 的 `stopPropagation` 拦断 document 冒泡相监听后，deferred 关闭被判「已拦截」而**抑制**——卡内所有防冒泡点击都会触发。修复：空链卡槽锚面与「＋」钮改 **onPointerDown 翻转开合**（按下即翻转、click 只拦冒泡，开合不再依赖 Radix deferred 关闭）；有链容器空白处点击**显式收起**弹窗再开「修改」；包装层撤除后其余区域恢复原生冒泡（Radix 正常关闭） |
+
+改动面：`src/client/features/tasks/taskAssign.tsx`（竖线 + 锚面 pointerdown
+翻转 + 容器显式收起）、`src/client/pages/teamsView/tasksTab.tsx`（卡身点击
+撤除 + 包装层清理 + 主任务开始钮 + submitStart 吃 `{started, skipped}`）、
+`src/client/lib/api.ts`（startTeamTask 返回 payload + GroupStartSkipped）、
+`src/host/runtime/assignment.ts`（startGroupTask + captainFor 无领队锚点 +
+ensureSpawned 重锚与报错文案）、`src/host/runtime/webui.ts`（start 路由主任务
+分支）、`tests/webui.test.ts`（+2：整体开始混合小任务、无领队心跳锚点；
+harness 暴露 captains Map）。任务列表页卡片未动（概览只读，九轮 DA22）。
+
+**二十五轮四绿门（2026-09-05）**：typecheck / lint（0 error，2 条既有
+exhaustive-deps warning：memberDialog.tsx:38 / taskDrawer.tsx:117）/ test
+（23 文件 **324 用例**全过——基线 322 + 本轮 2）/ build
+（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿。
+GUI 装机冒烟持续**未验证**（主任务开始钮、竖线显眼、卡身点击撤除、弹窗
+收起、无领队派发需装机后在 DSH 面板人工过一遍）。
+
+## 二十六轮追加（2026-09-05，DA39：锚面开合改回 click 期 + 列表页主任务卡「开始」钮）
+
+用户原话：
+
+> 1. 现在小任务里面的选择成员弹出弹窗后马上就消失了
+> 2. 主任务需要加开始按钮，没看到加在那里
+
+背景：二十五轮 DA38 的两处口径装机后不达预期——①多选弹窗一开就收（回归）；
+②整体「开始」钮只加在详情页标题行，用户在任务列表页没看到。本轮两项订正：
+
+| 项 | 拍板 |
+| --- | --- |
+| 弹窗一开即收回归修复 | DA38 把锚面（空链卡槽/「＋」钮）开合改到 onPointerDown 是**改过头**：pointerdown 开合让刚挂载的 Radix 外出监听撞上同一交互的尾巴——焦点默认动作落在 portal 内容之外的锚面上，Radix **focusin 外出关闭路径**（读 installed 1.1.19 dismissable-layer + 1.1.23 popover 源码实锤：NonModal 的防 focusin 关闭仅在有 pointerdown-outside 前置时生效，开锚面时该前置不存在）立即触发 onDismiss。订正：锚面开合**改回 click 期翻转**（onClick 内 stopPropagation + `pickerOpen ? 关 : 开`）——click 开合在整个交互结束后才挂外出监听，同交互不再自伤；点锚面收起由本处显式翻转承担（不依赖 deferred 关闭）；**空白处收起不受影响**——那半由 DA38 的防冒泡包装层撤除 + 原生冒泡 + Radix deferred click 关闭承载，与锚面开合是两条独立路径 |
+| 列表页主任务卡「开始」钮 | DA38 只加在主任务详情页「任务列表」标题行，任务列表页没有。订正：列表卡**底栏钮区首位**加「开始」实底主钮——判据与详情页标题行同（`kind === 'group' && status === 'ready' && subs.length > 0`），点击走同一路由逐个派发 ready 小任务（host startGroupTask，跳过卡回传原因）；startError 槽按卡行内就地提示（folderError 行之后）；底栏容器既有 stopPropagation 保证不触发整卡进详情；详情页标题行的整体开始钮保留 |
+
+改动面：`src/client/features/tasks/taskAssign.tsx`（两处锚面 onPointerDown 撤除、
+开合改回 onClick 翻转 + 文件头/A.5 口径注记）、`src/client/pages/teamsView/
+tasksTab.tsx`（列表卡底栏「开始」钮 + startError 行内槽 + 文件头注记）。
+无新增用例（交互行为修复——Radix 外出关闭与焦点时序无法在 node 端 harness
+断言，装机冒烟口径）；四绿门复跑全绿（324 用例，与二十五轮持平）。
+
+**二十六轮四绿门（2026-09-05）**：typecheck / lint（0 error，2 条既有
+exhaustive-deps warning：memberDialog.tsx:38 / taskDrawer.tsx:117）/ test
+（23 文件 **324 用例**全过，与二十五轮持平）/ build（`SMOKE OK: id=dsh-eteams,
+exports=[apply, inject]`）全绿。
+GUI 装机冒烟持续**未验证**（弹窗开合点锚面/点空白、列表卡开始钮需装机后在
+DSH 面板人工过一遍）。
+
+## 二十七轮追加（2026-09-05，DA40：整体开始链式接力 + 领队锚点统一 + 开始钮判据放宽）
+
+用户原话：
+
+> 还是没看到开始按钮， 1. 整体开始，所有小任务链式执行          2.不存在领队会话离线啊  3.不需要小任务详情啊，任务详情页面不就能看到所有小任务的状态信息了吗？
+
+背景：连续三轮「没看到/还是没看到开始按钮」——列表卡判据是 `status === 'ready'`
+等值；本轮判据放宽兜底（正常执行期组恒 ready，最大嫌疑仍是客户端构建包未
+更新，装机后请重启 DSH 让插件重注入）。三项拍板：
+
+| 项 | 拍板 |
+| --- | --- |
+| 整体开始 = 链式接力 | DA38 的整体开始是「一次性派发全部 ready 小任务」（依赖未满的被拒跳过），与用户口径「逐个开始执行（DA38）/链式执行（DA40）」不符。订正：按组内执行序（新宿主 `subExecutionOrder`：兄弟依赖拓扑序、同层建序稳定、组外依赖不算排序约束）**一次只发第一棒**，余下 ready 卡以「等待链式接力（前一小任务完成后自动开始）」记入 skipped（行内提示说明排队）；小任务**终站收口即自动交棒**（`completeTask` 尾以完成成员名义续派下一棒；组已收口免调用、失败仅记日志不吞完成应答）；终态组（completed/cancelled）整体开始直接 400；**建卡路由补收 `dependencies`**（面板建卡此前不收依赖——依赖只能靠拖拽调序补写，create 路由与 update 对齐） |
+| 不存在领队会话离线 | 用户拍板「不存在领队会话离线啊」——撤掉 DA38「有领队就硬绑领队会话（不在册 = 报错不退化）」分支：`captainFor` 统一条梯度 = 领队行登记主会话在册先用 → 心跳（POST /presence，60s）定位 → 都不在册才报错；报错文案改「主会话窗口不在线」，不再有「领队会话离线」这个独立报错态。重锚领队行逻辑不变（锚点会话 ≠ 领队行登记时改锚、随派发写事务落库） |
+| 不需要小任务详情 | 用户拍板「任务详情页面不就能看到所有小任务的状态信息了吗？」——确认 DA38 后小任务详情入口已全无（列表卡进详情仅顶层任务、小任务卡身无点击），主任务详情页即小任务状态总览；顶层普通任务的「详情」钮保留。本条无代码变更，仅口径确认 |
+| 开始钮判据放宽 | 用户「还是没看到开始按钮」：列表卡与详情页标题行判据由 `status === 'ready'` 放宽为**非终态组**（completed/cancelled 外）即渲染——ready 等值判据在组状态被旁路转移时会把钮藏掉，终态才收（纯兜底） |
+
+改动面：`src/host/runtime/assignment.ts`（subExecutionOrder + startGroupTask
+链式接力/终态守卫 + completeTask 尾续派 + captainFor 统一梯度 + ensureSpawned
+报错文案）、`src/host/runtime/webui.ts`（建卡路由补收 dependencies）、
+`src/client/pages/teamsView/tasksTab.tsx`（两处开始钮判据放宽 + 文件头注记）、
+`tests/webui.test.ts`（+3：链式接力、终态组 400、领队在册会话下线心跳兜底）。
+
+**二十七轮四绿门（2026-09-05）**：typecheck / lint（0 error，2 条既有
+exhaustive-deps warning：memberDialog.tsx:38 / taskDrawer.tsx:117）/ test
+（23 文件 **327 用例**全过——基线 324 + 本轮 3）/ build
+（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿。
+GUI 装机冒烟持续**未验证**（链式接力交棒、开始钮显示需装机后在 DSH 面板
+人工过一遍；请重启 DSH 载入最新构建包后再验「开始」钮）。

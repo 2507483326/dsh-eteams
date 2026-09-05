@@ -379,14 +379,31 @@ export async function openTaskFolder(teamId: string, taskId: number): Promise<vo
   );
 }
 
+/** 主任务开始响应的跳过卡（二十五轮 DA38）：无链/依赖未满/占用等逐卡原因，
+ * 面板行内就地提示。 */
+export interface GroupStartSkipped {
+  taskId: number;
+  subject: string;
+  reason: string;
+}
+
 /** Start (dispatch) a ready task from the panel（二十四轮 DA37 面板开始）：
  * 宿主把任务派发给执行链下一站（复用 assignTask 派发核）；空链 400
- * 「需要选择成员」——客户端对空链卡不渲染按钮，此处为兜底。 */
-export async function startTeamTask(teamId: string, taskId: number): Promise<void> {
-  await requestJson(
+ * 「需要选择成员」——客户端对空链卡不渲染按钮，此处为兜底。二十五轮
+ * DA38：同一路由开始主任务 = 逐个派发 ready 小任务，响应带 started/
+ * skipped（跳过卡列原因，面板行内提示）；单任务路径两字段无跳过。 */
+export async function startTeamTask(
+  teamId: string,
+  taskId: number,
+): Promise<{ started: number; skipped: GroupStartSkipped[] }> {
+  const body = (await requestJson(
     `${API_BASE}/team/${encodeURIComponent(teamId)}/task/${taskId}/start`,
     { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) },
-  );
+  )) as { started?: unknown; skipped?: unknown };
+  return {
+    started: typeof body.started === 'number' ? body.started : 0,
+    skipped: Array.isArray(body.skipped) ? (body.skipped as GroupStartSkipped[]) : [],
+  };
 }
 
 // ---------- role-builder build session (docs/19.6, D18) ----------

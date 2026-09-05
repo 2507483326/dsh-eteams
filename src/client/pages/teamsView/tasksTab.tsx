@@ -38,7 +38,22 @@
  * 左竖线块；小任务卡与详情页加**开始按钮**（用户拍板「卡片加上开始按钮」
  * ——ready 且有链渲染、ready 无链渲染「需要选择成员」提示，host 新增
  * /task/<id>/start 派发）；展示态文案合并：草稿/待指派均显「待开始」
- * （用户拍板「没有什么草稿状态、待指派状态，只有待开始状态」）。
+ * （用户拍板「没有什么草稿状态、待指派状态，只有待开始状态」）。二十五轮
+ * DA38 修订：主任务详情页标题行加**整体开始按钮**（用户拍板「主任务需要
+ * 加开始按钮……主任务启动就代表着小任务需要逐个开始执行了」——逐个派发
+ * ready 小任务，跳过卡回传原因行内提示）；小任务卡身点击进详情撤除（用户
+ * 拍板「小任务不需要再点击进入任务详情了」，防冒泡包装层随之清理）；多选
+ * 面板点空白收起修复（见 taskAssign 文件头）。二十六轮 DA39 修订：锚面
+ * 开合改回 click 期（pointerdown 开合回归修复，见 taskAssign 文件头）；
+ * 任务列表页**主任务卡底栏加「开始」按钮**（用户拍板「主任务需要加开始
+ * 按钮，没看到加在那里」——与详情页标题行同判据：ready 且有小任务才渲染，
+ * 点击逐个派发 ready 小任务、跳过原因行内就地提示；详情页标题行的整体
+ * 开始钮保留）。二十七轮 DA40 修订：开始钮判据放宽为**非终态组即渲染**
+ * （用户「还是没看到开始按钮」——ready 等值判据在组状态被旁路转移时会把
+ * 钮藏掉，completed/cancelled 才收）；小任务详情入口维持 DA38 口径全无
+ * （用户「不需要小任务详情啊，任务详情页面不就能看到所有小任务的状态
+ * 信息了吗？」——主任务详情页即小任务状态总览，顶层普通任务的「详情」
+ * 钮保留）。
  * 不列小任务明细——九轮
  * DA22）+ 空态行；详情页 = 返回条 + 头部卡 + 编排（主任务：新增小任务 +
  * 小任务卡片全套（卡槽/改删/**把手拖拽调序**——十轮 DA23：只有卡片左上
@@ -120,23 +135,25 @@ import {
 /** 七轮 DA20 + 十轮 DA23：小任务卡片——与组卡同观感的全边框卡，左上 grip
  * 把手 = 唯一拖拽源，卡身兼放置目标（拖 A 到 B = A 搬到 B 的执行位）。
  * 二十一轮 DA34：七轮的挂靠缩进 ml-4 撤除（用户拍板「下面的任务列表左边
- * 不留空隙」——卡片化后小任务卡已不在组卡内嵌套，缩进无嵌套语义）。 */
-const SUBTASK_CARD_CLASS = `mt-1.5 cursor-pointer rounded-[8px] border border-solid bg-background px-3 py-2.5 ${BORDER_L1_CLASS}`;
+ * 不留空隙」——卡片化后小任务卡已不在组卡内嵌套，缩进无嵌套语义）。二十五
+ * 轮 DA38：卡身点击进小任务详情撤除（用户拍板「小任务不需要再点击进入任务
+ * 详情了」）——cursor-pointer 与整卡 onClick 一并移除，卡身只承担放置
+ * 目标；小任务详情页仍服务于顶层普通任务（组卡不再有入口，见组详情分支）。 */
+const SUBTASK_CARD_CLASS = `mt-1.5 rounded-[8px] border border-solid bg-background px-3 py-2.5 ${BORDER_L1_CLASS}`;
 
 /** 小任务卡片（七轮 DA20 调序 + 十轮 DA23 把手化）：**只有左上 grip 把手
  * 可拖**（'eteams-subtask'，draft/ready 才可拖，不可编辑态把手淡化），
- * 卡身不可拖——整卡点击 = 进小任务详情页（拖拽不触发 click）。整卡作为
- * 放置目标（同父兄弟卡才亮；drop 时 onReorder 以最新快照现算依赖改写补丁，
- * 非乐观更新）。拖拽中半透明、悬停 ring 高亮；执行序号徽标由调用方渲染。 */
+ * 卡身不可拖。二十五轮 DA38：整卡点击 = 进小任务详情页的口径撤除（用户
+ * 拍板「小任务不需要再点击进入任务详情了」）——卡身只作为放置目标（同父
+ * 兄弟卡才亮；drop 时 onReorder 以最新快照现算依赖改写补丁，非乐观更新）。
+ * 拖拽中半透明、悬停 ring 高亮；执行序号徽标由调用方渲染。 */
 function SubtaskCard({
   task,
   onReorder,
-  onOpen,
   children,
 }: {
   task: TaskView;
   onReorder: (fromTaskId: number, toTaskId: number) => void;
-  onOpen: () => void;
   children: ReactNode;
 }): ReactNode {
   const editable = task.status === 'draft' || task.status === 'ready';
@@ -167,7 +184,6 @@ function SubtaskCard({
         isDragging && 'opacity-50',
         isOver && 'ring-1 ring-primary',
       )}
-      onClick={onOpen}
     >
       <div className="flex items-start gap-1.5">
         <span
@@ -442,11 +458,24 @@ export function TasksTab({
   // 链下一站（host /task/<id>/start 复用 assignTask 派发核——起子会话 +
   // 投递指派信，ready→wait 待接取）；空链卡不渲染按钮（行内「需要选择
   // 成员」提示），失败行内就地显示。非乐观更新，成功 refreshActivitySoon。
+  // 二十五轮 DA38：同一路由开始主任务 = 逐个派发 ready 小任务（host 分支，
+  // 响应带 started/skipped）——有跳过时行内就地提示（全跳过列首个原因、
+  // 部分成功带计数；单任务路径跳过恒空，行为不变）。
   const submitStart = async (taskId: number): Promise<void> => {
     setStartBusy(taskId);
     setStartError((cur) => (cur !== null && cur.taskId === taskId ? null : cur));
     try {
-      await startTeamTask(team.teamId, taskId);
+      const result = await startTeamTask(team.teamId, taskId);
+      if (result.skipped.length > 0) {
+        const reason = result.skipped.map((s) => `${s.subject}：${s.reason}`).join('；');
+        setStartError({
+          taskId,
+          message:
+            result.started > 0
+              ? `已开始 ${result.started} 个小任务，${result.skipped.length} 个未开始：${reason}`
+              : reason,
+        });
+      }
       refreshActivitySoon();
     } catch (e) {
       setStartError({ taskId, message: e instanceof Error ? e.message : String(e) });
@@ -622,7 +651,9 @@ export function TasksTab({
 
   // ---- 主任务（group）详情页 = 整个任务的编排面（八轮 DA21）：返回条 +
   // 头部卡 + 新增小任务 + 小任务卡片全套（执行序号/卡槽/把手拖拽调序（十轮
-  // DA23）/改删）+ 成员罗列条。小任务卡点击 → 小任务详情页。
+  // DA23）/改删）+ 成员罗列条。二十五轮 DA38：小任务卡点击 → 小任务详情页
+  // 的口径撤除（用户拍板「小任务不需要再点击进入任务详情了」）；主任务卡
+  // 加整体「开始」按钮（见下任务列表标题行）。
   if (selected !== null && selected.kind === 'group') {
     // 七轮 DA20：小任务按执行序展示（兄弟依赖拓扑序，创建序平局）。
     const subs = executionOrderOf(team.tasks.filter((t) => t.parentId === selected.taskId));
@@ -666,6 +697,26 @@ export function TasksTab({
             靠右同排（列表页「任务 n 个」表头行同构）。 */}
           <div className="mt-1.5 flex items-center gap-3">
             <div className={LIST_TITLE_CLASS}>任务列表</div>
+            {/* 二十五轮 DA38：主任务整体「开始」按钮（用户拍板「主任务需要
+              加开始按钮，不然整个怎么启动，主任务启动就代表着小任务需要逐个
+              开始执行了」）——ready 且有小任务才渲染；点击逐个派发 ready
+              小任务（host 逐卡走派发核，无链/依赖未满/占用的卡跳过并回传
+              原因，行内就地提示）。二十七轮 DA40：判据放宽——非终态
+              （completed/cancelled 外）的主任务一律渲染开始钮（用户「还是
+              没看到开始按钮」——ready 等值判据在组状态被旁路转移时会把钮
+              藏掉，终态才收；详情页与列表页同口径）。 */}
+            {selected.status !== 'completed' &&
+              selected.status !== 'cancelled' &&
+              subs.length > 0 && (
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={startBusy === selected.taskId}
+                  onClick={() => void submitStart(selected.taskId)}
+                >
+                  开始
+                </Button>
+              )}
             {mutable && (
               <Button
                 type="button"
@@ -678,6 +729,11 @@ export function TasksTab({
               </Button>
             )}
           </div>
+          {/* 二十五轮 DA38：主任务开始的行内提示（跳过的小任务按卡列原因；
+            单小任务路径错误也走同槽——组卡上无单卡开始钮，槽位复用）。 */}
+          {startError !== null && startError.taskId === selected.taskId && (
+            <FormErrorNote>{startError.message}</FormErrorNote>
+          )}
           {/* 十八轮 DA31：小任务列表展开升级 **shadcn Accordion**（Radix
             多开受控——type="multiple" + value=expandedSubIds，多开互不影响
             由组件承载；原逐卡 Collapsible + 手写开合状态机撤除）。触发钮/
@@ -699,11 +755,7 @@ export function TasksTab({
               const expanded = expandedSubIds.includes(t.taskId);
               return (
                 <AccordionItem key={t.taskId} value={String(t.taskId)} className="border-b-0">
-                  <SubtaskCard
-                    task={t}
-                    onReorder={(from, to) => void submitReorder(from, to)}
-                    onOpen={() => setSelectedTaskId(t.taskId)}
-                  >
+                  <SubtaskCard task={t} onReorder={(from, to) => void submitReorder(from, to)}>
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <span className={cn(MUTED_CLASS, 'mr-0.5')}>{subIndex + 1}.</span>
@@ -714,16 +766,15 @@ export function TasksTab({
                           <span className={cn(MUTED_CLASS, 'ml-1')}>· {t.assignee}</span>
                         )}
                       </div>
-                      <div
-                        className="flex shrink-0 items-center gap-1.5"
-                        onClick={(e) => e.stopPropagation()}
-                      >
+                      <div className="flex shrink-0 items-center gap-1.5">
                         {/* 二十四轮 DA37：开始按钮（用户拍板「卡片加上开始
                           按钮」）——ready 且有链才渲染（点击派发执行链下一
                           站）；ready 无链改渲染「需要选择成员」行内提示
                           （用户拍板「如果有任务没有成员，则提示需要选择
                           成员就行」，不设按钮）。draft（拆解中）与已入执行
-                          不渲染。 */}
+                          不渲染。二十五轮 DA38：防冒泡包装层撤除（卡身点击
+                          进详情口径已废，包装层随之无用；点击恢复原生冒泡
+                          ——多选面板的外出点击关闭不再被拦断）。 */}
                         {t.status === 'ready' && t.chain.length > 0 && (
                           <Button
                             type="button"
@@ -780,8 +831,11 @@ export function TasksTab({
                       </div>
                     </div>
                     {/* docs/29 A.8（四轮 DA17）：成员卡槽在任务卡下方独立一行
-                    （拖拽指派 drop target；点击不冒泡到卡）。 */}
-                    <div className="mt-1.5" onClick={(e) => e.stopPropagation()}>
+                    （拖拽指派 drop target）。二十五轮 DA38：防冒泡包装层
+                    撤除（卡身点击进详情口径已废）——卡槽内点击恢复原生
+                    冒泡，多选面板的外出点击关闭不再被拦断（卡槽空白处的
+                    点击仍由卡槽自身开合逻辑处理）。 */}
+                    <div className="mt-1.5">
                       <TaskAssignDropBox
                         task={t}
                         members={team.members}
@@ -795,13 +849,9 @@ export function TasksTab({
                     </div>
                     {!suppressStations && <TaskStations task={t} />}
                     {/* 展开内容渲染在**成员卡槽下面**（十七轮用户拍板「出现的
-                    文字会在卡槽下面」）——说明 + 合同 MD 只读渲染，点击不冒泡
-                    到卡，不误进详情页。AccordionContent 关态即卸载（原
-                    CollapsibleContent 同口径）。 */}
-                    <AccordionContent
-                      className="mt-1.5 border-t border-solid pt-2"
-                      onClick={(e) => e.stopPropagation()}
-                    >
+                    文字会在卡槽下面」）——说明 + 合同 MD 只读渲染。二十五轮
+                    DA38：防冒泡包装层撤除（卡身点击进详情口径已废）。 */}
+                    <AccordionContent className="mt-1.5 border-t border-solid pt-2">
                       {t.description !== null && (
                         <div className={LINE_CLASS}>说明：{t.description}</div>
                       )}
@@ -1026,6 +1076,12 @@ export function TasksTab({
                       {folderError !== null && folderError.taskId === t.taskId && (
                         <FormErrorNote>{folderError.message}</FormErrorNote>
                       )}
+                      {/* 二十六轮 DA39：主任务卡开始的行内提示（跳过原因清单
+                          /部分成功计数，与详情页同槽语义——FormErrorNote 就地
+                          展示，不绕过）。 */}
+                      {startError !== null && startError.taskId === t.taskId && (
+                        <FormErrorNote>{startError.message}</FormErrorNote>
+                      )}
                       {/* 底栏（十二轮 DA25 删除栏 + 十三轮 DA26 mt-auto 沉底 +
                           十四轮 DA27 重构 + 十五轮 DA28 状态 pill 描边）：
                           mt-auto 把底栏压到卡底——同一栅格行内内容行数不同的
@@ -1051,6 +1107,27 @@ export function TasksTab({
                           pillClassName={`rounded-[2px] ${BORDER_L1_CLASS} hover:bg-[color:var(--eteams-pill-bg)]`}
                         />
                         <div className="flex items-center gap-1.5">
+                          {/* 二十六轮 DA39：主任务卡「开始」按钮（用户拍板
+                            「主任务需要加开始按钮，没看到加在那里」——DA38
+                            只加在详情页标题行，列表页看不到；点击逐个派发
+                            ready 小任务（host startGroupTask，跳过卡回传原因，
+                            行内就地提示）；底栏容器已有 stopPropagation，
+                            不触发整卡进详情。二十七轮 DA40：判据放宽——
+                            非终态（completed/cancelled 外）一律渲染（用户
+                            「还是没看到开始按钮」——终态才收，详情页同口径）。 */}
+                          {t.kind === 'group' &&
+                            t.status !== 'completed' &&
+                            t.status !== 'cancelled' &&
+                            subs.length > 0 && (
+                              <Button
+                                type="button"
+                                size="sm"
+                                disabled={startBusy === t.taskId}
+                                onClick={() => void submitStart(t.taskId)}
+                              >
+                                开始
+                              </Button>
+                            )}
                           <Button
                             type="button"
                             variant="outline"

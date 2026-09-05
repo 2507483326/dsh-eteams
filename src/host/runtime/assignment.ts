@@ -58,6 +58,7 @@ import {
 } from './notifier.js';
 import { renderTeamDocs, taskDirAbs, teamWorkDirRel } from './docs.js';
 import { sendAssignmentInTx, spawnMember } from './members.js';
+import { readBuildPresence } from './roleBuilder.js';
 import {
   cancelledNotice,
   declineMail,
@@ -102,11 +103,27 @@ async function runWakes(wakes: Wake[]): Promise<void> {
   }
 }
 
-/** 领队代理（起会话/唤醒用）：领队行 main_session_id → live 注册表。 */
+/**
+ * 领队/主会话锚点（起会话/唤醒用）。二十五轮 DA38（用户拍板「需要判断
+ * 团队是否含有领队，如果没有领队，主会话窗口就是领队，如果有领队，则从
+ * 领队开始正式开始执行任务」）。二十七轮 DA40（用户拍板「不存在领队会话
+ * 离线啊」）：不再区分「有领队就硬绑领队会话」——统一一条梯度：领队行
+ * 登记的主会话仍在册就用它（零迁移，setLeaderRemoved 不改锚点）；不在册
+ * 则用客户端活跃会话心跳（POST /presence 落盘，60s 内有效）定位用户正在
+ * 看的对话——用领队视角看，主会话窗口永远在线，不存在「领队会话离线」
+ * 这个需要报错的状态。两锚都不在册返回 undefined（ensureSpawned 报错提
+ * 示）。返回的可能是「非领队」的主会话锚点——调用方（ensureSpawned）在用
+ * 它起人前先重锚领队行，保证成员子代理的父会话校验（installMemberRuntime
+ * 按领队行判父）成立。
+ */
 function captainFor(env: RuntimeEnv, team: TeamState): Agent | undefined {
-  const leader = leaderRowOf(team);
-  if (leader === undefined || leader.mainSessionId === '') return undefined;
-  return env.ctx.agents.get(leader.mainSessionId);
+  const mainSession = leaderRowOf(team)?.mainSessionId ?? '';
+  if (mainSession !== '') {
+    const live = env.ctx.agents.get(mainSession);
+    if (live !== undefined) return live;
+  }
+  const presence = readBuildPresence(stateRootOf(env));
+  return presence !== null ? env.ctx.agents.get(presence.sessionId) : undefined;
 }
 
 /**
@@ -241,8 +258,7 @@ export async function updateTask(
     if (params.dependencies !== undefined) {
       for (const dep of params.dependencies) {
         if (dep === task.id) throw new ETeamsError('任务不能依赖自身');
-        if (!team.tasks.some((t) => t.id === dep))
-          throw new ETeamsError(`依赖任务 ${dep} 不存在`);
+        if (!team.tasks.some((t) => t.id === dep)) throw new ETeamsError(`依赖任务 ${dep} 不存在`);
       }
       if (wouldCycle(team.tasks, task.id, params.dependencies))
         throw new ETeamsError('依赖构成循环');
@@ -290,9 +306,7 @@ function renameTaskFolder(
   oldDir: string | undefined,
 ): void {
   const parentDir =
-    task.parentId !== null
-      ? team.tasks.find((t) => t.id === task.parentId)?.workDir
-      : undefined;
+    task.parentId !== null ? team.tasks.find((t) => t.id === task.parentId)?.workDir : undefined;
   if (task.parentId !== null && parentDir === undefined) return; // 父目录未物化，无从改名
   const nextDir =
     parentDir !== undefined
@@ -411,7 +425,12 @@ async function dispatchCore(
   teamId: TeamKey,
   actor: Actor,
   prepare: (team: TeamState, captain: Agent | undefined) => Promise<AssignmentPlan>,
-  apply: (team: TeamState, tx: TeamTx, plan: AssignmentPlan, wakes: Wake[]) => {
+  apply: (
+    team: TeamState,
+    tx: TeamTx,
+    plan: AssignmentPlan,
+    wakes: Wake[],
+  ) => {
     task: TaskRecord;
     attempt: AttemptRecord;
   },
@@ -452,6 +471,110 @@ export async function assignTask(
     (team, tx, plan, wakes) =>
       applyAssignment(env, tx, team, who.actor, plan, { handoff: params.handoff }, wakes),
   );
+}
+
+/** 主任务整体开始的结果（二十五轮 DA38）：started = 成功派发的小任务数；
+ * skipped = 未能派发的小任务（无链/依赖未满/占用/起会话失败等，原因随卡
+ * 透出，面板行内就地提示）。 */
+export interface GroupStartResult {
+  started: number;
+  skipped: { taskId: number; subject: string; reason: string }[];
+}
+
+/**
+ * 组内执行序（客户端 executionOrderOf 同口径的宿主侧最小实现）：兄弟依赖
+ * 拓扑序（被依赖者在前），同层保持建序（快照序）稳定；组外依赖不算排序
+ * 约束（真实约束由派发核 prepareAssignment 兜）。二十七轮 DA40 链式接力
+ * 的发棒顺序。
+ */
+function subExecutionOrder(subs: TaskRecord[]): TaskRecord[] {
+  const siblingIds = new Set(subs.map((s) => s.id));
+  const ordered: TaskRecord[] = [];
+  const emitted = new Set<number>();
+  let progress = true;
+  while (ordered.length < subs.length && progress) {
+    progress = false;
+    for (const sub of subs) {
+      if (emitted.has(sub.id)) continue;
+      if (sub.dependencies.every((dep) => !siblingIds.has(dep) || emitted.has(dep))) {
+        emitted.add(sub.id);
+        ordered.push(sub);
+        progress = true;
+      }
+    }
+  }
+  // 依赖环兜底（建库侧 wouldCycle 已防）：剩余卡按快照序补齐，不丢卡。
+  for (const sub of subs) {
+    if (!emitted.has(sub.id)) ordered.push(sub);
+  }
+  return ordered;
+}
+
+/**
+ * Start a group task（二十五轮 DA38，用户拍板「主任务需要加开始按钮……
+ * 主任务启动就代表着小任务需要逐个开始执行了」）：主任务是容器（无链、
+ * 无依赖、不进执行）。
+ *
+ * 二十七轮 DA40（用户「整体开始，所有小任务链式执行」+ DA38「逐个开始
+ * 执行」）：「开始」= **链式接力**——按组内执行序（subExecutionOrder：兄
+ * 弟依赖拓扑序，同层建序）只派发**第一张**可跑的 ready 小任务，余下 ready
+ * 卡以「等待链式接力」记入 skipped（等前棒完成由 {@link completeTask} 尾
+ * 的续派自动交棒，不需要用户逐张点）。无链卡跳过（reason「需要选择成
+ * 员」），派发被拒的卡按卡跳过（原因透出）后继续找下一棒。终态组
+ * （completed/cancelled）整体开始直接报错，续派同样不会续终态组。
+ */
+export async function startGroupTask(
+  env: RuntimeEnv,
+  who: OpActor,
+  taskId: number,
+): Promise<GroupStartResult> {
+  const team = readTeamSync(stateRootOf(env), who.teamId);
+  if (team === undefined) {
+    throw new ETeamsError(`团队「${String(who.teamId)}」不存在`);
+  }
+  const group = requireTask(team, taskId);
+  if (group.parentId !== null || !team.tasks.some((t) => t.parentId === group.id)) {
+    throw new ETeamsError(`任务 #${taskId} 不是主任务，无法整体开始`);
+  }
+  // 二十七轮 DA40：终态组（全部小任务完成收口 / 取消）不再整体开始。
+  if (['completed', 'cancelled'].includes(group.status)) {
+    throw new ETeamsError(
+      `主任务 ${taskId} 已${group.status === 'completed' ? '完成' : '取消'}，无法整体开始`,
+    );
+  }
+  const result: GroupStartResult = { started: 0, skipped: [] };
+  for (const sub of subExecutionOrder(team.tasks.filter((t) => t.parentId === group.id))) {
+    if (sub.status !== 'ready') continue;
+    const next = sub.chain[sub.chainCursor + 1];
+    if (next === undefined) {
+      result.skipped.push({
+        taskId: sub.id,
+        subject: sub.subject,
+        reason: sub.chain.length === 0 ? '需要选择成员' : '执行链已到末站',
+      });
+      continue;
+    }
+    // 链式接力：一次只发一棒；已发过棒的余下 ready 卡进接力队列。
+    if (result.started > 0) {
+      result.skipped.push({
+        taskId: sub.id,
+        subject: sub.subject,
+        reason: '等待链式接力（前一小任务完成后自动开始）',
+      });
+      continue;
+    }
+    try {
+      await assignTask(env, who, { taskId: sub.id, member: next.member });
+      result.started += 1;
+    } catch (e) {
+      result.skipped.push({
+        taskId: sub.id,
+        subject: sub.subject,
+        reason: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+  return result;
 }
 
 /**
@@ -522,20 +645,13 @@ async function prepareAssignment(
  * 行、退团队级行；都没有则按班底模板补一行 staged（旧数据兼容），模板也
  * 没有才报「不在团队中」。
  */
-function resolveAssigneeRow(
-  team: TeamState,
-  task: TaskRecord,
-  name: string,
-): TaskMemberRecord {
+function resolveAssigneeRow(team: TeamState, task: TaskRecord, name: string): TaskMemberRecord {
   const root = rootTaskIdOf(task);
   const found = findInstanceRow(team, name, root);
   if (found !== undefined) return found;
   const template = team.members.find((m) => m.name === name);
   if (template === undefined) {
-    throw new ETeamsError(
-      `执行链成员「${name}」不在团队中`,
-      '先 eteams_add_member，或修正成员名',
-    );
+    throw new ETeamsError(`执行链成员「${name}」不在团队中`, '先 eteams_add_member，或修正成员名');
   }
   const row: TaskMemberRecord = {
     id: 0, // 落库时按 task_members 自增号发号（writeTeamInTx 回填）
@@ -603,9 +719,17 @@ async function ensureSpawned(
   }
   if (captain === undefined) {
     throw new ETeamsError(
-      `成员「${row.name}」尚未起会话，且领队不在线无法起会话`,
-      '回到团队对话让领队在线后重试指派',
+      `成员「${row.name}」尚未起会话，且主会话窗口不在线无法起会话`,
+      '把团队对话开着（客户端心跳会定位主会话窗口），或打开团队主会话后重试指派',
     );
+  }
+  // 二十五轮 DA38「主会话窗口就是领队」：锚点会话与领队行登记不一致时改锚
+  // 领队行——成员子代理的父会话校验（installMemberRuntime 按领队行判父，
+  // 父会话必须与行一致才装成员工具）。只改内存快照，随本次派发写事务一并
+  // 落库（帧内 spawn 失败即整帧作废，锚点不动）。
+  const leader = leaderRowOf(team);
+  if (leader !== undefined && leader.mainSessionId !== String(captain.id)) {
+    leader.mainSessionId = String(captain.id);
   }
   try {
     row.childSessionId = await spawnMember(env, team, row, captain);
@@ -1025,21 +1149,18 @@ export async function appendProgress(
     if (text === '') throw new ETeamsError('进度内容不能为空');
     const clipped = text.length > 200 ? `${text.slice(0, 197)}…` : text;
     attempt.progress.push({ at: tx.now, text: clipped });
-    emit(
-      tx,
-      fresh.id,
-      memberActor(requireMember(fresh, member.name)),
-      'attempt.progress',
-      {
-        taskId: task.id,
-        attemptId: attempt.id,
-        payload: { text: clipped },
-      },
-    );
+    emit(tx, fresh.id, memberActor(requireMember(fresh, member.name)), 'attempt.progress', {
+      taskId: task.id,
+      attemptId: attempt.id,
+      payload: { text: clipped },
+    });
   });
 }
 
-/** Member completes the current station (D11 chain logic + FR-36 notify). */
+/**
+ * Member completes the current station (D11 chain logic + FR-36 notify).
+ * 二十七轮 DA40 链式执行：小任务终站收口即续派组内就绪小任务（见函数尾）。
+ */
 export async function completeTask(
   env: RuntimeEnv,
   team: TeamState,
@@ -1091,7 +1212,7 @@ export async function completeTask(
           { taskId: task.id, attemptId: attempt.id },
         ),
       );
-      return { team: fresh, task, done: false, wakes };
+      return { team: fresh, task, done: false, wakes, actor: memberActor(row) };
     }
     // Final station or chainless: task completed (docs/35 §5#10：产出不落列，
     // 反查 attempts 最新成功行)。
@@ -1123,9 +1244,28 @@ export async function completeTask(
         { taskId: task.id, attemptId: attempt.id },
       ),
     );
-    return { team: fresh, task, done: true, wakes };
+    return { team: fresh, task, done: true, wakes, actor: memberActor(row) };
   });
   renderTeamDocs(env.workspace, out.team, (msg) => env.ctx.logger.warn(msg));
+  // 二十七轮 DA40 链式执行（用户「整体开始，所有小任务链式执行」）：小任务
+  // 完成（终站收口）即以完成成员名义续派组内下一棒（复用整体开始同一派发
+  // 核——一次只发一棒，按组内执行序找下一张可跑 ready 小任务），失败只记
+  // 日志，不回滚也不吞掉成员的完成应答。组在本帧已收口（全组 completed）
+  // 时不再续（终态守卫也拦，这里直接免调用）。
+  if (out.done && out.task.parentId !== null) {
+    const parent = out.team.tasks.find((t) => t.id === out.task.parentId);
+    if (
+      parent !== undefined &&
+      parent.parentId === null &&
+      !['completed', 'cancelled'].includes(parent.status)
+    ) {
+      try {
+        await startGroupTask(env, { teamId: team.id, actor: out.actor }, out.task.parentId);
+      } catch (error) {
+        env.ctx.logger.warn(`链式续派失败：${String(error)}`);
+      }
+    }
+  }
   await runWakes(out.wakes);
   return { task: out.task, done: out.done };
 }
@@ -1224,7 +1364,12 @@ export async function failTask(
   });
   renderTeamDocs(env.workspace, out.team, (msg) => env.ctx.logger.warn(msg));
   await runWakes(out.wakes);
-  return { task: out.task, retried: out.retried, retryCount: out.retryCount, maxRetries: out.maxRetries };
+  return {
+    task: out.task,
+    retried: out.retried,
+    retryCount: out.retryCount,
+    maxRetries: out.maxRetries,
+  };
 }
 
 // ---------- internal helpers ----------

@@ -48,7 +48,14 @@ import {
   syncMemberToRoster,
   updateMember,
 } from './teamOps.js';
-import { assignTask, createTask, deleteTask, taskOutcome, updateTask } from './assignment.js';
+import {
+  assignTask,
+  createTask,
+  deleteTask,
+  startGroupTask,
+  taskOutcome,
+  updateTask,
+} from './assignment.js';
 import { leaderRowOf, latestInstanceRow, memberStatusOf } from './notifier.js';
 import {
   answerBuildInterview,
@@ -1100,6 +1107,9 @@ export function installWebSurface(
               const { team, workspacePath } = located;
               const chain = readChainParam(body.chain);
               const parentTaskId = readTaskIdParam(body.parentTaskId);
+              // 二十七轮 DA40：建卡补收 dependencies（与 update 路由同参数
+              // 口径——小任务执行顺序 = 兄弟依赖链，链式接力按它排发棒序）。
+              const dependencies = readDependenciesParam(body.dependencies);
               try {
                 const task = await createTask(
                   envFor(ctx, config, workspacePath),
@@ -1111,6 +1121,7 @@ export function installWebSurface(
                       : {}),
                     ...(parentTaskId !== undefined ? { parentTaskId } : {}),
                     ...(chain !== undefined ? { chain } : {}),
+                    ...(dependencies !== undefined ? { dependencies } : {}),
                   },
                 );
                 sendJson(res, 200, { ok: true, taskId: task.id, status: task.status });
@@ -1197,7 +1208,9 @@ export function installWebSurface(
             // ready→wait 待接取）。空链 400「需要选择成员」（用户拍板「如果
             // 有任务没有成员，则提示需要选择成员就行」——客户端对空链卡不
             // 渲染按钮，此处兜底）；链已到末站无下一站同闸另文。依赖未完成/
-            // 执行者占用/领队不在线等由派发核原样拒绝（400 透出）。
+            // 执行者占用/领队不在线等由派发核原样拒绝（400 透出）。二十五轮
+            // DA38：主任务（容器）走整体开始分支（逐个派发 ready 小任务，
+            // 跳过卡回传原因）。
             if (
               req.method === 'POST' &&
               segments[0] === 'team' &&
@@ -1219,6 +1232,28 @@ export function installWebSurface(
               const task = team.tasks.find((t) => t.id === startTaskId);
               if (task === undefined) {
                 sendError(res, 404, `任务 #${startTaskId} 不存在`);
+                return;
+              }
+              // 二十五轮 DA38：主任务（容器）分支——「开始」= 逐个派发全部
+              // ready 小任务（用户拍板「主任务启动就代表着小任务需要逐个
+              // 开始执行了」）。每卡独立走派发核，无链（「需要选择成员」）/
+              // 依赖未满/占用/起会话失败的卡跳过并回传原因（200 + skipped，
+              // 面板行内就地提示）；非主任务走下方单任务链派发路径不变。
+              if (task.parentId === null && team.tasks.some((x) => x.parentId === task.id)) {
+                try {
+                  const result = await startGroupTask(
+                    envFor(ctx, config, workspacePath),
+                    { teamId: team.id, actor: { kind: 'user', name: '用户' } },
+                    startTaskId,
+                  );
+                  sendJson(res, 200, {
+                    ok: true,
+                    started: result.started,
+                    skipped: result.skipped,
+                  });
+                } catch (e) {
+                  sendError(res, 400, e instanceof Error ? e.message : String(e));
+                }
                 return;
               }
               const next = task.chain[task.chainCursor + 1];
