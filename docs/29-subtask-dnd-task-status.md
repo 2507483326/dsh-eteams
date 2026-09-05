@@ -147,7 +147,7 @@ D14（[README 决策记录](README.md)：执行槽与拖拽指派，`docs/README
 | 项 | 口径 |
 | --- | --- |
 | 展示序 | `executionOrderOf(tasks)`：兄弟集内依赖做分层拓扑排序（Kahn，逐轮按输入序=创建序平局）；兄弟集外的外部依赖不参与兄弟排序；环/悬空引用（防御，host 侧 wouldCycle 本应杜绝）剩余按输入序追加，不丢任务 |
-| 拖拽 | 卡片即拖拽源（`eteams-subtask`，draft/ready 才可拖，拖拽中半透明）+ 放置目标（**同父兄弟卡**才可落，悬停 ring 高亮）；拖 A 到 B = A 搬到 B 的执行位（数组搬移，同六轮 chip 口径：前移插目标前、后移插目标后）；点击整卡仍是开合详情抽屉（拖拽不触发 click） |
+| 拖拽 | 卡片即拖拽源（`eteams-subtask`，draft/ready 才可拖，拖拽中半透明）+ 放置目标（**同父兄弟卡**才可落，悬停 ring 高亮）；拖 A 到 B = A 搬到 B 的执行位（数组搬移，同六轮 chip 口径：前移插目标前、后移插目标后）；点击整卡仍是开合详情抽屉（拖拽不触发 click）（**十轮 DA23 收窄**：拖拽源改为左上 grip 把手、卡身只作放置目标、卡身点击 = 进小任务详情页——见下方增补段） |
 | 补丁 | `depPatchesForReorder(tasks, from, to)`：按新执行序重写兄弟依赖为**线性链**（第 k 位依赖第 k-1 位），各卡**外部依赖保留**；只发 deps 实际变化且 draft/ready 的卡——已领取/冻结的兄弟不改写（host 会拒），其链位滑动为已知口径；from===to / 找不到卡 / 非同父 / 端点不可编辑 / 全部无变化 → null 不发请求 |
 | 提交 | 补丁按序逐发 `updateTeamTask(teamId, taskId, { dependencies })`（**非乐观更新**，成功 `refreshActivitySoon`；部分失败也回拉快照对齐），落点卡行内 `FormErrorNote`（`reorderError` 同 `assignError` 模式）；host `updateTask` 依赖闸（自依赖/不存在/wouldCycle/draft-ready）沿用，update 路由本轮补 `dependencies` 透传（`readDependenciesParam` 整包收紧——非数组/含非数元素视为缺省不改字段，畸形载荷不半改写） |
 | 通道 | 复用 update 路由（DA10 同款）；api.ts `updateTeamTask` 增 `dependencies?: number[]`（整体替换） |
