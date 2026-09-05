@@ -50,7 +50,6 @@ import { MemberDialog } from './memberDialog';
 import { MarkdownDoc } from './markdownDoc';
 import {
   CARD_GRID_CLASS,
-  CHIP_CLASS,
   EMPTY_CLASS,
   FormErrorNote,
   FORM_LABEL_CLASS,
@@ -113,7 +112,6 @@ const STEP_NUM_CLASS =
 
 export function MembersTab({
   members,
-  pool,
   team,
   onDeleted,
   onPrefillAddPeople,
@@ -121,7 +119,6 @@ export function MembersTab({
   onAddTickConsumed,
 }: {
   members: RosterMember[];
-  pool: TeamSnapshot[];
   team: TeamSnapshot | undefined;
   onDeleted: () => void;
   onPrefillAddPeople: () => 'set' | 'copied' | 'aborted';
@@ -507,10 +504,6 @@ export function MembersTab({
       setManualSaving(false);
     }
   };
-
-  // 该角色已加入的团队（按当前可见团队池计算）。
-  const teamsOf = (memberName: string): string[] =>
-    pool.filter((t) => t.members.some((mm) => mm.name === memberName)).map((t) => t.name);
 
   const detail = members.find((m) => m.name === detailName) ?? null;
   const detailMemberView =
@@ -942,7 +935,6 @@ export function MembersTab({
   }
 
   if (view === 'detail' && detail !== null) {
-    const teamNames = teamsOf(detail.name);
     const isLeader = detail.name === LEADER_NAME;
     const nameLocked = PROTECTED_MEMBERS.includes(detail.name);
     // 头像：编辑态取草稿（随机头像实时预览），只读态取条目现值。
@@ -990,7 +982,8 @@ export function MembersTab({
                 </Button>
               )}
             </div>
-            {/* 角色（用户反馈）：不再需要标签——名字即身份，手册即人设。 */}
+            {/* 页头不再有标签与常驻副注（用户反馈）：名字即身份——所属团队
+            chips 已撤，副注仅领队/系统保留/编辑中三种情形。 */}
             <div className="min-w-0 flex-1">
               {detailEditing && !nameLocked ? (
                 <Input
@@ -1004,22 +997,13 @@ export function MembersTab({
                   {detail.name}
                 </div>
               )}
-              <div className={cn(MUTED_CLASS, 'mt-0.5')}>
-                {isLeader
-                  ? '领队 · 手册与头像可编辑，名称为系统保留'
-                  : nameLocked
-                    ? '系统保留角色 · 名称不可改，其余可编辑'
-                    : detailEditing
-                      ? '编辑中：名称、头像与手册，保存后生效'
-                      : '点击右上「编辑」可修改名称、头像与手册'}
-              </div>
-              {teamNames.length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {teamNames.map((n) => (
-                    <span key={n} className={CHIP_CLASS}>
-                      {n}
-                    </span>
-                  ))}
+              {(isLeader || nameLocked || detailEditing) && (
+                <div className={cn(MUTED_CLASS, 'mt-0.5')}>
+                  {isLeader
+                    ? '领队 · 手册与头像可编辑，名称为系统保留'
+                    : nameLocked
+                      ? '系统保留角色 · 名称不可改，其余可编辑'
+                      : '编辑中：名称、头像与手册，保存后生效'}
                 </div>
               )}
             </div>
@@ -1126,11 +1110,10 @@ export function MembersTab({
         ) : (
           <>
             {/* 角色卡片栅格（用户迭代 2026-09-03）：一行式横排——头像在前、
-            名称与所属团队随后、删除钮常驻行尾（不再 hover 显形）；
+            名称随后、删除钮常驻行尾（不再 hover 显形）；
             hover/描边由 ROLE_LIST_CSS 接管。 */}
             <div className={CARD_GRID_CLASS}>
               {pageRows.map((m) => {
-                const teamNames = teamsOf(m.name);
                 const isProtected = PROTECTED_MEMBERS.includes(m.name);
                 return (
                   <div
@@ -1147,11 +1130,6 @@ export function MembersTab({
                       <span className="eteams-role-name block max-w-full text-sm font-semibold text-foreground">
                         {m.name}
                       </span>
-                      {teamNames.length > 0 && (
-                        <div className={cn('eteams-role-name', MUTED_CLASS, 'mt-0.5')}>
-                          {teamNames.join('、')}
-                        </div>
-                      )}
                     </div>
                     {isProtected ? null : (
                       <Button

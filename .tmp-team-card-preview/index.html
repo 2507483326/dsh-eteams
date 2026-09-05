@@ -1,0 +1,96 @@
+<!doctype html>
+<!-- 团队小卡片改版预览（临时产物不入库）：真实 lib/tailwind.gen.css + 团队卡
+     同款 token/样式表规则（.eteams-team-card/.eteams-team-avatars），
+     DOM 与 teamTab.tsx 列表态卡片逐类对应——验证拉长/去进度行/人数下沉。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>团队卡片预览</title>
+<link rel="stylesheet" href="./tailwind.gen.css" />
+<style>
+  html, body { margin: 0; height: 100%; }
+  .panel {
+    --background: #ffffff; --foreground: #0f172a;
+    --card: #ffffff; --card-foreground: #0f172a;
+    --muted: #f1f5f9; --muted-foreground: #64748b;
+    --accent: #f1f5f9; --accent-foreground: #0f172a;
+    --destructive: #dc2626; --border: #e2e8f0;
+    background: var(--background); color: var(--foreground);
+    font-family: var(--eteams-font-sans);
+  }
+  /* 团队卡样式表规则（shared.tsx ROLE_LIST_CSS 同款） */
+  .eteams-team-card { background:var(--background); border:1px solid var(--border); box-shadow:0 1px 2px rgba(15,23,42,0.05); transition:background .15s ease,border-color .15s ease,box-shadow .15s ease; }
+  .eteams-team-card:hover { border-color:color-mix(in srgb,var(--foreground) 18%,transparent); background:var(--muted); }
+  .eteams-team-avatars>* { position:relative; margin-left:-6px; transition:margin-left .18s ease,transform .18s ease; }
+  .eteams-team-avatars>:first-child { margin-left:0; }
+  .eteams-team-avatars:hover>* { margin-left:-2px; }
+  .eteams-team-avatars>*:hover { transform:scale(1.35); z-index:30; }
+  .eteams-team-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .av { width:20px; height:20px; border-radius:9999px; display:inline-flex; align-items:center; justify-content:center; font-size:10px; font-weight:600; color:#fff; }
+</style>
+</head>
+<body>
+<div class="panel eteams-ui" style="max-width:720px; padding:24px;">
+  <div class="mb-2.5 flex items-center gap-2">
+    <h3 class="m-0 min-w-0 flex-1 text-base font-semibold tracking-tight text-foreground">团队</h3>
+    <span class="text-xs text-muted-foreground">3 个</span>
+  </div>
+  <div class="grid grid-cols-[repeat(auto-fill,minmax(210px,1fr))] gap-3">
+
+    <div class="eteams-team-card flex min-h-28 min-w-0 cursor-pointer flex-col justify-between rounded-xl p-4">
+      <div class="min-w-0">
+        <div class="eteams-team-name truncate text-base font-semibold text-foreground">文档迁移小组</div>
+        <p class="m-0 mt-0.5 text-xs text-muted-foreground">2 人</p>
+      </div>
+      <div class="mt-auto flex items-center gap-2 border-t border-solid pt-2.5">
+        <div class="eteams-team-avatars flex min-w-0 flex-1 items-center">
+          <span class="inline-flex shrink-0 rounded-full ring-2 ring-[color:var(--background)]"><span class="av" style="background:#0ea5e9">牧</span></span>
+          <span class="inline-flex shrink-0 rounded-full ring-2 ring-[color:var(--background)]"><span class="av" style="background:#16a34a">文</span></span>
+        </div>
+        <div class="flex shrink-0 gap-1">
+          <button class="inline-flex h-8 items-center justify-center whitespace-nowrap rounded-md border border-solid px-3 text-xs font-medium" style="border-color:var(--border); background:var(--background); color:var(--foreground)">详情</button>
+          <button class="inline-flex h-8 items-center justify-center whitespace-nowrap rounded-md border border-solid px-3 text-xs font-medium" style="border-color:var(--border); background:var(--background); color:var(--destructive)">删除</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="eteams-team-card flex min-h-28 min-w-0 cursor-pointer flex-col justify-between rounded-xl p-4">
+      <div class="min-w-0">
+        <div class="eteams-team-name truncate text-base font-semibold text-foreground">一个特别特别特别特别长的团队名称用来验证截断</div>
+        <p class="m-0 mt-0.5 text-xs text-muted-foreground">5 人</p>
+      </div>
+      <div class="mt-auto flex items-center gap-2 border-t border-solid pt-2.5">
+        <div class="eteams-team-avatars flex min-w-0 flex-1 items-center">
+          <span class="inline-flex shrink-0 rounded-full ring-2 ring-[color:var(--background)]"><span class="av" style="background:#0ea5e9">牧</span></span>
+          <span class="inline-flex shrink-0 rounded-full ring-2 ring-[color:var(--background)]"><span class="av" style="background:#d97706">甲</span></span>
+          <span class="inline-flex shrink-0 rounded-full ring-2 ring-[color:var(--background)]"><span class="av" style="background:#8b5cf6">乙</span></span>
+          <span class="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold bg-muted text-muted-foreground ring-2 ring-[color:var(--background)]">+2</span>
+        </div>
+        <div class="flex shrink-0 gap-1">
+          <button class="inline-flex h-8 items-center justify-center whitespace-nowrap rounded-md border border-solid px-3 text-xs font-medium" style="border-color:var(--border); background:var(--background); color:var(--foreground)">详情</button>
+          <button class="inline-flex h-8 items-center justify-center whitespace-nowrap rounded-md border border-solid px-3 text-xs font-medium" style="border-color:var(--border); background:var(--background); color:var(--destructive)">删除</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="eteams-team-card flex min-h-28 min-w-0 cursor-pointer flex-col justify-between rounded-xl p-4">
+      <div class="min-w-0">
+        <div class="eteams-team-name truncate text-base font-semibold text-foreground">建站小组</div>
+        <p class="m-0 mt-0.5 text-xs text-muted-foreground">1 人</p>
+      </div>
+      <div class="mt-auto flex items-center gap-2 border-t border-solid pt-2.5">
+        <div class="eteams-team-avatars flex min-w-0 flex-1 items-center">
+          <span class="inline-flex shrink-0 rounded-full ring-2 ring-[color:var(--background)]"><span class="av" style="background:#0ea5e9">牧</span></span>
+        </div>
+        <div class="flex shrink-0 gap-1">
+          <button class="inline-flex h-8 items-center justify-center whitespace-nowrap rounded-md border border-solid px-3 text-xs font-medium" style="border-color:var(--border); background:var(--background); color:var(--foreground)">详情</button>
+          <button class="inline-flex h-8 items-center justify-center whitespace-nowrap rounded-md border border-solid px-3 text-xs font-medium" style="border-color:var(--border); background:var(--background); color:var(--destructive)">删除</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>

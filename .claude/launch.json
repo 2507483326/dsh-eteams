@@ -78,6 +78,19 @@
       ],
       "port": 8796,
       "autoPort": true
+    },
+    {
+      "name": "team-card",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "-y",
+        "serve",
+        "-l",
+        "8797",
+        ".tmp-team-card-preview"
+      ],
+      "port": 8797,
+      "autoPort": true
     }
   ]
 }

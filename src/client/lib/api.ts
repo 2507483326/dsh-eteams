@@ -343,6 +343,8 @@ export async function updateTeamTask(
   payload: {
     subject?: string;
     description?: string;
+    /** 合同 MD 全文（二十八轮 DA41 就地编辑：说明 + 合同并读后的整篇正文）。 */
+    contractMd?: string;
     chain?: TaskSlotInput[];
     dependencies?: number[];
   },
@@ -355,6 +357,7 @@ export async function updateTeamTask(
       body: JSON.stringify({
         ...(payload.subject !== undefined ? { subject: payload.subject } : {}),
         ...(payload.description !== undefined ? { description: payload.description } : {}),
+        ...(payload.contractMd !== undefined ? { contractMd: payload.contractMd } : {}),
         ...(payload.chain !== undefined ? { chain: payload.chain } : {}),
         ...(payload.dependencies !== undefined ? { dependencies: payload.dependencies } : {}),
       }),

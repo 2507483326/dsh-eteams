@@ -56,11 +56,12 @@ import {
 /** 成员列表（用户迭代 2026-09 七）：与领队卡同款竖排——一行一个成员占满整行。 */
 const MEMBER_LIST_CLASS = 'flex flex-col gap-2.5';
 
-/** 团队小卡片（用户迭代 2026-09 八）：纵排三段式——头行（名称 + 人数）、
- * 目标一行（截断，给卡片一个「身体」），底栏以上边框分区放成员略缩图 +
- * 「详情/删除」。整卡可点进详情；底色/边框/悬停仍由
- * .eteams-team-card 样式表接管，p-3.5 = 卡内呼吸感。 */
-const TEAM_CARD_CLASS = 'flex min-w-0 cursor-pointer flex-col gap-2 rounded-xl p-3.5';
+/** 团队小卡片（用户迭代 2026-09 八）：纵排两段式——头部放名称 + 人数，底栏
+ * （上边框分区）放成员略缩图 + 「详情/删除」；min-h + justify-between
+ * 把两段上下撑开（卡片拉长、中段留白，用户「拉长好看一点」），整卡可点进
+ * 详情；底色/边框/悬停仍由 .eteams-team-card 样式表接管。 */
+const TEAM_CARD_CLASS =
+  'flex min-h-28 min-w-0 cursor-pointer flex-col justify-between rounded-xl p-4';
 
 /**
  * 团队：新增团队（弹窗，名称即建）+ 团队列表/详情两级视图（用户迭代
@@ -455,8 +456,8 @@ export function TeamTab({
       </Dialog>
 
       {/* 列表态：小卡片栅格（用户迭代 2026-09 八，复用 CARD_GRID_CLASS）——
-      最小 210px 自适应列，窄两列宽三列。卡片纵排三段式：头行（名称 + 人数）、
-      目标一行（截断）、底栏（上边框分区）放成员略缩图 + 「详情/删除」；整卡
+      最小 210px 自适应列，窄两列宽三列。卡片纵排两段式：头部放名称 + 人数，
+      底栏（上边框分区）放成员略缩图 + 「详情/删除」；整卡
       可点进详情，按钮区 stopPropagation 不触发整卡点击。删除走确认弹窗
       （host 只放行 staged/completed/halted）。当前团队不再做选中高亮描边，
       目标行也只在有真目标时出现（用户迭代 2026-09 九）。 */}
@@ -483,25 +484,19 @@ export function TeamTab({
                     setDetailId(t.teamId);
                   }}
                 >
-                  <div className="flex items-center gap-2">
-                    <span className="eteams-team-name min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
+                  <div className="min-w-0">
+                    <div className="eteams-team-name truncate text-base font-semibold text-foreground">
                       {t.name}
-                    </span>
-                    <span className={LIST_COUNT_CLASS}>{headcount} 人</span>
+                    </div>
+                    <p className={cn('m-0 mt-0.5', LIST_COUNT_CLASS)}>{headcount} 人</p>
                   </div>
-                  {/* 进度一行（docs/35 §3：goal 字段已砍——小卡片身体改为任务
-                  进度；无任务时留空保持三段式排版）。 */}
-                  {t.progress.total > 0 && (
-                    <p className="truncate text-xs text-muted-foreground">
-                      任务 {t.progress.completed}/{t.progress.total} 完成
-                      {t.progress.active > 0 ? ` · ${t.progress.active} 进行中` : ''}
-                    </p>
-                  )}
+                  {/* 头部放名称 + 人数（用户迭代：去掉「任务 X/Y 完成」进度行
+                  ——进度在任务页/详情页看；人数从头行挪到名称下方）。 */}
                   {/* 底栏（上边框分区）：成员略缩图（领队 + 成员头像最多 3 个，
                   超出 +N；小号头像负间距叠放，滑过整组间距松开、滑过单个放大
                   ——动效由样式表 .eteams-team-avatars 驱动，title 兜底全名）
                   + 详情/删除。 */}
-                  <div className="mt-0.5 flex items-center gap-2 border-t border-solid pt-2.5">
+                  <div className="mt-auto flex items-center gap-2 border-t border-solid pt-2.5">
                     <div className="eteams-team-avatars flex min-w-0 flex-1 items-center">
                       {faces.slice(0, 3).map((m) => (
                         <span

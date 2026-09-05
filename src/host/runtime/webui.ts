@@ -1131,7 +1131,9 @@ export function installWebSurface(
               return;
             }
             // POST /team/<id>/task/<taskId>/update — 修改未领取小任务（主题/
-            // 说明/成员槽）。
+            // 说明/成员槽）。二十八轮 DA41：补收 contractMd **raw 透传**（绕
+            // 开 str() 的 trim——MD 正文首尾空白属内容，面板就地编辑把「说明 +
+            // 合同」并读后的整篇 Markdown 原样发回）。
             if (
               req.method === 'POST' &&
               segments[0] === 'team' &&
@@ -1159,6 +1161,9 @@ export function installWebSurface(
                     ...(body.description !== undefined
                       ? { description: str(body.description) }
                       : {}),
+                    // DA41：contractMd raw 透传（不走 str() 的 trim，MD 正文
+                    // 首尾空白属内容）。
+                    ...(typeof body.contractMd === 'string' ? { contractMd: body.contractMd } : {}),
                     ...(chain !== undefined ? { chain } : {}),
                     ...(dependencies !== undefined ? { dependencies } : {}),
                   },

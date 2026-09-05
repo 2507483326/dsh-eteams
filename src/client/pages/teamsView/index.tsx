@@ -444,7 +444,6 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
           {activeTab === 'roster' && (
             <MembersTab
               members={roster}
-              pool={pool}
               team={team}
               onDeleted={refreshRoster}
               onPrefillAddPeople={prefillAddPeople}

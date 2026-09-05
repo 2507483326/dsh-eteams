@@ -676,3 +676,65 @@ exhaustive-deps warning：memberDialog.tsx:38 / taskDrawer.tsx:117）/ test
 （`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿。
 GUI 装机冒烟持续**未验证**（链式接力交棒、开始钮显示需装机后在 DSH 面板
 人工过一遍；请重启 DSH 载入最新构建包后再验「开始」钮）。
+
+
+## 二十八轮追加（2026-09-05，DA41：组卡去详情钮 + 头部卡开始钮 + 箭头剥描边 + 对齐规整 + 小任务卡就地编辑）
+
+用户原话：「1. 主任务页面去掉详情按钮，把开始按钮放在右侧 2. 主任务详情页面上方卡片需要加开始按钮 3. 主任务详情页面下面的任务列表右侧的箭头背景色去掉 4. 主任务详情页面下面的任务列表上方的文字状态这些都没有对齐 5. 主任务详情页面下面的任务列表修改按钮的逻辑不是弹窗，而是就地编辑 包括任务标题和md详情，点击修改展开卡片，然后下方放MD编辑器来编辑」（要求子 agent 逐个设计、完成、校验；追问拍板三处——开始钮「挪到 任务列表上方的卡片中间，上面不是任务的介绍吗？」、字段「说明和合同MD不是一个字段吗？不是的话改成一个字段。就是当前点击展开后展示出来的文本啊，上面的标题用input框修改不就好了么」、范围「只改小任务卡，普通任务上面的卡片也加上编辑按钮，点击编辑按钮修改」）。
+
+| 项 | 落法 |
+| --- | --- |
+| ①组卡去详情钮 | 组卡撤「详情」钮（整卡点击即进详情），钮序 [删除][开始]（开始最右）；顶层普通任务卡 [详情][删除] 逐位不变（验收揪出实现笔误翻转 [删除][详情]，已回退） |
+| ②头部卡收开始钮 | 主任务详情页「开始」钮从「任务列表」标题行上移头部卡右端（判据不变：非终态组且有子任务）；行内错误提示槽跟迁头部卡下；「任务列表」行只剩「＋ 新增小任务」（弹窗不动） |
+| ③箭头剥描边 | 用户报「箭头背景色」真凶 = Button 基类 `focus-visible:ring-1` 品牌色焦点环（十九轮 DA32 压平的是 hover 淡底，点击后的 1px 描边仍在）+ AccordionTrigger 渗漏类（py-4/flex-1/justify-between/hover:underline）；消费位 className 尾部覆盖剥净，vendored accordion.tsx/button.tsx 零改动 |
+| ④对齐规整 | 头部卡标题行改 flex（flex-wrap items-center justify-between、信息组 gap-x-1.5、撤内联 ml-1），文件夹行/进度行/汇总 chip 统一 mt-1.5、「任务列表」行 mt-2.5、小任务行 items-center |
+| ⑤就地编辑 | 小任务卡「修改」不再弹窗：该卡就地展开标题 Input + mergedBodyOf 并读单 MD Textarea（说明在前、空行分隔、contractMd 保真；内容 = 展开只读视图显示的文本）；保存整篇回写 contractMd、description 落严格空串（内容收敛进 contractMd、老数据首存并文不丢）；编辑态隐开始/修改/删除/箭头钮簇与成员卡槽、锁拖拽、同刻仅一卡编辑；普通任务详情页头部卡加「编辑」钮（同套编辑器）、按钮行撤「修改」；「新增小任务」与卡槽弹窗路径不动（就地编辑中 onOpenEdit 哑化防截胡草稿） |
+
+改动面：`src/client/lib/api.ts`（updateTeamTask 增 contractMd?: string）、`src/host/runtime/webui.ts`（update 路由 raw 透传 contractMd——绕开 str() 的 trim，宿主 updateTask 原生支持、零宿主逻辑改动）、`src/client/pages/teamsView/tasksTab.tsx`（底栏重排/detailHeader options 化/箭头防御类/对齐规整/就地编辑全套/文件头注记）、`tests/webui.test.ts`（+1：update 路由 contractMd 五语义——description 清空落库严格空串、contractMd 写入、仅 subject 不动合同、raw 保真、claim 后冻结 400）。
+
+**二十八轮四绿门（2026-09-05）**：typecheck / lint（0 error，2 条既有 exhaustive-deps warning：memberDialog.tsx:38 / taskDrawer.tsx:117）/ test （23 文件 **328 用例**全过——基线 327 + 1）/ build（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿。GUI 装机冒烟持续**未验证**（就地编辑全流程、箭头视觉、头部卡对齐需装机后在 DSH 面板人工过一遍；请重启 DSH 载入最新构建包后再验）。
+
+
+## 二十九轮追加（2026-09-05，DA42：就地编辑先展开原布局不变 + 行头状态前移统一样式）
+
+用户原话：「小任务的修改应该是如果没有展开先展开，在原有的布局上面修改，而不是突然改变布局。另外小任务的标题状态还是没有对齐，是不是行高问题，把状态放到最前面，然后统一使用主任务页面的状态样式」。
+
+| 项 | 落法 |
+| --- | --- |
+| 修改 = 先展开、原布局不变 | 点「修改」未展开先展开、已展开保持；行头钮簇/成员卡槽/箭头全程常显；编辑器迁入手风琴展开区（编辑态 = 只读正文换编辑器，二选一）；展开区节点级门 `expandable \|\| editing`（无内容卡仅在编辑中挂载，防取消后残留空分隔线且无箭头可收）；编辑中收起 = 仅隐藏草稿保留、再点「修改」幂等重开不重拉、「取消」才退编辑；删除/开始成功即清编辑槽（防陈旧草稿复活）；卡槽 onOpenEdit 编辑中哑化防老弹窗截胡；保存后留展开态显示新只读内容 |
+| 状态前移 + 统一样式 | 行头顺序改：状态 pill（补重试计数）→ 阻塞 pill → 序号 → #id → 主题 → 指派；状态样式统一主任务底栏款（新 shared `STATUS_PILL_CLASS`：2px 圆角 + 描边 + hover 淡底压平，底栏同引消除双处漂移）；左组从内联排版改 flex items-center + gap（与主任务详情页头部信息组同构——内联基线/行高错位机理消除） |
+
+改动面：`src/client/pages/teamsView/shared.tsx`（STATUS_PILL_CLASS 导出）、`src/client/pages/teamsView/tasksTab.tsx`（openInlineEdit 先展开+幂等 / 钮簇卡槽撤编辑态门 / 编辑器入展开区 / 箭头判据与 mt-0.5 / 删除开始清槽 / 行头左组重排 / 底栏 pillClassName 改引常量 / 文件头注记）。无宿主路由改动，用例数持平。
+
+**二十九轮四绿门（2026-09-05）**：typecheck / lint（0 error）/ test（23 文件 **328 用例**全过——持平）/ build（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿。GUI 装机冒烟持续**未验证**（先展开编辑交互、行头对齐观感需装机后在 DSH 面板人工过一遍；请重启 DSH 载入最新构建包后再验）。
+
+
+## 三十轮追加（2026-09-05，DA43：就地编辑正文换角色同款 MdEditor + 标题原位编辑）
+
+用户原话：「怎么没有用角色里面得md编辑器？  标题修改也没在原来的地方」。
+
+| 项 | 落法 |
+| --- | --- |
+| 正文编辑器 | 换角色人设同款 `MdEditor`（mdxeditor 所见即所得，工具栏随焦点出现）；组件加 placeholder/headerNote/readOnly 三个可选 props（默认值维持人设文案，既有四个调用位零回归）；任务场景 minHeight 220、占位「说明 / 合同（Markdown）」、头部说明「说明 + 合同 · 所见即所得」、保存飞行中 readOnly 锁编辑；弹层 fixed 定位不被展开区 overflow-hidden 裁剪（头注已记，勿顺手修） |
+| 标题原位编辑 | 小任务行头主题 span 编辑态原位换 Input（autofocus、左组布局不动）；任务详情页头部卡经 detailHeader 新增 `subjectEditor` 槽在标题行原位换 Input（与 editor 槽同判据）；编辑器块撤标题 Input；组详情页/弹窗路径零变化 |
+
+改动面：`src/client/features/mdEditor/mdEditor.tsx`（三可选 props + readOnly 接线 + 头注）、`src/client/pages/teamsView/tasksTab.tsx`（inlineEditor 换 MdEditor / 行头与头部卡标题原位 Input / 文件头注记）。无宿主路由改动，用例数持平。
+
+**三十轮四绿门（2026-09-05）**：typecheck / lint（0 error）/ test（23 文件 **328 用例**全过——持平）/ build（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿。GUI 装机冒烟持续**未验证**（WYSIWYG 编辑器观感、标题原位切换、保存中锁编辑手感需装机后人工过一遍；请重启 DSH 载入最新构建包后再验）。
+
+## 三十一轮追加（2026-09-05，DA44：tasksTab 组件抽离 + 行头去 #id + 原位 Input 统一加宽 + 间距规整 + 拖拽环 inset + 组页头部卡编辑钮 + 状态组件统一）
+
+用户原话：「1. 去掉左侧的#多少 2.这个input框太丑了，有用组件吗？而且宽度要增加 2. 这个间距好像都不规范啊，请仔细检查 3. 这个页面长度太长了，请抽离可复用的组件出去 4. 拖拽小任务还是左边的边框会看不见，看看是否有overflow导致的 5. 页面上面的任务卡片没有加编辑按钮，状态也不是主任务页面的状态样式，这个状态统一抽离出组件使用」。
+
+| 项 | 落法 |
+| --- | --- |
+| ①行头去 #id | 组详情页小任务行头撤 `#{t.taskId}`（序号保留）；任务详情页头部卡的 #id 保留（DA25 口径） |
+| ②原位 Input 统一加宽 | 新 shared `INLINE_SUBJECT_INPUT_CLASS`（h-8 对齐 32px 档、min-w-[160px] 防窄行塌缩、px-2.5），小任务行头/任务详情页头部/组页头部三处原位 Input 同引——宽度确有增加 |
+| ③间距规整 | 挂靠行 mt-1→mt-2、组侧指派错误行撤 ml-4、列表底栏 pt-2.5→pt-2、依赖 chips mt-[3px]→mt-1、抽屉 TaskStations 根 mt-[3px]→mt-1；卡槽/inlineEditor/任务列表行等「记录不改」处未动 |
+| ④组件抽离 | tasksTab 1429 行**纯移动**拆五文件：taskPills（98 行）/taskHeaderCard（65 行）/taskSubtaskItem（305 行）/taskListCard（204 行）/taskDialogs（166 行），tasksTab 收敛 805 行；@module 头注、原注释随迁、无循环依赖（新文件不引 tasksTab、shared 不引新文件）、零行为变化（验收对照 HEAD 原文逐段核对） |
+| ⑤拖拽高亮 | SubtaskCard isOver 外缘环改 `ring-1 ring-inset ring-primary`——根因 = 面板滚动列 CONTENT_CLASS `overflow-x-hidden` 裁掉贴左缘卡的外缘环（右侧有 pr-0.5 缓冲、左侧无）；环画进卡内缘免疫裁剪（DA36 chip 同款先例）；isDragging 半透明与 accordion.tsx 未动 |
+| ⑥组页头部卡编辑钮 + 状态统一 | 组详情页头部卡加「编辑」outline 钮（判据 = mutable：draft/ready——host updateTask 状态闸仅这两态放行全部字段）、开始钮仍最右；subjectEditor/editor 槽与任务详情页同构（headerEditing 同口径）；状态 pill 三处（详情头部/小任务行/列表底栏）统一走新 `TaskStatusPill`（taskPills.tsx：DisplayStatusPill 私有 + STATUS_PILL_CLASS 封装 + BlockedPill/GroupSummaryChip 迁入），全仓无残余 pillClassName 直传调用位 |
+
+改动面：`src/client/pages/teamsView/taskPills.tsx`、`taskHeaderCard.tsx`、`taskSubtaskItem.tsx`、`taskListCard.tsx`、`taskDialogs.tsx`（五新文件，纯移动）、`tasksTab.tsx`（1429→805 行）、`shared.tsx`（INLINE_SUBJECT_INPUT_CLASS）、`taskDrawer.tsx`（mt-1 + prettier 规范化缩进，无语义变化）。无宿主路由/api/tests 变更，用例数持平。
+
+**三十一轮四绿门（2026-09-05）**：typecheck / lint（0 error，taskDrawer.tsx:116 既有 1 条 exhaustive-deps warning 保留）/ test（23 文件 **328 用例**全过——持平）/ build（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿。GUI 装机冒烟持续**未验证**（抽离后五页回归、行头去 #id 观感、Input 宽度、拖拽环 inset、组页编辑钮需装机后在 DSH 面板人工过一遍；请重启 DSH 载入最新构建包后再验）。

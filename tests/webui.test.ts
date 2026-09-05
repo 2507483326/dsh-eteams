@@ -855,6 +855,59 @@ describe('panel write routes (M5 first slice)', () => {
     expect(missing.code).toBe(404);
   });
 
+  it('updates contractMd via the panel task update route（二十八轮 DA41 就地编辑）', async () => {
+    // 面板就地编辑把「说明 + 合同」并读成一篇 Markdown 原样发回：description
+    // 落严格空串（host 不拒空、不归 null），contractMd 整篇替换且 raw 透传
+    // （首尾空白保真，不走 str() 的 trim）；只传 subject 不动合同（undefined
+    // 语义回归）；领取后合同冻结，update → 400。
+    const h = await installFull();
+    const created = await h.post('/eteams-api/team', { name: '合同团队', sessionId: 'cap-conv' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Bob', role: 'engineer' });
+    const made = await h.post(`/eteams-api/team/${teamId}/task`, {
+      subject: '面板任务',
+      description: '旧说明',
+    });
+    const taskId = json<{ taskId: number }>(made.body).taskId;
+
+    // 1. 并读回写：description 落严格空串，contractMd 整篇替换落库。
+    const merged = await h.post(`/eteams-api/team/${teamId}/task/${taskId}/update`, {
+      contractMd: '并后全文',
+      description: '',
+    });
+    expect(merged.code).toBe(200);
+    const rec = readTeam(teamId).tasks.find((t) => t.id === taskId)!;
+    expect(rec.description).toBe('');
+    expect(rec.contractMd).toBe('并后全文');
+
+    // 2. 只传 subject 不传 contractMd → 合同保持不变（undefined 语义回归）。
+    const subjectOnly = await h.post(`/eteams-api/team/${teamId}/task/${taskId}/update`, {
+      subject: '改名不改合同',
+    });
+    expect(subjectOnly.code).toBe(200);
+    const afterSubject = readTeam(teamId).tasks.find((t) => t.id === taskId)!;
+    expect(afterSubject.subject).toBe('改名不改合同');
+    expect(afterSubject.contractMd).toBe('并后全文');
+
+    // 3. raw 透传：contractMd 首尾空白保真（验证未走 str() 的 trim）。
+    const raw = await h.post(`/eteams-api/team/${teamId}/task/${taskId}/update`, {
+      contractMd: '  x  ',
+    });
+    expect(raw.code).toBe(200);
+    expect(readTeam(teamId).tasks.find((t) => t.id === taskId)!.contractMd).toBe('  x  ');
+
+    // 4. claim 后合同冻结：update contractMd → 400（沿用既有冻结用例结构）。
+    const assigned = await h.call!('eteams_assign_task', { taskId, member: 'Bob' });
+    expect(assigned.ok).toBe(true);
+    const bob = h.memberAgent!(childIdOf(teamId, 'Bob'));
+    const claimed = await h.mem!(bob, 'eteams_claim_task', { taskId });
+    expect(claimed.ok).toBe(true);
+    const frozen = await h.post(`/eteams-api/team/${teamId}/task/${taskId}/update`, {
+      contractMd: '迟到修改',
+    });
+    expect(frozen.code).toBe(400);
+  });
+
   it('opens a task folder via POST /team/:id/task/:taskId/folder/open（十二轮 DA25）', async () => {
     // 注入假打开器：只记录被打开目录，不真拉 explorer（面板「文件夹路径
     // 可点击」的宿主侧，打开器经 WebSurfaceOptions 注入）。

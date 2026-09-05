@@ -59,7 +59,7 @@ export function TaskStations({ task }: { task: TaskView }): ReactNode {
   if (task.chainLength === 0) return null;
   const doneCursor = task.status === 'completed' ? task.chainLength : task.chainCursor + 1;
   return (
-    <div className="mt-[3px]">
+    <div className="mt-1">
       {task.chain.map((s, i) => (
         <span key={i} className="mr-1.5 text-xs leading-5 text-muted-foreground">
           <span
@@ -101,10 +101,9 @@ export function TaskDetailContent({
   const [track, setTrack] = useState<TrackBody | null>(null);
   useEffect(() => {
     let alive = true;
-    void fetch(
-      `/eteams-api/team/${encodeURIComponent(team.teamId)}/task/${task.taskId}/track`,
-      { cache: 'no-store' },
-    )
+    void fetch(`/eteams-api/team/${encodeURIComponent(team.teamId)}/task/${task.taskId}/track`, {
+      cache: 'no-store',
+    })
       .then((r) => (r.ok ? r.json() : null))
       .then((body) => {
         if (alive && body !== null) setTrack(body);
@@ -125,35 +124,35 @@ export function TaskDetailContent({
       {task.idempotencyNote !== null && (
         <div className={MUTED_CLASS}>幂等说明：{task.idempotencyNote}</div>
       )}
-        {task.outcome !== null && <div className={LINE_CLASS}>产出：{task.outcome}</div>}
-        {(track?.attempts ?? [])
-          .slice()
-          .reverse()
-          .map((a) => (
-            <div key={a.id} className={ATTEMPT_CLASS}>
-              <div className={LINE_CLASS}>
-                <strong>{a.id}</strong> · {a.kind} · {a.member} ·{' '}
-                {ATTEMPT_STATUS_LABELS[a.status] ?? a.status}
-                <span className={MUTED_CLASS}>
-                  {' '}
-                  {a.claimedAt ? relativeTime(a.claimedAt, now) : ''}
-                  {a.endedAt ? `–${relativeTime(a.endedAt, now)}` : ''}
-                </span>
-              </div>
-              {(a.progress ?? []).map((p, i) => (
-                <div key={i} className={cn(MUTED_CLASS, 'my-1')}>
-                  {relativeTime(p.at, now)} {p.text}
-                </div>
-              ))}
-              {a.error !== undefined && (
-                <div className="my-1 text-sm leading-6 text-destructive">✘ {a.error}</div>
-              )}
-              {a.result?.output !== undefined && (
-                <div className={MUTED_CLASS}>✔ {a.result.output}</div>
-              )}
+      {task.outcome !== null && <div className={LINE_CLASS}>产出：{task.outcome}</div>}
+      {(track?.attempts ?? [])
+        .slice()
+        .reverse()
+        .map((a) => (
+          <div key={a.id} className={ATTEMPT_CLASS}>
+            <div className={LINE_CLASS}>
+              <strong>{a.id}</strong> · {a.kind} · {a.member} ·{' '}
+              {ATTEMPT_STATUS_LABELS[a.status] ?? a.status}
+              <span className={MUTED_CLASS}>
+                {' '}
+                {a.claimedAt ? relativeTime(a.claimedAt, now) : ''}
+                {a.endedAt ? `–${relativeTime(a.endedAt, now)}` : ''}
+              </span>
             </div>
-          ))}
-        {track === null && <div className={MUTED_CLASS}>执行线路加载中…</div>}
+            {(a.progress ?? []).map((p, i) => (
+              <div key={i} className={cn(MUTED_CLASS, 'my-1')}>
+                {relativeTime(p.at, now)} {p.text}
+              </div>
+            ))}
+            {a.error !== undefined && (
+              <div className="my-1 text-sm leading-6 text-destructive">✘ {a.error}</div>
+            )}
+            {a.result?.output !== undefined && (
+              <div className={MUTED_CLASS}>✔ {a.result.output}</div>
+            )}
+          </div>
+        ))}
+      {track === null && <div className={MUTED_CLASS}>执行线路加载中…</div>}
     </div>
   );
 }

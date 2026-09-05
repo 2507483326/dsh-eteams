@@ -184,7 +184,11 @@ function looksLikeMarkdown(text: string): boolean {
  * 编辑（语言选择器显示临时项，可随时切换到已配置语言）。
  */
 const CODE_BLOCK_LANGUAGES = [
-  { name: 'TypeScript', alias: ['ts', 'tsx', 'typescript'], support: javascript({ typescript: true, jsx: true }) },
+  {
+    name: 'TypeScript',
+    alias: ['ts', 'tsx', 'typescript'],
+    support: javascript({ typescript: true, jsx: true }),
+  },
   { name: 'JavaScript', alias: ['js', 'jsx', 'javascript'], support: javascript({ jsx: true }) },
   { name: 'Python', alias: ['py', 'python'], support: python() },
   { name: 'YAML', alias: ['yaml', 'yml'], support: yaml() },
@@ -199,15 +203,29 @@ const CODE_BLOCK_LANGUAGES = [
  * 标题/列表/引用/表格/链接/代码块（CodeMirror 高亮）/分隔线，工具栏随
  * 焦点出现；不再需要编辑 ↔ 预览切换（入门文档："No more need for
  * edit ↔ preview"）。预览语义由 MarkdownText 保留给只读场景。
+ * DA43：三个可选 props——placeholder / headerNote（传空串隐藏头部中段
+ * 说明）/ readOnly；默认值维持人设文案，readOnly 供保存飞行中锁编辑。
+ * 挂在 AccordionContent 展开区时弹层 fixed 定位不受其 overflow-hidden
+ * 裁剪——Radix popper strategy=fixed 的包含块语义（相对 viewport 锚定），
+ * 勿「顺手修裁剪」。
  */
 export function MdEditor({
   value,
   onChange,
   minHeight = 320,
+  placeholder = '开始撰写角色手册：frontmatter + 身份 / 使命 / 规则 / 领域专章…',
+  headerNote = 'frontmatter + 正文 · 所见即所得',
+  readOnly = false,
 }: {
   value: string;
   onChange: (next: string) => void;
   minHeight?: number;
+  /** 编辑区占位文案（任务正文等非人设场景可覆盖）。 */
+  placeholder?: string;
+  /** 头部条中段说明文案；传空串隐藏该段。 */
+  headerNote?: string;
+  /** 只读透传（保存飞行中锁编辑）。 */
+  readOnly?: boolean;
 }): ReactNode {
   ensureMdxStyles();
 
@@ -328,7 +346,7 @@ export function MdEditor({
         <span style={{ fontSize: 11, fontWeight: 600, color: T.text3, letterSpacing: 0.4 }}>
           Markdown
         </span>
-        <span style={{ fontSize: 10.5, color: T.text3 }}>frontmatter + 正文 · 所见即所得</span>
+        {headerNote !== '' && <span style={{ fontSize: 10.5, color: T.text3 }}>{headerNote}</span>}
         <span style={{ flex: 1 }} />
         <span style={{ fontSize: 10.5, color: T.text3 }}>格式工具栏随焦点出现</span>
       </div>
@@ -345,7 +363,8 @@ export function MdEditor({
           overlayContainer={overlayEl}
           className={`eteams-mdx${dark ? ' dark-theme' : ''}`}
           contentEditableClassName="eteams-mdx-content"
-          placeholder={'开始撰写角色手册：frontmatter + 身份 / 使命 / 规则 / 领域专章…'}
+          placeholder={placeholder}
+          readOnly={readOnly}
           spellCheck={false}
         />
       </div>

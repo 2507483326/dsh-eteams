@@ -52,7 +52,8 @@ export const TONE_CLASS: Record<Tone, string> = {
  * （--eteams-pill-bg/--eteams-pill-ink，亮暗由 eteams.css 定值）。 */
 export const PILL_BASE_CLASS =
   'inline-flex w-fit items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium';
-export const PILL_NEUTRAL_CLASS = 'bg-[color:var(--eteams-pill-bg)] text-[color:var(--eteams-pill-ink)]';
+export const PILL_NEUTRAL_CLASS =
+  'bg-[color:var(--eteams-pill-bg)] text-[color:var(--eteams-pill-ink)]';
 /** PILL_TONE_CLASS（D22e 降噪后）：tone 不再改变 pill 面——五档统一中性
  * pill，tone 语义全部由内嵌彩色 dot 承载（映射表结构保留：Pill 组件按
  * tone 查底 + 查 dot，两组常量拼接完整字面量）。 */
@@ -126,7 +127,13 @@ export function FormErrorNote({
 /** 页签标题（S24-2 新增，官网 h2 签名）：五 tab 内容区顶部的页头行——
  * 20px bold tracking-tight + mb-4；右侧动作位（团队页放「＋ 新增团队」
  * 主按钮 → 创建弹窗）。标题字即 tab 名，不发明副标题。 */
-export function PageHeader({ label, children }: { label: string; children?: ReactNode }): ReactNode {
+export function PageHeader({
+  label,
+  children,
+}: {
+  label: string;
+  children?: ReactNode;
+}): ReactNode {
   return (
     <div className="mb-4 flex items-center gap-3">
       <h2 className="m-0 text-xl font-bold tracking-tight text-foreground">{label}</h2>
@@ -142,6 +149,12 @@ export function PageHeader({ label, children }: { label: string; children?: Reac
  * 暗 slate-800 #1e293b，token 值已官网化）——原 l1 别名半透明灰（比官网
  * 细线还淡、暗色发灰）的任意值直引全部收敛到这条。 */
 export const BORDER_L1_CLASS = 'border-[color:var(--border)]';
+/** DA42：主任务卡底栏 + 小任务行头共用的状态 pill 样式（2px 圆角 + 描边
+ * + hover 淡底压平）。 */
+export const STATUS_PILL_CLASS = `rounded-[2px] ${BORDER_L1_CLASS} hover:bg-[color:var(--eteams-pill-bg)]`;
+/** DA44②：主题原位编辑 Input 统一覆盖层——h-8 对齐 sm 钮簇/卡槽 chip 的
+ * 32px 档、min-w-[160px] 防窄行塌缩（flex-wrap 下不足即换行占满整行）。 */
+export const INLINE_SUBJECT_INPUT_CLASS = 'h-8 min-w-[160px] flex-1 rounded-md px-2.5 text-sm';
 /** 次级文字：D22d 官网正文灰阶语义——正文次级 = muted-foreground（官网
  * slate-500 #64748b），原 label-secondary 别名任意值直引收敛到语义 token。 */
 export const TEXT2_CLASS = 'text-muted-foreground';
@@ -152,7 +165,8 @@ export const MUTED_CLASS = 'text-xs leading-5 text-muted-foreground [overflow-wr
 export const LINE_CLASS = `my-1 text-sm leading-6 ${TEXT2_CLASS}`;
 /** 原 styles.sectionTitle（卡/区块标题：D22d 官网 h3 档 16px semibold +
  * tracking-tight，去原 11px 的反向加宽 tracking）。 */
-export const SECTION_TITLE_CLASS = 'mb-2 text-base font-semibold leading-6 tracking-tight text-foreground';
+export const SECTION_TITLE_CLASS =
+  'mb-2 text-base font-semibold leading-6 tracking-tight text-foreground';
 /** 原 styles.empty（虚线框空态）；边框色吃 S3 桥默认（--border 即原 l2 档）。 */
 export const EMPTY_CLASS =
   'rounded-xl border border-dashed px-5 py-9 text-center text-sm leading-6 text-muted-foreground';
