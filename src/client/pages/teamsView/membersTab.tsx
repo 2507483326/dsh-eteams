@@ -521,7 +521,7 @@ export function MembersTab({
     // 构建师定的原对——页头小像与表单头像行同源，不会各显各的。
     const draftAvatarPair =
       draftAvatarRoll ?? (build !== null && build.draft !== null ? build.draft.avatar : undefined);
-    // 访谈未答 = 阶段代理按设计已结束回合，此刻在等用户——显示「等你作答」
+    // 访谈未答 = 持续构建子代理按设计已收束回合，此刻在等用户——显示「等你作答」
     // 而不是转圈的「工作中」，否则看起来像卡死（显示状态要诚实）。
     const interviewWaiting =
       build !== null &&
@@ -581,7 +581,7 @@ export function MembersTab({
                     size="sm"
                     disabled={confirming}
                     onClick={() => void restartBuildAgent()}
-                    title="不答题，直接派一个新代理重新核查进度并按需重新出题"
+                    title="不答题，直接唤醒构建代理重新核查进度并按需重新出题"
                   >
                     重启代理
                   </Button>

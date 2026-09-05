@@ -21,6 +21,7 @@
  */
 import { useId, type CSSProperties, type ReactNode } from 'react';
 
+import { cn } from '../../lib/cn';
 import { generateAvatarOption } from './avatarOption';
 import { composeAvatarSvg } from './avatarSvg';
 
@@ -38,18 +39,21 @@ const AVATAR_CONTAINER_CLASS =
 /**
  * The member avatar: seeded vue-color-avatar face when (seed, salt) are
  * supplied, else a stable initial-letter circle. Same pair always renders
- * the same face.
+ * the same face. 二十三轮 DA36：增 optional `className` 透传（任务区头像
+ * 描边用——默认无附加类，其它表面零变化）。
  */
 export function Avatar({
   name,
   seed,
   salt,
   size = 34,
+  className,
 }: {
   name: string;
   seed?: number;
   salt?: number;
   size?: number;
+  className?: string;
 }): ReactNode {
   // 动态值（S14 清点口径）：size 直接定宽高、字号按 0.44 比例、底色按名字
   // 色相——其余容器样式全部走 AVATAR_CONTAINER_CLASS 工具类。
@@ -61,12 +65,21 @@ export function Avatar({
   };
   if (seed === undefined || salt === undefined) {
     return (
-      <span className={AVATAR_CONTAINER_CLASS} style={style}>
+      <span className={cn(AVATAR_CONTAINER_CLASS, className)} style={style}>
         {name.slice(0, 1)}
       </span>
     );
   }
-  return <SeedAvatar name={name} seed={seed} salt={salt} size={size} style={style} />;
+  return (
+    <SeedAvatar
+      name={name}
+      seed={seed}
+      salt={salt}
+      size={size}
+      style={style}
+      className={className}
+    />
+  );
 }
 
 /**
@@ -80,12 +93,14 @@ function SeedAvatar({
   salt,
   size,
   style,
+  className,
 }: {
   name: string;
   seed: number;
   salt: number;
   size: number;
   style: CSSProperties;
+  className?: string;
 }): ReactNode {
   const reactId = useId().replaceAll(':', '');
   const option = generateAvatarOption(seed, salt);
@@ -93,7 +108,7 @@ function SeedAvatar({
   // can sit directly inside the container span (upstream uses v-html too).
   return (
     <span
-      className={AVATAR_CONTAINER_CLASS}
+      className={cn(AVATAR_CONTAINER_CLASS, className)}
       style={{ ...style, background: option.background.color }}
       data-eteams="avatar"
       title={name}

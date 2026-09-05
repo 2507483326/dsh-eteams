@@ -22,10 +22,12 @@
 /** Semantic tone — every status color flows through these five buckets. */
 export type Tone = 'info' | 'ok' | 'warn' | 'err' | 'muted';
 
-/** 任务 10 态精确词表（docs/27 §27.9#11；八轮 DA21 后仅作键序规范来源）。 */
+/** 任务 10 态精确词表（docs/27 §27.9#11；二十四轮 DA37 用户拍板「没有什么
+ * 草稿状态、待指派状态，只有待开始状态」——draft/ready 两态展示文案合并为
+ * 「待开始」，词表仅作键序规范来源）。 */
 export const STATUS_LABELS: Record<string, string> = {
-  draft: '草稿',
-  ready: '待指派',
+  draft: '待开始',
+  ready: '待开始',
   wait: '待接取',
   start: '执行中',
   paused: '已挂起',
@@ -99,12 +101,17 @@ export interface DisplayStatus {
  * cancelled→error 桶但文案「已取消」、中性灰（同桶异色——wait_decision/
  * wait_user 行内点色 warning 黄、failed 红、cancelled 灰）。
  *
+ * 二十四轮 DA37（用户拍板「没有什么草稿状态、待指派状态，只有待开始状态」）：
+ * draft 与 ready 展示**合并为「待开始」**（同 label 同 tone，桶键保留
+ * init/created 不动组卡汇总优先级语义）；无成员不设状态——「需要选择成员」
+ * 是指派提示不是状态（成员卡槽空槽即提示面）。
+ *
  * 十态已是用户口径的精确粒度，detail 不再做吞并态补字；仅 retryCount>0
  * 并入重试计数。
  */
 const DISPLAY_STATUS_TABLE: Record<string, { key: DisplayStatusKey; label: string; tone: Tone }> = {
-  draft: { key: 'init', label: '草稿', tone: 'muted' },
-  ready: { key: 'created', label: '待指派', tone: 'info' },
+  draft: { key: 'init', label: '待开始', tone: 'info' },
+  ready: { key: 'created', label: '待开始', tone: 'info' },
   wait: { key: 'waiting', label: '待接取', tone: 'warn' },
   paused: { key: 'waiting', label: '已挂起', tone: 'warn' },
   start: { key: 'doing', label: '执行中', tone: 'info' },
@@ -146,7 +153,7 @@ export interface GroupSummary {
  * - 否则含 doing（start）→ 「n 执行中」（info）；
  * - 否则含 waiting（wait/paused）→ 「n 待接取」（warn）；
  * - 全部 done → null（「小任务 n/n 完成」进度行已表达，不加 chip）；
- * - 其余（ready/draft 混合）→ 「待指派」（中性）。
+ * - 其余（ready/draft 混合）→ 「待开始」（中性；二十四轮 DA37 文案合并）。
  * group 的 draft（拆解中）不做汇总——调用方只在 ready 时消费本函数。
  */
 export function groupDisplayOf(
@@ -170,12 +177,13 @@ export function groupDisplayOf(
     return { label: `${waiting.length} 待接取`, tone: 'warn', icon: '', detail: '' };
   }
   if (views.every((v) => v.key === 'done')) return null;
-  return { label: '待指派', tone: 'muted', icon: '', detail: '' };
+  return { label: '待开始', tone: 'muted', icon: '', detail: '' };
 }
 
 /**
  * 顶层状态分组（十态一列——每态独立成组，组头 label/tone 与行内 pill
- * 同口径）：draft 草稿 muted / ready 待指派 info（就绪待派单列）/
+ * 同口径；二十四轮 DA37 文案合并：draft/ready 同显「待开始」info）：
+ * draft 待开始 info / ready 待开始 info（就绪待派单列）/
  * wait 待接取 warn / start 执行中 info / paused 已挂起 warn /
  * wait_decision 待决策 warn / wait_user 待用户 warn / completed 已完成 ok /
  * failed 失败 err / cancelled 已取消 muted。

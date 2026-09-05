@@ -28,13 +28,13 @@
 | system/sessionPersona.ts | 角色接管 band 文本组装、neutralizeInterpolation | runtime/sessionPersona.ts 薄壳 |
 | system/sessionTeam.ts | 团队绑定 band 文本组装 | runtime/sessionTeam.ts 薄壳 |
 | spawn/captainChild.ts | 领队子代理人格 + 手册拼装 | tools/captainDispatch.ts |
-| spawn/builderPhases.ts | 构建阶段 A/B/C/restart 阶段提示词 | runtime/builderPhases.ts |
+| spawn/builderPhases.ts | 构建回合提示词（受理/续聊/恢复/重启，docs/19.16 持续构建子代理） | runtime/builderPhases.ts |
 | spawn/member.ts | 成员欢迎包（规则 + 工具表） | runtime/members.ts |
 | handoff/mails.ts | 指派 / 汇报 / 婉拒 / 挂起 / 取消模板 | runtime/assignment.ts、runtime/members.ts、runtime/docs.ts、tools/memberTools.ts |
 | personas/framework.ts | 人设框架（字段渲染 / 合并 / 摘要 / 回退执行提示） | state/、runtime/、prompts 内部 |
 | personas/presets.ts | ROLE_TEMPLATES、PRESET_MEMBER_ROLES、defaultPersonaFor | runtime/roster.ts、runtime/teamOps.ts、state/import.ts |
 | personas/captain.ts | 领队人设默认值 + 覆盖文件合成 | runtime/webui.ts、runtime/roster.ts、state/import.ts、tools/captainDispatch.ts、host/index.ts |
-| personas/builder.ts | 角色构建师预设 + 阶段子代理人格 + 人设规格尾 | runtime/builderPhases.ts、spawn/builderPhases.ts、personas/presets.ts |
+| personas/builder.ts | 角色构建师预设 + 持续构建子代理人格 + 人设规格尾 | runtime/builderPhases.ts、spawn/builderPhases.ts、personas/presets.ts |
 | personas/roleDocs.ts | ROLE_DOCS 逐字角色手册（scripts/gen-role-docs.cjs 生成） | personas/presets.ts、personas/builder.ts、personas/captain.ts |
 | steering/interview.ts | 访谈发布唤醒主对话的 steer 文本 | tools/captainTools.ts |
 | steering/dispatch.ts | dispatch 受理确认 + 领队子代理首轮 prompt 组装 | tools/captainDispatch.ts |

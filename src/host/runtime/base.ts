@@ -22,7 +22,7 @@ export interface RuntimeContext {
   logger: RuntimeLogger;
   /** Continuation runtime: spawn/followup/interrupt (inject `subagents`). */
   subagents: {
-    /** One-shot child (docs/19.16 builder phases): settles after its turn. */
+    /** One-shot child: settles after its turn (continuable = startContinuable). */
     start(
       name: string,
       request: {

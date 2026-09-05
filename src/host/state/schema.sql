@@ -255,7 +255,7 @@ CREATE TABLE IF NOT EXISTS usage_detail (
   event_time         INTEGER NOT NULL,  -- 事件发生时刻（Unix 毫秒）
   session_id         TEXT NOT NULL,     -- 会话 ID
   seq                INTEGER NOT NULL,  -- 会话内事件序号（同会话内单调）
-  team_key           TEXT,              -- 归属团队的台账文本 ID；NULL=工作区桶（普通对话、一次性构建子代理）；松引用，不校验存在
+  team_key           TEXT,              -- 归属团队的台账文本 ID；NULL=工作区桶（普通对话、持续构建子代理）；松引用，不校验存在
   member_name        TEXT,              -- 归属成员名；非成员为 NULL
   role_kind          TEXT NOT NULL,     -- 归属类别：captain / captain-child / member / conversation / workspace
   provider           TEXT,              -- 模型路线快照：provider 名

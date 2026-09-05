@@ -12,6 +12,18 @@
  * 为 4px、罗列条「未启动」改工号数字徽章（去 ET- 前缀）、拖动提示独占一行；
  * 六轮 DA19：站点 chip 可拖动调序（chip→chip 数组搬移）、行尾「＋」点开成员
  * 多选追加（Popover 勾选→整链重发），「修改」弹窗不再做链编排；
+ * 二十二轮 DA35：多选面板标题简化为「选择成员」（用户拍板去掉「追加为接力
+ * 站点」），已在链中的成员**不再出现在列表**（用户拍板；原禁用 +「已在链中」
+ * 标废弃，chainAfterAppendMany 去重守卫仍兜底）；二十三轮 DA36：多选确认钮
+ * 改「添加成员 / 添加 N 个成员」（用户拍板「添加站点改成添加成员」）、卡槽
+ * 悬停高亮改品牌淡底 + chip 环加 ring-inset（用户拍板「拖拽时高亮显示被
+ * 遮挡了」——原高亮底与 chip 底同色看不出、滚动态 chip 外缘环被滚动容器
+ * 裁掉）、任务区头像加 --border 描边（Avatar 增 className 透传，用户拍板
+ * 「任务中的成员头像加上border」）、罗列条改**头部卡下方左竖线提示块**并
+ * 更新提示文案（用户拍板「不放到卡片里面，放到卡片下面，左边用小竖线标识
+ * 为提示」）；二十四轮 DA37：罗列条**回卡内原位、只留 chips 行**，指派
+ * 提示拆出 StripAssignHint 仍置卡下方左竖线块（用户拍板「团队成员还是在
+ * 卡片内，只是拖拽成员到下方的成员卡槽完成指派不在」）；
  * 以拖放时刻最新快照的 chain 为底改后整链重发，DA10 复用
  * updateTeamTask、非乐观更新）。
  *
@@ -140,11 +152,13 @@ const BOX_OVER_CLASS = `${BOX_BASE_CLASS} border border-solid border-primary bg-
  * 容器 canDrop 同条件（A.3.1 注记）。 */
 const BOX_MULTI_CLASS =
   'inline-flex max-w-full flex-nowrap items-center gap-1 overflow-x-auto rounded-[4px] border border-dashed px-1.5 py-1 text-xs leading-none transition-colors';
-/** 多站容器悬停（空白处，shallow）：虚线转实线 + 品牌边 + 中性 pill 底。 */
-const BOX_MULTI_OVER_CLASS = 'border-solid border-primary bg-[color:var(--eteams-pill-bg)]';
+/** 多站容器悬停（空白处）：虚线转实线 + 品牌边 + 品牌淡底（color-mix——
+ * 二十三轮 DA36：原中性 pill 底与 chip 底同色，chip 列表顶满时高亮看不出
+ * （用户拍板「拖拽时高亮显示被遮挡了」），改品牌淡底让悬停面始终可辨）。 */
+const BOX_MULTI_OVER_CLASS =
+  'border-solid border-primary bg-[color:color-mix(in_srgb,var(--primary)_12%,transparent)]';
 /** 多站容器可放置（非悬停）：虚线边框转品牌淡边（color-mix，同 BOX_CAN_DROP）。 */
-const BOX_MULTI_CAN_DROP_CLASS =
-  'border-[color:color-mix(in_srgb,var(--primary)_60%,transparent)]';
+const BOX_MULTI_CAN_DROP_CLASS = 'border-[color:color-mix(in_srgb,var(--primary)_60%,transparent)]';
 /** 行尾追加提示小槽（装饰性：真落点是整个容器空白处；DA16 随 chip 32px 对齐、
  * DA18 圆角 4px）。 */
 const APPEND_HINT_CLASS =
@@ -157,10 +171,17 @@ const BOX_CHIP_CLASS =
 const BOX_READONLY_CLASS = `${BOX_CHIP_CLASS} opacity-60`;
 /** 悬停时 chip 轻微上浮阴影（A.5.1；D22f 阴影档同 MEMBER_CARD）。 */
 const BOX_OVER_SHADOW_CLASS = 'shadow-[0_1px_2px_rgba(15,23,42,0.08)]';
-/** chip 被悬停（=替换该站）/去重闪现：brand 环（box-shadow 不引发回流）。 */
-const CHIP_RING_CLASS = 'ring-1 ring-primary';
+/** chip 被悬停（=替换该站）/去重闪现：brand 环（box-shadow 不引发回流）。
+ * 二十三轮 DA36：加 ring-inset——环画进 chip 内缘，滚动容器（overflow-x-auto）
+ * 裁不掉（chip 列表顶到左边/滚动态时外缘环会被裁，用户拍板「拖拽时高亮
+ * 显示被遮挡了」）。 */
+const CHIP_RING_CLASS = 'ring-1 ring-inset ring-primary';
 /** 「已移出」弱化小标（悬空名，DA9/A.5.1）。 */
 const BOX_DANGLING_CLASS = 'text-[10px] font-normal text-muted-foreground';
+/** 任务区头像描边（二十三轮 DA36：用户拍板「任务中的成员头像加上border」
+ * ——罗列条/卡槽 chip/领队 chip/多选面板行，1px --border 细线，其余表面
+ * （成员库等）不传保持原观感）。 */
+const AVATAR_BORDER_CLASS = 'border border-solid border-[color:var(--border)]';
 /** 罗列条 chip（可拖签名 = ROLE_CHIP_CLASS 品牌淡底变体，A.5.3；hover 提示
  * 走 title，光标 grab/grabbing；DA14 26→30、DA16 30→32、DA18 圆角 4px）。 */
 const STRIP_CHIP_CLASS =
@@ -172,8 +193,7 @@ const CAPTAIN_CHIP_CLASS = `inline-flex h-[32px] shrink-0 cursor-default items-c
 const CHIP_TAG_CLASS = 'text-[10px] font-normal text-muted-foreground';
 /** 罗列条工号徽章（五轮 DA18：未启动→工号，只显数字不带 ET- 前缀）：小型
  * 徽章面——中性 pill 底 + token 边 + 10px medium，区别于 chip 主题色。 */
-const STRIP_BADGE_CLASS =
-  `inline-flex items-center rounded-[3px] border border-solid bg-[color:var(--eteams-pill-bg)] ${BORDER_TOKEN_CLASS} px-1 text-[10px] font-medium leading-none text-muted-foreground`;
+const STRIP_BADGE_CLASS = `inline-flex items-center rounded-[3px] border border-solid bg-[color:var(--eteams-pill-bg)] ${BORDER_TOKEN_CLASS} px-1 text-[10px] font-medium leading-none text-muted-foreground`;
 
 /** 成员罗列条的可拖 chip（A.3.2：staged 可拖，源 chip 拖拽中半透明；头像
  * 渲染复用 Avatar，状态点 memberTone 五桶——staged 态由状态点表达；五轮
@@ -186,9 +206,15 @@ function MemberDragChip({ member }: { member: MemberView }): ReactNode {
       ref={dragRef}
       className={STRIP_CHIP_CLASS}
       style={isDragging ? { opacity: 0.5 } : undefined}
-      title="拖到小任务下方的成员卡槽完成指派"
+      title="拖拽成员到下方的成员卡槽完成指派"
     >
-      <Avatar name={member.name} seed={member.avatar?.seed} salt={member.avatar?.salt} size={26} />
+      <Avatar
+        name={member.name}
+        seed={member.avatar?.seed}
+        salt={member.avatar?.salt}
+        size={26}
+        className={AVATAR_BORDER_CLASS}
+      />
       <span>{member.name}</span>
       {badge && <span className={STRIP_BADGE_CLASS}>{badge}</span>}
       <span className={cn(DOT_BASE_CLASS, DOT_TONE_CLASS[memberTone(member.status)])} />
@@ -202,7 +228,13 @@ function MemberDragChip({ member }: { member: MemberView }): ReactNode {
 function CaptainChip({ captain }: { captain: CaptainView }): ReactNode {
   return (
     <div className={CAPTAIN_CHIP_CLASS} title="领队不接任务：负责拆解、指派与调度">
-      <Avatar name={captain.name} seed={captain.avatar.seed} salt={captain.avatar.salt} size={26} />
+      <Avatar
+        name={captain.name}
+        seed={captain.avatar.seed}
+        salt={captain.avatar.salt}
+        size={26}
+        className={AVATAR_BORDER_CLASS}
+      />
       <span>{captain.name}</span>
       <span className={CHIP_TAG_CLASS}>领队</span>
     </div>
@@ -213,7 +245,12 @@ function CaptainChip({ captain }: { captain: CaptainView }): ReactNode {
  * 成员罗列条（A.5.3，用户 2026-09-04 拍板）：渲染在每张任务单（group）卡内
  * 小任务行之后——每卡一份相同副本，数据仍只取同一份成员快照（同队成员对
  * 全部组卡相同），无重复请求。领队 chip 单列置首；「从成员库添加」入口不在
- * 条内提供（DA12/E21）；拖动提示独占 chips 下一行（五轮 DA18）。
+ * 条内提供（DA12/E21）。
+ *
+ * 版式：二十轮 DA33 入头部卡（border-t 分区）；二十三轮 DA36 曾整条移出卡，
+ * 二十四轮 DA37 订正（用户拍板「团队成员还是在卡片内，只是拖拽成员到下方
+ * 的成员卡槽完成指派不在」）——罗列条回卡内原位（border-t 分区），**只留
+ * chips 行**；指派提示拆出为 {@link StripAssignHint}（仍置卡下方左竖线块）。
  */
 export function TeamMemberStrip({ team }: { team: TeamSnapshot }): ReactNode {
   return (
@@ -225,7 +262,25 @@ export function TeamMemberStrip({ team }: { team: TeamSnapshot }): ReactNode {
           <MemberDragChip key={m.name} member={m} />
         ))}
       </div>
-      <div className="mt-1 text-xs text-muted-foreground">拖到本卡小任务下方的成员卡槽完成指派</div>
+    </div>
+  );
+}
+
+/**
+ * 指派提示块（二十四轮 DA37：用户拍板「拖拽成员到下方的成员卡槽完成指派
+ * 不在（卡内）」——提示文案不入罗列条，独立置**头部卡下方**，左小竖线
+ * （border-l-2 + pl-3）标识提示语义；渲染判据与罗列条同源（存在可编辑
+ * 小任务才渲染），罗列条入卡、提示在卡下，同屏一上一下）。
+ */
+export function StripAssignHint(): ReactNode {
+  return (
+    <div
+      className={cn(
+        'mt-2 border-l-2 border-solid pl-3 text-xs leading-none text-muted-foreground',
+        BORDER_TOKEN_CLASS,
+      )}
+    >
+      拖拽成员到下方的成员卡槽完成指派
     </div>
   );
 }
@@ -350,6 +405,7 @@ export function TaskAssignDropBox({
           seed={stationAvatar?.avatar?.seed}
           salt={stationAvatar?.avatar?.salt}
           size={26}
+          className={AVATAR_BORDER_CLASS}
         />
         <span>{stationMember}</span>
         {dangling && <span className={BOX_DANGLING_CLASS}>已移出</span>}
@@ -458,10 +514,12 @@ export function TaskAssignDropBox({
 
 /**
  * 「＋」点开的成员多选追加面板（六轮 DA19）：Popover 列出团队成员快照
- * （host 已滤 removed）——已在链中的成员禁用并标「已在链中」（DA8 去重同
- * 源），勾选若干人按勾选顺序末尾追加站点（chainAfterAppendMany 整链重发）。
- * 只做加站，不做调序/移除/站点说明编辑（调序=chip 拖动、移除=×，brief 恒
- * 空串；「修改」弹窗不再编排链，DA19）。
+ * （host 已滤 removed）——二十二轮 DA35 起**已在链中的成员不再出现在
+ * 列表**（用户拍板「已经选中的成员不出现在列表中」；原禁用 + 「已在链中」
+ * 标废弃，chainAfterAppendMany 的去重守卫仍兜底），标题简化为「选择成员」
+ * （用户拍板去掉「追加为接力站点」）；勾选若干人按勾选顺序末尾追加站点
+ * （chainAfterAppendMany 整链重发）。只做加站，不做调序/移除/站点说明编辑
+ * （调序=chip 拖动、移除=×，brief 恒空串；「修改」弹窗不再编排链，DA19）。
  */
 function StationPicker({
   members,
@@ -478,32 +536,33 @@ function StationPicker({
   onToggle: (name: string) => void;
   onConfirm: () => void;
 }): ReactNode {
+  // 二十二轮 DA35：链中成员从可选列表滤除（不渲染，不只是禁用）。
+  const selectable = members.filter((m) => !chainMembers.includes(m.name));
   return (
     <PopoverContent align="start" className="w-64 p-2">
-      <div className="px-1 text-xs font-semibold text-muted-foreground">选择成员，追加为接力站点</div>
+      <div className="px-1 text-xs font-semibold text-muted-foreground">选择成员</div>
       <div className="mt-1.5 max-h-56 space-y-0.5 overflow-y-auto">
-        {members.map((m) => {
-          const inChain = chainMembers.includes(m.name);
+        {selectable.map((m) => {
           const checked = picked.includes(m.name);
           return (
             <button
               key={m.name}
               type="button"
-              disabled={inChain}
-              title={inChain ? '已在链中（接力链同成员只占一站）' : undefined}
               className={cn(
-                'flex w-full items-center gap-1.5 rounded-[4px] px-1.5 py-1 text-left text-xs leading-none transition-colors',
-                inChain
-                  ? 'cursor-not-allowed opacity-50'
-                  : 'cursor-pointer hover:bg-[color:var(--eteams-pill-bg)]',
+                'flex w-full cursor-pointer items-center gap-1.5 rounded-[4px] px-1.5 py-1 text-left text-xs leading-none transition-colors',
+                'hover:bg-[color:var(--eteams-pill-bg)]',
               )}
               onClick={() => onToggle(m.name)}
             >
-              <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={20} />
+              <Avatar
+                name={m.name}
+                seed={m.avatar?.seed}
+                salt={m.avatar?.salt}
+                size={20}
+                className={AVATAR_BORDER_CLASS}
+              />
               <span className="font-medium">{m.name}</span>
-              <span className="text-[10px] font-normal text-muted-foreground">
-                {inChain ? '已在链中' : m.role}
-              </span>
+              <span className="text-[10px] font-normal text-muted-foreground">{m.role}</span>
               <span
                 className={cn(
                   'ml-auto text-[10px] font-medium text-primary',
@@ -515,7 +574,7 @@ function StationPicker({
             </button>
           );
         })}
-        {members.length === 0 && (
+        {selectable.length === 0 && (
           <div className="px-1.5 py-2 text-xs text-muted-foreground">暂无可选成员</div>
         )}
       </div>
@@ -526,7 +585,7 @@ function StationPicker({
         disabled={busy || picked.length === 0}
         onClick={onConfirm}
       >
-        {picked.length > 0 ? `添加 ${picked.length} 站` : '添加站点'}
+        {picked.length > 0 ? `添加 ${picked.length} 个成员` : '添加成员'}
       </Button>
     </PopoverContent>
   );
@@ -570,7 +629,11 @@ function StationChip({
   // deps 携带最新 task/回调：spec 闭包逐渲染刷新（drop 不缓存旧 chain）。
   // accept 为成员/站点双类型数组：成员 chip=替换该站、站点 chip=调序（drop
   // 按 'index' in item 分流；容器只收成员类型——空白处对站点类型无落点）。
-  const [{ isOver }, dropRef] = useDrop<MemberDragItem | StationDragItem, unknown, { isOver: boolean }>(
+  const [{ isOver }, dropRef] = useDrop<
+    MemberDragItem | StationDragItem,
+    unknown,
+    { isOver: boolean }
+  >(
     () => ({
       accept: [MEMBER_DRAG_TYPE, STATION_DRAG_TYPE],
       canDrop: () => eligible,
@@ -610,7 +673,13 @@ function StationChip({
         isOver && BOX_OVER_SHADOW_CLASS,
       )}
     >
-      <Avatar name={member} seed={record?.avatar?.seed} salt={record?.avatar?.salt} size={26} />
+      <Avatar
+        name={member}
+        seed={record?.avatar?.seed}
+        salt={record?.avatar?.salt}
+        size={26}
+        className={AVATAR_BORDER_CLASS}
+      />
       <span>{member}</span>
       {dangling && <span className={BOX_DANGLING_CLASS}>已移出</span>}
       {removable && (

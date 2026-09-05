@@ -217,7 +217,7 @@ export function EteamBuildCard(props: { node?: unknown }): ReactNode {
                 ) : shown !== null &&
                   (shown.status === 'active' || shown.status === 'awaiting_confirmation') ? (
                   shown.status === 'active' && showInterviewPending ? (
-                    // 访谈未答 = 阶段代理按设计已结束回合，不是卡死——别转圈装忙。
+                    // 访谈未答 = 持续构建子代理按设计已收束回合，不是卡死——别转圈装忙。
                     // 作答入口在主会话（本卡片所在会话）的 ask_user_question 选择框。
                     <span>意图访谈待作答——在本会话作答后自动续跑</span>
                   ) : (

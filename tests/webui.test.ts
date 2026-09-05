@@ -15,6 +15,7 @@ import { createMemberTools } from '../src/host/tools/memberTools';
 import { installWebSurface, summarizeEvent, teamSnapshot } from '../src/host/runtime/webui';
 import {
   cancelBuildSession,
+  markBuilderChild,
   readBuildSession,
   reportBuildProgress,
   setBuildParentSession,
@@ -1184,8 +1185,9 @@ describe('conversation task workflow (docs/26)', () => {
     const h = await installFull();
     const created = await h.post('/eteams-api/team', { name: '顺序团队', sessionId: 'cap-conv' });
     const teamId = json<{ teamId: number }>(created.body).teamId;
-    const group = ((await h.call!('eteams_submit_task', { subject: '主任务' })) as { taskId: number })
-      .taskId;
+    const group = (
+      (await h.call!('eteams_submit_task', { subject: '主任务' })) as { taskId: number }
+    ).taskId;
 
     // 七轮修复回归锁：客户端（api.ts）发 JSON number，此前路由 str() 只收
     // 字符串 → parentTaskId 被静默丢弃 → 小任务落到顶层（挂靠失败、主任务
@@ -1219,6 +1221,51 @@ describe('conversation task workflow (docs/26)', () => {
     });
     expect(badDeps.code).toBe(200);
     expect(readTeam(teamId).tasks.find((t) => t.id === secondId)!.dependencies).toEqual([firstId]);
+  });
+
+  it('starts a ready chain task from the panel via POST /task/:taskId/start（二十四轮 DA37）', async () => {
+    const h = await installFull();
+    const created = await h.post('/eteams-api/team', { name: '开始团队', sessionId: 'cap-conv' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Alice', role: 'researcher' });
+    const group = (
+      (await h.call!('eteams_submit_task', { subject: '主任务' })) as { taskId: number }
+    ).taskId;
+    const sub = await h.post(`/eteams-api/team/${teamId}/task`, {
+      subject: '接力小任务',
+      parentTaskId: String(group),
+      chain: [{ member: 'Alice', stageBrief: '先做' }],
+    });
+    const subId = json<{ taskId: number }>(sub.body).taskId;
+    const bare = await h.post(`/eteams-api/team/${teamId}/task`, {
+      subject: '没选成员的小任务',
+      parentTaskId: String(group),
+    });
+    const bareId = json<{ taskId: number }>(bare.body).taskId;
+
+    // 空链：开始被「需要选择成员」闸住（用户拍板原话——客户端对空链卡不
+    // 渲染按钮，此处兜底）。
+    const bareStart = await h.post(`/eteams-api/team/${teamId}/task/${bareId}/start`, {});
+    expect(bareStart.code).toBe(400);
+    expect(json<{ error: string }>(bareStart.body).error).toBe('需要选择成员');
+
+    // 有链：派发链首 Alice（ready → wait 待接取，首尝试 stage，成员起会话）。
+    const started = await h.post(`/eteams-api/team/${teamId}/task/${subId}/start`, {});
+    expect(started.code).toBe(200);
+    const subRec = readTeam(teamId).tasks.find((t) => t.id === subId)!;
+    expect(subRec.status).toBe('wait');
+    expect(subRec.attempts).toHaveLength(1);
+    expect(subRec.attempts[0]!.member).toBe('Alice');
+    expect(childIdOf(teamId, 'Alice')).not.toBe('');
+
+    // 已派发（wait）再点开始：派发核拒绝（只能指派 ready 任务）。
+    const again = await h.post(`/eteams-api/team/${teamId}/task/${subId}/start`, {});
+    expect(again.code).toBe(400);
+    expect(json<{ error: string }>(again.body).error).toContain('只能指派 ready 任务');
+
+    // 未知任务 404。
+    const missing = await h.post(`/eteams-api/team/${teamId}/task/99999/start`, {});
+    expect(missing.code).toBe(404);
   });
 });
 
@@ -1446,21 +1493,21 @@ describe('usage calendar route (docs/28.4)', () => {
     await h.post('/eteams-api/team', { name: '应用用量队', sessionId: 'cap-app' });
     const year = new Date().getFullYear();
     const row = (seq: number, teamId: string | null, inputTokens: number): UsageRecord => ({
-        at: Date.now(),
-        day: `${year}-01-03`,
-        sessionId: `s${seq}`,
-        seq,
-        teamId,
-        memberName: null,
-        roleKind: teamId === null ? 'workspace' : 'member',
-        provider: 'p',
-        model: 'm',
-        inputTokens,
-        outputTokens: 0,
-        cacheReadTokens: null,
-        cacheWriteTokens: null,
-        reasoningTokens: null,
-      });
+      at: Date.now(),
+      day: `${year}-01-03`,
+      sessionId: `s${seq}`,
+      seq,
+      teamId,
+      memberName: null,
+      roleKind: teamId === null ? 'workspace' : 'member',
+      provider: 'p',
+      model: 'm',
+      inputTokens,
+      outputTokens: 0,
+      cacheReadTokens: null,
+      cacheWriteTokens: null,
+      reasoningTokens: null,
+    });
     recordUsage(getDb(joinPath(workspace, '.eteams')), row(1, null, 100));
     recordUsage(getDb(joinPath(workspace, '.eteams')), row(2, '999', 50));
     recordUsage(getDb(joinPath(workspace, '.eteams')), row(3, 'no-such-team', 7));
@@ -1543,16 +1590,38 @@ describe('web surface installation', () => {
 
 describe('POST /eteams-api/rolebuilder/resume (docs/19.16)', () => {
   /** Panel harness with an explicit captains registry: the resume gate reads
-   * `agents.get(parentSessionId)` — tests control who is "online". */
+   * `agents.get(parentSessionId)` — tests control who is "online". A recording
+   * continuable-subagents fake backs the wake path — the cancelled→active
+   * flip now happens inside the dispatcher's build lock, so the fake must
+   * exist or the wake (and thus the flip) never lands. */
   async function installResumeFake(): Promise<{
     handler: Handler;
     captains: Map<string, { id: string; session: { header: { cwd: string } } }>;
+    calls: { followups: string[]; rebuilt: number; interrupts: string[] };
   }> {
     const registered: Handler[] = [];
     const captains = new Map<string, { id: string; session: { header: { cwd: string } } }>();
-    const ctx = surfaceCtx(captains, registered);
+    const calls = { followups: [] as string[], rebuilt: 0, interrupts: [] as string[] };
+    const ctx = {
+      logger: { info: () => undefined, warn: () => undefined },
+      subagents: {
+        async startContinuable() {
+          calls.rebuilt += 1;
+          return { childId: `resume-rebuild-${calls.rebuilt}`, messageId: 'm' };
+        },
+        async followup(_parent: unknown, childId: unknown) {
+          calls.followups.push(String(childId));
+          return 'm';
+        },
+        interrupt(_childId: unknown, _authority: unknown) {
+          calls.interrupts.push(String(_childId));
+        },
+      },
+      agents: { get: (id: string) => captains.get(id) },
+      ...surfaceCtx(captains, registered),
+    } as unknown as Context;
     installWebSurface(ctx, config);
-    return { handler: registered[0]!, captains };
+    return { handler: registered[0]!, captains, calls };
   }
 
   it('GET /rolebuilder reports parentOnline: false when the parent conversation is offline', async () => {
@@ -1594,12 +1663,8 @@ describe('POST /eteams-api/rolebuilder/resume (docs/19.16)', () => {
   });
 
   it('resumes with a live parent: flips to active and keeps the draft context', async () => {
-    const registered: Handler[] = [];
-    const captains = new Map<string, { id: string; session: { header: { cwd: string } } }>();
+    const { handler, captains, calls } = await installResumeFake();
     captains.set('cap-online', { id: 'cap-online', session: { header: { cwd: workspace } } });
-    const ctx = surfaceCtx(captains, registered);
-    installWebSurface(ctx, config);
-    const handler = registered[0]!;
     await reportBuildProgress(stateRoot(), {
       request: '恢复回归',
       stepsDone: ['收到需求'],
@@ -1616,5 +1681,94 @@ describe('POST /eteams-api/rolebuilder/resume (docs/19.16)', () => {
     const session = readBuildSession(stateRoot());
     expect(session?.status).toBe('active');
     expect(session?.draft?.name).toBe('partial');
+    // 持续构建子代理（docs/19.16）：恢复路径会话里还没有 childId → 冷恢复
+    // 重建接手同一构建（没有第二次受理，重建计数恰为 1）。
+    expect(calls.rebuilt).toBe(1);
+    expect(calls.followups).toEqual([]);
+  });
+
+  it('resume with a persisted builderChildId wakes the same child via followup (no rebuild)', async () => {
+    const { handler, captains, calls } = await installResumeFake();
+    captains.set('cap-online', { id: 'cap-online', session: { header: { cwd: workspace } } });
+    await reportBuildProgress(stateRoot(), { request: '恢复回归', step: '收到需求' });
+    await cancelBuildSession(stateRoot());
+    await setBuildParentSession(stateRoot(), 'cap-online');
+    await markBuilderChild(stateRoot(), 'build-child-7');
+    const ok = await fire(handler, 'POST', '/eteams-api/rolebuilder/resume');
+    expect(ok.code).toBe(200);
+    const session = readBuildSession(stateRoot());
+    expect(session?.status).toBe('active');
+    expect(calls.followups).toEqual(['build-child-7']);
+    expect(calls.rebuilt).toBe(0);
+  });
+
+  it('resume still flips to active when followup fails — rebuild takes over and updates the childId', async () => {
+    const registered: Handler[] = [];
+    const captains = new Map<string, { id: string; session: { header: { cwd: string } } }>();
+    captains.set('cap-online', { id: 'cap-online', session: { header: { cwd: workspace } } });
+    const calls = { followups: 0, rebuilt: 0 };
+    const ctx = {
+      logger: { info: () => undefined, warn: () => undefined },
+      subagents: {
+        async startContinuable() {
+          calls.rebuilt += 1;
+          return { childId: `rebuild-${calls.rebuilt}`, messageId: 'm' };
+        },
+        async followup() {
+          calls.followups += 1;
+          throw new Error('lineage mismatch');
+        },
+        interrupt() {},
+      },
+      agents: { get: (id: string) => captains.get(id) },
+      ...surfaceCtx(captains, registered),
+    } as unknown as Context;
+    installWebSurface(ctx, config);
+    const handler = registered[0]!;
+    await reportBuildProgress(stateRoot(), { request: '恢复回归', step: '收到需求' });
+    await cancelBuildSession(stateRoot());
+    await setBuildParentSession(stateRoot(), 'cap-online');
+    await markBuilderChild(stateRoot(), 'stale-child');
+    const ok = await fire(handler, 'POST', '/eteams-api/rolebuilder/resume');
+    expect(ok.code).toBe(200);
+    // 同一构建、新持有者：followup 失败 → 重建并覆盖落盘 childId。
+    expect(calls.followups).toBe(1);
+    expect(calls.rebuilt).toBe(1);
+    expect(readBuildSession(stateRoot())?.builderChildId).toBe('rebuild-1');
+  });
+
+  it('interview POST wakes the persisted builder child via followup and stores the answers', async () => {
+    const { handler, captains, calls } = await installResumeFake();
+    captains.set('cap-online', { id: 'cap-online', session: { header: { cwd: workspace } } });
+    await reportBuildProgress(stateRoot(), {
+      request: '访谈中转',
+      step: '意图访谈',
+      interview: { questions: [{ id: 'q1', question: '用在哪？', options: [{ label: 'A' }] }] },
+    });
+    await setBuildParentSession(stateRoot(), 'cap-online');
+    await markBuilderChild(stateRoot(), 'build-child-9');
+    const got = await fire(handler, 'POST', '/eteams-api/rolebuilder/interview', {
+      answers: [{ id: 'q1', choice: 'A' }],
+    });
+    expect(got.code).toBe(200);
+    const session = readBuildSession(stateRoot());
+    expect(session?.interview?.answers).toEqual([{ id: 'q1', choice: 'A' }]);
+    // 同一持续子代理被 followup 唤醒起草，不再起第二个代理。
+    expect(calls.followups).toEqual(['build-child-9']);
+    expect(calls.rebuilt).toBe(0);
+  });
+
+  it('cancel interrupts the persisted builder child (durable session kept)', async () => {
+    const { handler, calls } = await installResumeFake();
+    await reportBuildProgress(stateRoot(), { request: '中途放弃', step: '收到需求' });
+    await setBuildParentSession(stateRoot(), 'cap-online');
+    await markBuilderChild(stateRoot(), 'build-child-11');
+    const got = await fire(handler, 'POST', '/eteams-api/rolebuilder/cancel');
+    expect(got.code).toBe(200);
+    expect(readBuildSession(stateRoot())?.status).toBe('cancelled');
+    expect(calls.interrupts).toEqual(['build-child-11']);
+    // 放弃不回收 durable 会话（恢复经 followup 或冷恢复重建续聊）。
+    expect(calls.rebuilt).toBe(0);
+    expect(calls.followups).toEqual([]);
   });
 });

@@ -379,6 +379,16 @@ export async function openTaskFolder(teamId: string, taskId: number): Promise<vo
   );
 }
 
+/** Start (dispatch) a ready task from the panel（二十四轮 DA37 面板开始）：
+ * 宿主把任务派发给执行链下一站（复用 assignTask 派发核）；空链 400
+ * 「需要选择成员」——客户端对空链卡不渲染按钮，此处为兜底。 */
+export async function startTeamTask(teamId: string, taskId: number): Promise<void> {
+  await requestJson(
+    `${API_BASE}/team/${encodeURIComponent(teamId)}/task/${taskId}/start`,
+    { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) },
+  );
+}
+
 // ---------- role-builder build session (docs/19.6, D18) ----------
 
 /** One persona draft — field names align with eteams_member_save params. */
@@ -452,7 +462,7 @@ export async function fetchBuildState(): Promise<BuildSession | null> {
   return { ...body.session, parentOnline: body.parentOnline === true };
 }
 
-/** Resume a cancelled build — host spawns a fresh one-shot phase child. */
+/** Resume a cancelled build — host followup-wakes the continuable builder child. */
 export async function resumeBuild(): Promise<void> {
   await requestJson(`${API_BASE}/rolebuilder/resume`, { method: 'POST' });
 }
@@ -481,8 +491,9 @@ export async function submitInterview(answers: { id: string; choice: string }[])
 }
 
 /**
- * Manually restart the builder agent — spawns a fresh one-shot phase child
- * that re-checks progress and re-publishes the interview if unanswered.
+ * Manually restart the builder agent — followup-wakes the SAME continuable
+ * builder child to re-check progress and re-publish the interview if
+ * unanswered (cold-recovery rebuild only if the followup fails).
  */
 export async function restartBuild(): Promise<void> {
   await requestJson(`${API_BASE}/rolebuilder/restart`, {

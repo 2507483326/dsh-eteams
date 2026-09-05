@@ -47,7 +47,7 @@ import {
   cancelBuildSession,
   type BuildDraft,
 } from '../runtime/roleBuilder.js';
-import { spawnBuildPhase, spawnContinueAfterAnswers } from '../runtime/builderPhases.js';
+import { startBuilderChild, wakeBuilderChild } from '../runtime/builderPhases.js';
 import { stationProgress } from '../model/taskMachine.js';
 import type { TaskRecord } from '../model/types.js';
 
@@ -79,24 +79,11 @@ const intArr = (description: string) => ({
 });
 
 /**
- * 意图访谈发布去重（模块级）：同一份会话更新只 steer 一次——子代理的
- * 每条播报都会过 build_report，只有「新访谈落地」这一刻需要唤醒主对话。
+ * 意图访谈弹窗失败中转（模块级，docs/19.16 持续构建子代理迭代）：中转的
+ * 触发是事件驱动的——子代理亲报 interview.popFailed（边沿：播报前标记未
+ * 置位）才 steer 父/在场会话补弹，弹窗成功路径（答案内联落盘）永不触发，
+ * 见 eteams_build_report 的执行体。
  */
-let lastInterviewSteerKey = '';
-
-/** Steer 去重指纹：问题 id + 选项数——重复播报同一份访谈不再重复打扰；
- * 换了问题集（真·新访谈）才再次弹窗。 */
-function interviewSteerFingerprint(questions: unknown): string {
-  const list = Array.isArray(questions) ? questions : [];
-  return list
-    .map((q) => {
-      const o = q as { id?: unknown; options?: unknown };
-      const id = typeof o.id === 'string' ? o.id : '?';
-      const n = Array.isArray(o.options) ? o.options.length : 0;
-      return `${id}#${n}`;
-    })
-    .join('|');
-}
 
 import { interviewSteerText } from '../prompts/steering/interview.js';
 
@@ -318,7 +305,7 @@ export function createCaptainTools(
   const buildReportTool = defineTool({
     name: 'eteams_build_report',
     description:
-      '角色构建师进度播报（D18-5）：把成员构建会话的一步写入 .eteams/rolebuilder.json，面板实时轮询渲染（步骤时间线 + 草稿渐次呈现）。status 缺省沿用当前状态；首轮报告开启会话（active）；draft 浅合并累积；终态会话上 status=active 的报告开启新一轮。',
+      '角色构建师进度播报（D18-5）：把成员构建会话的一步写入 .eteams/rolebuilder.json，面板实时轮询渲染（步骤时间线 + 草稿渐次呈现）。status 缺省沿用当前状态；首轮报告开启会话（active）；draft 浅合并累积；已结束（confirmed/cancelled）的会话只允许显式 newBuild=true 开新局，普通播报会被拒绝。',
     parameters: {
       status: {
         type: 'string' as const,
@@ -359,7 +346,7 @@ export function createCaptainTools(
       interview: {
         type: 'object' as const,
         description:
-          '意图访谈（后台构建代理与用户交互的唯一通道，docs/19.16）：把问题写入会话，工作台渲染为选项问卷，宿主把用户答案经 followup 发回。发布后立即结束回合等答案。',
+          '意图访谈（docs/19.16）：把问题写入会话（发布前先播报步骤「意图访谈」）。发布后立即用 ask_user_question 把问题逐题弹给用户（选择框落在主对话）；拿到答案 eteams_build_report(answers=[{id, choice}]) 落盘后同回合继续起草。弹窗被拒/报错：不重试——再发一次本参数并带 popFailed=true 上报后结束回合（宿主会把问题经主对话中转回来）；弹窗被用户关闭/未答也直接结束回合。',
         properties: {
           questions: {
             type: 'array' as const,
@@ -370,7 +357,7 @@ export function createCaptainTools(
                 id: str('问题唯一 id'),
                 question: str('问题文本'),
                 header: str(
-                  '问题题头（可省）：模型常沿用 ask_user_question 的 header 习惯，工作台渲染为问题上方的小标题',
+                  '问题题头（可省）：模型常沿用 ask_user_question 的 header 习惯，渲染为问题上方的小标题',
                 ),
                 options: {
                   type: 'array' as const,
@@ -389,6 +376,11 @@ export function createCaptainTools(
               additionalProperties: false,
             },
           },
+          popFailed: {
+            type: 'boolean' as const,
+            description:
+              '弹窗失败标记（docs/19.16 持续构建子代理）：ask_user_question 被拒/报错时置 true 上报——宿主把问题经主对话中转回来（补弹选择框）；弹窗正常时不要传。',
+          },
         },
         additionalProperties: false,
       },
@@ -400,7 +392,7 @@ export function createCaptainTools(
       answers: {
         type: 'array' as const,
         description:
-          '意图访谈答案（构建代理经 ask_user_question 拿到用户选择后用）：[{id, choice}]，与已发布问题一一对应；宿主写回会话并立即派起草阶段代理。',
+          '意图访谈答案（构建代理经 ask_user_question 拿到用户选择后用）：[{id, choice}]，与已发布问题一一对应；宿主写回会话，你随后同回合继续起草。',
         items: {
           type: 'object' as const,
           properties: {
@@ -437,8 +429,12 @@ export function createCaptainTools(
     execute: async (args, exec) => {
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
       const root = stateRootOf(env);
-      // 构建代理经 ask_user_question 拿到用户答案 → 写回会话并立即派起草
-      // 代理（父会话归属取自 parent-ref；父不在线时留待面板提交兜底）。
+      // 构建代理经 ask_user_question 拿到用户答案 → 只落盘（docs/19.16
+      // 持续构建子代理迭代）：调用者就是持续构建子代理本身（toolFilter 只
+      // 对它开放本工具的 answers 面），提示词纪律要求它拿到答案后同回合
+      // 继续起草——宿主不代唤醒，也就没有「childId 尚未落盘误判外部作答
+      // → 多余 followup → 双起草」的竞态面。答案中转/面板提交两条路才由
+      // 宿主 followup 唤醒（见 eteams_interview_answer / 面板 interview 路由）。
       const inlineAnswers = (Array.isArray(args.answers) ? args.answers : []).filter(
         (a): a is { id: string; choice: string } => {
           const o = a as Record<string, unknown>;
@@ -452,24 +448,6 @@ export function createCaptainTools(
       );
       if (inlineAnswers.length > 0) {
         const answered = await answerBuildInterview(root, inlineAnswers);
-        const parentSessionId = readBuildParentSession(root);
-        const parent =
-          parentSessionId !== null
-            ? (env.ctx as unknown as RuntimeContext).agents?.get(parentSessionId)
-            : undefined;
-        if (parent !== undefined) {
-          spawnContinueAfterAnswers({
-            ctx: env.ctx,
-            config,
-            parent,
-            stateRoot: root,
-            logger: env.ctx.logger,
-          });
-        } else {
-          env.ctx.logger.warn(
-            'eteams: inline interview answers saved but parent agent not live — continue phase deferred to panel submit',
-          );
-        }
         return {
           ok: true as const,
           status: answered.status,
@@ -477,6 +455,9 @@ export function createCaptainTools(
           updatedAt: answered.updatedAt,
         };
       }
+      // 播报前的访谈态（用于 popFailed 边沿判定：只有「本次播报新标记
+      // 弹窗失败」才中转，重复播报不重复打扰）。
+      const beforeReport = readBuildSession(root);
       const session = await reportBuildProgress(root, {
         ...(args.status !== undefined ? { status: args.status } : {}),
         ...(args.step !== undefined ? { step: args.step } : {}),
@@ -489,64 +470,57 @@ export function createCaptainTools(
           : {}),
         ...(args.newBuild === true ? { newBuild: true } : {}),
       });
-      // 意图访谈落地 → 45 秒后仍无答案才唤醒父会话补弹选择框（兜底）：
-      // 首选是构建代理自己的 ask_user_question（确定性弹窗），答案一旦落
-      // 会话（代理弹成功 / 用户面板作答）本兜底自动哑火，绝不双弹窗。
-      if (session.interview !== undefined && session.interview.answers === undefined) {
-        const steerKey = `${session.startedAt}:${interviewSteerFingerprint(session.interview.questions)}`;
-        if (lastInterviewSteerKey !== steerKey) {
-          lastInterviewSteerKey = steerKey;
-          const steerTimer = setTimeout(() => {
-            const latest = readBuildSession(root);
-            if (
-              latest === null ||
-              latest.interview === undefined ||
-              latest.interview.answers !== undefined
-            ) {
-              return; // 答案已落（代理内联/面板）——兜底静默退出。
-            }
-            // 活跃会话定位（用户迭代）：客户端心跳上报「用户正在看的对话」
-            // ——在线且新鲜就优先 steer 到那里；否则退回父会话。心跳只是
-            // 优化信号，缺失/过期/查不到活代理时旧路径完全不受影响。
-            const agents = (env.ctx as unknown as RuntimeContext).agents;
-            const parentSessionId = readBuildParentSession(root);
-            let target = parentSessionId !== null ? agents?.get(parentSessionId) : undefined;
-            const presence = readBuildPresence(root);
-            if (presence !== null && presence.sessionId !== parentSessionId) {
-              const candidate = agents?.get(presence.sessionId);
-              if (candidate !== undefined) target = candidate;
-            }
-            if (target === undefined || target.id === exec.agent?.id) return;
-            try {
-              target.steer(
-                createUserMessage({
-                  content: [
-                    {
-                      type: 'text',
-                      text: interviewSteerText(
-                        latest.step,
-                        latest.request,
-                        latest.interview.questions,
-                      ),
-                    },
-                  ],
-                  source: {
-                    kind: 'plugin',
-                    plugin: 'dsh-eteams',
-                    form: 'notice',
-                    summary: '意图访谈仍待作答——请用选择框补弹',
+      // 弹窗失败即中转（事件驱动兜底，docs/19.16 持续构建子代理迭代）：
+      // 子代理 ask_user_question 被拒/报错时经 interview.popFailed 上报——
+      // 宿主立即 steer（活父/在场会话）补弹选择框。替代原 45 秒盲定时器：
+      // 子代理阻塞在弹窗等答案时定时器分不清「在等答案」与「已失败」，会
+      // 双弹；事件驱动只在子代理亲报失败那一刻触发，无竞态。
+      if (
+        session.interview !== undefined &&
+        session.interview.answers === undefined &&
+        session.interview.popFailed === true &&
+        beforeReport?.interview?.popFailed !== true
+      ) {
+        // 活跃会话定位（用户迭代）：客户端心跳上报「用户正在看的对话」
+        // ——在线且新鲜就优先 steer 到那里；否则退回父会话。心跳只是
+        // 优化信号，缺失/过期/查不到活代理时父会话路径不受影响。
+        const agents = (env.ctx as unknown as RuntimeContext).agents;
+        const parentSessionId = readBuildParentSession(root);
+        let target = parentSessionId !== null ? agents?.get(parentSessionId) : undefined;
+        const presence = readBuildPresence(root);
+        if (presence !== null && presence.sessionId !== parentSessionId) {
+          const candidate = agents?.get(presence.sessionId);
+          if (candidate !== undefined) target = candidate;
+        }
+        if (target !== undefined && target.id !== exec.agent?.id) {
+          try {
+            target.steer(
+              createUserMessage({
+                content: [
+                  {
+                    type: 'text',
+                    text: interviewSteerText(
+                      session.step,
+                      session.request,
+                      session.interview.questions,
+                    ),
                   },
-                }),
-              );
-            } catch (error) {
-              env.ctx.logger.warn(
-                `eteams: interview steer to parent failed: ${
-                  error instanceof Error ? error.message : String(error)
-                }`,
-              );
-            }
-          }, 45_000);
-          steerTimer.unref?.();
+                ],
+                source: {
+                  kind: 'plugin',
+                  plugin: 'dsh-eteams',
+                  form: 'notice',
+                  summary: '意图访谈弹窗不可用——请用选择框补弹',
+                },
+              }),
+            );
+          } catch (error) {
+            env.ctx.logger.warn(
+              `eteams: interview steer to parent failed: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          }
         }
       }
       return {
@@ -561,7 +535,7 @@ export function createCaptainTools(
   const interviewAnswerTool = defineTool({
     name: 'eteams_interview_answer',
     description:
-      '提交意图访谈答案（主对话构建师专用，docs/19.16 用户迭代）：用户经 ask_user_question 选择框作答后，把答案写入构建会话并派起草阶段代理。answers 与会话里的问题一一对应（id=问题 id，choice=所选项 label，多选以「、」连接）。',
+      '提交意图访谈答案（主对话构建师专用，docs/19.16 用户迭代）：用户经 ask_user_question 选择框作答后，把答案写入构建会话并 followup 唤醒持续构建子代理起草。answers 与会话里的问题一一对应（id=问题 id，choice=所选项 label，多选以「、」连接）。',
     parameters: {
       answers: {
         type: 'array' as const,
@@ -605,13 +579,24 @@ export function createCaptainTools(
         .map((a) => ({ id: a.id, choice: a.choice }));
       if (answers.length === 0) throw new ETeamsError('answers 不能为空');
       const session = await answerBuildInterview(stateRootOf(env), answers);
-      // 派起草代理（调用者就是主会话代理——天然的父会话归属）。
-      spawnContinueAfterAnswers({
+      // 唤醒同一持续构建子代理续聊（调用者就是主会话代理——天然的父会话
+      // 归属；followup 失败会冷恢复重建，见 builderPhases.wakeBuilderChild；
+      // 同轮答案双入口竞态由会话落盘的 builderWakeKey 去重）。fire-and-
+      // forget：返回值不阻塞工具应答，失败走 logger；唤醒与重建都失败则
+      // 回滚成 cancelled，给用户留「继续构建」的可读出路。
+      void wakeBuilderChild({
         ctx: env.ctx,
         config,
         parent: exec.agent,
         stateRoot: stateRootOf(env),
+        kind: 'continue',
         logger: env.ctx.logger,
+        onSpawnFailure: () => {
+          void cancelBuildSession(
+            stateRootOf(env),
+            '构建唤醒失败——可稍后点「继续构建」重试',
+          ).catch(() => undefined);
+        },
       });
       return { ok: true as const, status: session.status, step: session.step };
     },
@@ -620,7 +605,7 @@ export function createCaptainTools(
   const buildDispatchTool = defineTool({
     name: 'eteams_build_dispatch',
     description:
-      '派发成员构建（角色构建师调度专用，docs/19.16）：自带门禁——已有构建进行中（active/awaiting）返回 busy；否则派发一次性阶段代理（受理：开会话 → 查重 → 发布意图访谈后自然结束，不留下可续聊的持久子代理）。按返回 detail 回应用户即可。',
+      '派发成员构建（角色构建师调度专用，docs/19.16）：自带门禁——已有构建进行中（active/awaiting）返回 busy；否则受理并派发持续构建子代理（受理：开会话 → 查重 → 发布意图访谈；同一子代理随后经访谈弹窗/宿主续聊完成起草，一次构建只有一个子代理）。按返回 detail 回应用户即可。',
     parameters: {
       request: strR('用户激活消息原文（eTeam --add-people …）'),
     },
@@ -668,12 +653,11 @@ export function createCaptainTools(
         request: args.request,
         note: '构建请求已受理——角色构建师启动中',
       });
-      spawnBuildPhase({
+      startBuilderChild({
         ctx: env.ctx,
         config,
         parent: exec.agent,
         stateRoot: root,
-        kind: 'start',
         logger: env.ctx.logger,
         onSpawnFailure: () => {
           void cancelBuildSession(root, '构建派发失败——可重新派发').catch(() => undefined);

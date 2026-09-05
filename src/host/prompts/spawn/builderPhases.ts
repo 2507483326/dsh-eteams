@@ -1,12 +1,14 @@
 /**
- * 角色构建阶段提示词（docs/19.16）。角色构建师各阶段（start/continue/
- * restart/resume）发给一次性阶段子代理的任务提示词——纯文本函数：会话
- * 快照由 runtime 读盘后传入，这里不触盘、不依赖 runtime 类型（依赖方向
- * prompts ← runtime，见 prompts/README.md）。
+ * 角色构建阶段提示词（docs/19.16 持续构建子代理迭代）。持续构建子代理
+ * （每构建一个，startContinuable 建立后由宿主 followup 续聊）的各回合任务
+ * 提示词——纯文本函数：会话快照由 runtime 读盘后传入，这里不触盘、不依赖
+ * runtime 类型（依赖方向 prompts ← runtime，见 prompts/README.md）。
  *
- * Phase A `start`    — activation: open session → dedup → publish interview.
- * Phase B `continue` — after panel answers: draft → deepen → awaiting.
- * Phase C `resume`   — after 放弃→继续: finish from the stored context.
+ * start    — 初始回合（startContinuable 的 prompt）：受理 → 查重 → 发布访谈
+ *            → 直接弹窗 → 同回合起草到 awaiting_confirmation。
+ * continue — followup（面板/父代理中转的访谈答案）：按答案起草到 awaiting。
+ * resume   — followup（放弃后继续）：从快照继续（未答则重新出题弹窗）。
+ * restart  — followup（重启指令）：核查进度 → 未答重新出题 / 已答续完。
  *
  * @module dsh-eteams/prompts/spawn/builderPhases
  */
@@ -47,10 +49,11 @@ export function builderPhasePrompt(
     return [
       ROLE_BUILDER_CHILD_PERSONA,
       '',
-      '【本阶段任务】（完成即结束回合，不等待任何后续消息）',
+      '【本回合任务】',
       '会话已由宿主开启（status=active，request=激活原文）。直接开始：eteams_member_list 查重（重名要向用户点明是更新）→ eteams_build_report(status=active, step=查重成员库, note=查重结果) → 意图访谈：eteams_build_report(status=active, step=意图访谈, interview={questions:[…]}) 一次问全 ≤5 问，每问 2-4 个 options，推荐项放首位加「（推荐）」。',
-      '访谈发布后立即用 ask_user_question 把问题原样弹给用户（每问映射 { id, question, header, options:[{label, description?}], multi_select: q.multi===true }，选项文案逐字保留；多选题等它返回）。拿到答案后：eteams_build_report(step=意图访谈, answers=[{id, choice}]，choice=所选项 label，多选以「、」连接）提交后立即结束回合。若 ask_user_question 不可用或报错：不要再尝试，直接结束回合（面板问卷与宿主兜底提醒会接管），不要在聊天文本里复述问题。',
-      '本阶段不起草。禁止传 newBuild（会话已开启，覆写会重置会话身份、让卡片重复跳转）；若播报报「会话已结束/已取消」类错误，立即结束回合。',
+      '访谈发布后立即用 ask_user_question 把问题逐题弹给用户（每问映射 { id, question, header, options:[{label, description?}], multi_select: q.multi===true }，选项文案逐字保留；多选题等它返回）。拿到答案后：eteams_build_report(answers=[{id, choice}]，choice=所选项 label，多选以「、」连接) → 同回合继续起草，不要提前收束：eteams_build_report(status=active, step=起草统一手册) → step=深化领域章节 → 完整草稿 + status=awaiting_confirmation + step=完成草稿 → 结束回合。',
+      '弹窗被拒/报错：不重试——eteams_build_report(interview={questions, popFailed=true}, note=弹窗不可用) 上报后立即结束回合（宿主会把问题经主对话中转回来）；弹窗被用户关闭/未答也直接结束回合，等宿主以 followup 送来答案或用户点「重启代理」。',
+      '本回合不重复发布访谈、不传 newBuild（会话已由宿主开启，覆写会重置会话身份、让卡片重复跳转）；若播报报「会话已结束/已取消」类错误，立即结束回合。',
       '',
       '【激活原文】',
       session?.request ?? '',
@@ -67,8 +70,8 @@ export function builderPhasePrompt(
     return [
       ROLE_BUILDER_CHILD_PERSONA,
       '',
-      '【本阶段任务】（完成即结束回合，不等待任何后续消息）',
-      '用户已在面板完成意图访谈。按答案继续：eteams_build_report(status=active, step=起草统一手册) 起草 → step=深化领域章节 深化 → 完整草稿 + status=awaiting_confirmation + step=完成草稿 → 结束回合。草稿必须包含全部字段（name/role/duty/style/skills/rules/executionPrompt/personaMd），一次报告给全，不做浅合并增量。',
+      '【本回合任务】',
+      '宿主把用户作答后的访谈答案（主对话工具中转或面板提交）转交给你。按答案继续：eteams_build_report(status=active, step=起草统一手册) 起草 → step=深化领域章节 深化 → 完整草稿 + status=awaiting_confirmation + step=完成草稿 → 结束回合。草稿必须包含全部字段（name/role/duty/style/skills/rules/executionPrompt/personaMd），一次报告给全，不做浅合并增量。',
       ROLE_BUILDER_SPEC_TAIL,
       '',
       ...snapshot,
@@ -81,8 +84,8 @@ export function builderPhasePrompt(
     return [
       ROLE_BUILDER_CHILD_PERSONA,
       '',
-      '【本阶段任务】（完成即结束回合，不等待任何后续消息）',
-      '构建代理被用户手动重启（阶段代理是一次性的：前任已收工，你就是新任）。先 eteams_build_report(status=active, step=重启核查) 同步进度（沿用原步骤与草稿）。然后判断：若意图访谈尚无答案——重新发布访谈（eteams_build_report(status=active, step=意图访谈, interview={questions:[…]})，问题可按已有草稿调整，一次问全 ≤5 问，每问 2-4 个 options），随后立即用 ask_user_question 原样弹给用户（映射与选项保留规则同上），拿到答案后 eteams_build_report(answers=[{id, choice}]) 提交并结束回合；若 ask_user_question 不可用或报错：直接结束回合（面板与宿主兜底会接管）。否则直接续完：起草统一手册 → 深化领域章节 → 完整草稿 + status=awaiting_confirmation + step=完成草稿 → 结束回合。',
+      '【本回合任务】',
+      '构建代理被用户手动重启（你是同一持续代理，宿主唤醒你重新核查）。先 eteams_build_report(status=active, step=重启核查) 同步进度（沿用原步骤与草稿）。然后判断：若意图访谈尚无答案——重新发布访谈（eteams_build_report(status=active, step=意图访谈, interview={questions:[…]})，问题可按已有草稿调整，一次问全 ≤5 问，每问 2-4 个 options），随后立即用 ask_user_question 原样弹给用户（映射与选项保留规则同上），拿到答案后 eteams_build_report(answers=[{id, choice}]) 内联落盘并继续起草到 awaiting_confirmation；若弹窗被拒/报错：eteams_build_report(interview={questions, popFailed=true}, note=弹窗不可用) 上报后结束回合（宿主中转兜底）；弹窗被关闭/未答也结束回合。否则直接续完：起草统一手册 → 深化领域章节 → 完整草稿 + status=awaiting_confirmation + step=完成草稿 → 结束回合。',
       ROLE_BUILDER_SPEC_TAIL,
       '',
       ...snapshot,
@@ -92,8 +95,8 @@ export function builderPhasePrompt(
   return [
     ROLE_BUILDER_CHILD_PERSONA,
     '',
-    '【本阶段任务】（完成即结束回合，不等待任何后续消息）',
-    '构建曾被用户放弃，现已恢复。先 eteams_build_report(status=active) 同步恢复进度（沿用原步骤与草稿）。然后判断：若意图访谈尚无答案——重新发布访谈（eteams_build_report(step=意图访谈, interview={questions})，问题按已有草稿调整），随后立即用 ask_user_question 原样弹给用户，拿到答案后 eteams_build_report(answers=[{id, choice}]) 提交并结束回合；若 ask_user_question 不可用：直接结束回合。否则直接续完：起草统一手册 → 深化领域章节 → 完整草稿 + status=awaiting_confirmation + step=完成草稿 → 结束回合。',
+    '【本回合任务】',
+    '构建曾被用户放弃，宿主已恢复本次构建并唤醒你（你是同一持续代理，或经冷恢复重建的新持有者）。先 eteams_build_report(status=active) 同步恢复进度（沿用原步骤与草稿）。然后判断：若意图访谈尚无答案——重新发布访谈（eteams_build_report(step=意图访谈, interview={questions})，问题按已有草稿调整），随后立即用 ask_user_question 原样弹给用户，拿到答案后 eteams_build_report(answers=[{id, choice}]) 内联落盘并继续起草到 awaiting_confirmation；若弹窗被拒/报错：eteams_build_report(interview={questions, popFailed=true}) 上报后结束回合（宿主中转兜底）；弹窗被关闭/未答也结束回合。否则直接续完：起草统一手册 → 深化领域章节 → 完整草稿 + status=awaiting_confirmation + step=完成草稿 → 结束回合。',
     ROLE_BUILDER_SPEC_TAIL,
     '',
     ...snapshot,

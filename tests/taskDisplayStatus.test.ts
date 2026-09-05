@@ -16,16 +16,16 @@ import {
 } from '../src/client/features/tasks/taskDisplayStatus';
 
 describe('displayStatusOf（10 态→展示态全表）', () => {
-  it('六档映射逐格对表（key/label/tone）', () => {
+  it('六档映射逐格对表（key/label/tone；二十四轮 DA37 draft/ready 文案合并待开始）', () => {
     expect(displayStatusOf('draft')).toEqual({
       key: 'init',
-      label: '草稿',
-      tone: 'muted',
+      label: '待开始',
+      tone: 'info',
       detail: '',
     });
     expect(displayStatusOf('ready')).toEqual({
       key: 'created',
-      label: '待指派',
+      label: '待开始',
       tone: 'info',
       detail: '',
     });
@@ -130,7 +130,8 @@ describe('STATUS_LABELS（10 态精确词表）', () => {
         'wait_user',
       ].sort(),
     );
-    expect(STATUS_LABELS.ready).toBe('待指派');
+    expect(STATUS_LABELS.draft).toBe('待开始');
+    expect(STATUS_LABELS.ready).toBe('待开始');
     expect(STATUS_LABELS.wait).toBe('待接取');
     expect(STATUS_LABELS.cancelled).toBe('已取消');
   });
@@ -205,9 +206,9 @@ describe('groupDisplayOf（组卡汇总优先级）', () => {
     expect(groupDisplayOf([{ status: 'completed' }, { status: 'completed' }])).toBeNull();
   });
 
-  it('其余（created/init 混合）→ 待指派（中性）', () => {
+  it('其余（created/init 混合）→ 待开始（中性；二十四轮 DA37 文案合并）', () => {
     const summary = groupDisplayOf([{ status: 'ready' }, { status: 'draft' }]);
-    expect(summary).toEqual({ label: '待指派', tone: 'muted', icon: '', detail: '' });
+    expect(summary).toEqual({ label: '待开始', tone: 'muted', icon: '', detail: '' });
   });
 });
 

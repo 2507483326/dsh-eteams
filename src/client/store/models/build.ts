@@ -103,7 +103,7 @@ function* cancelBuildWorker(_action: DvaAction<void>, { call, put }: EffectComma
   }
 }
 
-/** resume worker：恢复已放弃的构建（宿主派新的一次性阶段代理接着跑）。 */
+/** resume worker：恢复已放弃的构建（宿主 followup 唤醒同一持续构建子代理接着跑）。 */
 function* resumeBuildWorker(_action: DvaAction<void>, { call, put }: EffectCommands): Generator {
   yield put({ type: 'setLoading', payload: true });
   try {

@@ -31,7 +31,14 @@
  * 页不传保持原观感）；二十一轮 DA34 修订：「任务列表」标题行改 flex——新增
  * 小任务钮靠右同排（用户拍板「任务列表右侧是新增任务」），小任务卡撤七轮
  * 挂靠缩进 ml-4（用户拍板「下面的任务列表左边不留空隙」，改删错误行随卡
- * 对齐）。
+ * 对齐）；二十三轮 DA36 修订：成员罗列条移出头部卡置**卡下方**左竖线提示
+ * 块（用户拍板「不放到卡片里面，放到卡片下面，左边用小竖线标识为提示」，
+ * 提示文案同步更新）；二十四轮 DA37 修订：罗列条**回卡内**（用户拍板
+ * 「团队成员还是在卡片内」），指派提示拆出 StripAssignHint 独立置卡下方
+ * 左竖线块；小任务卡与详情页加**开始按钮**（用户拍板「卡片加上开始按钮」
+ * ——ready 且有链渲染、ready 无链渲染「需要选择成员」提示，host 新增
+ * /task/<id>/start 派发）；展示态文案合并：草稿/待指派均显「待开始」
+ * （用户拍板「没有什么草稿状态、待指派状态，只有待开始状态」）。
  * 不列小任务明细——九轮
  * DA22）+ 空态行；详情页 = 返回条 + 头部卡 + 编排（主任务：新增小任务 +
  * 小任务卡片全套（卡槽/改删/**把手拖拽调序**——十轮 DA23：只有卡片左上
@@ -52,6 +59,7 @@ import {
   createTeamTask,
   deleteTeamTask,
   openTaskFolder,
+  startTeamTask,
   updateTeamTask,
   type TaskSlotInput,
 } from '../../lib/api';
@@ -59,6 +67,7 @@ import { cn } from '../../lib/cn';
 import { refreshActivitySoon, type TaskView, type TeamSnapshot } from '../../lib/monitor';
 import {
   SUBTASK_DRAG_TYPE,
+  StripAssignHint,
   TaskAssignDropBox,
   TaskDndProvider,
   TeamMemberStrip,
@@ -328,6 +337,11 @@ export function TasksTab({
   // 展示（宿主 404/400/500 原样透出——文件夹缺失等）。
   const [folderBusy, setFolderBusy] = useState<number | null>(null);
   const [folderError, setFolderError] = useState<{ taskId: number; message: string } | null>(null);
+  // 二十四轮 DA37 面板开始任务瞬态（对齐 assignError 模式）：busy 按小任务
+  // taskId 定位，error 单槽记录受影响小任务（行内展示——host 400 原文透出，
+  // 含「需要选择成员」兜底）。
+  const [startBusy, setStartBusy] = useState<number | null>(null);
+  const [startError, setStartError] = useState<{ taskId: number; message: string } | null>(null);
   // 十八轮 DA31 小任务展开瞬态：展开态的小任务 id 列表（多开互不影响）。
   // 开合交互由 shadcn Accordion（Radix，type="multiple" 受控多开）承载，
   // 展开内容 = 任务说明 + 合同 MD（MarkdownDoc 只读渲染，docs/41），
@@ -424,6 +438,23 @@ export function TasksTab({
     }
   };
 
+  // 二十四轮 DA37 面板开始任务（用户拍板「卡片加上开始按钮」）：派发给执行
+  // 链下一站（host /task/<id>/start 复用 assignTask 派发核——起子会话 +
+  // 投递指派信，ready→wait 待接取）；空链卡不渲染按钮（行内「需要选择
+  // 成员」提示），失败行内就地显示。非乐观更新，成功 refreshActivitySoon。
+  const submitStart = async (taskId: number): Promise<void> => {
+    setStartBusy(taskId);
+    setStartError((cur) => (cur !== null && cur.taskId === taskId ? null : cur));
+    try {
+      await startTeamTask(team.teamId, taskId);
+      refreshActivitySoon();
+    } catch (e) {
+      setStartError({ taskId, message: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setStartBusy(null);
+    }
+  };
+
   // 十二轮 DA25：打开任务文件夹（列表卡文件夹路径点击）。非乐观：成功无
   // 回执 UI（文件管理器窗口即回执），失败按卡行内 FormErrorNote。
   const openFolder = async (taskId: number): Promise<void> => {
@@ -454,8 +485,9 @@ export function TasksTab({
     </button>
   );
   // 详情页头部卡（主任务/任务共用：#id 主题 + 展示态 pill + blocked + assignee）。
-  // 二十轮 DA33：主任务详情页增 extra 槽——进度三计数/汇总 chip/成员罗列条
-  // 收进卡内（用户拍板「把团队成员放到上面去和任务标题放一起」）；任务详情页
+  // 二十轮 DA33：主任务详情页增 extra 槽——进度三计数/汇总 chip 收进卡内
+  // （用户拍板「把团队成员放到上面去和任务标题放一起」）；成员罗列条曾随
+  // extra 入卡，二十三轮 DA36 移出卡置卡下方（左竖线提示块）；任务详情页
   // 不传保持原观感。
   const detailHeader = (task: TaskView, extra?: ReactNode): ReactNode => (
     <div
@@ -474,7 +506,8 @@ export function TasksTab({
     </div>
   );
   // 详情页成员罗列条（八轮 DA21：编排收进详情，罗列条随编排走——仅
-  // 存在可放置任务（draft/ready）时渲染，作为卡槽的拖拽源）。
+  // 存在可放置任务（draft/ready）时渲染，作为卡槽的拖拽源）。二十四轮
+  // DA37：指派提示拆出 StripAssignHint（与罗列条同判据另行渲染）。
   const detailStrip = (show: boolean): ReactNode => (show ? <TeamMemberStrip team={team} /> : null);
 
   // 共用弹窗（列表/详情两页都挂）：编辑/新增 + 删除确认。瞬态 useState
@@ -597,6 +630,9 @@ export function TasksTab({
     const mutable = selected.status === 'draft' || selected.status === 'ready';
     // docs/29 B.2 组卡汇总：ready 且有小任务时叠加汇总 chip。
     const summary = selected.status === 'ready' && subs.length > 0 ? groupDisplayOf(subs) : null;
+    // 罗列条/指派提示块渲染判据（八轮 DA21 口径）：存在可放置任务
+    // （draft/ready）才渲染，仍是卡槽拖拽源。
+    const stripShow = subs.some((t) => t.status === 'draft' || t.status === 'ready');
     return (
       <TaskDndProvider>
         <div>
@@ -605,8 +641,10 @@ export function TasksTab({
             任务标题放一起」）——①进度行改**任务卡片同款三计数**（共 x 个
             任务，已完成 x，未完成 x，数字着色 success/warning；原「· 小任务
             n/m 完成」行与 draft 特例撤除）；②汇总 chip 随行入卡（ready 时，
-            B.2 判据不变）；③成员罗列条上移入卡（TeamMemberStrip 自带
-            border-t 分区，仍是小任务卡槽的拖拽源，渲染判据不变）。 */}
+            B.2 判据不变）；③成员罗列条上移入卡——二十三轮 DA36 曾移出卡，
+            二十四轮 DA37 订正（用户拍板「团队成员还是在卡片内，只是拖拽
+            成员到下方的成员卡槽完成指派不在」）：罗列条回卡内原位（只留
+            chips 行），指派提示拆出 StripAssignHint 仍置卡下方（见下）。 */}
           {detailHeader(
             selected,
             <>
@@ -615,9 +653,12 @@ export function TasksTab({
                 ，未完成 <span className="text-warning">{subs.length - done}</span>
               </div>
               {summary !== null && <GroupSummaryChip summary={summary} />}
-              {detailStrip(subs.some((t) => t.status === 'draft' || t.status === 'ready'))}
+              {detailStrip(stripShow)}
             </>,
           )}
+          {/* 二十四轮 DA37：指派提示块置头部卡下方（左小竖线；渲染判据与
+            罗列条同源——存在 draft/ready 小任务才渲染）。 */}
+          {stripShow && <StripAssignHint />}
           {/* 二十轮 DA33：卡片下面加「任务列表」节标题（用户拍板「卡片下面
             加标题 任务列表」）——小任务编排区从此有标题。二十一轮 DA34
             修订（用户拍板「任务列表右侧是新增任务」）：标题行改 flex——
@@ -677,6 +718,25 @@ export function TasksTab({
                         className="flex shrink-0 items-center gap-1.5"
                         onClick={(e) => e.stopPropagation()}
                       >
+                        {/* 二十四轮 DA37：开始按钮（用户拍板「卡片加上开始
+                          按钮」）——ready 且有链才渲染（点击派发执行链下一
+                          站）；ready 无链改渲染「需要选择成员」行内提示
+                          （用户拍板「如果有任务没有成员，则提示需要选择
+                          成员就行」，不设按钮）。draft（拆解中）与已入执行
+                          不渲染。 */}
+                        {t.status === 'ready' && t.chain.length > 0 && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            disabled={startBusy === t.taskId}
+                            onClick={() => void submitStart(t.taskId)}
+                          >
+                            开始
+                          </Button>
+                        )}
+                        {t.status === 'ready' && t.chain.length === 0 && (
+                          <span className={cn(MUTED_CLASS, 'shrink-0')}>需要选择成员</span>
+                        )}
                         {subMutable && (
                           <div className="flex shrink-0 gap-1.5">
                             <Button
@@ -754,6 +814,9 @@ export function TasksTab({
                   {reorderError !== null && reorderError.taskId === t.taskId && (
                     <FormErrorNote>{reorderError.message}</FormErrorNote>
                   )}
+                  {startError !== null && startError.taskId === t.taskId && (
+                    <FormErrorNote>{startError.message}</FormErrorNote>
+                  )}
                 </AccordionItem>
               );
             })}
@@ -784,7 +847,22 @@ export function TasksTab({
             </div>
           )}
           {parent !== null && subMutable && (
-            <div className="mt-1.5 flex gap-1.5">
+            /* 二十四轮 DA37：行首加开始按钮（与组详情页小任务卡同判据——
+            ready 且有链渲染、ready 无链渲染「需要选择成员」提示）。 */
+            <div className="mt-1.5 flex items-center gap-1.5">
+              {selected.status === 'ready' && selected.chain.length > 0 && (
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={startBusy === selected.taskId}
+                  onClick={() => void submitStart(selected.taskId)}
+                >
+                  开始
+                </Button>
+              )}
+              {selected.status === 'ready' && selected.chain.length === 0 && (
+                <span className={MUTED_CLASS}>需要选择成员</span>
+              )}
               <Button
                 type="button"
                 variant="outline"
@@ -833,7 +911,11 @@ export function TasksTab({
           {assignError !== null && assignError.taskId === selected.taskId && (
             <FormErrorNote className="ml-4">{assignError.message}</FormErrorNote>
           )}
+          {startError !== null && startError.taskId === selected.taskId && (
+            <FormErrorNote>{startError.message}</FormErrorNote>
+          )}
           {detailStrip(parent !== null && subMutable)}
+          {parent !== null && subMutable && <StripAssignHint />}
           {dialogs}
         </div>
       </TaskDndProvider>

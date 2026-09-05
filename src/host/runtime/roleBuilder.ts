@@ -57,12 +57,28 @@ export interface BuildSession {
    */
   commandId?: string;
   /**
-   * 派发锁：本会话已派发的阶段代理（start/restart）与派发时刻。60 秒内
-   * 同阶段二次派发一律拒绝——受理路径（/eteam 处理器 / build_dispatch
-   * 工具）竞态或重放时，不允许再起一个并行子代理。newBuild 新会话即新锁。
+   * 派发锁：本会话已派发的受理代理（start）与派发时刻（docs/19.16 持续
+   * 构建子代理——重启/续聊走 followup 唤醒，不再占本锁；'restart' 值保留
+   * 兼容旧会话数据，现无写入方）。60 秒内二次受理一律拒绝——受理路径
+   * （/eteam 处理器 / build_dispatch 工具）竞态或重放时，不允许再起一个
+   * 并行子代理。newBuild 新会话即新锁。
    */
   phaseSpawn?: 'start' | 'restart';
   phaseSpawnAt?: number;
+  /**
+   * 当前持有本构建的持续子代理 durable 会话 id（docs/19.16 持续构建子代理
+   * 迭代）：受理时 `startContinuable` 建立后写入；后续环节（访谈答案中转/
+   * 恢复/重启）宿主经 `followup` 送进同一子代理。宿主重启或会话记录被回收
+   * 后 followup 失败 → 以快照提示词重建新子代理并**覆盖**旧值（重建 =
+   * 新持有者接手同一构建；其余路径只读不写）。
+   */
+  builderChildId?: string;
+  /**
+   * 最近一次 followup 唤醒的去重键（如 `${startedAt}:${answeredAt}`）：面板
+   * 路由与主对话工具两个入口竞态时第二个直接跳过。落盘（非模块变量）才
+   * 跨构建互不踩、宿主重启后仍有效。
+   */
+  builderWakeKey?: string;
 }
 
 interface BuildFile {
@@ -89,16 +105,16 @@ export function roleBuilderFile(stateRoot: string): string {
 
 /**
  * Side-car file remembering which main-session agent spawned the current
- * build phase (docs/19.16): host routes (interview answers / resume) need a
- * live parent Agent to attribute the NEXT one-shot phase child to. Written on
- * every spawn; never carries a child id — phase children are one-shot and
- * need no interrupt/followup handle at all.
+ * build (docs/19.16): host routes (interview answers / resume) need a live
+ * parent Agent to attribute followup wakes to. Written on every spawn.
+ * The BUILDER CHILD id lives in the session file (`builderChildId`) —
+ * continuable children are interrupt/followup/drain handles.
  */
 function parentRefFile(stateRoot: string): string {
   return join(stateRoot, 'rolebuilder-parent.json');
 }
 
-/** Remember the spawning main-session id (one-shot phase attribution). */
+/** Remember the spawning main-session id (followup-wake attribution). */
 export async function setBuildParentSession(
   stateRoot: string,
   parentSessionId: string,
@@ -192,10 +208,12 @@ export interface BuildReport {
   note?: string;
   /**
    * Publish an intent interview (docs/19.16): the builder child posts its
-   * questions; the workbench renders them; answers arrive via
-   * `answerBuildInterview` and are relayed back to the child by the host.
+   * questions; the host relays answers back to the child by followup. The
+   * child also reports `popFailed` when its own ask_user_question is
+   * rejected — the host then steers the parent to pop the questionnaire
+   * (event-driven fallback instead of a blind 45s timer).
    */
-  interview?: { questions: InterviewQuestion[] };
+  interview?: { questions: InterviewQuestion[]; popFailed?: boolean };
   /**
    * Marks a deliberate brand-new build (the /eteam handler opening over a
    * terminal session). Ordinary builder reports never set this — so a
@@ -211,8 +229,8 @@ export interface BuildReport {
 }
 
 /**
- * Merge one report into the session slot. A report on a terminal session
- * with an explicit `status: 'active'` opens a NEW session (覆盖); anything
+ * Merge one report into the session slot. A terminal session accepts only
+ * an explicit `newBuild: true` (which opens a NEW session, 覆盖); anything
  * else on a terminal session is rejected. `draft` merges shallowly so
  * partial field reports accumulate (docs/19.6.2).
  */
@@ -234,6 +252,7 @@ export async function reportBuildProgress(
       request: report.request ?? '',
       draft: ensureDraftAvatar(report.draft ?? null),
       note: report.note ?? '',
+      ...(report.interview !== undefined ? { interview: interviewOf(report) } : {}),
       ...(report.commandId !== undefined ? { commandId: report.commandId } : {}),
       updatedAt: now,
     };
@@ -267,6 +286,7 @@ export async function reportBuildProgress(
       request: report.request ?? '',
       draft: ensureDraftAvatar(report.draft ?? null),
       note: report.note ?? '',
+      ...(report.interview !== undefined ? { interview: interviewOf(report) } : {}),
       updatedAt: now,
     };
     await writeSession(stateRoot, fresh);
@@ -287,19 +307,31 @@ export async function reportBuildProgress(
     ),
     note: report.note ?? current.note,
     interview:
-      report.interview !== undefined
-        ? { questions: report.interview.questions }
-        : current.interview,
+      report.interview !== undefined ? interviewOf(report) : current.interview,
     updatedAt: now,
   };
   await writeSession(stateRoot, next);
   return next;
 }
 
+/** Project a report's interview payload onto the session shape (questions +
+ * popFailed only — answers live exclusively in the answer paths). */
+function interviewOf(report: BuildReport): {
+  questions: InterviewQuestion[];
+  popFailed?: boolean;
+} {
+  return {
+    questions: report.interview!.questions,
+    ...(report.interview!.popFailed === true ? { popFailed: true } : {}),
+  };
+}
+
 /**
- * Mark that a phase agent (start/restart) was spawned for this session —
- * the durable dispatch lock. Merge-write keeps every other field intact;
- * a fresh newBuild session resets the lock (new build = new lock).
+ * Mark that the builder child was dispatched (start acceptance) for this
+ * session — the durable 60s dispatch lock. Merge-write keeps every other
+ * field intact; a fresh newBuild session resets the lock (new build = new
+ * lock). ('restart' remains a legal persisted value for old sessions but
+ * has no writer anymore — restarts are followup wakes, docs/19.16.)
  */
 export async function markPhaseSpawn(
   stateRoot: string,
@@ -316,8 +348,44 @@ export async function markPhaseSpawn(
 }
 
 /**
- * Whether a same-phase spawn is already locked for this session（60 秒窗）。
- * True = 已有同阶段代理在跑或刚派出，调用方必须放弃本次派发。
+ * Record the continuable builder child's durable session id（docs/19.16
+ * 持续构建子代理迭代）：受理（startContinuable）与冷恢复重建各写一次——
+ * 重建覆盖旧值 = 新持有者接手。其余合并（reportBuildProgress 等）原样
+ * 保留该字段。
+ */
+export async function markBuilderChild(
+  stateRoot: string,
+  childId: string,
+): Promise<void> {
+  const current = readBuildSession(stateRoot);
+  if (current === null) return;
+  await writeSession(stateRoot, {
+    ...current,
+    builderChildId: childId,
+    updatedAt: current.updatedAt,
+  });
+}
+
+/**
+ * Record the latest followup-wake dedup key（面板路由与主对话工具双入口
+ * 竞态去重）：落盘进会话——跨构建互不踩、宿主重启后仍有效。
+ */
+export async function markBuilderWake(
+  stateRoot: string,
+  wakeKey: string,
+): Promise<void> {
+  const current = readBuildSession(stateRoot);
+  if (current === null) return;
+  await writeSession(stateRoot, {
+    ...current,
+    builderWakeKey: wakeKey,
+    updatedAt: current.updatedAt,
+  });
+}
+
+/**
+ * Whether an acceptance spawn is already locked for this session（60 秒窗）。
+ * True = 已有受理派发在跑或刚派出，调用方必须放弃本次派发。
  */
 export function phaseSpawnLocked(
   stateRoot: string,
@@ -378,13 +446,21 @@ export interface InterviewQuestion {
 
 /**
  * Intent-interview state carried on the session (docs/19.16): the builder
- * child publishes questions here; the workbench renders them as a clickable
- * questionnaire; the host relays answers back to the child via followup.
+ * child publishes questions here; the host relays answers back to the
+ * continuable builder child via followup.
  */
 export interface InterviewState {
   questions: InterviewQuestion[];
   answers?: { id: string; choice: string }[];
   answeredAt?: number;
+  /**
+   * 子代理弹窗失败标记（docs/19.16 持续构建子代理迭代）：构建代理弹
+   * ask_user_question 被拒/报错时经 `eteams_build_report(interview.popFailed)`
+   * 上报，宿主立即 steer 父代理补弹（事件驱动兜底，替代 45 秒盲定时器——
+   * 子代理阻塞在弹窗等答案时定时器分不清「在等答案」与「已失败」）。
+   * 下一次访谈发布（新 questions 报告）即重置。
+   */
+  popFailed?: boolean;
 }
 
 /** One-time avatar assignment: stable face from first preview through confirm. */

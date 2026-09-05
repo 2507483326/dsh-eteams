@@ -139,7 +139,7 @@ async function resolveIdentity(sessionId: string, root: string): Promise<Session
         if (bound !== undefined) {
           identity = { teamId: bound, memberName: null, roleKind: 'conversation' };
         } else {
-          // 5. 其余（未绑定对话/eteams-rolebuilder 一次性构建子代理/普通会话）
+          // 5. 其余（未绑定对话/eteams-rolebuilder 持续构建子代理/普通会话）
           identity = { teamId: null, memberName: null, roleKind: 'workspace' };
         }
       }

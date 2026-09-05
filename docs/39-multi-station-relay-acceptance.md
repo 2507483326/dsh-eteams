@@ -499,3 +499,85 @@ exhaustive-deps warning：memberDialog.tsx:38 / taskDrawer.tsx:117）/ test
 （`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿。
 GUI 装机冒烟持续**未验证**（标题行同排观感、卡左缘齐平需装机后在 DSH
 面板人工过一遍）。
+
+## 二十二轮追加（2026-09-05，DA35 多选面板标题简化 + 链中成员不进列表）
+
+用户原话：
+
+> 选择成员，追加为接力站点   去掉 追加为接力站点，而且已经选中的成员不出现在列表中
+
+背景：小任务卡槽行尾「＋」点开的成员多选面板（StationPicker，六轮 DA19
+引入），本轮两处修订：
+
+| 项 | 拍板 |
+| --- | --- |
+| 标题 | 面板头行「选择成员，追加为接力站点」简化为「选择成员」（用户拍板去掉「追加为接力站点」） |
+| 链中成员 | 已在接力链中的成员**不再出现在列表**（`members.filter` 滤除，不渲染）——原「禁用 + opacity-50 + 『已在链中』标」废弃；全部在链中时显「暂无可选成员」；`chainAfterAppendMany` 纯函数去重守卫不变（兜底） |
+
+改动面：`src/client/features/tasks/taskAssign.tsx`（StationPicker 头行文案 +
+列表过滤 + 死分支删除 + 文件头注释）。确认钮/勾选序追加语义不变。
+零 host/store/纯函数变更。
+
+**二十二轮四绿门（2026-09-05）**：typecheck / lint（0 error，2 条既有
+exhaustive-deps warning：memberDialog.tsx:38 / taskDrawer.tsx:117）/ test
+（23 文件 **317 用例**全过，用例数持平）/ build
+（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿。
+GUI 装机冒烟持续**未验证**（面板新标题、链中成员隐藏需装机后在 DSH
+面板人工过一遍）。
+
+## 二十三轮追加（2026-09-05，DA36 确认钮文案 + 拖拽高亮修复 + 头像描边 + 罗列条卡下方左竖线）
+
+用户原话：
+
+> 1. 添加站点改成添加成员 2.列表顶左边导致拖拽时高亮显示被遮挡了 3. 任务中的成员头像加上border 4.拖到本卡小任务下方的成员卡槽完成指派 修改为 拖拽成员到下方的成员卡槽完成指派，且不放到卡片里面，放到卡片下面，左边用小竖线标识为提示
+
+| 项 | 拍板 |
+| --- | --- |
+| 确认钮文案 | StationPicker 确认钮「添加站点 / 添加 N 站」→「添加成员 / 添加 N 个成员」 |
+| 拖拽高亮 | 两处修复：①容器悬停底原为中性 pill 色——与卡槽 chip 底**同色**，chip 列表顶满时高亮看不出，改 color-mix 品牌淡底（primary 12%）；②chip 悬停 brand 环画在**外缘**，滚动容器（overflow-x-auto）滚动态会裁掉外缘环（chip 列表顶到左边时尤甚），加 `ring-inset` 画进 chip 内缘——滚动容器裁不掉 |
+| 头像描边 | Avatar 增 optional `className` 透传；任务区 5 处（罗列条成员/领队/多选面板行/卡槽站点 chip/只读框单站）加 1px `--border` 细线；其它表面（成员库等）不传零变化 |
+| 罗列条版式 | 移出头部卡（二十轮 DA33 曾入卡），置**头部卡下方**独立提示块——根容器去 border-t 改 `border-l-2` 左小竖线 + pl-3 缩进；提示文案与罗列条 chip 悬浮提示统一改「拖拽成员到下方的成员卡槽完成指派」；渲染判据（存在 draft/ready 小任务）与拖拽源不变 |
+
+改动面：`src/client/features/tasks/taskAssign.tsx`（确认钮/高亮类/头像描边/
+罗列条）、`src/client/features/avatar/avatar.tsx`（className 透传）、
+`src/client/pages/teamsView/tasksTab.tsx`（罗列条移出卡置卡下方）。
+零 host/store/纯函数变更。
+
+**二十三轮四绿门（2026-09-05）**：typecheck / lint（0 error，2 条既有
+exhaustive-deps warning：memberDialog.tsx:38 / taskDrawer.tsx:117）/ test
+（23 文件 **317 用例**全过，用例数持平）/ build
+（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿。
+GUI 装机冒烟持续**未验证**（高亮可见性、头像描边、罗列条左竖线观感需装机
+后在 DSH 面板人工过一遍）。
+
+## 二十四轮追加（2026-09-05，DA37 罗列条回卡只留 chips 行 + 小任务卡「开始」钮 + 展示文案合并「待开始」）
+
+用户原话：
+
+> 1. 不对，团队成员还是在卡片内，只是拖拽成员到下方的成员卡槽完成指派不在 2. 卡片加上开始按钮 3. 没有什么草稿状态、待指派状态，只有待开始状态。如果有任务没有成员，则提示需要选择成员就行
+
+背景：二十四轮对二十三轮 DA36 做订正（整条罗列条移出卡是过度移动），并新增
+面板「开始」派发通道与展示文案合并：
+
+| 项 | 拍板 |
+| --- | --- |
+| 罗列条回卡 | `TeamMemberStrip` 恢复 border-t 分区形态放回头部卡 `extra` 槽（二十轮 DA33 形态），**只留 chips 行**（「团队成员」标签 + 领队 chip + 成员 chips）；提示文案拆出为独立组件 `StripAssignHint`（border-l-2 左小竖线 + pl-3，渲染在**头部卡下方**、与罗列条同判据）——「团队成员还是在卡片内，只是拖拽成员到下方的成员卡槽完成指派不在」 |
+| 「开始」按钮 | ready 小任务卡按钮簇与小任务详情页按钮行新增「开始」钮（`ready && chain.length > 0` 才渲染）：点击 = 新宿主路由 POST `/team/<id>/task/<taskId>/start`，宿主取 `task.chain[chainCursor + 1]` 复用 `assignTask` 派发核派发下一站（成员未起会话自动起会话）；ready 但链空的卡不渲染按钮、改显灰字「需要选择成员」；宿主空链 400 兜底同文案、链到末站 400 「任务 #N 执行链已到末站，无下一站可派发」；依赖未满足/成员忙碌/领队不在线照宿主原文 400 透出 |
+| 展示文案合并 | draft/ready 展示文案合并为「待开始」：STATUS_LABELS.draft/ready、DISPLAY_STATUS_TABLE（draft muted→info 与 ready 同 tone）、groupDisplayOf 兜底 chip「待指派」→「待开始」；**底层 10 态状态机不动**（draft 仍是组拆解中、ready 仍是就绪待派，仅展示层合并）；「需要选择成员」是指派提示不是状态（不设状态，空槽即提示面） |
+
+改动面：`src/client/features/tasks/taskAssign.tsx`（Strip 回卡只留 chips 行 +
+StripAssignHint 拆出）、`src/client/pages/teamsView/tasksTab.tsx`（罗列条/提示
+块渲染、submitStart + startBusy/startError、开始/需要选择成员按钮簇、详情页
+按钮行）、`src/client/features/tasks/taskDisplayStatus.ts`（三处文案合并）、
+`src/client/lib/api.ts`（startTeamTask）、`src/host/runtime/webui.ts`（start
+路由）、`tests/taskDisplayStatus.test.ts` + `tests/webui.test.ts`（文案锁 +
+start 路由回归 1 例）。任务列表页卡片**未加**开始钮（开始从详情发起，列表卡
+保持只读概览——九轮 DA22 口径）。
+
+**二十四轮四绿门（2026-09-05）**：typecheck / lint（0 error，2 条既有
+exhaustive-deps warning：memberDialog.tsx:38 / taskDrawer.tsx:117）/ test
+（23 文件 **322 用例**全过——基线 321 含用户提交 5b3f539 并行批次新增
+4 例，本轮 +1）/ build
+（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿。
+GUI 装机冒烟持续**未验证**（罗列条回卡、卡下提示块、开始按钮、待开始 pill
+需装机后在 DSH 面板人工过一遍）。

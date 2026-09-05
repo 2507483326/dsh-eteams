@@ -48,7 +48,7 @@ import {
   syncMemberToRoster,
   updateMember,
 } from './teamOps.js';
-import { createTask, deleteTask, taskOutcome, updateTask } from './assignment.js';
+import { assignTask, createTask, deleteTask, taskOutcome, updateTask } from './assignment.js';
 import { leaderRowOf, latestInstanceRow, memberStatusOf } from './notifier.js';
 import {
   answerBuildInterview,
@@ -57,11 +57,10 @@ import {
   readBuildParentSession,
   readBuildSession,
   reportBuildProgress,
-  resumeBuildSession,
   writeBuildPresence,
   type BuildDraft,
 } from './roleBuilder.js';
-import { spawnBuildPhase, spawnContinueAfterAnswers } from './builderPhases.js';
+import { stopBuilderChild, wakeBuilderChild } from './builderPhases.js';
 import { clearSessionPersona, setSessionPersona } from './sessionPersona.js';
 import { clearSessionTeam, setSessionTeam } from './sessionTeam.js';
 import { readUsageCalendar, readAppUsageCalendar } from './usage.js';
@@ -1192,6 +1191,60 @@ export function installWebSurface(
               sendJson(res, 200, { ok: true });
               return;
             }
+            // POST /team/<id>/task/<taskId>/start — 面板开始任务（二十四轮
+            // DA37，用户拍板「卡片加上开始按钮」）：把 ready 任务派发给执行
+            // 链下一站（复用 assignTask 派发核——起子会话 + 投递指派信 +
+            // ready→wait 待接取）。空链 400「需要选择成员」（用户拍板「如果
+            // 有任务没有成员，则提示需要选择成员就行」——客户端对空链卡不
+            // 渲染按钮，此处兜底）；链已到末站无下一站同闸另文。依赖未完成/
+            // 执行者占用/领队不在线等由派发核原样拒绝（400 透出）。
+            if (
+              req.method === 'POST' &&
+              segments[0] === 'team' &&
+              segments.length === 5 &&
+              segments[2] === 'task' &&
+              segments[4] === 'start'
+            ) {
+              const located = locateTeam(ctx, config, segments[1]!);
+              if (!located) {
+                sendError(res, 404, `团队 ${segments[1]} 不存在`);
+                return;
+              }
+              const { team, workspacePath } = located;
+              const startTaskId = Number.parseInt(segments[3] ?? '', 10);
+              if (!Number.isFinite(startTaskId)) {
+                sendError(res, 400, `任务号无效：${segments[3]}`);
+                return;
+              }
+              const task = team.tasks.find((t) => t.id === startTaskId);
+              if (task === undefined) {
+                sendError(res, 404, `任务 #${startTaskId} 不存在`);
+                return;
+              }
+              const next = task.chain[task.chainCursor + 1];
+              if (next === undefined) {
+                sendError(
+                  res,
+                  400,
+                  task.chain.length === 0
+                    ? '需要选择成员'
+                    : `任务 #${startTaskId} 执行链已到末站，无下一站可派发`,
+                );
+                return;
+              }
+              try {
+                await assignTask(
+                  envFor(ctx, config, workspacePath),
+                  { teamId: team.id, actor: { kind: 'user', name: '用户' } },
+                  { taskId: startTaskId, member: next.member },
+                );
+              } catch (e) {
+                sendError(res, 400, e instanceof Error ? e.message : String(e));
+                return;
+              }
+              sendJson(res, 200, { ok: true });
+              return;
+            }
             // POST /team/<id>/task/<taskId>/folder/open — 打开任务文件夹（十二轮
             // DA25：列表卡文件夹路径可点击，系统文件管理器中打开）。目录由
             // workspacePath + 任务 work_dir 现算（taskDirAbs），缺失 400；
@@ -1228,7 +1281,11 @@ export function installWebSurface(
               try {
                 await openFolder(dir);
               } catch (e) {
-                sendError(res, 500, `打开文件夹失败：${e instanceof Error ? e.message : String(e)}`);
+                sendError(
+                  res,
+                  500,
+                  `打开文件夹失败：${e instanceof Error ? e.message : String(e)}`,
+                );
                 return;
               }
               sendJson(res, 200, { ok: true, dir });
@@ -1299,10 +1356,21 @@ export function installWebSurface(
                 return;
               }
               try {
-                const { session, memberName } = await confirmBuildSession(
-                  rootForWrites(ctx, config),
-                  draft,
-                );
+                const root = rootForWrites(ctx, config);
+                const { session, memberName } = await confirmBuildSession(root, draft);
+                // 入库即释放持续构建子代理的驻留（版本门控 drain，
+                // feature-detect——老运行时静默退化，fire-and-forget）。
+                const drainParentSessionId = readBuildParentSession(root);
+                void stopBuilderChild({
+                  ctx: { subagents: (ctx as unknown as RuntimeContext).subagents },
+                  parent:
+                    drainParentSessionId !== null
+                      ? (ctx as unknown as RuntimeContext).agents?.get(drainParentSessionId)
+                      : undefined,
+                  stateRoot: root,
+                  mode: 'drain',
+                  logger: (ctx as unknown as RuntimeContext).logger,
+                });
                 sendJson(res, 200, {
                   ok: true,
                   status: session.status,
@@ -1314,9 +1382,10 @@ export function installWebSurface(
               }
               return;
             }
-            // POST /rolebuilder/cancel — abandon the current build session.
-            // Phase children are one-shot: they end naturally; nothing to
-            // interrupt, nothing resumable left behind (docs/19.16).
+            // POST /rolebuilder/cancel — abandon the current build session（docs/19.16
+            // 持续构建子代理）：终态落盘后 interrupt 当前回合（durable 会话
+            // 保留——恢复经 followup 或冷恢复重建续聊）；父离线退 user 权限，
+            // 目标缺失是可接受 no-op，绝不阻塞放弃本身。
             if (
               req.method === 'POST' &&
               segments[0] === 'rolebuilder' &&
@@ -1326,15 +1395,29 @@ export function installWebSurface(
               try {
                 const root = rootForWrites(ctx, config);
                 const session = await cancelBuildSession(root);
+                const cancelParentSessionId = readBuildParentSession(root);
+                void stopBuilderChild({
+                  ctx: { subagents: (ctx as unknown as RuntimeContext).subagents },
+                  parent:
+                    cancelParentSessionId !== null
+                      ? (ctx as unknown as RuntimeContext).agents?.get(cancelParentSessionId)
+                      : undefined,
+                  stateRoot: root,
+                  mode: 'interrupt',
+                  logger: (ctx as unknown as RuntimeContext).logger,
+                });
                 sendJson(res, 200, { ok: true, status: session.status });
               } catch (e) {
                 sendError(res, 400, e instanceof Error ? e.message : String(e));
               }
               return;
             }
-            // POST /rolebuilder/resume — continue a cancelled build (docs/19.16).
-            // Context lives in the session file; a fresh ONE-SHOT phase child
-            // finishes the build from that context — nothing resumable hangs.
+            // POST /rolebuilder/resume — continue a cancelled build（docs/19.16
+            // 持续构建子代理）：父会话在线闸前置（不在线诚实 409——followup
+            // 唤醒必然拿不到父代理），翻转 cancelled→active 在单构建锁内由
+            // wakeBuilderChild 完成（双入口竞态只有第一个生效），随后宿主
+            // followup 唤醒同一持续子代理（失败冷恢复重建，再失败回滚
+            // cancelled——不留无代理的 active 会话卡门禁）。
             if (
               req.method === 'POST' &&
               segments[0] === 'rolebuilder' &&
@@ -1343,6 +1426,15 @@ export function installWebSurface(
             ) {
               try {
                 const root = rootForWrites(ctx, config);
+                const pre = readBuildSession(root);
+                if (pre === null) {
+                  sendError(res, 400, '没有可恢复的构建会话');
+                  return;
+                }
+                if (pre.status !== 'cancelled') {
+                  sendError(res, 409, `仅已放弃的构建可恢复（当前状态：${pre.status}）`);
+                  return;
+                }
                 // 父会话在线性前置校验（先于恢复）：不在线就不改状态、诚实
                 // 报错——否则恢复成 active 后没有代理续跑，面板再次假卡死。
                 const parentSessionId = readBuildParentSession(root);
@@ -1358,25 +1450,32 @@ export function installWebSurface(
                   );
                   return;
                 }
-                const session = await resumeBuildSession(root);
-                spawnBuildPhase({
+                await wakeBuilderChild({
                   ctx: { subagents: (ctx as unknown as RuntimeContext).subagents },
                   config,
                   parent,
                   stateRoot: root,
                   kind: 'resume',
                   logger: (ctx as unknown as RuntimeContext).logger,
+                  onSpawnFailure: () => {
+                    // 唤醒与重建都失败 → 回滚成 cancelled，别让无子代理的
+                    // active 会话卡住下一次「继续构建」。
+                    void cancelBuildSession(root, '构建恢复失败——请稍后重试').catch(
+                      () => undefined,
+                    );
+                  },
                 });
-                sendJson(res, 200, { ok: true, status: session.status });
+                sendJson(res, 200, { ok: true, status: 'active' });
               } catch (e) {
                 sendError(res, 400, e instanceof Error ? e.message : String(e));
               }
               return;
             }
-            // POST /rolebuilder/restart — 手动重启构建代理（用户迭代）：阶段
-            // 代理是一次性的，「等答案」期间本就没有活着的代理；重启 = 立即
-            // 派一个新代理重新核查进度、按需重新出题。前置校验 + 10s 防抖
-            // （updatedAt 被写走即天然占用），避免与提交答案/重复点击竞态。
+            // POST /rolebuilder/restart — 手动重启构建代理（用户迭代，docs/19.16
+            // 持续构建子代理）：宿主 followup 唤醒同一持续子代理重新核查
+            // （followup 失败冷恢复重建——仍是同一构建，没有第二个代理）。
+            // 前置校验 + 10s 防抖（updatedAt 被写走即天然占用），避免与提交
+            // 答案/重复点击竞态。
             if (
               req.method === 'POST' &&
               segments[0] === 'rolebuilder' &&
@@ -1403,7 +1502,7 @@ export function installWebSurface(
                   return;
                 }
                 if (Date.now() - current.updatedAt < 10_000) {
-                  sendError(res, 429, '刚有阶段代理更新过会话——请等 10 秒后再重启');
+                  sendError(res, 429, '刚有构建代理更新过会话——请等 10 秒后再重启');
                   return;
                 }
                 const parentSessionId = readBuildParentSession(root);
@@ -1424,13 +1523,20 @@ export function installWebSurface(
                   step: '重启核查',
                   note: '已手动重启构建代理——重新核查进度与访谈',
                 });
-                spawnBuildPhase({
+                await wakeBuilderChild({
                   ctx: { subagents: (ctx as unknown as RuntimeContext).subagents },
                   config,
                   parent,
                   stateRoot: root,
                   kind: 'restart',
                   logger: (ctx as unknown as RuntimeContext).logger,
+                  onSpawnFailure: () => {
+                    // 唤醒与重建都失败 → 回滚成 cancelled 并留可读出路，
+                    // 别让无代理的 active 假死。
+                    void cancelBuildSession(root, '构建唤醒失败——可稍后点「继续构建」重试').catch(
+                      () => undefined,
+                    );
+                  },
                 });
                 sendJson(res, 200, { ok: true, status: 'active' });
               } catch (e) {
@@ -1439,8 +1545,10 @@ export function installWebSurface(
               return;
             }
             // POST /rolebuilder/interview — user answered the intent interview
-            // in the workbench (docs/19.16): store the answers, then spawn the
-            // drafting ONE-SHOT phase child with the full session snapshot.
+            // in the workbench (docs/19.16 持续构建子代理): store the answers,
+            // then followup-wake the SAME continuable builder child to draft
+            // with the full session snapshot（唤醒去重在单构建锁内，面板与
+            // 主对话 eteams_interview_answer 双入口竞态时后者跳过）。
             if (
               req.method === 'POST' &&
               segments[0] === 'rolebuilder' &&
@@ -1459,7 +1567,7 @@ export function installWebSurface(
                   sendError(res, 400, 'answers 不能为空');
                   return;
                 }
-                // 父会话在线性前置校验（先于落盘）：父不在线时 spawn continue
+                // 父会话在线性前置校验（先于落盘）：父不在线时 followup 唤醒
                 // 必然失败——诚实报错并保留原访谈，而不是存了答案后静默卡死。
                 const parentSessionId = readBuildParentSession(root);
                 const parent =
@@ -1475,14 +1583,21 @@ export function installWebSurface(
                   return;
                 }
                 const session = await answerBuildInterview(root, answers);
-                // 共用出口（去重）：同一轮答案只派一次起草代理——面板与主
-                // 对话 eteams_interview_answer 两个入口竞态时后者跳过。
-                spawnContinueAfterAnswers({
+                await wakeBuilderChild({
                   ctx: { subagents: (ctx as unknown as RuntimeContext).subagents },
                   config,
                   parent,
                   stateRoot: root,
+                  kind: 'continue',
                   logger: (ctx as unknown as RuntimeContext).logger,
+                  onSpawnFailure: () => {
+                    // followup 与冷恢复重建都失败 → 回滚成 cancelled 并留
+                    // 可读出路（点「继续构建」= resume 唤醒同一子代理），
+                    // 别让无代理的 active 假死。
+                    void cancelBuildSession(root, '构建唤醒失败——可稍后点「继续构建」重试').catch(
+                      () => undefined,
+                    );
+                  },
                 });
                 sendJson(res, 200, { ok: true, status: session.status });
               } catch (e) {

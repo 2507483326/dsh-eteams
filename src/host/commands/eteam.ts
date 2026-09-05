@@ -1,8 +1,9 @@
 /**
  * /eteam 命令（docs/19.4, D18）：新增成员 · 角色构建师的命令面入口。斜杠
  * 输入本身不会到达模型，handler 把激活消息（`eTeam --add-people …`）显式
- * steer 到接收 agent 上；门禁 + 受理即写盘 + 一次性阶段派发的编排随
- * handler 走，命令面一次性 UX 文本（busy/降级 notice）留在本文件。
+ * steer 到接收 agent 上；门禁 + 受理即写盘 + 持续构建子代理受理派发
+ * （startBuilderChild）的编排随 handler 走，命令面一次性 UX 文本（busy/
+ * 降级 notice）留在本文件。
  *
  * @module dsh-eteams/commands/eteam
  */
@@ -19,7 +20,7 @@ import {
   cancelBuildSession,
 } from '../runtime/roleBuilder.js';
 import { rootForWrites } from '../runtime/webui.js';
-import { spawnBuildPhase } from '../runtime/builderPhases.js';
+import { startBuilderChild } from '../runtime/builderPhases.js';
 import { ACTIVATION_PREFIX } from '../prompts/system/roleBuilder.js';
 
 /** The /eteam slash command name (DSH command names are lowercase, docs/19.4). */
@@ -107,11 +108,12 @@ export function createEteamCommand(
       images: false,
     },
     handler: async ({ agent, rawInput, commandId }) => {
-      // 门禁 + 一次性阶段派发（docs/19.16）：已有构建进行中则不派发；
-      // 否则派发阶段 A 一次性代理（开会话 → 查重 → 发布意图访谈后自然
-      // 结束）——没有任何可续聊的持久子代理被留下。受理即写盘（卡片
-      // 首轮轮询即命中），commandId 写入会话供对话内卡片按构建归属。
-      // 派发失败退回 steer 主会话，保证流程永不哑火。
+      // 门禁 + 持续构建子代理受理派发（docs/19.16）：已有构建进行中则不
+      // 派发；否则 startBuilderChild（startContinuable 建立唯一构建子代理
+      // ——受理回合做查重/发布访谈/弹窗/起草，后续环节由宿主 followup
+      // 续聊同一子代理，不再起第二个）。受理即写盘（卡片首轮轮询即命中），
+      // commandId 写入会话供对话内卡片按构建归属。派发失败退回 steer 主
+      // 会话，保证流程永不哑火。
       let root: string | null = null;
       try {
         root = rootForWrites(ctx, config);
@@ -149,11 +151,11 @@ export function createEteamCommand(
           };
         }
       } catch {
-        // 状态读不到时不拦：照常派发（阶段代理的 newBuild 会开新局）。
+        // 状态读不到时不拦：照常派发（受理写入 newBuild=true 会开新局）。
       }
       try {
         const subagents = (ctx as unknown as RuntimeContext).subagents;
-        if (subagents?.start === undefined) {
+        if (subagents?.startContinuable === undefined) {
           throw new Error('subagents 服务不可用');
         }
         const stateRoot = root ?? rootForWrites(ctx, config);
@@ -168,12 +170,11 @@ export function createEteamCommand(
           note: '构建请求已受理——角色构建师启动中',
           ...(commandId !== undefined ? { commandId } : {}),
         });
-        spawnBuildPhase({
+        startBuilderChild({
           ctx: { subagents },
           config,
           parent: agent,
           stateRoot,
-          kind: 'start',
           logger: log,
           onSpawnFailure: () => {
             // 派发被拒 → 回滚成 cancelled，别让无子代理的 active 会话
