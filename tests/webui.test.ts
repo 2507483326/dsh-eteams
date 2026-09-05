@@ -4,7 +4,7 @@
  * loop, the GET /board cross-team aggregation and the usage-calendar route —
  * all driven offline through the runtime ops with a fake subagent runtime.
  */
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -13,6 +13,12 @@ import { ETeamsConfig, type ETeamsResolvedConfig } from '../src/host/config';
 import { createCaptainTools } from '../src/host/tools/captainTools';
 import { createMemberTools } from '../src/host/tools/memberTools';
 import { installWebSurface, summarizeEvent, teamSnapshot } from '../src/host/runtime/webui';
+import {
+  cancelBuildSession,
+  readBuildSession,
+  reportBuildProgress,
+  setBuildParentSession,
+} from '../src/host/runtime/roleBuilder';
 import { joinPath } from '../src/host/runtime/base';
 import { getDb } from '../src/host/state/db';
 import { recordUsage, type UsageRecord } from '../src/host/state/usageStore';
@@ -844,6 +850,49 @@ describe('panel write routes (M5 first slice)', () => {
     expect(missing.code).toBe(404);
   });
 
+  it('opens a task folder via POST /team/:id/task/:taskId/folder/open（十二轮 DA25）', async () => {
+    // 注入假打开器：只记录被打开目录，不真拉 explorer（面板「文件夹路径
+    // 可点击」的宿主侧，打开器经 WebSurfaceOptions 注入）。
+    const opened: string[] = [];
+    const registered: Handler[] = [];
+    const captains = new Map<string, { id: string; session: { header: { cwd: string } } }>();
+    installWebSurface(surfaceCtx(captains, registered), config, {
+      openFolder: (dir) => {
+        opened.push(dir);
+      },
+    });
+    const post = async (path: string, body?: unknown) =>
+      fire(registered[0]!, 'POST', path, body ?? {});
+
+    const created = await post('/eteams-api/team', {
+      name: 'folder-open-team',
+      sessionId: 'sess-panel',
+    });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    // 团队/任务名取 ASCII：folder 断言要 rmSync 真删掉目录，本机 Windows 对
+    // CJK 路径 rmSync 静默不删（环境怪癖，与路由逻辑无关）——CJK 路径已由
+    // 其余用例覆盖。
+    const made = await post(`/eteams-api/team/${teamId}/task`, { subject: 'folder task' });
+    const taskId = json<{ taskId: number }>(made.body).taskId;
+
+    // 建任务即分配 work_dir 并物化文档树（docs/35 §3#8）——路由打开的就是它。
+    const task = readTeam(teamId).tasks.find((t) => t.id === taskId)!;
+    expect(task.workDir).toBeDefined();
+    const dir = join(workspace, task.workDir!);
+    const openedOk = await post(`/eteams-api/team/${teamId}/task/${taskId}/folder/open`, {});
+    expect(openedOk.code, openedOk.body).toBe(200);
+    expect(json<{ ok: boolean; dir: string }>(openedOk.body)).toEqual({ ok: true, dir });
+    expect(opened).toEqual([dir]);
+
+    // 未知任务 → 404；文件夹被外部清掉 → 400 且不拉打开器。
+    const unknownTask = await post(`/eteams-api/team/${teamId}/task/999/folder/open`, {});
+    expect(unknownTask.code).toBe(404);
+    rmSync(dir, { recursive: true });
+    const goneDir = await post(`/eteams-api/team/${teamId}/task/${taskId}/folder/open`, {});
+    expect(goneDir.code, goneDir.body).toBe(400);
+    expect(opened).toHaveLength(1);
+  });
+
   it('saves the member handbook copy via POST /team/:id/member/:name/persona and projects it in /state', async () => {
     const h = await installFake();
     await h.post('/eteams-api/roster', { name: 'Eve', role: 'engineer', personaMd: '# Eve 初版' });
@@ -1489,5 +1538,83 @@ describe('web surface installation', () => {
     const record = json<{ version: string; entry: { kind: string; message: string } }>(log[0]!);
     expect(record.version).toBe('v0.2.0');
     expect(record.entry).toMatchObject({ kind: 'error', message: 'boom' });
+  });
+});
+
+describe('POST /eteams-api/rolebuilder/resume (docs/19.16)', () => {
+  /** Panel harness with an explicit captains registry: the resume gate reads
+   * `agents.get(parentSessionId)` — tests control who is "online". */
+  async function installResumeFake(): Promise<{
+    handler: Handler;
+    captains: Map<string, { id: string; session: { header: { cwd: string } } }>;
+  }> {
+    const registered: Handler[] = [];
+    const captains = new Map<string, { id: string; session: { header: { cwd: string } } }>();
+    const ctx = surfaceCtx(captains, registered);
+    installWebSurface(ctx, config);
+    return { handler: registered[0]!, captains };
+  }
+
+  it('GET /rolebuilder reports parentOnline: false when the parent conversation is offline', async () => {
+    const { handler } = await installResumeFake();
+    await reportBuildProgress(stateRoot(), { request: '在线检测', step: '收到需求' });
+    await cancelBuildSession(stateRoot());
+    await setBuildParentSession(stateRoot(), 'cap-offline');
+    const got = await fire(handler, 'GET', '/eteams-api/rolebuilder');
+    expect(got.code).toBe(200);
+    const parsed = json<{ empty: boolean; parentOnline?: boolean }>(got.body);
+    expect(parsed.empty).toBe(false);
+    expect(parsed.parentOnline).toBe(false);
+  });
+
+  it('GET /rolebuilder reports parentOnline: true when the parent conversation is live', async () => {
+    const { handler, captains } = await installResumeFake();
+    captains.set('cap-live', { id: 'cap-live', session: { header: { cwd: workspace } } });
+    await reportBuildProgress(stateRoot(), { request: '在线检测', step: '收到需求' });
+    await setBuildParentSession(stateRoot(), 'cap-live');
+    const got = await fire(handler, 'GET', '/eteams-api/rolebuilder');
+    expect(got.code).toBe(200);
+    const parsed = json<{ empty: boolean; parentOnline?: boolean }>(got.body);
+    expect(parsed.parentOnline).toBe(true);
+  });
+
+  it('refuses with 409 when the parent conversation is offline, session stays cancelled', async () => {
+    const { handler } = await installResumeFake();
+    // 已放弃的构建 + 记住的父会话；注册表为空 → 父不在线（用户反馈
+    // 2026-09-05「点继续构建没反应」的宿主侧根因：拒绝必须带可读原因）。
+    await reportBuildProgress(stateRoot(), { request: '恢复回归', step: '收到需求' });
+    await cancelBuildSession(stateRoot());
+    await setBuildParentSession(stateRoot(), 'cap-offline');
+    const refused = await fire(handler, 'POST', '/eteams-api/rolebuilder/resume');
+    expect(refused.code).toBe(409);
+    expect(json<{ error: string }>(refused.body).error).toContain('不在线');
+    expect(json<{ error: string }>(refused.body).error).toContain('继续构建');
+    // 诚实拒绝：状态不翻转（否则恢复成 active 却没有代理续跑 = 假卡死）。
+    expect(readBuildSession(stateRoot())?.status).toBe('cancelled');
+  });
+
+  it('resumes with a live parent: flips to active and keeps the draft context', async () => {
+    const registered: Handler[] = [];
+    const captains = new Map<string, { id: string; session: { header: { cwd: string } } }>();
+    captains.set('cap-online', { id: 'cap-online', session: { header: { cwd: workspace } } });
+    const ctx = surfaceCtx(captains, registered);
+    installWebSurface(ctx, config);
+    const handler = registered[0]!;
+    await reportBuildProgress(stateRoot(), {
+      request: '恢复回归',
+      stepsDone: ['收到需求'],
+      draft: { name: 'partial', role: 'eng' },
+    });
+    await cancelBuildSession(stateRoot());
+    await setBuildParentSession(stateRoot(), 'cap-online');
+    const ok = await fire(handler, 'POST', '/eteams-api/rolebuilder/resume');
+    expect(ok.code).toBe(200);
+    expect(json<{ ok: boolean; status: string }>(ok.body)).toMatchObject({
+      ok: true,
+      status: 'active',
+    });
+    const session = readBuildSession(stateRoot());
+    expect(session?.status).toBe('active');
+    expect(session?.draft?.name).toBe('partial');
   });
 });

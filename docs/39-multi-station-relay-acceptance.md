@@ -272,3 +272,88 @@ build（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿；lint 仅 2
 exhaustive-deps warning（memberDialog/taskDrawer，非本次引入）。
 GUI 装机冒烟持续**未验证**（同上口径——平铺栅格/小卡三段式/整卡点击进详情需
 装机后在 DSH 面板人工过一遍）。
+
+## 十二轮追加（2026-09-05，DA25 去号/文件夹可点击/加大/分行/底栏删除）
+
+**用户需求原话**：「去掉 #1 这种，文件夹左边... 然后做成可以点击的，卡片再大
+一点，分行，下面放删除按钮」；两个开放点用户续拍：文件夹点击 = 「打开任务
+文件夹」（宿主拉系统文件管理器），删除按钮 = 「仅可删除的卡显示」。
+
+| 决策 | 内容 |
+| --- | --- |
+| DA25 | ①**头行去 `#id` 前缀**：列表小卡只渲染主题 + 展示态 pill（详情页头部卡 #id 不动）。②**文件夹行**：去「文件夹：」标签，裸路径（`{folder}/`）渲染成可点击件（下划线 + hover 提色 + title），点击 = 新宿主路由 POST `/team/<id>/task/<taskId>/folder/open`——目录由 workspacePath + 任务 work_dir 现算（`taskDirAbs`），缺失 400、未知任务 404；打开器经 `WebSurfaceOptions.openFolder` 注入（默认按平台 spawn：win32 explorer / darwin open / 其余 xdg-open，detached + 异步错误吞掉）；失败按卡行内 FormErrorNote，成功无回执 UI（文件管理器窗口即回执）。③**卡片加大**：任务列表专用 `TASK_GRID_CLASS`（最小 260px 自适应列，不并轨 CARD_GRID_CLASS 以免牵动团队/角色列表）。④**信息分行**：进度/汇总 chip/阻塞各自独立行（不再 flex-wrap 混排）。⑤**底栏删除按钮**：border-t 分区 + destructive 描边删除钮（团队卡底栏同款），仅可删的卡渲染（`deletableOf` = 本身 draft/ready + 主任务全部小任务 draft/ready + 删除集不被未入集任务依赖——与 host `deleteTask` 守卫同口径，host 仍最终裁决、弹窗就地显示拒绝原因）；删除确认弹窗共用面扩大（列表卡主任务/顶层任务 + 详情页小任务），标题改「删除任务」、主任务追加级联提示、文案去 `#id` 前缀 |
+
+改动面：`tasksTab.tsx`（列表小卡重排 + `deletableOf` + `folderBusy/folderError`
+瞬态 + `openFolder` 提交 + 删除弹窗改共用面）、`shared.tsx`（新增
+`TASK_GRID_CLASS`）、`api.ts`（新增 `openTaskFolder`）、`webui.ts`（新增
+folder/open 路由 + `WebSurfaceOptions` 注入点 + `defaultOpenFolder`）、
+`tests/webui.test.ts`（folder/open 路由回归 1 例：假打开器收目录、未知任务
+404、目录缺失 400 且不拉打开器；团队/任务名取 ASCII——本机 Windows 对 CJK
+路径 rmSync 静默不删，环境怪癖与路由逻辑无关，CJK 路径由其余用例覆盖）。
+
+**十二轮四绿门（2026-09-05）**：typecheck / lint / test（23 文件 **312 用例**
+全过）/ build（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿；lint
+仅 2 条既有 exhaustive-deps warning（memberDialog/taskDrawer，非本次引入）。
+GUI 装机冒烟持续**未验证**（同上口径——文件夹点击拉起资源管理器、底栏删除
+显隐判据、加大栅格与分行版面需装机后在 DSH 面板人工过一遍；其中「拉起系统
+文件管理器」是真实进程行为，离线测试只验证了注入路径与目录解析）。
+
+## 十三轮追加（2026-09-05，DA26 对齐/小任务 0/目录标签/路径截断收窄）
+
+**用户需求原话**：「任务卡片内容对齐，没有小任务就显示0，而且目录两个字没有
+了，路径太长了截断大部分的」。
+
+| 决策 | 内容 |
+| --- | --- |
+| DA26 | ①**内容行顶格对齐**：`BlockedPill` 不再内建 `ml-1`（ml-1 外置到 className——详情页两处行内文字流场景由调用位补 `ml-1`，列表卡独立行顶格与其它行左缘齐）；底栏 `mt-auto` 沉底——同一栅格行内内容行数不同的卡，删除栏齐平在卡底。②**每卡必有进度行**：进度行从「主任务才渲染」改为无条件渲染，行结构跨卡统一——主任务沿用 小任务 N 个（draft）/ N/M 完成 · n 进行中；无小任务的顶层普通任务显**「小任务 0」**（用户拍板「没有小任务就显示0」；有指派人追加 「 · 指派 X」）。③**「目录」标签回补**：十二轮裸路径后用户发现「目录两个字没有了」，文件夹行恢复两字标签——「目录 末段/」（`folder.split('/').pop()`），全路径进悬停 title「在文件管理器中打开：<全路径>」。④**路径截断收窄**：十二轮整条路径 truncate 截掉大部分，只显末段后不再长截断 |
+
+改动面：`tasksTab.tsx` 单文件（`BlockedPill` className prop + 两处详情调用位、
+进度行统一渲染、文件夹行目录末段、底栏 mt-auto；头注/卡片常量/区块注释同步）。
+零 store/host/api/纯函数变更（312 用例）。
+
+**十三轮四绿门（2026-09-05）**：typecheck / lint / test（23 文件 **312 用例**
+全过）/ build（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿；lint
+仅 2 条既有 exhaustive-deps warning（memberDialog/taskDrawer，非本次引入）。
+GUI 装机冒烟持续**未验证**（同上口径——阻塞行顶格、每卡进度行含「小任务 0」、
+目录末段路径、底栏沉底齐平需装机后在 DSH 面板人工过一遍）。
+
+## 十四轮追加（2026-09-05，DA27 状态入底栏/进度三计数/工作目录钮/详情钮）
+
+**用户需求原话**：「1. 状态挪到卡片的左边下面，圆角改成 2px  2。目录样式调整
+一下，就显示工作目录就行，别显示具体路径了，别用灰色打底了不好看」；「2. 别
+小任务 个了，改成 共 x 个任务，已完成 x , 未完成 x 数字用颜色标识一下」；
+「3. 删除旁边加一个详情按钮」（原文两处序号重复，按语义拆四点）。
+
+| 决策 | 内容 |
+| --- | --- |
+| DA27 | ①**状态 pill 挪到卡底栏左侧 + 圆角 2px**：「左边下面」按用户十二轮「下面放删除按钮」同词汇解作卡底栏——底栏改左右分栏（justify-between），左 = 展示态 pill、右 = 按钮组；头行只剩主题。「圆角改成 2px」指该状态 pill：`Pill` 增 `className` 透传、`DisplayStatusPill` 增 `pillClassName`，底栏位传 `rounded-[2px]`，其余 pill 调用位不动。②**进度行三分计数**：「共 x 个任务，已完成 x，未完成 x」统一格式（原「小任务 N 个 / N/M 完成 · n 进行中 / 小任务 N」三分支废止，「进行中」不再单列），数字着色——已完成 `text-success` 绿、未完成 `text-warning` 琥珀、总数行底灰；指派人尾注保留。③**文件夹行「工作目录」标签钮**：只留四字标签（末段路径也撤），完整路径仅存 title 悬停提示；样式去灰色弱化文案改描边小按钮（hover 淡底）。④**底栏每卡常驻 + 详情钮**：删除旁新增「详情」outline 钮（每卡都有，整卡点击的显式等价入口）；删除仍仅可删的卡渲染（deletableOf 口径不变）；底栏从仅可删的卡渲染改每卡渲染（mt-auto 对齐因此覆盖全部卡） |
+
+改动面：`shared.tsx`（Pill 增 className 透传 + 注释）、`tasksTab.tsx`（头行
+只剩主题、DisplayStatusPill 增 pillClassName、底栏重构、进度行三分计数 JSX、
+文件夹行工作目录钮、注释同步）。零 store/host/api/纯函数变更（312 用例）。
+
+**十四轮四绿门（2026-09-05）**：typecheck / lint / test（23 文件 **312 用例**
+全过）/ build（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿；lint
+仅 2 条既有 exhaustive-deps warning（memberDialog/taskDrawer，非本次引入）。
+GUI 装机冒烟持续**未验证**（同上口径——状态 pill 入底栏与 2px 圆角、进度
+数字着色、工作目录描边钮、详情钮需装机后在 DSH 面板人工过一遍）。
+
+## 十五轮追加（2026-09-05，DA28 状态 pill 描边/工作目录幽灵钮）
+
+**用户需求原话**：「1. 优化一下左下角状态的样式，去掉放上去变淡，加上边框」；
+「2. 工作目录还是不协调，修改一下更好融入卡片」。
+
+| 决策 | 内容 |
+| --- | --- |
+| DA28 | ①**底栏状态 pill 描边 + 去 hover 淡底**：加 `--border` 描边（`BORDER_L1_CLASS` 经 tailwind-merge 压过 shadcn Badge 的 `border-transparent`），并以同色 hover（`hover:bg-[color:var(--eteams-pill-bg)]`）压平 Badge 自带的悬停淡底（secondary 80% 淡化，D19c color-mix 实现）——悬停后底色不变；透传链沿用十四轮（`Pill.className` → `DisplayStatusPill.pillClassName`）。②**工作目录钮融入卡片**：十四轮的描边小按钮「还是不协调」，撤掉按钮外壳（border/底色/内边距全去），改**幽灵文字钮**——常规字色 + hover 下划线，与卡内其它文字行同权重；文案四字与完整路径 title 不变 |
+
+改动面：`tasksTab.tsx` 单文件（底栏 pillClassName 叠描边 + 同色 hover、文件夹
+行按钮 className 换幽灵文字样式、六处注释同步——文件头/DisplayStatusPill/
+卡片常量/列表区块/文件夹行/底栏）。零 store/host/api/纯函数变更。
+
+**十五轮四绿门（2026-09-05）**：typecheck / lint / test（23 文件 **314 用例**
+全过——工作区另有并行新增的 rolebuilder-resume 回归 2 例，非本轮改动面）/
+build（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿；lint 仅 2 条
+既有 exhaustive-deps warning（memberDialog/taskDrawer，非本次引入）。
+GUI 装机冒烟持续**未验证**（同上口径——状态 pill 描边与 hover 不变色、工作
+目录幽灵文字钮需装机后在 DSH 面板人工过一遍）。

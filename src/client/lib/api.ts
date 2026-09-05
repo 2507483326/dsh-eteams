@@ -370,6 +370,15 @@ export async function deleteTeamTask(teamId: string, taskId: number): Promise<vo
   );
 }
 
+/** Open a task folder in the system file manager（十二轮 DA25：列表卡文件夹
+ * 路径可点击；宿主以 workspacePath + 任务 work_dir 定位后拉起文件管理器）. */
+export async function openTaskFolder(teamId: string, taskId: number): Promise<void> {
+  await requestJson(
+    `${API_BASE}/team/${encodeURIComponent(teamId)}/task/${taskId}/folder/open`,
+    { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) },
+  );
+}
+
 // ---------- role-builder build session (docs/19.6, D18) ----------
 
 /** One persona draft — field names align with eteams_member_save params. */
@@ -424,6 +433,12 @@ export interface BuildSession {
   interview?: InterviewState;
   /** Owning /eteam invocation id — cards match it to their own build. */
   commandId?: string;
+  /**
+   * 宿主 GET /rolebuilder 附挂（不落盘，用户反馈 2026-09-05 第二批）：发起
+   * 构建的 /eteam 父会话是否在线。false → 面板不渲染「已放弃本次构建」卡
+   * （继续构建无从派发，避免死按钮）；旧响应无此字段 → 照旧渲染（防御）。
+   */
+  parentOnline?: boolean;
 }
 
 /** Poll the single build-session slot (null when no session exists). */
@@ -431,8 +446,10 @@ export async function fetchBuildState(): Promise<BuildSession | null> {
   const body = (await requestJson(`${API_BASE}/rolebuilder`)) as {
     empty?: boolean;
     session?: BuildSession;
+    parentOnline?: boolean;
   };
-  return body.empty === true || body.session === undefined ? null : body.session;
+  if (body.empty === true || body.session === undefined) return null;
+  return { ...body.session, parentOnline: body.parentOnline === true };
 }
 
 /** Resume a cancelled build — host spawns a fresh one-shot phase child. */

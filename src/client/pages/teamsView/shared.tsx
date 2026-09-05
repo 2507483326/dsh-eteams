@@ -73,10 +73,20 @@ export const dotClass = (tone: Tone): string => cn(DOT_BASE_CLASS, DOT_TONE_CLAS
  * 本仓 pill 视觉口径（官网圆 pill / 12px / medium / 内嵌状态点）以
  * className 覆盖层保留——tone 底色表（PILL_TONE_CLASS）经 tailwind-merge
  * 压过 Badge 变体底色。D22e：dot 由组件统一内嵌（中性 pill + 彩点签名），
- * 调用位不再自插 dot span。 */
-export function Pill({ tone, children }: { tone: Tone; children: ReactNode }): ReactNode {
+ * 调用位不再自插 dot span。十四轮 DA27：className 透传（tailwind-merge
+ * 压过基础圆角/底色）——任务列表卡底栏的状态 pill 以 rounded-[2px] 覆盖
+ * 圆角（用户拍板「圆角改成 2px」），其余调用位不传保持原观感。 */
+export function Pill({
+  tone,
+  children,
+  className,
+}: {
+  tone: Tone;
+  children: ReactNode;
+  className?: string;
+}): ReactNode {
   return (
-    <Badge variant="secondary" className={pillClass(tone)}>
+    <Badge variant="secondary" className={cn(pillClass(tone), className)}>
       <span className={dotClass(tone)} />
       {children}
     </Badge>
@@ -172,6 +182,11 @@ export const CHIP_CLASS = `mr-1 mb-0.5 inline-block rounded-md bg-muted px-2 py-
  * 列表共用：按面板宽度自适应列数，窄两列宽三列，卡片不拉成长条
  * （用户迭代 2026-09 八）。 */
 export const CARD_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(210px,1fr))] gap-3';
+
+/** 任务列表小卡栅格（十二轮 DA25：用户拍板「卡片再大一点」——任务卡比团队
+ * 卡再宽一档，最小 260px 自适应列，窄列少宽列多；任务列表专用，不并轨
+ * CARD_GRID_CLASS 以免牵动团队/角色列表）。 */
+export const TASK_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3';
 /**
  * 角色/团队/任务列表注入样式表（ROLE_LIST_CSS）消费的主题 token——S12–S14
  * 迁移后 inline 样式消费面已清空；hover/focus-within/attr 选择器与下面的原生

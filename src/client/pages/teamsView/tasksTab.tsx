@@ -1,13 +1,27 @@
 /**
- * 任务 tab（2026-09-05 九/十/十一轮 DA22/DA23/DA24 修订）：**任务列表页 ↔
- * 任务详情页**两级导航，编排全部收进详情页。列表页 = **平铺小卡栅格**（十一
- * 轮 DA24：不分「对话任务」/状态分区，与团队列表同款 Card 面板 + 任务小卡，
- * 一卡一顶层任务，整卡点击进详情，无拖拽；不列小任务明细——九轮 DA22）+
- * 空态行；详情页 = 返回条 + 头部卡 + 编排（主任务：新增小任务 + 小任务卡片
- * 全套（卡槽/改删/**把手拖拽调序**——十轮 DA23：只有卡片左上 grip 把手可
- * 拖，卡身点击进小任务详情）+ 成员罗列条；任务：合同/时间线正文 + 卡槽 +
- * 站点行）。导航状态复用 ui model drawerTaskId（语义 = 详情页选中的任务
- * id）；依赖 taskDrawer（详情正文）、features/tasks（拖拽指派）与 shared。
+ * 任务 tab（2026-09-05 九…十五轮 DA22…DA28 修订）：**任务
+ * 列表页 ↔ 任务详情页**两级导航，编排全部收进详情页。列表页 = **平铺小卡栅格**
+ * （十一轮 DA24：不分「对话任务」/状态分区，与团队列表同款 Card 面板 + 任务
+ * 小卡，一卡一顶层任务，整卡点击进详情，无拖拽；十二轮 DA25 修订：头行去
+ * #id 前缀、信息逐行分行、卡片加大一档、文件夹路径去标签且**可点击**——
+ * 宿主拉起系统文件管理器、可删的卡底栏放删除按钮（draft/ready 且无下游
+ * 依赖/级联障碍，与 host deleteTask 守卫同口径）；十三轮 DA26 修订：卡内
+ * 内容顶格对齐（阻塞徽标 ml-1 外置）、每卡必有进度行（无小任务显「小任务
+ * 0」）、文件夹行恢复「目录」标签且只显示末段路径（全路径进悬停 title），
+ * 底栏 mt-auto 沉底——同栅格行各卡删除栏齐平；十四轮 DA27 修订：展示态
+ * pill 挪到卡底栏左侧且圆角收 2px、进度行改「共 x 个任务，已完成 x，未完成
+ * x」（数字着色 success/warning）、文件夹行只留「工作目录」标签钮（路径全
+ * 撤、去灰改描边钮）、底栏每卡常驻且加「详情」按钮（删除仍仅可删的卡渲染）；
+ * 十五轮 DA28 修订：底栏状态 pill 加 --border 描边并压平 hover 淡底（badge
+ * secondary 80% 淡化的同色 hover 压平）、文件夹行改幽灵文字钮融入卡片（border/
+ * 底色/内边距全去，常规字色 + hover 下划线）；
+ * 不列小任务明细——九轮
+ * DA22）+ 空态行；详情页 = 返回条 + 头部卡 + 编排（主任务：新增小任务 +
+ * 小任务卡片全套（卡槽/改删/**把手拖拽调序**——十轮 DA23：只有卡片左上
+ * grip 把手可拖，卡身点击进小任务详情）+ 成员罗列条；任务：合同/时间线
+ * 正文 + 卡槽 + 站点行）。导航状态复用 ui model drawerTaskId（语义 = 详情页
+ * 选中的任务 id）；依赖 taskDrawer（详情正文）、features/tasks（拖拽指派）
+ * 与 shared。
  *
  * @module dsh-eteams/client/pages/teamsView/tasksTab
  */
@@ -19,6 +33,7 @@ import GripVertical from 'lucide-react/dist/esm/icons/grip-vertical.mjs';
 import {
   createTeamTask,
   deleteTeamTask,
+  openTaskFolder,
   updateTeamTask,
   type TaskSlotInput,
 } from '../../lib/api';
@@ -52,7 +67,6 @@ import { Textarea } from '../../components/ui/textarea';
 import { TaskDetailContent, TaskStations } from './taskDrawer';
 import {
   BORDER_L1_CLASS,
-  CARD_GRID_CLASS,
   CHIP_CLASS,
   EMPTY_CLASS,
   FormErrorNote,
@@ -61,6 +75,7 @@ import {
   MUTED_CLASS,
   PANEL_CARD_CLASS,
   Pill,
+  TASK_GRID_CLASS,
 } from './shared';
 
 /** 七轮 DA20 + 十轮 DA23：小任务卡片——与组卡同观感的全边框卡（挂靠缩进
@@ -138,37 +153,80 @@ function SubtaskCard({
   );
 }
 
-/** 列表页任务小卡（十一轮 DA24：与团队列表小卡同款三段式——头行（#id 主题
- * 截断 + 展示态 pill）、身体行（进度/指派 + 阻塞 + 汇总 chip）、文件夹行；
- * 底色/边框/悬停由 .eteams-task-card 样式表接管，p-3.5 = 卡内高度呼吸感）。 */
+/** 列表页任务小卡（十一轮 DA24 与团队列表小卡同款三段式，十二轮 DA25 修订：
+ * 头行（主题截断，**无 #id 前缀**）、信息**逐行分行**（进度行/汇总 chip 行/
+ * 阻塞行各自独立）、文件夹行（点击打开）、底栏（border-t 分区）；十三轮 DA26
+ * 修订：内容行顶格对齐、每卡必有进度行（无小任务显「小任务 0」）、底栏
+ * mt-auto 沉底；十四轮 DA27 修订：底栏每卡常驻——左状态 pill（圆角 2px）+
+ * 右详情/删除钮（删除仍仅可删的卡渲染）、进度行改共/已完成/未完成三计数
+ * （数字着色）、文件夹行「工作目录」标签钮；十五轮 DA28 修订：状态 pill
+ * 描边压平 hover、工作目录改幽灵文字钮；底色/边框/悬停由 .eteams-task-card
+ * 样式表接管，p-3.5 = 卡内高度呼吸感）。 */
 const TASK_CARD_CLASS = 'flex min-w-0 cursor-pointer flex-col gap-2 rounded-xl p-3.5';
+
+/** 列表卡删除按钮显隐判据（十二轮 DA25，用户拍板「仅可删除的卡显示」）——
+ * 与 host deleteTask 守卫（assignment.ts）同口径：本身 draft/ready；主任务
+ * 级联删除要求全部小任务 draft/ready；删除集（自身 + 小任务）不得被任何
+ * 未入集任务依赖。host 仍是最终裁决，弹窗内就地显示拒绝原因。 */
+function deletableOf(t: TaskView, tasks: readonly TaskView[]): boolean {
+  if (t.status !== 'draft' && t.status !== 'ready') return false;
+  const doomedIds = new Set<number>([t.taskId]);
+  for (const sub of tasks) {
+    if (sub.parentId !== t.taskId) continue;
+    if (sub.status !== 'draft' && sub.status !== 'ready') return false;
+    doomedIds.add(sub.taskId);
+  }
+  for (const other of tasks) {
+    if (doomedIds.has(other.taskId)) continue;
+    if (other.dependencies.some((dep) => doomedIds.has(dep))) return false;
+  }
+  return true;
+}
 
 /** 展示态徽标（docs/29 B.3 渲染位）：中性 pill（Badge secondary + 6px dot，
  * tone 按展示态逐格对表——29-M3 同桶异色）+ 重试计数 detail 小字。八轮 DA21
  * 页面化后列表行/组卡/详情页头部统一走展示态（原 TaskDrawer Dialog 的任务态
- * 精确文案随页面化撤除）。 */
+ * 精确文案随页面化撤除）。十四轮 DA27：新增 pillClassName 直通内层 Pill——
+ * 任务列表卡底栏的状态 pill 用 rounded-[2px]（用户拍板「圆角改成 2px」），
+ * pill 挪到卡底栏左侧（「状态挪到卡片的左边下面」——十二轮「下面放删除
+ * 按钮」同词汇，「下面」= 卡底栏）；十五轮 DA28 底栏位再叠 border-[--border]
+ * 描边 + 同色 hover 压平 Badge 淡底（用户「去掉放上去变淡，加上边框」）；
+ * 其余调用位不传保持原观感。 */
 function DisplayStatusPill({
   status,
   retryCount = 0,
   className,
+  pillClassName,
 }: {
   status: string;
   retryCount?: number;
   className?: string;
+  /** 直通内层 Pill 的类（tailwind-merge 压过基础圆角）。 */
+  pillClassName?: string;
 }): ReactNode {
   const d = displayStatusOf(status, retryCount);
   return (
     <span className={cn('inline-flex items-baseline gap-1.5 whitespace-nowrap', className)}>
-      <Pill tone={d.tone}>{d.label}</Pill>
+      <Pill tone={d.tone} className={pillClassName}>
+        {d.label}
+      </Pill>
       {d.detail !== '' && <span className={MUTED_CLASS}>{d.detail}</span>}
     </span>
   );
 }
 
-/** 阻塞徽标（docs/36 建议 1）：wait + blockedFrom 非空的物化阻塞行内标记。 */
-function BlockedPill({ blockedFrom }: { blockedFrom: number | null }): ReactNode {
+/** 阻塞徽标（docs/36 建议 1）：wait + blockedFrom 非空的物化阻塞行内标记。
+ * 十三轮 DA26：ml-1 不再内建——行内文字流场景（详情页）由调用位补 ml-1，
+ * 列表卡独立行场景顶格与其它行对齐。 */
+function BlockedPill({
+  blockedFrom,
+  className,
+}: {
+  blockedFrom: number | null;
+  className?: string;
+}): ReactNode {
   return (
-    <span className="ml-1 inline-flex items-baseline whitespace-nowrap">
+    <span className={cn('inline-flex items-baseline whitespace-nowrap', className)}>
       <Pill tone="warn">阻塞中{blockedFrom !== null ? ` · 前置 #${blockedFrom}` : ''}</Pill>
     </span>
   );
@@ -242,6 +300,10 @@ export function TasksTab({
   const [reorderError, setReorderError] = useState<{ taskId: number; message: string } | null>(
     null,
   );
+  // 十二轮 DA25 文件夹打开瞬态（对齐 assignError 模式）：error 按卡定位行内
+  // 展示（宿主 404/400/500 原样透出——文件夹缺失等）。
+  const [folderBusy, setFolderBusy] = useState<number | null>(null);
+  const [folderError, setFolderError] = useState<{ taskId: number; message: string } | null>(null);
   const editingTask = editTarget !== null && editTarget.task !== null ? editTarget.task : null;
 
   const openEdit = (group: TaskView, task: TaskView | null): void => {
@@ -336,6 +398,20 @@ export function TasksTab({
     }
   };
 
+  // 十二轮 DA25：打开任务文件夹（列表卡文件夹路径点击）。非乐观：成功无
+  // 回执 UI（文件管理器窗口即回执），失败按卡行内 FormErrorNote。
+  const openFolder = async (taskId: number): Promise<void> => {
+    setFolderBusy(taskId);
+    setFolderError((cur) => (cur !== null && cur.taskId === taskId ? null : cur));
+    try {
+      await openTaskFolder(team.teamId, taskId);
+    } catch (e) {
+      setFolderError({ taskId, message: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setFolderBusy(null);
+    }
+  };
+
   // 八轮 DA21 导航：selectedTaskId（ui model drawerTaskId）非空 = 详情页；
   // 选中任务被删（快照里已无此 id）自动回落列表页。
   const selected =
@@ -364,7 +440,7 @@ export function TasksTab({
       <div>
         <strong>#{task.taskId}</strong> {task.subject}
         <DisplayStatusPill status={task.status} retryCount={task.retryCount} className="ml-1" />
-        {task.blocked && <BlockedPill blockedFrom={task.blockedFrom} />}
+        {task.blocked && <BlockedPill blockedFrom={task.blockedFrom} className="ml-1" />}
         {task.assignee !== null && (
           <span className={cn(MUTED_CLASS, 'ml-1')}>· {task.assignee}</span>
         )}
@@ -437,7 +513,9 @@ export function TasksTab({
         </DialogContent>
       </Dialog>
 
-      {/* docs/26 小任务删除确认弹窗：未领取（draft/ready）可删，host 校验。 */}
+      {/* 任务删除确认弹窗（十二轮 DA25 共用面扩大：列表卡删除 + 详情页
+      小任务删除；标题去「小任务」限定，主任务追加级联提示）。未领取
+      （draft/ready）可删，host 校验，拒绝原因就地显示。 */}
       <Dialog
         open={deleteTarget !== null}
         onOpenChange={(next) => {
@@ -449,10 +527,11 @@ export function TasksTab({
       >
         <DialogContent className="max-w-sm">
           <DialogHeader className="space-y-1 text-left">
-            <DialogTitle>删除小任务</DialogTitle>
+            <DialogTitle>删除任务</DialogTitle>
             <DialogDescription className={MUTED_CLASS}>
-              确定删除「#{deleteTarget?.taskId ?? ''} {deleteTarget?.subject ?? ''}」？未领取的
-              任务删除后不可恢复。
+              确定删除「{deleteTarget?.subject ?? ''}」？
+              {deleteTarget?.kind === 'group' ? '主任务将级联删除全部小任务，' : ''}
+              未领取的任务删除后不可恢复。
             </DialogDescription>
           </DialogHeader>
           {deleteError !== null && <FormErrorNote>{deleteError}</FormErrorNote>}
@@ -536,7 +615,7 @@ export function TasksTab({
                       <span className={cn(MUTED_CLASS, 'mr-0.5')}>{subIndex + 1}.</span>
                       <strong>#{t.taskId}</strong> {t.subject}
                       <DisplayStatusPill status={t.status} className="ml-1" />
-                      {t.blocked && <BlockedPill blockedFrom={t.blockedFrom} />}
+                      {t.blocked && <BlockedPill blockedFrom={t.blockedFrom} className="ml-1" />}
                       {t.assignee !== null && (
                         <span className={cn(MUTED_CLASS, 'ml-1')}>· {t.assignee}</span>
                       )}
@@ -680,12 +759,21 @@ export function TasksTab({
   return (
     <TaskDndProvider>
       <div>
-        {/* 十一轮 DA24：任务主列表**平铺小卡栅格**（用户拍板「任务主列表不分
-        对话任务、待指派这种，做成团队那种小卡片」）——撤掉「对话任务」区块与
-        STATUS_GROUPS 十态分区（组头/彩点/计数全去），顶层任务（主任务 + 顶层
-        普通任务）一卡一任务平铺进团队列表同款 Card 面板栅格；整卡点击进详情
-        （主任务 → 主任务详情、普通任务 → 任务详情），无拖拽（十轮订正）。
-        九轮 DA22 口径不变：不列小任务明细，小任务列表在主任务详情页。 */}
+        {/* 十一…十五轮 DA24…DA28：任务主列表**平铺小卡栅格**（用户十一轮拍板
+        「任务主列表不分对话任务、待指派这种，做成团队那种小卡片」；十二轮
+        修订「去掉 #1 这种，文件夹左边…做成可以点击的，卡片再大一点，分行，
+        下面放删除按钮」；十三轮修订「任务卡片内容对齐，没有小任务就显示0，
+        而且目录两个字没有了，路径太长了截断大部分的」；十四轮修订「状态挪到
+        卡片的左边下面，圆角改成 2px／目录样式调整一下，就显示工作目录就行，
+        别显示具体路径了，别用灰色打底了不好看／别小任务 个了，改成 共 x 个
+        任务，已完成 x , 未完成 x 数字用颜色标识一下／删除旁边加一个详情
+        按钮」；十五轮修订「优化一下左下角状态的样式，去掉放上去变淡，加上
+        边框／工作目录还是不协调，修改一下更好融入卡片」）——撤掉「对话任务」
+        区块与 STATUS_GROUPS 十态分区，顶层任务（主任务 + 顶层普通任务）
+        一卡一任务平铺进 Card 面板栅格（TASK_GRID_CLASS 260px 加大一档）；
+        整卡点击进详情（主任务 → 主任务详情、普通任务 → 任务详情），无拖拽
+        （十轮订正）；文件夹路径点击 = 宿主拉起系统文件管理器，删除按钮仅可删
+        的卡渲染。九轮 DA22 口径不变：不列小任务明细，小任务列表在主任务详情页。 */}
         {(() => {
           // 平铺列表 = 全部顶层任务（主任务 + 顶层普通任务，快照序）。
           const mainTasks = team.tasks.filter((t) => t.parentId === null);
@@ -702,7 +790,7 @@ export function TasksTab({
                 <h3 className={LIST_TITLE_CLASS}>任务</h3>
                 <span className={LIST_COUNT_CLASS}>{mainTasks.length} 个</span>
               </div>
-              <div className={CARD_GRID_CLASS}>
+              <div className={TASK_GRID_CLASS}>
                 {mainTasks.map((t) => {
                   // 组卡进度：小任务计数与汇总（九轮 DA22 概览口径——只计数
                   // 不列明细；draft 只显示个数，ready 且有明细时叠加汇总）。
@@ -710,48 +798,113 @@ export function TasksTab({
                     ? team.tasks.filter((s) => s.parentId === t.taskId)
                     : [];
                   const done = subs.filter((s) => s.status === 'completed').length;
-                  const active = subs.filter((s) => s.status === 'start').length;
                   const summary =
                     t.kind === 'group' && t.status === 'ready' && subs.length > 0
                       ? groupDisplayOf(subs)
                       : null;
-                  // 身体行：主任务 = 小任务进度（对齐团队卡「任务 x/y 完成 ·
-                  // n 进行中」措辞）；普通任务 = 指派人（无则不出身体行）。
-                  const progress = t.kind === 'group'
-                    ? t.status === 'draft'
-                      ? `小任务 ${subs.length} 个`
-                      : `小任务 ${done}/${subs.length} 完成${active > 0 ? ` · ${active} 进行中` : ''}`
-                    : t.assignee !== null
-                      ? `指派 ${t.assignee}`
-                      : null;
+                  // 进度行（十四轮 DA27 改版，用户拍板「别小任务 个了，改成
+                  // 共 x 个任务，已完成 x , 未完成 x 数字用颜色标识一下」）：
+                  // 每卡统一渲染（十三轮口径），三种身份同格式——总数/已完成/
+                  // 未完成三分计数（原「进行中」计数不再单列），数字着色：
+                  // 已完成 success 绿、未完成 warning 琥珀、总数走行底灰；
+                  // 顶层普通任务的指派人沿用同行尾注。
+                  const progress = (
+                    <>
+                      共 {subs.length} 个任务，已完成 <span className="text-success">{done}</span>
+                      ，未完成 <span className="text-warning">{subs.length - done}</span>
+                      {t.kind !== 'group' && t.assignee !== null ? ` · 指派 ${t.assignee}` : ''}
+                    </>
+                  );
+                  const deletable = deletableOf(t, team.tasks);
                   return (
                     <div
                       key={t.taskId}
                       className={cn('eteams-task-card', TASK_CARD_CLASS)}
                       onClick={() => setSelectedTaskId(t.taskId)}
                     >
-                      <div className="flex items-center gap-2">
-                        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
-                          #{t.taskId} {t.subject}
-                        </span>
+                      {/* 头行：主题（十四轮 DA27：展示态 pill 挪出头部——用户
+                          「状态挪到卡片的左边下面」，入底栏左侧；十二轮 DA25
+                          已去 #id 前缀）。 */}
+                      <div className="truncate text-sm font-semibold text-foreground">
+                        {t.subject}
+                      </div>
+                      {/* 信息分行（十二轮 DA25 分行 + 十三轮 DA26 统一渲染）：
+                        进度/汇总 chip/阻塞各自独立行，每卡都有进度行（对齐）。 */}
+                      <div className="text-xs text-muted-foreground">{progress}</div>
+                      {summary !== null && <GroupSummaryChip summary={summary} />}
+                      {t.blocked && <BlockedPill blockedFrom={t.blockedFrom} />}
+                      {/* 文件夹行（十二轮 DA25 可点击 + 十三轮 DA26 目录标签 +
+                          十四轮 DA27 工作目录标签钮 + 十五轮 DA28 融入卡片）：
+                          十四轮用户「就显示工作目录就行，别显示具体路径了，
+                          别用灰色打底了不好看」——文案只留「工作目录」四字，
+                          完整路径仅在 title 悬浮提示；十五轮用户「还是不协调，
+                          修改一下更好融入卡片」——撤掉描边小按钮外壳（border/
+                          底色/内边距全去），改**幽灵文字钮**：常规字色 + hover
+                          下划线，与卡内其它文字行同权重、不再像外来件；点击 =
+                          宿主拉系统文件管理器，不冒泡到整卡。 */}
+                      {t.folder !== null && (
+                        <button
+                          type="button"
+                          title={`在文件管理器中打开：${t.folder}`}
+                          disabled={folderBusy === t.taskId}
+                          className="self-start cursor-pointer text-xs text-foreground underline-offset-2 hover:underline"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void openFolder(t.taskId);
+                          }}
+                        >
+                          工作目录
+                        </button>
+                      )}
+                      {folderError !== null && folderError.taskId === t.taskId && (
+                        <FormErrorNote>{folderError.message}</FormErrorNote>
+                      )}
+                      {/* 底栏（十二轮 DA25 删除栏 + 十三轮 DA26 mt-auto 沉底 +
+                          十四轮 DA27 重构 + 十五轮 DA28 状态 pill 描边）：
+                          mt-auto 把底栏压到卡底——同一栅格行内内容行数不同的
+                          卡，底栏齐平；border-t 分区。十四轮起每卡常驻：左侧 =
+                          展示态 pill（用户「状态挪到卡片的左边下面」；
+                          rounded-[2px] 用户拍板「圆角改成 2px」），右侧 = 详情
+                          + 删除（用户「删除旁边加一个详情按钮」——详情每卡都
+                          有，整卡点击的等价显式入口；删除仍仅可删的卡渲染，
+                          deletableOf 与 host deleteTask 守卫同口径）。十五轮
+                          用户「优化一下左下角状态的样式，去掉放上去变淡，加上
+                          边框」——pill 加 --border 描边（BORDER_L1_CLASS 压过
+                          Badge 的 border-transparent）、hover 淡底（badge.tsx
+                          secondary 80% 淡化，D19c color-mix 任意值实现）以同色
+                          hover 压平（hover 后底色不变）；按钮区不冒泡——点详情/删除不触发整卡进
+                          详情。 */}
+                      <div
+                        className="mt-auto flex items-center justify-between gap-2 border-t border-solid pt-2.5"
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         <DisplayStatusPill
                           status={t.status}
                           retryCount={t.retryCount}
-                          className="shrink-0"
+                          pillClassName={`rounded-[2px] ${BORDER_L1_CLASS} hover:bg-[color:var(--eteams-pill-bg)]`}
                         />
-                      </div>
-                      {(t.blocked || progress !== null || summary !== null) && (
-                        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs">
-                          {t.blocked && <BlockedPill blockedFrom={t.blockedFrom} />}
-                          {progress !== null && (
-                            <span className="text-muted-foreground">{progress}</span>
+                        <div className="flex items-center gap-1.5">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setSelectedTaskId(t.taskId)}
+                          >
+                            详情
+                          </Button>
+                          {deletable && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="text-destructive hover:text-destructive"
+                              onClick={() => setDeleteTarget(t)}
+                            >
+                              删除
+                            </Button>
                           )}
-                          {summary !== null && <GroupSummaryChip summary={summary} />}
                         </div>
-                      )}
-                      {t.folder !== null && (
-                        <p className="truncate text-xs text-muted-foreground">文件夹：{t.folder}/</p>
-                      )}
+                      </div>
                     </div>
                   );
                 })}

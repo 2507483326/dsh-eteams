@@ -10,7 +10,6 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import ArrowLeft from 'lucide-react/dist/esm/icons/arrow-left.mjs';
 import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right.mjs';
 import Dices from 'lucide-react/dist/esm/icons/dices.mjs';
-import MessageSquare from 'lucide-react/dist/esm/icons/message-square.mjs';
 import PenLine from 'lucide-react/dist/esm/icons/pen-line.mjs';
 import {
   IconPlusOutline16,
@@ -19,7 +18,6 @@ import {
   writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives';
 import { ADD_PEOPLE_TEMPLATE, type PrefillOutcome } from '../../lib/addPeople';
-import { activateConversationTab } from '../../lib/bridge';
 import type { InterviewQuestion, RosterMember } from '../../lib/api';
 import type { TeamSnapshot } from '../../lib/monitor';
 import { cn } from '../../lib/cn';
@@ -389,14 +387,18 @@ export function MembersTab({
 
   // 继续构建（docs/19.16）：会话文件保存完整上下文（步骤/草稿/需求），
   // 宿主恢复会话并唤醒后台构建代理，从中断处接着跑。
+  // 失败要可见（用户反馈 2026-09-05「点继续构建没反应」）：宿主对父会话
+  // 不在线等情形会诚实拒绝（409/400），此前组件侧吞错导致点了毫无反馈——
+  // 与访谈提交同口径，把拒绝原因亮在卡里。
+  const [resumeError, setResumeError] = useState<string | null>(null);
   const resume = async (): Promise<void> => {
     setConfirming(true);
-    // S10：继续构建改发 `build/resumeBuild`（同上：effect 失败上抛，
-    // 组件侧吞错行为不变）。
+    setResumeError(null);
+    // S10：继续构建改发 `build/resumeBuild`（effect 失败上抛）。
     try {
       await dispatch({ type: 'build/resumeBuild' });
-    } catch {
-      // 与迁移前一致：恢复失败不打断面板。
+    } catch (e) {
+      setResumeError(e instanceof Error ? e.message : String(e));
     }
     setConfirming(false);
     refreshBuild();
@@ -459,6 +461,17 @@ export function MembersTab({
   };
   const prefillAi = (): void => {
     setAiPrefill(onPrefillAddPeople());
+  };
+  // 复制反馈（用户反馈 2026-09-05 第二批）：writeClipboard 回传是否真的写进
+  // 剪贴板——成功亮「✓ 已复制」、失败亮「复制失败」各 2 秒（此前点了零反
+  // 馈）。计时器挂 ref：重复点击先清旧的，卸载后不误触 setState。
+  const [copyState, setCopyState] = useState<'idle' | 'ok' | 'fail'>('idle');
+  const copyTimer = useRef<number | null>(null);
+  const copyTemplate = async (): Promise<void> => {
+    const ok = await writeClipboard(ADD_PEOPLE_TEMPLATE).catch(() => false);
+    setCopyState(ok ? 'ok' : 'fail');
+    if (copyTimer.current !== null) window.clearTimeout(copyTimer.current);
+    copyTimer.current = window.setTimeout(() => setCopyState('idle'), 2000);
   };
 
   // 手动创建（用户迭代 2026-09-03）：面板直连名册保存（`roster/saveRoster`
@@ -531,20 +544,6 @@ export function MembersTab({
             <ArrowLeft className="h-3.5 w-3.5" />
             返回角色列表
           </Button>
-          {/* 对话页看进度只在 AI 创建路径有意义（手动创建不经对话）。 */}
-          {(addMode === 'ai' ||
-            (build !== null &&
-              (build.status === 'active' || build.status === 'awaiting_confirmation'))) && (
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => activateConversationTab()}
-              title="切到会话的对话视图，看命令卡片与进度行"
-            >
-              <MessageSquare className="h-3.5 w-3.5 text-muted-foreground" />
-              对话页看进度
-            </Button>
-          )}
         </div>
         <Card className={cn(PANEL_CARD_CLASS, 'mt-2')}>
           {build !== null && build.status === 'active' && (
@@ -816,31 +815,44 @@ export function MembersTab({
               </div>
             </div>
           )}
-          {build !== null && build.status === 'cancelled' && addMode === 'ai' && (
-            // 已放弃的构建（用户迭代 2026-09-05：只在 AI 创建页出现，并标出
-            // 在建角色——草稿名优先，没起名就退回原始需求）：上下文（步骤/
-            // 草稿/需求）都保存在会话里，「继续构建」唤醒后台代理从中断处
-            // 接着跑（docs/19.16）。
-            <Card className={PANEL_CARD_CLASS}>
-              <div className="flex items-center gap-2">
-                <div className={cn(LINE_CLASS, 'my-0 font-semibold')}>
-                  已放弃本次构建
-                  {build.draft?.name !== undefined && build.draft.name !== ''
-                    ? ` · ${build.draft.name}`
-                    : ''}
+          {build !== null &&
+            build.status === 'cancelled' &&
+            addMode === 'ai' &&
+            build.parentOnline !== false && (
+              // 已放弃的构建（用户迭代 2026-09-05：只在 AI 创建页出现，并标出
+              // 在建角色——草稿名优先，没起名就退回原始需求）：上下文（步骤/
+              // 草稿/需求）都保存在会话里，「继续构建」唤醒后台代理从中断处
+              // 接着跑（docs/19.16）。
+              // 父会话不在线 → 整卡不渲染（用户反馈 2026-09-05 第二批）：
+              // 发起构建的 /eteam 对话没开着时宿主必拒恢复（409），按钮是
+              // 死的——进页检测到就不渲染，而不是点了才报错。
+              <Card className={PANEL_CARD_CLASS}>
+                <div className="flex items-center gap-2">
+                  <div className={cn(LINE_CLASS, 'my-0 font-semibold')}>
+                    已放弃本次构建
+                    {build.draft?.name !== undefined && build.draft.name !== ''
+                      ? ` · ${build.draft.name}`
+                      : ''}
+                  </div>
+                  <Pill tone="muted">已中断</Pill>
                 </div>
-                <Pill tone="muted">已中断</Pill>
-              </div>
-              {build.request !== '' && <div className={MUTED_CLASS}>需求：{build.request}</div>}
-              {build.note !== '' && <div className={MUTED_CLASS}>{build.note}</div>}
-              <div className="mt-2 flex items-center gap-2">
-                <Button size="sm" disabled={confirming} onClick={() => void resume()}>
-                  继续构建
-                </Button>
-                <span className={MUTED_CLASS}>上下文已保存——从中断处接着跑，不用从头再来。</span>
-              </div>
-            </Card>
-          )}
+                {build.request !== '' && (
+                  <div className={MUTED_CLASS}>需求：{build.request}</div>
+                )}
+                {build.note !== '' && <div className={MUTED_CLASS}>{build.note}</div>}
+                <div className="mt-2 flex items-center gap-2">
+                  <Button size="sm" disabled={confirming} onClick={() => void resume()}>
+                    继续构建
+                  </Button>
+                  <span className={MUTED_CLASS}>上下文已保存——从中断处接着跑，不用从头再来。</span>
+                </div>
+                {resumeError !== null && (
+                  // 恢复被拒要可见（父会话不在线 / 会话状态翻页竞态等）：拒绝原因
+                  // 亮在卡里，与访谈提交失败同口径（destructive token 错误面）。
+                  <div className="mt-2 text-xs leading-5 text-destructive">⚠️ {resumeError}</div>
+                )}
+              </Card>
+            )}
           {/* 已入库（用户迭代 2026-09-04）不再渲染回顾卡：确认成功在对话卡
           与角色列表各有反馈，新增页回到「AI 创建 / 手动创建」方式选择——
           再建一个从方式选择卡走，不再停留上一轮的已入库回顾。 */}
@@ -952,46 +964,29 @@ export function MembersTab({
                     <span>{s}</span>
                   </div>
                 ))}
-                {aiPrefill === 'set' ? (
+                {/* 填充/复制两钮常驻（用户反馈 2026-09-05 第二批「点填充按
+                钮就都消失了」）：填充成功不再收走按钮行——复制仍随时可用；
+                复制带「✓ 已复制」瞬时反馈（writeClipboard 回传 false 时亮
+                「复制失败」，不假装成功）。 */}
+                <div className="mt-2.5 flex items-center gap-2">
+                  <Button size="sm" onClick={prefillAi}>
+                    {aiPrefill === 'set' ? '重新填充' : '填充'}
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={() => void copyTemplate()}>
+                    {copyState === 'ok' ? '✓ 已复制' : copyState === 'fail' ? '复制失败' : '复制'}
+                  </Button>
+                  {aiPrefill !== 'set' && (
+                    <span className={cn(MUTED_CLASS, 'mt-0')}>
+                      {aiPrefill === 'aborted'
+                        ? '你保留了输入框里未发送的草稿——再点「填充」会再次询问是否覆盖。'
+                        : '点「填充」把命令填进对话输入框，或复制后去对话粘贴发送。'}
+                    </span>
+                  )}
+                </div>
+                {aiPrefill === 'set' && (
                   <div className={cn(MUTED_CLASS, 'mt-2.5')}>
                     提示：已模拟「键入 /eteam +
                     空格」完成命令认领（claimed）——补全两个【】占位符后直接回车即可；编辑正文时命令高亮收起属正常行为。
-                  </div>
-                ) : aiPrefill === null ? (
-                  // 未填充态（用户迭代 2026-09-05）：进页先给「填充 / 复制」
-                  // 两个按钮——点「填充」此刻才写对话输入框，不点不动输入框。
-                  <div className="mt-2.5 flex items-center gap-2">
-                    <Button size="sm" onClick={prefillAi}>
-                      填充
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => void writeClipboard(ADD_PEOPLE_TEMPLATE)}
-                    >
-                      复制
-                    </Button>
-                    <span className={cn(MUTED_CLASS, 'mt-0')}>
-                      点「填充」把命令填进对话输入框，或复制后去对话粘贴发送。
-                    </span>
-                  </div>
-                ) : (
-                  <div className="mt-2.5 flex items-center gap-2">
-                    <Button size="sm" variant="secondary" onClick={prefillAi}>
-                      重试填充
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => void writeClipboard(ADD_PEOPLE_TEMPLATE)}
-                    >
-                      复制命令
-                    </Button>
-                    <span className={cn(MUTED_CLASS, 'mt-0')}>
-                      {aiPrefill === 'aborted'
-                        ? '你保留了输入框里未发送的草稿——重试填充会再次询问是否覆盖。'
-                        : '也可复制命令去对话粘贴发送。'}
-                    </span>
                   </div>
                 )}
               </div>

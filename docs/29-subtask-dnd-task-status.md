@@ -64,6 +64,10 @@
 | DA22 | 列表页组卡**只承状态概览**（2026-09-05 九轮拍板） | 用户原话「任务列表中的任务卡片不展示任务详情和整个任务列表，需要点击进去再看到整个任务列表」：主任务卡片撤掉八轮的小任务精简行——列表页组卡只剩头部（#id/主题/展示态）+ 进度计数（小任务 n/m 完成）+ 汇总 chip（ready）+ 文件夹，**整个任务列表只在主任务详情页看**（整卡点击进详情，导航口径不变）。计数/汇总与顺序无关，列表组卡不再调 `executionOrderOf`（详情页分支照旧拓扑排序） |
 | DA23 | 小任务列表**把手拖拽**（2026-09-05 十轮拍板，含订正） | 用户原话「团队列表左上角新增一个拖拽图标，只有拖拽图标可以拖拽」（初读误为任务列表页主任务卡加把手，用户随即订正「错了不是任务列表，而是小任务列表，任务列表去掉拖拽」）：①**任务列表页无拖拽**——主任务卡保持九轮 DA22 状态概览（整卡点击进详情，展示序维持普通 filter 无拓扑排序），本轮误加的把手/调序撤除；②**主任务详情页小任务列表**：小任务卡片**左上角新增 grip 把手**（GripVertical，'eteams-subtask' item 不变）——**只有把手是拖拽源**（dragRef 只挂把手 span，canDrag = draft/ready，不可编辑态把手淡化），卡身不可拖；③卡身仍兼**放置目标**（同父兄弟卡可落，悬停 ring）——拖 A 把手落 B 卡 = 调小任务执行顺序，语义与七轮 DA20 完全一致（兄弟依赖链改写补丁，非乐观更新），仅拖拽源从整卡收窄为把手；④卡身点击 = 进小任务详情页不受影响（HTML5 拖拽不触发 click） |
 | DA24 | 任务主列表**平铺小卡栅格**（2026-09-05 十一轮拍板） | 用户原话「任务主列表 不分 对话任务、待指派这种。把任务主列表做成团队那种小卡片」：①**撤分区**——「对话任务」区块与 STATUS_GROUPS 十态分区（组头/彩点/计数/精简行）全去，顶层任务不再按 kind/状态拆区块；②**平铺栅格**——团队列表同款容器（Card 面板 + 「任务 n 个」标题行 + `CARD_GRID_CLASS` 栅格，最小 210px 自适应列），一卡一**顶层任务**（主任务 + 顶层普通任务，快照序混排）；③**小卡三段式**（团队卡同款）：头行（#id 主题截断 + 展示态 pill，retryCount 并入）+ 身体行（主任务 = 小任务进度「x/y 完成 · n 进行中」（draft 只显个数；ready 叠加汇总 chip）；普通任务 = 指派人，无则不出）+ 文件夹行；阻塞 pill 并入身体行；④卡底色/边框/悬停由 `.eteams-task-card` 样式表接管（与团队卡 `.eteams-team-card` 别名并轨）；⑤整卡点击进详情（主任务 → 主任务详情、普通任务 → 任务详情），无拖拽（十轮 DA23 订正）；九轮 DA22 口径不变（不列小任务明细，整个任务列表在主任务详情页） |
+| DA25 | 列表卡**去 #id、文件夹可点击、加大、分行、底栏删除**（2026-09-05 十二轮拍板） | 用户原话「去掉 #1 这种，文件夹左边... 然后做成可以点击的，卡片再大一点，分行，下面放删除按钮」；两个开放点用户续拍：文件夹点击 = **「打开任务文件夹」**（宿主拉系统文件管理器），删除按钮 = **「仅可删除的卡显示」**：①**头行去 `#id` 前缀**——只渲染主题 + 展示态 pill（详情页头部卡的 #id 不动）；②**文件夹行去「文件夹：」标签**——裸路径（`{folder}/`）渲染成可点击件（点线下划线 + hover 提色 + title），点击 = POST `/team/<id>/task/<taskId>/folder/open`（新宿主路由）：目录由 `locateTeam` 的 workspacePath + 任务 work_dir 现算（`taskDirAbs`），缺失 400、未知任务 404，打开器经 `WebSurfaceOptions.openFolder` 注入（默认按平台 spawn：win32 explorer / darwin open / 其余 xdg-open，detached + 异步错误吞掉）；api.ts 新增 `openTaskFolder`；失败按卡行内 `FormErrorNote`（folderBusy/folderError 瞬态，成功无回执 UI——文件管理器窗口即回执）；③**卡片加大**——任务列表专用 `TASK_GRID_CLASS`（最小 260px 自适应列，shared.tsx 新增；不并轨 `CARD_GRID_CLASS` 以免牵动团队/角色列表）；④**信息分行**——进度行/汇总 chip 行/阻塞行各自独立（不再 flex-wrap 混排一行）；⑤**底栏删除按钮**——border-t 分区行 + destructive 描边删除钮（团队卡底栏同款），**仅可删的卡渲染**（`deletableOf`：本身 draft/ready + 主任务全部小任务 draft/ready + 删除集不被未入集任务依赖——与 host `deleteTask` 守卫同口径，host 仍是最终裁决，弹窗就地显示拒绝原因）；删除确认弹窗共用面扩大（列表卡主任务/顶层任务 + 详情页小任务），标题改「删除任务」、主任务追加级联提示、文案去 `#id` 前缀 |
+| DA26 | 列表卡**内容对齐、小任务 0、目录标签回补、路径截断收窄**（2026-09-05 十三轮拍板） | 用户原话「任务卡片内容对齐，没有小任务就显示0，而且目录两个字没有了，路径太长了截断大部分的」：①**内容行顶格对齐**——`BlockedPill` 不再内建 `ml-1`（ml-1 移到 className 由调用位补：详情页两处行内文字流场景传 `ml-1`，列表卡独立行顶格与其它行左缘齐）；底栏 `mt-auto` 沉底——同一栅格行内内容行数不同的卡，删除栏齐平在卡底；②**每卡必有进度行**——进度行从「主任务才渲染」改为**无条件渲染**（行结构跨卡统一）：主任务沿用 小任务 N 个（draft）/ N/M 完成 · n 进行中；无小任务的顶层普通任务显 **「小任务 0」**（用户拍板「没有小任务就显示0」；有指派人追加 「 · 指派 X」）；③**「目录」标签回补**——十二轮裸路径后用户发现「目录两个字没有了」，文件夹行恢复两字标签：**「目录 末段/」**（只显示 `folder.split('/').pop()` 末段），全路径进悬停 title（「在文件管理器中打开：<全路径>」）；④**路径截断收窄**——十二轮整条路径 truncate 截掉大部分，本轮只显末段后不再长截断 |
+| DA27 | 列表卡**状态入底栏（圆角 2px）、进度三计数着色、工作目录标签钮、详情按钮**（2026-09-05 十四轮拍板） | 用户原话「1. 状态挪到卡片的左边下面，圆角改成 2px  2。目录样式调整一下，就显示工作目录就行，别显示具体路径了，别用灰色打底了不好看／2. 别小任务 个了，改成 共 x 个任务，已完成 x , 未完成 x 数字用颜色标识一下／3. 删除旁边加一个详情按钮」：①**展示态 pill 挪到卡底栏左侧**——「左边下面」按用户十二轮「下面放删除按钮」同词汇解作卡底栏：底栏改左右分栏（justify-between），左 = 状态 pill、右 = 按钮；**圆角改 2px** 指该状态 pill（`Pill` 增 `className` 透传、`DisplayStatusPill` 增 `pillClassName`，底栏位传 `rounded-[2px]` 压过 rounded-full；其余 pill 调用位不动）；头行只剩主题。②**进度行改三分计数**——「共 x 个任务，已完成 x，未完成 x」统一格式（原「小任务 N 个 / N/M 完成 · n 进行中 / 小任务 N」三分支废止，「进行中」计数不再单列），数字着色：已完成 `text-success` 绿、未完成 `text-warning` 琥珀、总数走行底灰；顶层普通任务指派人尾注保留。③**文件夹行改「工作目录」标签钮**——只留四字标签（十三轮的末段路径也撤），完整路径仅存 title 悬浮提示；样式去灰色弱化文案（muted + 点线下划线废止），改常规字色描边小按钮（border 走 `.eteams-ui` 的 --border 缺省、hover 淡底、self-start 不占满行）。④**底栏每卡常驻 + 详情按钮**——删除按钮右侧旁新增「详情」outline 钮（整卡点击进详情的显式等价入口，每卡都有）；删除仍仅可删的卡渲染（deletableOf 口径不变）；底栏从「仅可删的卡渲染」改为每卡渲染（mt-auto 沉底对齐因此覆盖全部卡） |
+| DA28 | 底栏状态 pill **描边去 hover 淡底**、工作目录改**幽灵文字钮融入卡片**（2026-09-05 十五轮拍板） | 用户原话「1. 优化一下左下角状态的样式，去掉放上去变淡，加上边框／2. 工作目录还是不协调，修改一下更好融入卡片」：①**底栏状态 pill**——加 `--border` 描边（`BORDER_L1_CLASS` 经 tailwind-merge 压过 shadcn Badge 的 `border-transparent`）并**压平 hover 淡底**（Badge 悬停淡底 = secondary 80% 淡化，D19c color-mix 任意值实现）→ 同色 hover `hover:bg-[color:var(--eteams-pill-bg)]`，悬停后底色不变）；`Pill`/`DisplayStatusPill` 的 className/pillClassName 透传链沿用十四轮。②**文件夹行工作目录钮**——十四轮的描边小按钮（border/底色/内边距）「还是不协调」，撤掉按钮外壳改**幽灵文字钮**：常规字色（text-foreground）+ hover 下划线，与卡内其它文字行同权重、不再像外来件；文案「工作目录」四字与完整路径 title 悬停提示不变 |
 
 ## A.2 依赖选型与 DndProvider 层级
 
@@ -201,20 +205,27 @@ refreshActivitySoon() → /state（≤1s 轮询命中）   行内 FormErrorNote 
 
 可编辑窗口内框承整链（DA5），一律**抑制** `TaskStations` 的重复渲染（`boxCoversChain` 纯函数；站点行与框 chips 内容重合，E13）；开跑后（`chainCursor ≥ 0`）恢复 `TaskStations` + 框只读承单站。多站容器空白处 / chip 点击 = 打开「修改」弹窗（主题/说明等，键盘 Enter/Space 同路径；六轮 DA19 起弹窗不再编排链），空框点击 = 「＋」多选面板（A.7）。
 
-### A.5.2 界面草图（2026-09-05 八轮 DA21 页面化 + 九轮 DA22 列表概览化 + 十轮 DA23 小任务卡把手 + 十一轮 DA24 平铺小卡：列表页 ↔ 详情页；四轮卡槽下置 + 七轮卡片化口径并入详情页草图）
+### A.5.2 界面草图（2026-09-05 八轮 DA21 页面化 + 九轮 DA22 列表概览化 + 十轮 DA23 小任务卡把手 + 十一轮 DA24 平铺小卡 + 十二轮 DA25 卡片加大/分行/文件夹可点击/底栏删除 + 十三轮 DA26 对齐/小任务 0/目录标签 + 十四轮 DA27 状态入底栏/进度三计数/工作目录钮/详情钮 + 十五轮 DA28 状态 pill 描边/工作目录幽灵钮：列表页 ↔ 详情页；四轮卡槽下置 + 七轮卡片化口径并入详情页草图）
 
-**列表页（十一轮 DA24：平铺小卡栅格，与团队列表同款；不分「对话任务」/状态分区、无拖拽）**：
+**列表页（十一轮 DA24 平铺小卡栅格 + 十二轮 DA25 修订 + 十三轮 DA26 修订 + 十四轮 DA27 修订 + 十五轮 DA28 修订：底栏左状态 pill（圆角 2px + --border 描边 + hover 不变色）、进度行共/已完成/未完成三计数着色、工作目录幽灵文字钮（hover 下划线）、底栏加详情钮；与团队列表同款容器、不分「对话任务」/状态分区、无拖拽）**：
 
 ```
-┌ Card 面板（PANEL_CARD_CLASS，同团队列表）───────────────────────────────┐
-│ 任务 · 3 个                                                             │
-│ ┌ #t7-101 登录页改版 ◔ 待指派 ┐ ┌ #t8 部署脚本 ● 执行中 ┐               │
-│ │ 小任务 2/3 完成 · 1 进行中   │ │ 指派 王五              │  ←一卡一     │
-│ │ [汇总 chip（ready 时）]      │ │ 阻塞中 · 前置 #t7      │    顶层任务  │
-│ │ 文件夹：登录改版/            │ └────────────────────────┘              │
-│ └──────────────────────────────┘                                         │
+┌ Card 面板（PANEL_CARD_CLASS，同团队列表）────────────────────────────────┐
+│ 任务 · 3 个                                                              │
+│ ┌ 登录页改版 ─────────────────┐ ┌ 部署脚本 ────────────┐                 │
+│ │ 共 3 个任务，已完成 2，      │ │ 共 0 个任务，已完成 0，│  ←十四轮：     │
+│ │   未完成 1（数字绿/琥珀着色） │ │   未完成 0 · 指派 王五 │   进度三计数  │
+│ │ [汇总 chip（ready 时）]      │ │ 阻塞中 · 前置 #7      │   着色；头行  │
+│ │ 工作目录 ←幽灵文字钮（hover    │ │ 工作目录（完整路径     │   只有主题；  │
+│ │   下划线），路径在悬停提示    │ │  在悬停提示）          │   状态 pill  │
+│ │ ─────────────────────────    │ └───────────────────────┘ 挪入底栏左  │
+│ │ ◔ 待指派        [详情][删除] │ ←底栏每卡常驻：左状态 pill（2px 圆角  │
+│ └──────────────────────────────┘   + 描边，hover 不变色）右详情钮（每卡）│
+│                                     + 删除钮（仅可删的卡）               │
 └──────────────────────────────────────────────────────────────────────────┘
-（min 210px 自适应列；无组头/彩点/分区；整卡点击进详情；不列小任务明细）
+（min 260px 自适应列——十二轮加大一档；头行无 #id 前缀；进度/chip/阻塞逐行
+分行、顶格左缘对齐——十三轮；底栏 mt-auto 沉底同栅格行齐平；整卡点击进详情，
+工作目录钮/详情/删除钮不冒泡；不列小任务明细）
 ```
 
 **主任务详情页（= 整个任务的编排面；返回条 + 头部卡 + 编排全套）**：
@@ -421,6 +432,10 @@ group 自身只有 draft/ready/completed（+cancelled）四态可达（taskMachi
 | 九轮（2026-09-05，DA22 列表页组卡概览化） | `tasksTab.tsx`：列表页组卡撤掉小任务精简行（八轮 DA21 的只读行）——组卡只剩头部（#id/主题/展示态）+ 进度计数 + 汇总 chip + 文件夹，整卡点击进主任务详情看整个任务列表；列表组卡不再调 `executionOrderOf`（计数/汇总与顺序无关，改普通 filter），详情页分支拓扑排序照旧；文件头与 TasksTab 注释同步。零 store/host/纯函数变更 |
 | 十轮（2026-09-05，DA23 小任务卡把手拖拽；含列表页误加订正） | `tasksTab.tsx`：`SubtaskCard` **把手化**——dragRef 从卡身 div 移到左上 GripVertical 把手 span（canDrag = draft/ready，不可编辑态 opacity-40 淡化），卡身只挂 dropRef（canDrop 同父兄弟口径不变），children 包 `min-w-0 flex-1` 与把手并排；任务列表页保持九轮 DA22 状态概览**无拖拽**（初版误给列表主任务卡加把手调序，经用户订正「任务列表去掉拖拽」撤除，展示序恢复普通 filter）；`taskAssign.tsx`：拖拽类型注释更新（'eteams-subtask' 即把手 item；误加的 `GROUP_DRAG_TYPE`/`GroupDragItem` 撤除）；`lucide-icon.d.ts`：增 GripVertical 深层导入声明；`tests/taskAssign.test.ts`：无新增（初版数组限定对照锁随列表拖拽撤除删除，311 用例）。零 store/host/核心纯函数变更 |
 | 十一轮（2026-09-05，DA24 任务主列表平铺小卡栅格） | `tasksTab.tsx`：列表页 return 块整体重写——「对话任务」区块与 STATUS_GROUPS 十态分区（组头/dotClass/TASK_ROW_CLASS 精简行）**撤除**，改团队列表同款 `Card` 面板（PANEL_CARD_CLASS + 「任务 n 个」标题行 LIST_TITLE/LIST_COUNT + CARD_GRID_CLASS 栅格）平铺顶层任务小卡（`TASK_CARD_CLASS` + `.eteams-task-card`：头行 #id 主题截断 + 展示态 pill、身体行 小任务进度（x/y 完成 · n 进行中）/指派 + 阻塞 pill + 汇总 chip、文件夹行；整卡点击进详情）；`shared.tsx`：ROLE_LIST_CSS 增 `.eteams-task-card` 别名选择器（与 `.eteams-team-card` 同规则并轨）+ 注释同步；`taskDisplayStatus.ts`：STATUS_GROUPS 注释改「十一轮后无运行时渲染方的键序规范」（列表不再按态分区）；`tests/taskDisplayStatus.test.ts`：STATUS_GROUPS describe 题注同步（311 用例）。零 store/host/核心纯函数变更 |
+| 十二轮（2026-09-05，DA25 去号/文件夹可点击/加大/分行/底栏删除） | `tasksTab.tsx`：列表小卡重排——头行去 `#{taskId}` 前缀（只渲染主题 + pill）、信息**分行**（进度/chip/阻塞各自独立行，不再 flex-wrap 混排）、文件夹行去「文件夹：」标签改**可点击件**（裸路径下划线 + hover 提色 + title；stopPropagation；`folderBusy` 禁用中、`folderError` 行内 FormErrorNote）、栅格换 `TASK_GRID_CLASS`（260px）、底栏 border-t 分区 + 删除钮（`deletableOf` 判据 = draft/ready + 主任务小任务全 draft/ready + 删除集无下游依赖，仅可删的卡渲染；stopPropagation；删除确认弹窗共用面扩大——标题「删除任务」、主任务级联提示、文案去 #id）；`shared.tsx`：新增 `TASK_GRID_CLASS`（任务列表专用 260px 栅格，不并轨 CARD_GRID_CLASS）；`api.ts`：新增 `openTaskFolder(teamId, taskId)`；`webui.ts`：新增 POST `/team/<id>/task/<taskId>/folder/open` 路由（`taskDirAbs` 现算目录、缺失 400、未知任务 404；`installWebSurface` 增 `WebSurfaceOptions.openFolder` 注入点，默认 `defaultOpenFolder` 按平台 spawn explorer/open/xdg-open，detached + 异步错误吞掉）；`tests/webui.test.ts`：增 folder/open 路由回归 1 例（假打开器收目录 + 404/400 分支，312 用例） |
+| 十三轮（2026-09-05，DA26 对齐/小任务 0/目录标签/路径截断收窄） | `tasksTab.tsx`：①`BlockedPill` 增 `className` prop、**ml-1 不再内建**（详情页两处行内文字流调用位补 `className="ml-1"`，列表卡独立行顶格与其它行左缘齐）；②进度行**无条件渲染**（`const progress` 三分支：主任务 draft = 小任务 N 个、主任务非 draft = N/M 完成 · n 进行中、顶层普通任务 = 小任务 N（指派人并入同行）——无小任务显「小任务 0」，用户拍板「没有小任务就显示0」）；③文件夹行恢复**「目录」两字标签** + 只显示末段路径（`folder.split('/').pop()/`，全路径进 title「在文件管理器中打开：<全路径>」）；④底栏 `mt-auto` 沉底（同栅格行内容行数不同的卡删除栏齐平）；头注/卡片常量/区块注释同步。零 store/host/api/纯函数变更（312 用例） |
+| 十四轮（2026-09-05，DA27 状态入底栏/进度三计数/工作目录钮/详情钮） | `shared.tsx`：`Pill` 增 `className` 透传（tailwind-merge 压过基础圆角/底色，其余调用位不传观感不变）；`tasksTab.tsx`：①头行只剩主题（展示态 pill 挪出），`DisplayStatusPill` 增 `pillClassName` 直通内层 Pill；②底栏重构为每卡常驻左右分栏（justify-between）——左 = 状态 pill（`rounded-[2px]` 用户拍板「圆角改成 2px」，「左边下面」按十二轮「下面放删除按钮」同词汇解作卡底栏），右 = 「详情」outline 钮（新增，`setSelectedTaskId` 显式入口）+ 「删除」钮（仍仅 `deletableOf` 通过的卡渲染）；③进度行改三分计数 JSX：共 N 个任务，已完成 N（`text-success`）/未完成 N（`text-warning`），数字着色、总数走行底灰，「进行中」计数不再单列（`active` 变量删除），指派人尾注保留；④文件夹行改「工作目录」四字描边小按钮（self-start、border 走 `.eteams-ui` --border 缺省、hover 淡底；末段路径文案撤除，完整路径仅存 title）；头注/卡片常量/区块注释同步。零 store/host/api/纯函数变更（312 用例） |
+| 十五轮（2026-09-05，DA28 状态 pill 描边/工作目录幽灵钮） | `tasksTab.tsx`：①底栏状态 pill `pillClassName` 叠加 `BORDER_L1_CLASS` 描边（tailwind-merge 压过 Badge `border-transparent`）+ `hover:bg-[color:var(--eteams-pill-bg)]` 同色 hover（压平 Badge `hover:bg-secondary/80` 淡底，悬停底色不变）——用户「去掉放上去变淡，加上边框」；②文件夹行工作目录钮撤外壳（border/bg-background/px/py/transition 全去）改幽灵文字钮（text-foreground + underline-offset-2 hover:underline）——用户「还是不协调，修改一下更好融入卡片」；头注/卡片常量/区块注释同步。零 store/host/api/纯函数变更（314 用例——工作区另有并行新增的 rolebuilder-resume 回归 2 例，非本轮改动面） |
 
 预计新增 client 组件：`TaskAssignDropBox`（成员框）、`MemberDragChip`（成员罗列条 chip）、`TeamMemberStrip`（罗列条容器）、`DisplayStatusPill`（展示态徽标）。
 

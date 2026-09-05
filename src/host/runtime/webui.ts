@@ -11,6 +11,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
+import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { ETeamsResolvedConfig } from '../config.js';
@@ -25,7 +26,7 @@ import { readEventsSync, readMailboxSync } from '../state/events.js';
 import { boardOverview } from '../state/queries.js';
 import { listTeamIds, readTeamSync } from '../state/store.js';
 import { joinPath, stateRootFor, type RuntimeContext, type RuntimeEnv } from './base.js';
-import { taskDirRel } from './docs.js';
+import { taskDirAbs, taskDirRel } from './docs.js';
 import { composeCaptainPersona } from '../prompts/personas/captain.js';
 import {
   avatarSeedFor,
@@ -547,10 +548,38 @@ function logHostBoot(ctx: Context, config: ETeamsResolvedConfig): void {
 }
 
 /**
+ * Web-surface options（十二轮 DA25 注入点）：测试注入假 openFolder，避免
+ * 单测真的拉起系统文件管理器。
+ */
+export interface WebSurfaceOptions {
+  /** 任务文件夹打开器：默认按平台 spawn 文件管理器（defaultOpenFolder）。 */
+  openFolder?: (dir: string) => void | Promise<void>;
+}
+
+/**
+ * 默认任务文件夹打开器（十二轮 DA25）：按平台拉系统文件管理器——win32
+ * explorer / darwin open / 其余 xdg-open。detached + unref 不阻塞宿主；
+ * spawn 的异步失败（命令不存在等）吞掉——打开失败不致崩宿主，客户端侧
+ * 靠目录存在性 400 先行拦截。
+ */
+function defaultOpenFolder(dir: string): void {
+  const command =
+    process.platform === 'win32' ? 'explorer' : process.platform === 'darwin' ? 'open' : 'xdg-open';
+  const child = spawn(command, [dir], { detached: true, stdio: 'ignore' });
+  child.on('error', () => undefined);
+  child.unref();
+}
+
+/**
  * Install the eteams web surface (idempotent): registers one prefix route
  * covering every read endpoint and returns whether it bound this call.
  */
-export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): boolean {
+export function installWebSurface(
+  ctx: Context,
+  config: ETeamsResolvedConfig,
+  options: WebSurfaceOptions = {},
+): boolean {
+  const openFolder = options.openFolder ?? defaultOpenFolder;
   const webServer = webServerOf(ctx);
   const workspaceRegistry = workspaceRegistryOf(ctx);
   if (webServer === undefined || workspaceRegistry === undefined) return false;
@@ -1165,15 +1194,74 @@ export function installWebSurface(ctx: Context, config: ETeamsResolvedConfig): b
               sendJson(res, 200, { ok: true });
               return;
             }
+            // POST /team/<id>/task/<taskId>/folder/open — 打开任务文件夹（十二轮
+            // DA25：列表卡文件夹路径可点击，系统文件管理器中打开）。目录由
+            // workspacePath + 任务 work_dir 现算（taskDirAbs），缺失 400；
+            // 打开器可经 WebSurfaceOptions 注入（测试不真拉 explorer）。
+            if (
+              req.method === 'POST' &&
+              segments[0] === 'team' &&
+              segments.length === 6 &&
+              segments[2] === 'task' &&
+              segments[4] === 'folder' &&
+              segments[5] === 'open'
+            ) {
+              const located = locateTeam(ctx, config, segments[1]!);
+              if (!located) {
+                sendError(res, 404, `团队 ${segments[1]} 不存在`);
+                return;
+              }
+              const { team, workspacePath } = located;
+              const openTaskId = Number.parseInt(segments[3] ?? '', 10);
+              if (!Number.isFinite(openTaskId)) {
+                sendError(res, 400, `任务号无效：${segments[3]}`);
+                return;
+              }
+              const task = team.tasks.find((t) => t.id === openTaskId);
+              if (task === undefined) {
+                sendError(res, 404, `任务 #${openTaskId} 不存在`);
+                return;
+              }
+              const dir = taskDirAbs(workspacePath, team, task);
+              if (!existsSync(dir)) {
+                sendError(res, 400, `任务文件夹不存在：${dir}`);
+                return;
+              }
+              try {
+                await openFolder(dir);
+              } catch (e) {
+                sendError(res, 500, `打开文件夹失败：${e instanceof Error ? e.message : String(e)}`);
+                return;
+              }
+              sendJson(res, 200, { ok: true, dir });
+              return;
+            }
             // docs/35 §5#1：批准环节下线（POST /team/<id>/approve 路由与
             // 'plan.approved' 事件分支随之删除）——计划在对话内确认，任务
             // 就绪后由领队直接指派执行。
             // ---------- role-builder build session (docs/19.6, D18) ----------
             // GET /rolebuilder — the single build-session slot; {empty:true}
-            // when no session exists yet.
+            // when no session exists yet. 会话存在时附带 parentOnline（用户反馈
+            // 2026-09-05 第二批）：发起构建的 /eteam 父会话是否在线——面板据
+            // 此决定「已放弃本次构建」卡是否渲染（父不在线时继续构建无从
+            // 派发，卡不显示，避免死按钮）。只挂响应、不落盘。
             if (req.method === 'GET' && segments[0] === 'rolebuilder' && segments.length === 1) {
-              const session = readBuildSession(rootForWrites(ctx, config));
-              sendJson(res, 200, session === null ? { empty: true } : { empty: false, session });
+              const root = rootForWrites(ctx, config);
+              const session = readBuildSession(root);
+              if (session === null) {
+                sendJson(res, 200, { empty: true });
+                return;
+              }
+              const parentSessionId = readBuildParentSession(root);
+              const parent =
+                parentSessionId !== null
+                  ? (ctx as unknown as RuntimeContext).agents?.get(parentSessionId)
+                  : undefined;
+              sendJson(res, 200, {
+                empty: false,
+                session,
+                parentOnline: parent !== undefined,
+              });
               return;
             }
             // POST /rolebuilder/confirm — the user-confirmed draft lands in
