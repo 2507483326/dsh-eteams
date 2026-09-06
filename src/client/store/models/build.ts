@@ -5,8 +5,9 @@
  * await api（api.ts 不动）。
  *
  * 轮询纪律（迁移前现状保持）：1.5s interval 留在视图层（原 eteamsView，
- * 已拆分至 pages/teamsView/，现住 membersTab.tsx；角色构建师的
- * monitor 逻辑不动），本 model 只承接单次 fetch。失败语义分两档：
+ * 已拆分至 pages/teamsView/，现住 roster/buildWorkbench.tsx 的
+ * useBuildSession——roster 域三个路由页共用；角色构建师的 monitor 逻辑不动），
+ * 本 model 只承接单次 fetch。失败语义分两档：
  * - fetch：落 state.error 后吞掉——迁移前 refreshBuild 就是
  *   `.catch(() => undefined)` 的静默面，且 1.5s 高频轮询，不上抛（不给
  *   onError 打无谓诊断），dispatch promise 照常 resolve。
@@ -21,6 +22,7 @@
  * @module dsh-eteams/client/store/models/build
  */
 import type { DvaAction } from 'dva-core';
+import { errorMessageOf } from '../../lib/errors';
 import {
   cancelBuild,
   confirmBuild,
@@ -61,7 +63,7 @@ function* fetchBuildWorker(_action: DvaAction<void>, { call, put }: EffectComman
     yield put({ type: 'setError', payload: null });
   } catch (e) {
     // 静默面（见模块注释）：只落 state.error，不向上抛。
-    yield put({ type: 'setError', payload: e instanceof Error ? e.message : String(e) });
+    yield put({ type: 'setError', payload: errorMessageOf(e) });
   } finally {
     yield put({ type: 'setLoading', payload: false });
   }
@@ -80,7 +82,7 @@ function* confirmBuildWorker(
     yield call(confirmBuild, payload as BuildDraft);
     yield put({ type: 'setError', payload: null });
   } catch (e) {
-    yield put({ type: 'setError', payload: e instanceof Error ? e.message : String(e) });
+    yield put({ type: 'setError', payload: errorMessageOf(e) });
     // 确认失败要可见：上抛让 dispatch promise reject，组件 catch 提示。
     throw e;
   } finally {
@@ -95,7 +97,7 @@ function* cancelBuildWorker(_action: DvaAction<void>, { call, put }: EffectComma
     yield call(cancelBuild);
     yield put({ type: 'setError', payload: null });
   } catch (e) {
-    yield put({ type: 'setError', payload: e instanceof Error ? e.message : String(e) });
+    yield put({ type: 'setError', payload: errorMessageOf(e) });
     // 上抛（组件侧迁移前就吞错，net 行为不变；失败仍有 onError/diagnostics 记录）。
     throw e;
   } finally {
@@ -110,7 +112,7 @@ function* resumeBuildWorker(_action: DvaAction<void>, { call, put }: EffectComma
     yield call(resumeBuild);
     yield put({ type: 'setError', payload: null });
   } catch (e) {
-    yield put({ type: 'setError', payload: e instanceof Error ? e.message : String(e) });
+    yield put({ type: 'setError', payload: errorMessageOf(e) });
     // 上抛（组件侧迁移前就吞错，net 行为不变）。
     throw e;
   } finally {
@@ -128,7 +130,7 @@ function* restartBuildWorker(_action: DvaAction<void>, { call, put }: EffectComm
     yield call(restartBuild);
     yield put({ type: 'setError', payload: null });
   } catch (e) {
-    yield put({ type: 'setError', payload: e instanceof Error ? e.message : String(e) });
+    yield put({ type: 'setError', payload: errorMessageOf(e) });
     throw e;
   } finally {
     yield put({ type: 'setLoading', payload: false });
@@ -145,7 +147,7 @@ function* submitInterviewWorker(
     yield call(submitInterview, payload as InterviewAnswer[]);
     yield put({ type: 'setError', payload: null });
   } catch (e) {
-    yield put({ type: 'setError', payload: e instanceof Error ? e.message : String(e) });
+    yield put({ type: 'setError', payload: errorMessageOf(e) });
     // 提交失败不再静默（迁移前注释即如此要求）：上抛，组件 catch 提示。
     throw e;
   } finally {

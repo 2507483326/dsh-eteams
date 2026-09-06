@@ -45,6 +45,9 @@
 | 41   | [41 Markdown 渲染 Typeset 排版](41-md-typeset.md)             | shadcn/typeset 手工端口进 eteams.css（(0,3,0) 特异性纪律 + not-typeset 逃生门 + 宿主中和表），MarkdownDoc 包装组件替换四处只读渲染点，暗色经 D22a 语义 token 零分支；41.6 验收记录（四绿门 + 实测计算样式 + 宿主内未验证声明） |
 | 42   | [42 编辑模式代码块塌陷与语言下拉错位](42-md-editor-codemirror-dedupe.md) | 根因不是定位：构建产物双实例化 @codemirror/state 等七包（npm 顶层真实目录 vs pnpm 商店），LanguageSupport instanceof 失配致 CodeMirror 永不挂载、代码块塌成 ~28px 空条；tsdown alias 六包统一到 @mdxeditor/editor 解析链（pnpm 商店真理源），产物单实例、体积 −0.45 MB、门禁全绿；遗留隐患：lang-* 未声明依赖 + npm/pnpm 混装土壤 |
 | 43   | [43 shadcn/ui 组件清单与用件规则](43-shadcn-component-catalog.md) | 官方组件全集快照（表单/展示/浮层三组 50+ 件）；本仓 vendored 组件清单（含 Accordion/Toast/Pagination；Tooltip 转预留）与统一适配约定（cn 相对导入、/alpha 改 color-mix、border 补 border-solid、自管 portal）；用件规则：chrome 控件/操作反馈/分页必用组件，悬浮提示用原生 title=（二十轮用户拍板撤回 Hint 迁移）；43.6 一对一检索表（官方组件 ↔ 本仓使用面逐件核对，十九轮补齐 Pagination/Toast，二十轮撤回 Tooltip） |
+| 44   | [44 客户端结构性改造：页面规范与整体方案](44-page-structure-spec.md) | 六项诉求（Router 页面拆分/组件复用/状态机查表/目录重排/分区横幅规范/工作流推进）的方案定稿：react-router-dom v6 MemoryRouter 每表面一棵（插件不拥有 URL）+ 十路径路由树、lib/status.ts 查表层、components/ 领域组件层、pages 两级目录终表（域目录上提 + 组件名全驼峰）、七区横幅分区规范与三种文件模板、M1-M8 模块序列与执行纪律 |
+| 45   | [45 客户端项目地图与组件清单](45-project-map.md) | src/client 全量文件地图（入口/表面/teamsView 20 文件含去向/features/lib/hooks/store/components）+ 依赖方向规则 + 可复用组件清单（既有件与消费位、M7 新增 11 件）；M8 收口为终态 |
+| 46   | [46 结构性改造清单](46-refactor-checklist.md) | M1-M8 逐文件 checkbox（路由骨架/角色域三页/任务域两页/团队域三页/看板汇报/弹层卡片/复用收口 11 项/目录重排终检）+ 四道门禁基线与验收记录 |
 
 ## 决策记录（2026-02 与用户确认）
 

@@ -84,6 +84,7 @@ import { python } from '@codemirror/lang-python';
 import { yaml } from '@codemirror/lang-yaml';
 import mdxEditorCss from '@mdxeditor/editor/style.css';
 import { recordClientDiag } from '../../lib/diagnostics';
+import { errorMessageOf } from '../../lib/errors';
 import { useHostDark } from '../../hooks/useHostDark';
 
 const T = {
@@ -150,7 +151,7 @@ function ensureMdxStyles(): void {
     style.textContent = mdxEditorCss + THEME_BRIDGE_CSS;
     document.head.appendChild(style);
   } catch (error) {
-    recordClientDiag('mdx-editor', error instanceof Error ? error.message : String(error));
+    recordClientDiag('mdx-editor', errorMessageOf(error));
   }
 }
 

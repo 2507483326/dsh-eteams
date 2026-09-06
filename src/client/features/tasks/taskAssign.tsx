@@ -1,6 +1,7 @@
 /**
  * 小任务拖拽指派组件（docs/29 A 节）：DndProvider(HTML5Backend) 局部包裹器
- * （DA2——只包 TasksTab，单实例单 Provider，A.6 同文档注入无跨文档问题）、
+ * （DA2——只包任务消费面根（原 TasksTab；M3 拆页后 tasks/ 两路由页各自包
+ * 裹），单实例单 Provider，A.6 同文档注入无跨文档问题）、
  * 成员罗列条（A.5.3 用户拍板：每张组卡下方各一条，chip 副本相同；领队 chip
  * 单列置首、带徽标、不可拖；staged 成员可拖带「未启动」弱化标记）、小任务
  * 行尾成员框（TaskAssignDropBox：2026-09-04 二轮 DA13 多人接力槽位——可编辑
@@ -65,7 +66,7 @@ import { DOT_BASE_CLASS, DOT_TONE_CLASS, memberTone } from './taskDisplayStatus'
 import { Button } from '../../components/ui/button';
 import { Popover, PopoverAnchor, PopoverContent } from '../../components/ui/popover';
 
-/** 每条拖拽 item 的类型常量（A.2：同一 TasksTab Provider 内拖拽源/目标配对）。
+/** 每条拖拽 item 的类型常量（A.2：同一任务 Provider 内拖拽源/目标配对）。
  * 'eteams-member'=罗列条成员 chip（drop=追加/替换）；'eteams-station'=卡槽内
  * 站点 chip（六轮 DA19：drop 到另一 chip=调序，容器不接受该类型——空白处
  * 落点无目标即 not-allowed，语义「调序只能 chip→chip」）；'eteams-subtask'=
@@ -95,7 +96,8 @@ interface StationDragItem {
   member: string;
 }
 
-/** DndProvider（HTML5Backend）局部包裹器（DA2：仅 TasksTab 根，不放面板根）。 */
+/** DndProvider（HTML5Backend）局部包裹器（DA2：仅任务消费面根，不放面板根
+ * ——原 TasksTab 根，M3 拆页后 tasks/ 两路由页各自包裹）。 */
 export function TaskDndProvider({ children }: { children: ReactNode }): ReactNode {
   return <DndProvider backend={HTML5Backend}>{children}</DndProvider>;
 }
@@ -143,7 +145,7 @@ function useStationDrag(index: number, memberName: string) {
   );
 }
 
-/* —— 类名常量（完整字面量；边框 token 类与 teamsView shared.tsx 的
+/* —— 类名常量（完整字面量；边框 token 类与 shared/styles.ts 的
    BORDER_L1_CLASS 同值（原 eteamsView），独立成表避免与视图模块互相 import 成环）—— */
 const BORDER_TOKEN_CLASS = 'border-[color:var(--border)]';
 /** 成员框基座（A.5.1：32px 高 / min-w-96px / 圆角 4px（DA18 五轮收小）/ 12px 字；
@@ -153,7 +155,8 @@ const BOX_BASE_CLASS =
 /** 空框：虚线槽（BORDER_L1 类边框 token）。 */
 const BOX_EMPTY_CLASS = `border border-dashed text-muted-foreground ${BOX_BASE_CLASS} ${BORDER_TOKEN_CLASS}`;
 /** 可放置（非悬停）：虚线边框转品牌淡边——token 色禁 /alpha，半透明走
- * color-mix（token 纪律；teamMembers.tsx MemberCard 的 shadow 光晕同路径）。 */
+ * color-mix（token 纪律；team/memberCards.tsx MemberCard 的 shadow 光晕
+ * 同路径）。 */
 const BOX_CAN_DROP_CLASS = `${BOX_BASE_CLASS} border border-dashed border-[color:color-mix(in_srgb,var(--primary)_60%,transparent)] text-muted-foreground`;
 /** 拖拽悬停：虚线转实线 + 品牌边 + 中性 pill 底（A.5.1 悬停行）。 */
 const BOX_OVER_CLASS = `${BOX_BASE_CLASS} border border-solid border-primary bg-[color:var(--eteams-pill-bg)] text-foreground`;

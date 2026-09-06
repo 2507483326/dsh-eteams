@@ -46,6 +46,12 @@
  * 是 layer-1，任意值直引保持视觉）；返回按钮换 shadcn Button（S5 card 先例，
  * 显式 type="button"）。pane 测量、Esc/resize 监听与降级投递逐字保留。
  *
+ * M6 结构性改造（docs/44 44.3，行为零变更）：44.3 横幅分区；覆盖层视图的
+ * 静态面类名收编 OVERLAY_PAGE_CLASS/OVERLAY_HEADER_CLASS（样式类区，逐字
+ * 面量）——覆盖层视图无状态切换三元可查表（TeamsOverlay 为纯静态 chrome +
+ * ETeamsView 出口，见验收记录），pane 矩形动态 inline style 原样保留；
+ * z-[500] 层级与 portal 行为不动。
+ *
  * @module dsh-eteams/client/teamsPanel
  */
 import { useEffect, useState, type ReactNode } from 'react';
@@ -53,13 +59,15 @@ import { createRoot } from 'react-dom/client';
 import { Provider } from 'react-redux';
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
 // lucide 深层图标导入（dialog.tsx 先例：深层 .mjs 只进用到的图标）。
-import ArrowLeft from 'lucide-react/dist/esm/icons/arrow-left.mjs';
 import { activateETeamsTab, stageTeamSignals, teamsTabVisible } from '../lib/bridge';
-import { Button } from '../components/ui/button';
+import { errorMessageOf } from '../lib/errors';
+import { BackBar } from '../components/backBar';
 import { ClientErrorBoundary, recordClientDiag } from '../lib/diagnostics';
 import { ETeamsView } from '../pages/teamsView/index';
 import { HERO_ROW_SELECTOR } from './heroTeamsButton';
 import { getApp } from '../store/app';
+
+/** ================================== 类型 ================================== */
 
 /** Landing options for {@link enterTeamsPanel}: which panel view to open. */
 export interface TeamsPanelOptions {
@@ -70,6 +78,25 @@ export interface TeamsPanelOptions {
   /** Select this team after landing (teamId). */
   readonly teamId?: string;
 }
+
+/** A viewport-anchored rectangle in plain numbers (fixed positioning input). */
+interface PaneRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/** ================================== 样式类 ================================== */
+
+/* 整页覆盖层的静态面（S11 迁移 + M6 收编，逐字面量）：固定层（z-[500] 层级
+   见文件头台账）与官网顶栏（--border 细线 + 白底条）。pane 矩形是实时测量
+   的动态值，保留 inline style 不入类。 */
+const OVERLAY_PAGE_CLASS = 'fixed z-[500] flex flex-col bg-background text-foreground';
+const OVERLAY_HEADER_CLASS =
+  'flex h-11 flex-none items-center justify-between gap-2.5 border-b border-solid border-[color:var(--border)] bg-background px-4';
+
+/** ================================== 工具函数 ================================== */
 
 let overlayRoot: { render: (node: ReactNode) => void; unmount: () => void } | null = null;
 let overlayContainer: HTMLDivElement | null = null;
@@ -110,16 +137,9 @@ function openTeamsOverlay(): void {
       </ClientErrorBoundary>,
     );
   } catch (error) {
-    recordClientDiag('overlay', error instanceof Error ? error.message : String(error));
+    // 错误规范化收口 errorMessageOf（M7-5，诊断面两处同口径）。
+    recordClientDiag('overlay', errorMessageOf(error));
   }
-}
-
-/** A viewport-anchored rectangle in plain numbers (fixed positioning input). */
-interface PaneRect {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
 }
 
 const windowRect = (): PaneRect => ({
@@ -155,10 +175,13 @@ function measurePane(): PaneRect {
     }
     return best ?? full;
   } catch (error) {
-    recordClientDiag('overlay-pane', error instanceof Error ? error.message : String(error));
+    // 错误规范化收口 errorMessageOf（M7-5）。
+    recordClientDiag('overlay-pane', errorMessageOf(error));
     return full;
   }
 }
+
+/** ================================== 主组件 ================================== */
 
 /**
  * The full-page 团队页: a fixed layer inset to the measured content pane
@@ -194,18 +217,18 @@ function TeamsOverlay({ onClose }: { onClose: () => void }): ReactNode {
           aria-label="团队"
           data-eteams="overlay-page"
           /* S24-2（D22f）：整页底改语义 token --background（官网 v3 值：亮
-            白 / 暗 slate-900，不再直引 bg-base 别名）。 */
-          className="fixed z-[500] flex flex-col bg-background text-foreground"
+            白 / 暗 slate-900，不再直引 bg-base 别名）。z-[500] 层级与 pane
+            矩形 inline style 见文件头/M6 注记（OVERLAY_PAGE_CLASS）。 */
+          className={OVERLAY_PAGE_CLASS}
           style={{ left: pane.left, top: pane.top, width: pane.width, height: pane.height }}
         >
           {/* 官网顶栏（S24-2）：--border 细线 + 白底条；左标题（官网条内
             14px semibold 签名）+ 右 ghost 返回钮（lucide ArrowLeft）。 */}
-          <header className="flex h-11 flex-none items-center justify-between gap-2.5 border-b border-solid border-[color:var(--border)] bg-background px-4">
+          <header className={OVERLAY_HEADER_CLASS}>
             <span className="text-sm font-semibold text-foreground">团队</span>
-            <Button type="button" variant="ghost" size="sm" className="text-sm" onClick={onClose}>
-              <ArrowLeft className="h-3.5 w-3.5" />
-              返回
-            </Button>
+            {/* 返回条（M7-3 收口 components/backBar，ghost 档 + text-sm 拉正
+            字号原位透传）。 */}
+            <BackBar variant="ghost" className="text-sm" label="返回" onClick={onClose} />
           </header>
           {/* Plain block wrapper: the view root is `height:100%` + flex row and
         has no width of its own — a block parent lets it fill the pane width

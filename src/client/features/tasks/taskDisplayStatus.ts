@@ -13,6 +13,8 @@
  *   removed；memberStatusOf 聚合口径，任务态词表不再兼管成员状态）。
  * - `memberTone`：成员状态 tone（原 eteamsView 同名函数迁移，值域更新为
  *   新成员五态；旧值 busy/idle/done/failed/error 保留兜底不破老快照）。
+ * - `isStartable`/`isTerminal`：开始钮状态判据（docs/44 44.2.2，M3 收拢
+ *   tasks/taskListCard、tasks/taskSubtaskItem、任务详情页头三处开始钮判据）。
  * - `DOT_BASE_CLASS`/`DOT_TONE_CLASS`：6px 状态点工具类（D22e 彩点唯一载体，
  *   完整字面量映射表，21.5.1 禁拼接纪律）。
  *
@@ -133,6 +135,27 @@ export function displayStatusOf(status: string, retryCount = 0): DisplayStatus {
   }
   const detail = retryCount > 0 ? `重试 ${retryCount}` : '';
   return { ...entry, detail };
+}
+
+/**
+ * 任务/小任务「开始」钮状态判据（docs/44 44.2.2，M3 自 tasks/taskSubtaskItem
+ * 行头与任务详情页头收拢）：状态窗口 = ready（执行链就绪待派单——host
+ * /task/<id>/start 派发核只消费 ready 链；draft 拆解中与已入执行不渲染）。
+ * 链是否为空（ready 无链 = 行内「需要选择成员」提示面）是数据判据，调用位
+ * 与状态判据并列消费——判定结果与收拢前逐位等价。
+ */
+export function isStartable(status: string): boolean {
+  return status === 'ready';
+}
+
+/**
+ * 主任务（group）「开始」钮状态判据（docs/44 44.2.2，M3 自 tasks/taskListCard
+ * 底栏与组详情页头收拢）：非终态一律渲染（completed/cancelled 外——二十七
+ * 轮 DA40 判据放宽，用户「还是没看到开始按钮」：终态才收）。结构判据
+ * （kind === 'group'、小任务数 > 0）留在调用位，与状态判据并列消费。
+ */
+export function isTerminal(status: string): boolean {
+  return status === 'completed' || status === 'cancelled';
 }
 
 /** 组卡汇总 chip（B.2 group 汇总规则）：一条可渲染的汇总（tone/icon/detail）。 */

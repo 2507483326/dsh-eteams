@@ -1,18 +1,16 @@
 /**
- * 团队面板页内跨 tab 共享层（docs/32 32.5.2）：被 ≥2 个 tab 文件引用的
- * 类名常量、tone 徽标族、跨 tab 小组件、领域常量与页面注入样式。符号自
- * eteamsView.tsx 原样搬出（纯移动、零行为变更），按四段分区：
- * 领域常量 / tone 徽标族 / 跨 tab 小组件 / 页面级类名常量与注入样式。
+ * 面板页内跨 tab 共享层 · 类名常量与注入样式（docs/44 M8 自 shared.tsx 拆分，
+ * 46 清单）：领域常量、tone 徽标族、页面级类名常量与 ROLE_LIST_CSS 注入
+ * 样式表——符号自 shared.tsx 原样搬出（纯移动、零行为变更）。小组件件
+ * （Pill/FormErrorNote/PageHeader）拆居同目录 components.tsx；各引用方按需
+ * 改导入（类名常量 ← 本文件，组件 ← components.tsx）。
  *
- * @module dsh-eteams/client/pages/teamsView/shared
+ * @module dsh-eteams/client/pages/shared/styles
  */
-import type { ReactNode } from 'react';
 import { cn } from '../../lib/cn';
-import { Alert } from '../../components/ui/alert';
-import { Badge } from '../../components/ui/badge';
 import { DOT_BASE_CLASS, DOT_TONE_CLASS, type Tone } from '../../features/tasks/taskDisplayStatus';
 
-/* —— 领域常量 —— */
+/** ================================== 常量与映射表 ================================== */
 
 /** The leader is a member too — default-joined, undeletable (用户定稿模型). */
 export const LEADER_NAME = '项目牧羊人';
@@ -21,15 +19,6 @@ export const LEADER_NAME = '项目牧羊人';
 export const ROLE_BUILDER_NAME = '角色构建师';
 /** Members the panel never offers a delete button for (host enforces too). */
 export const PROTECTED_MEMBERS: readonly string[] = [LEADER_NAME, ROLE_BUILDER_NAME];
-
-/** Sort rank: leader first, role builder second, everyone else after. */
-export function memberRank(name: string): number {
-  if (name === LEADER_NAME) return 0;
-  if (name === ROLE_BUILDER_NAME) return 1;
-  return 2;
-}
-
-/* —— tone 徽标族 —— */
 
 /**
  * S12：Tone→工具类映射表（完整字面量，content 扫描可检出——禁 `tone-${x}`
@@ -64,86 +53,6 @@ export const PILL_TONE_CLASS: Record<Tone, string> = {
   err: PILL_NEUTRAL_CLASS,
   muted: PILL_NEUTRAL_CLASS,
 };
-/** 原 fns.dot 的类名版：D22e 后 dot 是状态色的唯一载体——DOT_BASE_CLASS/
- * DOT_TONE_CLASS 已迁 taskDisplayStatus（docs/29 B，与展示态/tone 同家），
- * dotClass 经 import 消费。 */
-export const pillClass = (tone: Tone): string => cn(PILL_BASE_CLASS, PILL_TONE_CLASS[tone]);
-export const dotClass = (tone: Tone): string => cn(DOT_BASE_CLASS, DOT_TONE_CLASS[tone]);
-
-/** 状态徽标（docs/23 S23-3）：shadcn Badge 承底座（边框/过渡/焦点环），
- * 本仓 pill 视觉口径（官网圆 pill / 12px / medium / 内嵌状态点）以
- * className 覆盖层保留——tone 底色表（PILL_TONE_CLASS）经 tailwind-merge
- * 压过 Badge 变体底色。D22e：dot 由组件统一内嵌（中性 pill + 彩点签名），
- * 调用位不再自插 dot span。十四轮 DA27：className 透传（tailwind-merge
- * 压过基础圆角/底色）——任务列表卡底栏的状态 pill 以 rounded-[2px] 覆盖
- * 圆角（用户拍板「圆角改成 2px」），其余调用位不传保持原观感。 */
-export function Pill({
-  tone,
-  children,
-  className,
-}: {
-  tone: Tone;
-  children: ReactNode;
-  className?: string;
-}): ReactNode {
-  return (
-    <Badge variant="secondary" className={cn(pillClass(tone), className)}>
-      <span className={dotClass(tone)} />
-      {children}
-    </Badge>
-  );
-}
-
-/** D22f 执行链/构建步骤字形三态调色（✔●◌ 字符保留=产品语义，只换色）：
- * done=已完成弱化灰、current=进行中品牌蓝（token 官网化为 sky）、
- * pending=未到站中性字（pill 字色 token）。完整字面量查表（21.5.1）。 */
-export const GLYPH_TONE_CLASS: Record<string, string> = {
-  done: 'text-muted-foreground',
-  current: 'text-primary',
-  pending: 'text-[color:var(--eteams-pill-ink)]',
-};
-
-/* —— 跨 tab 小组件 —— */
-
-/** 表单/列表错误提示（docs/23 S23-3）：shadcn Alert destructive 的紧凑档
- * （原 styles.formError 的 12px/20 + 上 4 下 8 边距口径）。 */
-export function FormErrorNote({
-  children,
-  className,
-}: {
-  children: ReactNode;
-  className?: string;
-}): ReactNode {
-  return (
-    <Alert
-      variant="destructive"
-      className={cn('mt-1 mb-2 rounded-md px-3 py-2 text-xs leading-5', className)}
-    >
-      {children}
-    </Alert>
-  );
-}
-
-/** 页签标题（S24-2 新增，官网 h2 签名）：五 tab 内容区顶部的页头行——
- * 20px bold tracking-tight + mb-4；右侧动作位（团队页放「＋ 新增团队」
- * 主按钮 → 创建弹窗）。标题字即 tab 名，不发明副标题。 */
-export function PageHeader({
-  label,
-  children,
-}: {
-  label: string;
-  children?: ReactNode;
-}): ReactNode {
-  return (
-    <div className="mb-4 flex items-center gap-3">
-      <h2 className="m-0 text-xl font-bold tracking-tight text-foreground">{label}</h2>
-      {children !== undefined && <span className="flex-1" />}
-      {children}
-    </div>
-  );
-}
-
-/* —— 页面级类名常量与注入样式 —— */
 
 /** 边框统一走语义 token --border（D22a 官网 v3：亮 slate-200 #e2e8f0 /
  * 暗 slate-800 #1e293b，token 值已官网化）——原 l1 别名半透明灰（比官网
@@ -171,11 +80,20 @@ export const SECTION_TITLE_CLASS =
 export const EMPTY_CLASS =
   'rounded-xl border border-dashed px-5 py-9 text-center text-sm leading-6 text-muted-foreground';
 
+/** 卡片面三要素（M7-11 收编：面板卡/成员卡的边框、底色、官网阴影档三件
+ * 同值面——原两处逐字面量合一；圆角/内距等档位差留在各消费位拼接，
+ * 拼出的仍是完整字面量（21.5.1）。 */
+export const CARD_SURFACE_CLASS = `border border-solid bg-background shadow-[0_1px_2px_rgba(15,23,42,0.05)] ${BORDER_L1_CLASS}`;
+/** 任务卡面（M7-11 收编：taskHeaderCard 内联与 taskSubtaskItem
+ * SUBTASK_CARD_CLASS 的逐字重复合一——小任务行的 mt-1.5 档位差留消费位）。 */
+export const TASK_CARD_CLASS = `rounded-[8px] border border-solid bg-background px-3 py-2.5 ${BORDER_L1_CLASS}`;
+
 /** 面板卡片（原 styles.card → shadcn Card 的覆盖层）：底色回 layer-1 档
 （Card 默认 bg-card 是 layer-2）、--border 边框、官网 shadow-sm 阴影档
 （D22f：0.03→0.05）；px-4 py-4 = 卡内呼吸感提到 16px（行密度不变）。
-eteams-ui 字面量随 Card 根（S5 试点双保险）。 */
-export const PANEL_CARD_CLASS = `eteams-ui mb-3 min-w-0 border border-solid bg-background px-4 py-4 shadow-[0_1px_2px_rgba(15,23,42,0.05)] ${BORDER_L1_CLASS}`;
+eteams-ui 字面量随 Card 根（S5 试点双保险）。M7-11：面三要素收编
+CARD_SURFACE_CLASS（逐字同值，工具类序不影响级联）。 */
+export const PANEL_CARD_CLASS = `eteams-ui mb-3 min-w-0 px-4 py-4 ${CARD_SURFACE_CLASS}`;
 
 /** shadcn Select 空选项哨兵（Radix SelectItem value 禁空串；映射回 ''/null）。 */
 export const SELECT_NONE = '__none__';
@@ -232,10 +150,27 @@ export const ROLE_LIST_CSS = `
 .eteams-team-avatars:hover>*{margin-left:-2px}
 .eteams-team-avatars>*:hover{transform:scale(1.35);z-index:30}
 /* 删除钮：已迁 shadcn Button（outline sm + destructive 文字，使用位
-   membersTab——docs/43 扫描整改）；类规则随迁删除。 */
+   roster/rosterPage（原 membersTab）——docs/43 扫描整改）；类规则随迁删除。 */
 .eteams-role-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .eteams-team-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* 原生 details/summary 样式（构建工作台展开指示）已随展开面迁移 shadcn
    Accordion/Collapsible 删除——全仓已无 <details> 消费位（docs/43 一对一
    检索核对）。 */
 `;
+
+/** ================================== 工具函数 ================================== */
+
+/** Sort rank: leader first, role builder second, everyone else after. */
+export function memberRank(name: string): number {
+  if (name === LEADER_NAME) return 0;
+  if (name === ROLE_BUILDER_NAME) return 1;
+  return 2;
+}
+
+/** tone 徽标族的类名组装（模块级纯函数，调用时点在渲染期）：pillClass 拼
+ * 底座 + tone 表，dotClass 拼 dot 底座 + tone 色表——Pill 组件消费。 */
+export const pillClass = (tone: Tone): string => cn(PILL_BASE_CLASS, PILL_TONE_CLASS[tone]);
+/** 原 fns.dot 的类名版：D22e 后 dot 是状态色的唯一载体——DOT_BASE_CLASS/
+ * DOT_TONE_CLASS 已迁 taskDisplayStatus（docs/29 B，与展示态/tone 同家），
+ * dotClass 经 import 消费。 */
+export const dotClass = (tone: Tone): string => cn(DOT_BASE_CLASS, DOT_TONE_CLASS[tone]);

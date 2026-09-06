@@ -84,11 +84,13 @@ export default tseslint.config(
   },
 
   // shadcn/ui vendored components (docs/21-client-ui-stack.md D19d): kebab-case
-  // filenames are the upstream registry convention. Kept LAST on purpose:
-  // flat config is last-match-wins per rule, so this must come after the
-  // project-wide camelCase block above.
+  // filenames are the upstream registry convention. Scoped to components/ui/ so
+  // the first-party domain components at components/ root stay under the
+  // project-wide camelCase rule (2026-09-06, all component files camelCase).
+  // Kept LAST on purpose: flat config is last-match-wins per rule, so this
+  // must come after the project-wide camelCase block above.
   {
-    files: ['src/client/components/**'],
+    files: ['src/client/components/ui/**'],
     rules: {
       'unicorn/filename-case': ['error', { cases: { kebabCase: true } }],
     },

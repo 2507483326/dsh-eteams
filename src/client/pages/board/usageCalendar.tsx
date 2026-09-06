@@ -1,7 +1,7 @@
 /**
  * 看板 · Token 消耗日历卡（docs/28）：每日聚合 + 全年格子 + 悬浮明细。
  * 符号自 eteamsView.tsx 原样搬出（docs/32 32.5.1 纯移动、零行为变更），
- * 供 boardTab 消费（依赖方向：boardTab → usageCalendar → shared）。
+ * 供 board/boardPage 消费（依赖方向：boardPage → usageCalendar → shared）。
  * 用户迭代 2026-09-04：置看板顶部；样式回归 docs/28 28.5.2 卡片规格
  * （PANEL_CARD_CLASS 卡壳），日历与 meta 行居中显示；格子无装饰扁平化
  * （renderBlock 去包内 hairline 描边，见 usageFlatBlock）。
@@ -12,8 +12,10 @@
  * 用户迭代 2026-09-05（二）：档位改固定「AI 代码工程师强度」标尺（0 空 +
  * 10 万/100 万/300 万三道台阶，见 USAGE_LEVEL_STEPS），不再按当年四分位
  * 相对划分；tooltip 行首带档位名（轻度/常规/高强度/满负荷）。
+ * M5 结构性改造（docs/44 44.3，行为零变更）：44.3 横幅分区——档位表
+ * （USAGE_LEVEL_STEPS/USAGE_LEVEL_NAMES）已表驱动，保持原样仅归组。
  *
- * @module dsh-eteams/client/pages/teamsView/usageCalendar
+ * @module dsh-eteams/client/pages/board/usageCalendar
  */
 import { cloneElement, useEffect, useState, type ReactElement, type ReactNode } from 'react';
 // docs/28 Token 消耗日历：react-activity-calendar（v3，devDep；React 18 peer
@@ -26,11 +28,14 @@ import ChevronLeft from 'lucide-react/dist/esm/icons/chevron-left.mjs';
 import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right.mjs';
 import { fetchAppUsageCalendar, type AppUsageCalendar, type UsageDay } from '../../lib/api';
 import { cn } from '../../lib/cn';
+import { errorMessageOf } from '../../lib/errors';
 import { useHostDark } from '../../hooks/useHostDark';
 import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
-import { FormErrorNote, MUTED_CLASS, PANEL_CARD_CLASS, SECTION_TITLE_CLASS } from './shared';
-// ---------- docs/28 看板 · Token 消耗日历（每日聚合 + 全年格子） ----------
+import { FormErrorNote } from '../shared/components';
+import { MUTED_CLASS, PANEL_CARD_CLASS, SECTION_TITLE_CLASS } from '../shared/styles';
+
+/** ================================== 常量与映射表 ================================== */
 
 /** 日历主题（28.5.2 定稿色板）：亮/暗两档各 5 级（0 空档 + 4 活跃档）。 */
 const USAGE_CALENDAR_THEME: ThemeInput = {
@@ -46,6 +51,18 @@ const USAGE_CALENDAR_LABELS: Labels = {
   totalCount: '{{year}} 年共 {{count}} tokens',
   legend: { less: '少', more: '多' },
 };
+
+/** 固定档位标尺（用户迭代 2026-09-05：按 AI 代码工程师的日强度划分，不再
+ * 按当年四分位「自己和自己比」——相对划分下年初数据少时一天峰值日即爆表、
+ * 平常日全灭，且档位随数据漂移）。四档（0 恒空档）：
+ * 轻度 ≤10 万 → 常规 ≤100 万 → 高强度 ≤300 万 → 满负荷 >300 万（>500 万
+ * 同样顶格满负荷色——日历只有 4 个活跃色档）。 */
+const USAGE_LEVEL_STEPS = [100_000, 1_000_000, 3_000_000] as const;
+
+/** 档位名（tooltip 行首标注，让「按强度划分」看得见；下标 = 档-1）。 */
+const USAGE_LEVEL_NAMES = ['轻度', '常规', '高强度', '满负荷'] as const;
+
+/** ================================== 工具函数 ================================== */
 
 let usageStylesInjected = false;
 
@@ -97,16 +114,6 @@ function usageTodayKey(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-/** 固定档位标尺（用户迭代 2026-09-05：按 AI 代码工程师的日强度划分，不再
- * 按当年四分位「自己和自己比」——相对划分下年初数据少时一天峰值日即爆表、
- * 平常日全灭，且档位随数据漂移）。四档（0 恒空档）：
- * 轻度 ≤10 万 → 常规 ≤100 万 → 高强度 ≤300 万 → 满负荷 >300 万（>500 万
- * 同样顶格满负荷色——日历只有 4 个活跃色档）。 */
-const USAGE_LEVEL_STEPS = [100_000, 1_000_000, 3_000_000] as const;
-
-/** 档位名（tooltip 行首标注，让「按强度划分」看得见；下标 = 档-1）。 */
-const USAGE_LEVEL_NAMES = ['轻度', '常规', '高强度', '满负荷'] as const;
-
 /** totalTokens → 0-4 档：0 恒空档，正数按固定标尺逐级抬升。 */
 function usageLevelOf(totalTokens: number): number {
   if (totalTokens <= 0) return 0;
@@ -119,8 +126,7 @@ function usageLevelOf(totalTokens: number): number {
 
 /** tooltip 文案（28.5.2 格式）：行首档位名 + 四分项 + 可选推理行 + 调用次数。 */
 function usageTooltipText(day: UsageDay | undefined, activity: Activity): string {
-  const band =
-    activity.level > 0 ? ` · ${USAGE_LEVEL_NAMES[activity.level - 1] ?? ''}` : '';
+  const band = activity.level > 0 ? ` · ${USAGE_LEVEL_NAMES[activity.level - 1] ?? ''}` : '';
   const lines = [
     `${usageDateLabel(day?.date ?? activity.date)} · ${usageNum(day?.totalTokens ?? 0)} tokens${band}`,
     `输入 ${usageNum(day?.inputTokens ?? 0)} / 输出 ${usageNum(day?.outputTokens ?? 0)} / 缓存读 ${usageNum(
@@ -150,6 +156,8 @@ function usageFlatLegendBlock(block: BlockElement): ReactElement {
     children: usageFlatBlock(block.props.children as BlockElement),
   });
 }
+
+/** ================================== 主组件 ================================== */
 
 /**
  * Token 消耗卡（docs/28.5.2）：全年 365/366 格日历、年份切换（未来年禁用）、
@@ -181,7 +189,7 @@ export function UsageCalendarCard(): ReactNode {
         })
         .catch((e: unknown) => {
           if (!alive) return;
-          setError(e instanceof Error ? e.message : String(e));
+          setError(errorMessageOf(e));
         });
     };
     fetchOne();

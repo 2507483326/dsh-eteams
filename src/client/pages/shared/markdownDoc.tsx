@@ -16,7 +16,7 @@
  * color: inherit }` 结构寻址复位其 font/color 复声明——若换宿主原语或根结构
  * 变化，先复核该规则。
  *
- * @module dsh-eteams/client/pages/teamsView/markdownDoc
+ * @module dsh-eteams/client/pages/shared/markdownDoc
  */
 import type { ReactNode } from 'react';
 import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives';

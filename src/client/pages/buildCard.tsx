@@ -7,8 +7,13 @@
  * S14（docs/21-client-ui-stack.md 21.6）：inline style 迁 Tailwind 类。卡片
  * 原先不在任何 `.eteams-ui` 作用域内——表面根按 D19b 挂作用域类（根自身
  * 不承工具类，后代选择器机制），卡片样式全部迁内层工具类；状态色改语义
- * token 类查表（CARD_STATUS.toneClass，完整字面量，content 扫描可检出）。
- * 跳转/轮询/归属判定等行为逻辑与迁移前逐字一致。
+ * token 类查表（BUILD_SESSION_META.toneClass，完整字面量，content 扫描可
+ * 检出）。跳转/轮询/归属判定等行为逻辑与迁移前逐字一致。
+ * M6 结构性改造（docs/44 44.3，行为零变更）：44.3 横幅分区；状态 pill 表
+ * CARD_STATUS 迁 lib/status.ts（BUILD_SESSION_META，BUILD_SESSION 表）；
+ * 渲染端 5 分支大三元链拆 buildView 视图键 → BUILD_VIEW_META 文案表（键由
+ * 归属/轮询态推导，三元只算键名）；轮询 setTimeout 链语义原样保留（不并
+ * usePoll，44.2.2/M7-8 注记）。
  *
  * @module dsh-eteams/client/buildCard
  */
@@ -22,24 +27,28 @@ import { cn } from '../lib/cn';
 import { Badge } from '../components/ui/badge';
 import { ClientErrorBoundary } from '../lib/diagnostics';
 import { fetchBuildState, type BuildSession } from '../lib/api';
+import { BUILD_SESSION_META } from '../lib/status';
 import { getApp } from '../store/app';
 
-/** Status → (label, toneClass)：语义 token 类（active→business、待确认→
- * warning、已入库→success、放弃→muted-foreground，与原 state-err/warn/
- * success、label-tertiary 变量同源，D19c）；类名一律完整字面量（21.5.1
- * content 扫描纪律）。 */
-const CARD_STATUS: Record<BuildSession['status'], { label: string; toneClass: string }> = {
-  active: { label: '创建中', toneClass: 'text-business' },
-  awaiting_confirmation: { label: '待确认', toneClass: 'text-warning' },
-  confirmed: { label: '已入库', toneClass: 'text-success' },
-  cancelled: { label: '已放弃', toneClass: 'text-muted-foreground' },
-};
+/** 状态行视图键（M6）：归属/轮询态推导的渲染形态——见主组件 buildView 推导。 */
+type BuildViewKey =
+  | 'orphanConfirmed'
+  | 'orphanEnded'
+  | 'loading'
+  | 'activeInterview'
+  | 'building'
+  | 'awaitingConfirm'
+  | 'confirmed'
+  | 'idle';
+
+/** ================================== 样式类 ================================== */
 
 const SPIN_KEYFRAMES = '@keyframes eteams-card-spin{to{transform:rotate(360deg)}}';
 
 /** 状态 pill（S24-2 D22e 官网圆 pill 口径：中性半透明底 + 12px medium；
  * 原 layer-2 淡底任意值直引收敛到 --eteams-pill-bg token。状态字色仍由
- * CARD_STATUS.toneClass 经 tailwind-merge 覆盖中性字色——彩底撤、彩字留）。 */
+ * BUILD_SESSION_META.toneClass 经 tailwind-merge 覆盖中性字色——彩底撤、彩
+ * 字留）。 */
 const STATUS_PILL_CLASS =
   'rounded-full bg-[color:var(--eteams-pill-bg)] px-2.5 py-0.5 text-xs font-medium text-[color:var(--eteams-pill-ink)]';
 /** 访谈待作答 pill（D22e 品牌档：品牌淡底 token + brand-ink 字 token）。 */
@@ -49,12 +58,39 @@ const INTERVIEW_PILL_CLASS =
 const SPINNER_CLASS =
   'inline-block h-3 w-3 rounded-full border-2 border-solid border-primary border-t-transparent [animation:eteams-card-spin_0.9s_linear_infinite]';
 
+/** ================================== 常量与映射表 ================================== */
+
+/**
+ * 状态行视图表（M6 拆渲染端 5 分支大三元链，44.2.2）：键 = 归属/轮询态推导
+ * 的视图名，text + spin 查表（推导式见主组件 buildView——三元只算键名，
+ * 21.5.1 同纪律）。stepFallback 仅 building 行消费：实时步骤是运行时值不上
+ * 表，表存前缀字面量件（text）与空档兜底，消费位拼接（M5 boardTab
+ * EMPTY_FOOTNOTE_META 同模式）。spin = 该视图带构建 spinner。
+ */
+const BUILD_VIEW_META: Record<
+  BuildViewKey,
+  { text: string; spin: boolean; stepFallback: string }
+> = {
+  orphanConfirmed: { text: '本次构建已完成入库——新构建请发起 /eteam', spin: false, stepFallback: '' },
+  orphanEnded: { text: '本次构建已结束（会话已被新构建取代）', spin: false, stepFallback: '' },
+  loading: { text: '连接构建会话…', spin: false, stepFallback: '' },
+  // 访谈未答 = 持续构建子代理按设计已收束回合，不是卡死——别转圈装忙。
+  // 作答入口在主会话（本卡片所在会话）的 ask_user_question 选择框。
+  activeInterview: { text: '意图访谈待作答——在本会话作答后自动续跑', spin: false, stepFallback: '' },
+  building: { text: '角色构建师工作中 · ', spin: true, stepFallback: '准备中' },
+  awaitingConfirm: { text: '草稿就绪——待你确认入库', spin: true, stepFallback: '' },
+  confirmed: { text: '构建完成，成员已入库——点击查看详情', spin: false, stepFallback: '' },
+  idle: { text: '没有进行中的构建会话', spin: false, stepFallback: '' },
+};
+
 /**
  * 发送即跳转的去重标记（模块级，docs/19.16）：卡片会随聊天重渲染频繁重
  * 挂载，useRef 每次归零会把用户从对话页反复拽回面板——按 startedAt 全局
  * 只跳一次，用户之后可以自由切回对话 tab。
  */
 let jumpedSessionAt: number | null = null;
+
+/** ================================== 主组件 ================================== */
 
 /**
  * The in-conversation card for `/eteam` command runs. The keyed slot owner is
@@ -148,7 +184,8 @@ export function EteamBuildCard(props: { node?: unknown }): ReactNode {
   // - orphaned：槽里已是别人的构建 → 用最后匹配快照渲染冻结终态。
   const shown: BuildSession | null | 'loading' =
     myCommandId !== null && orphaned ? lastMatch : build;
-  const showStatus = shown === 'loading' || shown === null ? null : CARD_STATUS[shown.status];
+  const showStatus =
+    shown === 'loading' || shown === null ? null : BUILD_SESSION_META[shown.status];
   const showName =
     shown === 'loading' || shown === null ? '新成员' : (shown.draft?.name ?? '新成员');
   const showAvatar = shown === 'loading' || shown === null ? undefined : shown.draft?.avatar;
@@ -158,6 +195,30 @@ export function EteamBuildCard(props: { node?: unknown }): ReactNode {
     shown.interview !== undefined &&
     shown.interview.answers === undefined;
   const isOrphan = myCommandId !== null && orphaned;
+  // 状态行视图键（M6 拆 5 分支大三元链）：三元只算键名，文案与 spinner 形态
+  // 查 BUILD_VIEW_META。推导顺序与原三元分支判定逐支等价——orphan 的
+  // confirmed 终态优先（loading/null 亦落已结束档，原分支同口径）；active
+  // 带未答访谈单列（不转圈）；active/awaiting 走 spinner；confirmed 入库；
+  // cancelled 与无会话同落 idle（原 else 兜底「没有进行中的构建会话」）。
+  const buildView: BuildViewKey = isOrphan
+    ? shown !== 'loading' && shown !== null && shown.status === 'confirmed'
+      ? 'orphanConfirmed'
+      : 'orphanEnded'
+    : shown === 'loading'
+      ? 'loading'
+      : shown === null
+        ? 'idle'
+        : shown.status === 'active'
+          ? showInterviewPending
+            ? 'activeInterview'
+            : 'building'
+          : shown.status === 'awaiting_confirmation'
+            ? 'awaitingConfirm'
+            : shown.status === 'confirmed'
+              ? 'confirmed'
+              : 'idle';
+  // building 行的实时步骤串（其余视图无此插值）：空档落表内兜底「准备中」。
+  const shownStep = shown === 'loading' || shown === null ? '' : shown.step;
 
   return (
     <ClientErrorBoundary label="成员创建卡片">
@@ -206,34 +267,19 @@ export function EteamBuildCard(props: { node?: unknown }): ReactNode {
                 )}
               </div>
               <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-                {isOrphan ? (
-                  <span>
-                    {shown !== 'loading' && shown !== null && shown.status === 'confirmed'
-                      ? '本次构建已完成入库——新构建请发起 /eteam'
-                      : '本次构建已结束（会话已被新构建取代）'}
-                  </span>
-                ) : shown === 'loading' ? (
-                  <span>连接构建会话…</span>
-                ) : shown !== null &&
-                  (shown.status === 'active' || shown.status === 'awaiting_confirmation') ? (
-                  shown.status === 'active' && showInterviewPending ? (
-                    // 访谈未答 = 持续构建子代理按设计已收束回合，不是卡死——别转圈装忙。
-                    // 作答入口在主会话（本卡片所在会话）的 ask_user_question 选择框。
-                    <span>意图访谈待作答——在本会话作答后自动续跑</span>
-                  ) : (
-                    <>
-                      <span className={SPINNER_CLASS} />
-                      <span>
-                        {shown.status === 'active'
-                          ? `角色构建师工作中 · ${shown.step !== '' ? shown.step : '准备中'}`
-                          : '草稿就绪——待你确认入库'}
-                      </span>
-                    </>
-                  )
-                ) : shown !== null && shown.status === 'confirmed' ? (
-                  <span>构建完成，成员已入库——点击查看详情</span>
+                {BUILD_VIEW_META[buildView].spin ? (
+                  <>
+                    <span className={SPINNER_CLASS} />
+                    <span>
+                      {buildView === 'building'
+                        ? `${BUILD_VIEW_META.building.text}${
+                            shownStep === '' ? BUILD_VIEW_META.building.stepFallback : shownStep
+                          }`
+                        : BUILD_VIEW_META[buildView].text}
+                    </span>
+                  </>
                 ) : (
-                  <span>没有进行中的构建会话</span>
+                  <span>{BUILD_VIEW_META[buildView].text}</span>
                 )}
               </div>
             </div>

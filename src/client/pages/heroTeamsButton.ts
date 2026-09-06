@@ -23,9 +23,28 @@
  *   the composition root so this DOM module stays free of the React import
  *   graph.
  *
+ * M6 结构性改造（docs/44 44.3，行为零变更）：按 lib 模板横幅分区（样式类
+ * = 注入样式表字符串 HERO_BUTTON_CSS → 常量与映射表 = 选择器/标记/样式 id
+ * → 工具函数）；无状态切换三元可查表（注入器为纯过程逻辑），行为与导出面
+ * （HERO_ROW_SELECTOR/ensureHeroButton/installHeroTeamsButton）原样。
+ *
  * @module dsh-eteams/client/heroTeamsButton
  */
 import { recordClientDiag } from '../lib/diagnostics';
+import { errorMessageOf } from '../lib/errors';
+
+/** ================================== 样式类 ================================== */
+
+/** Chip styling mirrors the host preset chip (`.cubgiG_seat`), token-driven
+ * (docs/25 D23-6 缩档：用户反馈「团队按钮太大」——h 24px / 12px 字 / 8px
+ * 横距；focus 环随 --ring 官网 sky，兜底字色官网 slate-900 档). */
+const HERO_BUTTON_CSS = `
+.eteams-hero-btn{max-width:min(100%,200px);min-height:24px;color:var(--foreground,#0f172a);white-space:nowrap;cursor:pointer;background:transparent;border:none;border-radius:14px;align-items:center;gap:4px;padding:0 8px;font-size:12px;font-weight:500;line-height:18px;display:inline-flex;font-family:inherit;overflow:hidden}
+.eteams-hero-btn:hover{background:var(--muted,rgba(100,116,139,0.08))}
+.eteams-hero-btn:focus-visible{outline:2px solid var(--ring,#0ea5e9);outline-offset:1px}
+`;
+
+/** ================================== 常量与映射表 ================================== */
 
 /**
  * The hero chip row. CSS-module classes are content-hashed
@@ -41,14 +60,7 @@ const BUTTON_FLAG = 'hero-button';
 /** id of the one-shot <style> element carrying the chip styles. */
 const STYLE_ID = 'eteams-hero-button-style';
 
-/** Chip styling mirrors the host preset chip (`.cubgiG_seat`), token-driven
- * (docs/25 D23-6 缩档：用户反馈「团队按钮太大」——h 24px / 12px 字 / 8px
- * 横距；focus 环随 --ring 官网 sky，兜底字色官网 slate-900 档). */
-const HERO_BUTTON_CSS = `
-.eteams-hero-btn{max-width:min(100%,200px);min-height:24px;color:var(--foreground,#0f172a);white-space:nowrap;cursor:pointer;background:transparent;border:none;border-radius:14px;align-items:center;gap:4px;padding:0 8px;font-size:12px;font-weight:500;line-height:18px;display:inline-flex;font-family:inherit;overflow:hidden}
-.eteams-hero-btn:hover{background:var(--muted,rgba(100,116,139,0.08))}
-.eteams-hero-btn:focus-visible{outline:2px solid var(--ring,#0ea5e9);outline-offset:1px}
-`;
+/** ================================== 工具函数 ================================== */
 
 let installed = false;
 
@@ -74,7 +86,7 @@ export function installHeroTeamsButton(onClick: () => void): void {
     }
     scanForHeroRow(onClick);
   } catch (error) {
-    recordClientDiag('hero-button', error instanceof Error ? error.message : String(error));
+    recordClientDiag('hero-button', errorMessageOf(error));
   }
 }
 
@@ -93,7 +105,7 @@ function scanForHeroRow(onClick: () => void): void {
     const rows = document.querySelectorAll<HTMLElement>(HERO_ROW_SELECTOR);
     for (const row of rows) ensureHeroButton(row, onClick);
   } catch (error) {
-    recordClientDiag('hero-button-scan', error instanceof Error ? error.message : String(error));
+    recordClientDiag('hero-button-scan', errorMessageOf(error));
   }
 }
 
@@ -116,13 +128,13 @@ export function ensureHeroButton(row: HTMLElement, onClick: () => void): boolean
       try {
         onClick();
       } catch (error) {
-        recordClientDiag('hero-button-click', error instanceof Error ? error.message : String(error));
+        recordClientDiag('hero-button-click', errorMessageOf(error));
       }
     });
     row.appendChild(button);
     return true;
   } catch (error) {
-    recordClientDiag('hero-button-inject', error instanceof Error ? error.message : String(error));
+    recordClientDiag('hero-button-inject', errorMessageOf(error));
     return false;
   }
 }

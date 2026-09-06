@@ -18,6 +18,7 @@
  * @module dsh-eteams/client/store/models/roster
  */
 import type { DvaAction } from 'dva-core';
+import { errorMessageOf } from '../../lib/errors';
 import {
   deleteRosterMember,
   fetchRoster,
@@ -43,7 +44,7 @@ function* fetchRosterWorker(_action: DvaAction<void>, { call, put }: EffectComma
     yield put({ type: 'setError', payload: null });
   } catch (e) {
     // 静默面（见模块注释）：只落 state.error，不向上抛。
-    yield put({ type: 'setError', payload: e instanceof Error ? e.message : String(e) });
+    yield put({ type: 'setError', payload: errorMessageOf(e) });
   } finally {
     yield put({ type: 'setLoading', payload: false });
   }
@@ -62,7 +63,7 @@ function* saveRosterWorker(
     yield call(saveRosterMember, payload as NewMemberInput);
     yield put({ type: 'setError', payload: null });
   } catch (e) {
-    yield put({ type: 'setError', payload: e instanceof Error ? e.message : String(e) });
+    yield put({ type: 'setError', payload: errorMessageOf(e) });
     // 保存失败要可见：上抛让 dispatch promise reject，组件 catch 提示。
     throw e;
   } finally {
@@ -80,7 +81,7 @@ function* deleteRosterWorker(
     yield call(deleteRosterMember, payload as string);
     yield put({ type: 'setError', payload: null });
   } catch (e) {
-    yield put({ type: 'setError', payload: e instanceof Error ? e.message : String(e) });
+    yield put({ type: 'setError', payload: errorMessageOf(e) });
     // 删除失败要可见：上抛让 dispatch promise reject，组件 catch 提示。
     throw e;
   } finally {

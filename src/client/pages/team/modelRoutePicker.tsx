@@ -2,9 +2,10 @@
  * 模型二级菜单（用户迭代 2026-09）：领队/成员卡共用的模型与推理等级选择
  * Popover（与对话 ModelSelect 同款交互）。
  * 符号自 eteamsView.tsx 原样搬出（docs/32 32.5.1 纯移动、零行为变更），
- * 供 teamMembers 消费（依赖方向：teamMembers → modelRoutePicker → lib）。
+ * 供 team/memberCards 消费（依赖方向：team/memberCards → modelRoutePicker
+ * → lib；M4 起团队 tab 拆页，见 team/）。
  *
- * @module dsh-eteams/client/pages/teamsView/modelRoutePicker
+ * @module dsh-eteams/client/pages/team/modelRoutePicker
  */
 import { useRef, useState, type ReactNode } from 'react';
 import Check from 'lucide-react/dist/esm/icons/check.mjs';
@@ -14,12 +15,16 @@ import { catalogRow, type ModelCatalogState } from '../../lib/modelCatalog';
 import { cn } from '../../lib/cn';
 import { Popover, PopoverContent, PopoverTrigger } from '../../components/ui/popover';
 
+/** ================================== 样式类 ================================== */
+
 /** 模型二级菜单的行样式（完整字面量，对话 ModelSelect 同构的 token 化版本：
  * root 行 = label + 当前值 + 右箭头；列表项 = 名称 + 描述 + 选中勾）。 */
 const PICKER_CELL_CLASS =
   'flex h-9 w-full items-center gap-2 rounded-lg bg-transparent px-2.5 text-left text-[13px] text-foreground outline-none hover:bg-accent disabled:cursor-default disabled:text-muted-foreground';
 const PICKER_OPTION_CLASS =
   'flex min-h-[34px] w-full items-center gap-2 rounded-lg bg-transparent px-2 py-1 text-left text-foreground outline-none hover:bg-accent disabled:cursor-default disabled:text-muted-foreground';
+
+/** ================================== 主组件 ================================== */
 
 /** 模型二级菜单（用户迭代 2026-09：与对话 ModelSelect 同款交互）——root
  * 面板两行（「模型」「推理等级」：label + 当前值 + 右箭头），各自钻入列表。

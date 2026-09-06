@@ -9,17 +9,20 @@
  * 范围外/交付物）合并为一篇 Markdown（task.contractMd），详情区改
  * MarkdownText 只读渲染（MarkdownDoc typeset 包装，docs/41；成员手册同款原语）。
  *
- * @module dsh-eteams/client/pages/teamsView/taskDrawer
+ * @module dsh-eteams/client/pages/tasks/taskDrawer
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import { ATTEMPT_STATUS_LABELS } from '../../features/tasks/taskDisplayStatus';
 import { cn } from '../../lib/cn';
 import { relativeTime, type TaskView, type TeamSnapshot } from '../../lib/monitor';
-import { GLYPH_TONE_CLASS, LINE_CLASS, MUTED_CLASS } from './shared';
-import { MarkdownDoc } from './markdownDoc';
+import { BORDER_L1_CLASS, LINE_CLASS, MUTED_CLASS } from '../shared/styles';
+import { StepGlyph } from '../../components/stepGlyph';
+import { MarkdownDoc } from '../shared/markdownDoc';
 
-/** 原 styles.attempt（执行线路尝试条目：--border 左描边）。 */
-const ATTEMPT_CLASS = 'my-2.5 border-l-2 border-solid border-border py-0.5 pl-3';
+/** 原 styles.attempt（执行线路尝试条目：--border 左描边）。M7-11 统一
+ * token 口径：border-border 即 border-[color:var(--border)]（tailwind.config
+ * borderColor.border 同值），改引 BORDER_L1_CLASS 同值异名归一。 */
+const ATTEMPT_CLASS = `my-2.5 border-l-2 border-solid py-0.5 pl-3 ${BORDER_L1_CLASS}`;
 
 /** GET /team/<id>/task/<taskId>/track 响应（webui track 路由）：attempts 全量
  * + 合同全文（contract 渲染串）——本抽屉只消费 attempts；任务态/合同字段
@@ -52,7 +55,7 @@ function ContractMd({ text }: { text: string }): ReactNode {
 }
 
 /** S13：执行链站点行——✔/●/◌ 结构原样保留，仅样式改 Tailwind 类。D22f：
- * 字形三态调色查表（GLYPH_TONE_CLASS），站点名/meta 走 12px/20 小字档。
+ * 字形三态调色查表（StepGlyph 三态档），站点名/meta 走 12px/20 小字档。
  * 末站完成即 completed（chainCursor 不再推进，docs/35 §5#10）——完成态按
  * 满进度口径显示站点计数。 */
 export function TaskStations({ task }: { task: TaskView }): ReactNode {
@@ -62,15 +65,9 @@ export function TaskStations({ task }: { task: TaskView }): ReactNode {
     <div className="mt-1">
       {task.chain.map((s, i) => (
         <span key={i} className="mr-1.5 text-xs leading-5 text-muted-foreground">
-          <span
-            className={cn(
-              GLYPH_TONE_CLASS[s.stationStatus] ?? GLYPH_TONE_CLASS.pending,
-              'font-semibold',
-            )}
-          >
-            {s.stationStatus === 'done' ? '✔' : s.stationStatus === 'current' ? '●' : '◌'}
-          </span>{' '}
-          {s.member}
+          {/* 字形（M7-6 收口 components/stepGlyph：三态调色随组件，未知态
+          回落 pending 档——原查表口径一致）。 */}
+          <StepGlyph state={s.stationStatus} className="font-semibold" /> {s.member}
           {i < task.chain.length - 1 ? ' →' : ''}
         </span>
       ))}

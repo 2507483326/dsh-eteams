@@ -143,7 +143,8 @@ export function readonlyStationMember(task: ChainTaskLike): string | null {
 }
 
 /**
- * 可编辑窗口内框承整链（DA5/DA13）→ TasksTab 抑制 TaskStations 重复渲染；
+ * 可编辑窗口内框承整链（DA5/DA13）→ 消费位抑制 TaskStations 重复渲染
+ * （原 TasksTab 消费，M3 起 = tasks/taskSubtaskItem 的 suppressStations）；
  * 空链时 TaskStations 本就渲染 null，无需抑制。
  */
 export function boxCoversChain(task: ChainTaskLike): boolean {

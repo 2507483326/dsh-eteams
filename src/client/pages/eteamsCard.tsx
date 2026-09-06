@@ -22,12 +22,18 @@
  * activateETeamsTab）与迁移前逐字一致。docs/35 §5：goal 随建队审批重构砍掉
  * （create 工具参数只剩 {name, questionnaire?}），徽标改任务进度文案。
  *
+ * M6 结构性改造（docs/44 44.3，行为零变更）：44.3 横幅分区（类型 → 常量与
+ * 映射表（Node 定义）→ 工具函数（parse/install）→ 子组件 → 主组件）。头像
+ * 栈 slice(0, 8) 密度已随 M7-7 收口 components/avatarStack.tsx（teamTab +N /
+ * 本件 slice 8 / teamsButton chip——chip 是单字圆牌非头像栈，M7 验收注记：
+ * 不在收口范围），本件密度走 props。
+ *
  * @module dsh-eteams/client/card
  */
 import { type ReactNode } from 'react';
 import { Provider } from 'react-redux';
 import type { Context } from '@deepseek-ai/cordis';
-import { Avatar } from '../features/avatar/avatar';
+import { AvatarStack } from '../components/avatarStack';
 import { activateETeamsTab } from '../lib/bridge';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -36,6 +42,8 @@ import { Progress } from '../components/ui/progress';
 import { ClientErrorBoundary } from '../lib/diagnostics';
 import { useActivityState, type TeamSnapshot } from '../lib/monitor';
 import { getApp } from '../store/app';
+
+/** ================================== 类型 ================================== */
 
 /** Card state folded from the create-team tool events. */
 interface CardState {
@@ -57,35 +65,7 @@ interface ToolResultBlock {
   isError?: boolean;
 }
 
-/** docs/35 §5#1：create 工具参数只剩 {name, questionnaire?}——只要 name。
- * 不带 name 的调用（老版本/异常载荷）不渲染卡片。 */
-function parseCreateArgs(raw: unknown): { name: string } | undefined {
-  try {
-    const args =
-      typeof raw === 'string'
-        ? (JSON.parse(raw) as Record<string, unknown>)
-        : (raw as Record<string, unknown>);
-    if (typeof args.name === 'string') return { name: args.name };
-  } catch {
-    // unparseable arguments: no card
-  }
-  return undefined;
-}
-
-function parseTeamIdFromResult(blocks: unknown): string | null {
-  for (const block of (Array.isArray(blocks) ? blocks : []) as ToolResultBlock[]) {
-    if (block.type !== 'tool-result' || typeof block.text !== 'string') continue;
-    try {
-      const parsed = JSON.parse(block.text) as { teamId?: unknown };
-      // docs/27：库内整数 id（数字）——客户端口径归一 string。
-      if (typeof parsed.teamId === 'number') return String(parsed.teamId);
-      if (typeof parsed.teamId === 'string') return parsed.teamId;
-    } catch {
-      // not our JSON payload
-    }
-  }
-  return null;
-}
+/** ================================== 常量与映射表 ================================== */
 
 /** Conversation Node definition: create-tool call/result → card node. */
 const eteamsCardDefinition = {
@@ -155,6 +135,38 @@ const eteamsCardDefinition = {
   },
 };
 
+/** ================================== 工具函数 ================================== */
+
+/** docs/35 §5#1：create 工具参数只剩 {name, questionnaire?}——只要 name。
+ * 不带 name 的调用（老版本/异常载荷）不渲染卡片。 */
+function parseCreateArgs(raw: unknown): { name: string } | undefined {
+  try {
+    const args =
+      typeof raw === 'string'
+        ? (JSON.parse(raw) as Record<string, unknown>)
+        : (raw as Record<string, unknown>);
+    if (typeof args.name === 'string') return { name: args.name };
+  } catch {
+    // unparseable arguments: no card
+  }
+  return undefined;
+}
+
+function parseTeamIdFromResult(blocks: unknown): string | null {
+  for (const block of (Array.isArray(blocks) ? blocks : []) as ToolResultBlock[]) {
+    if (block.type !== 'tool-result' || typeof block.text !== 'string') continue;
+    try {
+      const parsed = JSON.parse(block.text) as { teamId?: unknown };
+      // docs/27：库内整数 id（数字）——客户端口径归一 string。
+      if (typeof parsed.teamId === 'number') return String(parsed.teamId);
+      if (typeof parsed.teamId === 'string') return parsed.teamId;
+    } catch {
+      // not our JSON payload
+    }
+  }
+  return null;
+}
+
 function findTeam(
   state: { teams: TeamSnapshot[] },
   data: { teamId: string | null; teamName: string },
@@ -164,21 +176,32 @@ function findTeam(
 }
 
 /**
- * The in-transcript card renderer (live via polled snapshots).
- * R2-F2（docs/21 21.5.3）：表面根包 Provider——本组件自身的 hook 调用
- * （useActivityState → useSelector）必须在 Provider 子树内，故拆为
- * 「包装层（错误边界 + Provider）+ 内体（hook 消费 + 表面根）」两层；
- * 单例 store，多 Provider 同 store 无害。
+ * Register the card definition and its chat-node renderer seat. The
+ * `conversationEvents` service is optional: when the running client runtime
+ * does not provide it, only the card degrades — tab and button stay up.
+ * @param ctx - client root context (cordis).
  */
-export function ETeamsCard({ node }: { node: { data: unknown } }): ReactNode {
-  return (
-    <ClientErrorBoundary label="团队卡片">
-      <Provider store={getApp().store}>
-        <ETeamsCardBody node={node} />
-      </Provider>
-    </ClientErrorBoundary>
+export function installCard(ctx: Context): void {
+  const events = (
+    ctx as unknown as { conversationEvents?: { register: (d: unknown) => () => void } }
+  ).conversationEvents;
+  if (typeof events?.register !== 'function') return;
+  events.register(eteamsCardDefinition);
+  (
+    ctx as unknown as {
+      slots: {
+        inject: (n: string, f: () => unknown) => void;
+        register: (d: Record<string, unknown>, c: unknown) => unknown;
+      };
+    }
+  ).slots.inject('conversation.chat.node', () =>
+    (
+      ctx as unknown as { slots: { register: (d: Record<string, unknown>, c: unknown) => unknown } }
+    ).slots.register({ name: 'conversation.chat.node', key: 'eteams' }, ETeamsCard),
   );
 }
+
+/** ================================== 子组件 ================================== */
 
 /** Card body — mounted inside the Provider (see {@link ETeamsCard}). */
 function ETeamsCardBody({ node }: { node: { data: unknown } }): ReactNode {
@@ -216,18 +239,16 @@ function ETeamsCardBody({ node }: { node: { data: unknown } }): ReactNode {
           <>
             <div className="mb-1 mt-2 flex items-center">
               {/* 人数/头像含领队（用户迭代 2026-09 六：领队也算成员，初始化
-              默认在团；移出后只剩成员）——与团队页、添加弹窗同一口径。 */}
-              {(team.leaderRemoved ? team.members : [team.captain, ...team.members])
-                .slice(0, 8)
-                .map((m) => (
-                  <span
-                    key={m.name}
-                    className="-mr-1.5"
-                    title={`${m.name}${'status' in m ? ` · ${m.status}` : ' · 领队'}`}
-                  >
-                    <Avatar name={m.name} size={26} />
-                  </span>
-                ))}
+              默认在团；移出后只剩成员）——与团队页、添加弹窗同一口径。
+              （M7-7 收口 components/avatarStack：本件密度 = slice(0, 8)、
+              -mr-1.5 重叠、title 带「 · 领队/状态」尾注；人数行在栈外原位。） */}
+              <AvatarStack
+                people={team.leaderRemoved ? team.members : [team.captain, ...team.members]}
+                size={26}
+                max={8}
+                wrapperClass="-mr-1.5"
+                titleOf={(m) => `${m.name}${'status' in m ? ` · ${m.status}` : ' · 领队'}`}
+              />
               <span className="ml-3 text-xs text-muted-foreground">
                 {team.members.length + (team.leaderRemoved ? 0 : 1)} 人
               </span>
@@ -271,28 +292,21 @@ function ETeamsCardBody({ node }: { node: { data: unknown } }): ReactNode {
   );
 }
 
+/** ================================== 主组件 ================================== */
+
 /**
- * Register the card definition and its chat-node renderer seat. The
- * `conversationEvents` service is optional: when the running client runtime
- * does not provide it, only the card degrades — tab and button stay up.
- * @param ctx - client root context (cordis).
+ * The in-transcript card renderer (live via polled snapshots).
+ * R2-F2（docs/21 21.5.3）：表面根包 Provider——本组件自身的 hook 调用
+ * （useActivityState → useSelector）必须在 Provider 子树内，故拆为
+ * 「包装层（错误边界 + Provider）+ 内体（hook 消费 + 表面根）」两层；
+ * 单例 store，多 Provider 同 store 无害。
  */
-export function installCard(ctx: Context): void {
-  const events = (
-    ctx as unknown as { conversationEvents?: { register: (d: unknown) => () => void } }
-  ).conversationEvents;
-  if (typeof events?.register !== 'function') return;
-  events.register(eteamsCardDefinition);
-  (
-    ctx as unknown as {
-      slots: {
-        inject: (n: string, f: () => unknown) => void;
-        register: (d: Record<string, unknown>, c: unknown) => unknown;
-      };
-    }
-  ).slots.inject('conversation.chat.node', () =>
-    (
-      ctx as unknown as { slots: { register: (d: Record<string, unknown>, c: unknown) => unknown } }
-    ).slots.register({ name: 'conversation.chat.node', key: 'eteams' }, ETeamsCard),
+export function ETeamsCard({ node }: { node: { data: unknown } }): ReactNode {
+  return (
+    <ClientErrorBoundary label="团队卡片">
+      <Provider store={getApp().store}>
+        <ETeamsCardBody node={node} />
+      </Provider>
+    </ClientErrorBoundary>
   );
 }

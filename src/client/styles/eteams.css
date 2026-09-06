@@ -230,7 +230,7 @@
  * Typeset 端口（docs/41）：shadcn/typeset（ui.shadcn.com/docs/components/base/
  * typography；canonical = shadcn-ui/ui@main apps/v4/app/(app)/(typeset)/typeset.css
  * @ 7c9eaba，2026-09-05 实抓）手工平铺进本文件。MD 只读渲染面（宿主
- * MarkdownText，四处消费点经 markdownDoc.tsx 的 `typeset eteams-md` 包装）从
+ * MarkdownText，四处消费点经 shared/markdownDoc.tsx 的 `typeset eteams-md` 包装）从
  * 宿主 --dsw-* 换吃上方 D22a 语义 token。
  *
  * 纪律（docs/41 §41.3）：

@@ -3,16 +3,17 @@
  * 可编辑草稿表单态（DraftEdit/EMPTY_EDIT/fromBuildDraft）、预填命令芯片
  * 与构建中草稿只读预览、手册骨架合成（handbookSeed/HandbookSource）。
  * 符号自 eteamsView.tsx 原样搬出（docs/32 32.5.1 纯移动、零行为变更），
- * 供 teamMembers / membersTab 消费（R1 类型边：HandbookSource/DraftEdit
- * 一律 import type）。
+ * 供 roster/rosterAddPage、roster/buildWorkbench、roster/rosterDetailPage
+ * 与 team/memberDetailPage 消费（R1 类型边：HandbookSource/DraftEdit 一律
+ * import type）。
  *
- * @module dsh-eteams/client/pages/teamsView/buildDraft
+ * @module dsh-eteams/client/pages/roster/buildDraft
  */
 import type { ReactNode } from 'react';
 import type { BuildDraft } from '../../lib/api';
 import { cn } from '../../lib/cn';
 import { Card } from '../../components/ui/card';
-import { BORDER_L1_CLASS, MUTED_CLASS, PANEL_CARD_CLASS, SECTION_TITLE_CLASS } from './shared';
+import { BORDER_L1_CLASS, MUTED_CLASS, PANEL_CARD_CLASS, SECTION_TITLE_CLASS } from '../shared/styles';
 
 /** 原 styles.detailRow / detailLabel（构建中草稿预览行；--border 下边线；
  * D22d 数据行 14px/24）。 */

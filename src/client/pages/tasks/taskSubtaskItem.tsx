@@ -3,10 +3,10 @@
  * SUBTASK_CARD_CLASS + SubtaskCard（私有——唯一消费方是本文件的 SubtaskItem）
  * + SubtaskItem，承载组页 AccordionItem 整块（行头/钮簇/卡槽/TaskStations/
  * 展开区/错误行）。Accordion 根（type/value/onValueChange）、编辑态与
- * inlineEdit 哑化判据仍由 tasksTab 持有，状态经 props 传入；原注释逐字随迁
- * （纯移动、零行为变更）。
+ * inlineEdit 哑化判据由消费页持有（M3 起为 tasks/taskDetailPage），状态经
+ * props 传入；原注释逐字随迁（纯移动、零行为变更）。
  *
- * @module dsh-eteams/client/pages/teamsView/taskSubtaskItem
+ * @module dsh-eteams/client/pages/tasks/taskSubtaskItem
  */
 import type { ReactNode } from 'react';
 import { useDrag, useDrop } from 'react-dnd';
@@ -21,11 +21,14 @@ import {
   type SubtaskDragItem,
 } from '../../features/tasks/taskAssign';
 import { boxCoversChain } from '../../features/tasks/taskAssignCore';
+import { isStartable } from '../../features/tasks/taskDisplayStatus';
 import { AccordionContent, AccordionItem, AccordionTrigger } from '../../components/ui/accordion';
+import { DeleteButton } from '../../components/deleteButton';
 import { Button } from '../../components/ui/button';
 import { TaskStations } from './taskDrawer';
-import { MarkdownDoc } from './markdownDoc';
-import { BORDER_L1_CLASS, FormErrorNote, LINE_CLASS, MUTED_CLASS } from './shared';
+import { MarkdownDoc } from '../shared/markdownDoc';
+import { FormErrorNote } from '../shared/components';
+import { LINE_CLASS, MUTED_CLASS, TASK_CARD_CLASS } from '../shared/styles';
 import { BlockedPill, TaskStatusPill } from './taskPills';
 
 /** 瞬态错误槽（assignError/reorderError/startError 同构：taskId 定位 + 行内展示）。 */
@@ -43,7 +46,7 @@ interface TaskErrorSlot {
  * 目标；小任务详情页仍服务于顶层普通任务（组卡不再有入口，见组详情分支）。
  * 三十一轮 DA44⑤：isOver 高亮改 ring-inset（目标卡四边内缘高亮，免疫卡身
  * 滚动容器 overflow-x-hidden 的外缘裁剪——DA36 chip 同款先例）。 */
-const SUBTASK_CARD_CLASS = `mt-1.5 rounded-[8px] border border-solid bg-background px-3 py-2.5 ${BORDER_L1_CLASS}`;
+const SUBTASK_CARD_CLASS = `mt-1.5 ${TASK_CARD_CLASS}`;
 
 /** 小任务卡片（七轮 DA20 调序 + 十轮 DA23 把手化）：**只有左上 grip 把手
  * 可拖**（'eteams-subtask'，draft/ready 才可拖，不可编辑态把手淡化），
@@ -110,8 +113,9 @@ function SubtaskCard({
 }
 
 /** 组详情页小任务卡条目（DA44④ 自 tasksTab AccordionItem 整块抽离）：状态
- * （expandedSubIds/inlineEdit/busy/error 瞬态）与提交回调留在 tasksTab，经
- * props 传入；suppressStations（boxCoversChain）与 expandable（说明/合同
+ * （expandedSubIds/inlineEdit/busy/error 瞬态）与提交回调由消费页持有
+ * （M3 起 = tasks/taskDetailPage），经 props 传入；suppressStations
+ * （boxCoversChain）与 expandable（说明/合同
  * trim 判据）随块迁入本组件现算。subjectEditor/editor 节点由调用方按 editing
  * 生成传入（行头原位 Input / 展开区 MdEditor），组件内 editing 三元二选一。 */
 export function SubtaskItem({
@@ -158,7 +162,8 @@ export function SubtaskItem({
   onDelete: () => void;
   onAssign: (chain: TaskSlotInput[]) => void;
   onRemoveStation: (index: number) => void;
-  /** 卡槽「修改」入口（inlineEdit 哑化判断留 tasksTab，回调传入）。 */
+  /** 卡槽「修改」入口（inlineEdit 哑化判断留消费页——M3 起为
+   * tasks/taskDetailPage，回调传入）。 */
   onOpenEditDialog: () => void;
 }): ReactNode {
   // docs/29 DA5/DA13：可编辑窗口内成员框承整链（boxCoversChain）
@@ -201,10 +206,11 @@ export function SubtaskItem({
                 站）；ready 无链改渲染「需要选择成员」行内提示
                 （用户拍板「如果有任务没有成员，则提示需要选择
                 成员就行」，不设按钮）。draft（拆解中）与已入执行
-                不渲染。二十五轮 DA38：防冒泡包装层撤除（卡身点击
+                不渲染。M3：状态窗口收拢 isStartable 谓词（判定逐位
+                等价）。二十五轮 DA38：防冒泡包装层撤除（卡身点击
                 进详情口径已废，包装层随之无用；点击恢复原生冒泡
                 ——多选面板的外出点击关闭不再被拦断）。 */}
-            {task.status === 'ready' && task.chain.length > 0 && (
+            {isStartable(task.status) && task.chain.length > 0 && (
               <Button
                 type="button"
                 size="sm"
@@ -214,7 +220,7 @@ export function SubtaskItem({
                 开始
               </Button>
             )}
-            {task.status === 'ready' && task.chain.length === 0 && (
+            {isStartable(task.status) && task.chain.length === 0 && (
               <span className={cn(MUTED_CLASS, 'shrink-0')}>需要选择成员</span>
             )}
             {subMutable && (
@@ -222,9 +228,9 @@ export function SubtaskItem({
                 <Button type="button" variant="outline" size="sm" onClick={onInlineEdit}>
                   修改
                 </Button>
-                <Button type="button" variant="outline" size="sm" onClick={onDelete}>
-                  删除
-                </Button>
+                {/* 删除（M7-4 收口 components/deleteButton）：原位无 destructive
+                红字（本行漂移保留——46 清单 M7-4 明示不并口径），destructive={false}。 */}
+                <DeleteButton label="删除" destructive={false} onClick={onDelete} />
               </div>
             )}
             {(expandable || editing) && (

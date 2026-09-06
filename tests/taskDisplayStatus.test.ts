@@ -1,6 +1,7 @@
 /**
  * 展示态派生层单测（docs/27 §27.9#11 十态收敛）：10 态→展示态映射全表（含
  * cancelled 同桶异色特例）、retryCount 并入 detail、未知态中性回退、
+ * isStartable/isTerminal 开始钮状态窗口（M3 收拢三处开始钮判据）、
  * group 汇总优先级（error > doing > waiting > done 全完成 null）与全部
  * done → null；成员五态词表/tone 与 13 态旧值兜底。
  */
@@ -12,6 +13,8 @@ import {
   STATUS_LABELS,
   displayStatusOf,
   groupDisplayOf,
+  isStartable,
+  isTerminal,
   memberTone,
 } from '../src/client/features/tasks/taskDisplayStatus';
 
@@ -169,6 +172,36 @@ describe('memberTone（成员状态五档 + 旧值兜底）', () => {
     expect(memberTone('failed')).toBe('err');
     expect(memberTone('error')).toBe('err');
     expect(memberTone('unknown')).toBe('muted');
+  });
+});
+
+describe('isStartable / isTerminal（M3 收拢三处开始钮判据的状态窗口）', () => {
+  it('isStartable：任务/小任务「开始」钮仅 ready 渲染（十态逐格，判定与收拢前逐位等价）', () => {
+    expect(isStartable('ready')).toBe(true);
+    expect(isStartable('draft')).toBe(false);
+    expect(isStartable('wait')).toBe(false);
+    expect(isStartable('start')).toBe(false);
+    expect(isStartable('paused')).toBe(false);
+    expect(isStartable('wait_decision')).toBe(false);
+    expect(isStartable('wait_user')).toBe(false);
+    expect(isStartable('completed')).toBe(false);
+    expect(isStartable('failed')).toBe(false);
+    expect(isStartable('cancelled')).toBe(false);
+  });
+
+  it('isTerminal：主任务「开始」钮终态（completed/cancelled）收钮，其余渲染', () => {
+    expect(isTerminal('completed')).toBe(true);
+    expect(isTerminal('cancelled')).toBe(true);
+    expect(isTerminal('draft')).toBe(false);
+    expect(isTerminal('ready')).toBe(false);
+    expect(isTerminal('wait')).toBe(false);
+    expect(isTerminal('start')).toBe(false);
+    expect(isTerminal('paused')).toBe(false);
+    expect(isTerminal('wait_decision')).toBe(false);
+    expect(isTerminal('wait_user')).toBe(false);
+    expect(isTerminal('failed')).toBe(false);
+    // 未知态（旧快照/词表外）非终态——开始钮照渲染（原 !== 串比较同口径）。
+    expect(isTerminal('unknown_state')).toBe(false);
   });
 });
 

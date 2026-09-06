@@ -1,9 +1,10 @@
 /**
  * 添加成员弹窗（用户迭代 2026-09 三）：角色购物车 + 加减步进器。
  * 符号自 eteamsView.tsx 原样搬出（docs/32 32.5.1 纯移动、零行为变更），
- * 供 teamTab 消费（依赖方向：teamTab → addMembersDialog → shared）。
+ * 供 team/teamDetailPage 消费（依赖方向：team/teamDetailPage →
+ * addMembersDialog → shared；M4 起团队 tab 拆页，见 team/）。
  *
- * @module dsh-eteams/client/pages/teamsView/addMembersDialog
+ * @module dsh-eteams/client/pages/team/addMembersDialog
  */
 import { useState, type ReactNode } from 'react';
 import Minus from 'lucide-react/dist/esm/icons/minus.mjs';
@@ -11,23 +12,20 @@ import Plus from 'lucide-react/dist/esm/icons/plus.mjs';
 import { addTeamMember, setTeamLeaderRemoved, type RosterMember } from '../../lib/api';
 import type { TeamSnapshot } from '../../lib/monitor';
 import { cn } from '../../lib/cn';
+import { errorMessageOf } from '../../lib/errors';
 import { Avatar } from '../../features/avatar/avatar';
+import { FormDialog, FormFooterActions } from '../../components/formDialog';
 import { Button } from '../../components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '../../components/ui/dialog';
+import { FormErrorNote } from '../shared/components';
 import {
   BORDER_L1_CLASS,
-  FormErrorNote,
   LEADER_NAME,
   LIST_COUNT_CLASS,
   MUTED_CLASS,
   ROLE_BUILDER_NAME,
-} from './shared';
+} from '../shared/styles';
+
+/** ================================== 类型 ================================== */
 
 /** 添加成员弹窗购物车项：角色名 + 已点份数。 */
 interface CartItem {
@@ -35,6 +33,8 @@ interface CartItem {
   name: string;
   qty: number;
 }
+
+/** ================================== 子组件 ================================== */
 
 /**
  * 加减步进器（用户迭代 2026-09 三添加成员行尾）：− 减一份、＋ 加一份，
@@ -92,6 +92,8 @@ function StepButtons({
     </div>
   );
 }
+
+/** ================================== 主组件 ================================== */
 
 /**
  * 添加成员弹窗（用户迭代 2026-09 三）：一行一个角色 + 加减步进器——每行
@@ -190,7 +192,9 @@ export function AddMembersDialog({
       }
       close(false);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      // 错误规范化收口 errorMessageOf（M7-5；catch 侧还有清购物车动作——
+      // 带额外动作的壳不套 runWithBusy，见 lib/errors 边界注记）。
+      setError(errorMessageOf(e));
       // 已加成功的保留；清空购物车避免重名二次报错。
       setCart([]);
       setLeaderPicked(false);
@@ -206,112 +210,100 @@ export function AddMembersDialog({
     );
 
   return (
-    <Dialog open={open} onOpenChange={close}>
-      <DialogContent className="max-w-md">
-        <DialogHeader className="space-y-1 text-left">
-          <DialogTitle>添加成员</DialogTitle>
-          <DialogDescription className={MUTED_CLASS}>
-            一行一个角色：＋ 加一份、－ 减一份，同一角色可加多份（自动加 -2、-3
-            后缀），工号在加入团队时自动分配（这里不展示——角色没加入成员前没有工号）。
-          </DialogDescription>
-        </DialogHeader>
-
-        {/* 菜单：一行一个角色，行尾加减步进器（名额满时全体 ＋ 禁用）。 */}
-        <div className="flex max-h-[300px] flex-col gap-1.5 overflow-y-auto pr-0.5">
-          {team.leaderRemoved && (
-            <div className={rowClass(leaderPicked)}>
-              <Avatar
-                name={team.captain.name}
-                seed={team.captain.avatar.seed}
-                salt={team.captain.avatar.salt}
-                size={28}
-              />
+    // 弹窗壳（M7-1 收口 FormDialog，max-w-md 档；onOpenChange 即 close 原样
+    // 透传）。尾行（M7-1 收口 FormFooterActions）：左槽放已选计数、按钮组
+    // 成组靠右——与原 justify-between 双层行同构。
+    <FormDialog
+      open={open}
+      onOpenChange={close}
+      width="max-w-md"
+      title="添加成员"
+      description="一行一个角色：＋ 加一份、－ 减一份，同一角色可加多份（自动加 -2、-3 后缀），工号在加入团队时自动分配（这里不展示——角色没加入成员前没有工号）。"
+    >
+      {/* 菜单：一行一个角色，行尾加减步进器（名额满时全体 ＋ 禁用）。 */}
+      <div className="flex max-h-[300px] flex-col gap-1.5 overflow-y-auto pr-0.5">
+        {team.leaderRemoved && (
+          <div className={rowClass(leaderPicked)}>
+            <Avatar
+              name={team.captain.name}
+              seed={team.captain.avatar.seed}
+              salt={team.captain.avatar.salt}
+              size={28}
+            />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-semibold text-foreground">
+                {team.captain.name}
+              </div>
+              <div className={cn(MUTED_CLASS, 'truncate text-xs')}>
+                领队 · ＋ 加回（占 1 个名额）
+              </div>
+            </div>
+            <StepButtons
+              qty={leaderPicked ? 1 : 0}
+              onAdd={() => {
+                setLeaderPicked(true);
+                setError(null);
+              }}
+              onRemove={() => {
+                setLeaderPicked(false);
+                setError(null);
+              }}
+              addDisabled={leaderPicked || left <= 0}
+              removeDisabled={!leaderPicked}
+              addTitle={
+                left <= 0 ? '名额已满：团队上限 ' + memberCap + ' 人（含领队）' : '加回领队'
+              }
+              removeTitle="取消加回"
+            />
+          </div>
+        )}
+        {menu.map((m) => {
+          const qty = qtyOf(m.name);
+          return (
+            <div key={m.name} className={rowClass(qty > 0)}>
+              <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={28} />
               <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-semibold text-foreground">
-                  {team.captain.name}
-                </div>
-                <div className={cn(MUTED_CLASS, 'truncate text-xs')}>
-                  领队 · ＋ 加回（占 1 个名额）
-                </div>
+                <div className="truncate text-sm font-semibold text-foreground">{m.name}</div>
+                <div className={cn(MUTED_CLASS, 'truncate text-xs')}>{m.role}</div>
               </div>
               <StepButtons
-                qty={leaderPicked ? 1 : 0}
-                onAdd={() => {
-                  setLeaderPicked(true);
-                  setError(null);
-                }}
-                onRemove={() => {
-                  setLeaderPicked(false);
-                  setError(null);
-                }}
-                addDisabled={leaderPicked || left <= 0}
-                removeDisabled={!leaderPicked}
+                qty={qty}
+                onAdd={() => addItem(m.name)}
+                onRemove={() => removeOne(m.name)}
+                addDisabled={left <= 0}
+                removeDisabled={qty === 0}
                 addTitle={
-                  left <= 0 ? '名额已满：团队上限 ' + memberCap + ' 人（含领队）' : '加回领队'
+                  left <= 0 ? '名额已满：团队上限 ' + memberCap + ' 人（含领队）' : '加一份'
                 }
-                removeTitle="取消加回"
+                removeTitle="减一份"
               />
             </div>
-          )}
-          {menu.map((m) => {
-            const qty = qtyOf(m.name);
-            return (
-              <div key={m.name} className={rowClass(qty > 0)}>
-                <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={28} />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-semibold text-foreground">{m.name}</div>
-                  <div className={cn(MUTED_CLASS, 'truncate text-xs')}>{m.role}</div>
-                </div>
-                <StepButtons
-                  qty={qty}
-                  onAdd={() => addItem(m.name)}
-                  onRemove={() => removeOne(m.name)}
-                  addDisabled={left <= 0}
-                  removeDisabled={qty === 0}
-                  addTitle={
-                    left <= 0 ? '名额已满：团队上限 ' + memberCap + ' 人（含领队）' : '加一份'
-                  }
-                  removeTitle="减一份"
-                />
-              </div>
-            );
-          })}
-          {menu.length === 0 && !team.leaderRemoved && (
-            <div className={cn(MUTED_CLASS, 'py-4 text-center text-xs')}>
-              角色库还没有可选角色——先到「角色」页新增。
-            </div>
-          )}
-        </div>
+          );
+        })}
+        {menu.length === 0 && !team.leaderRemoved && (
+          <div className={cn(MUTED_CLASS, 'py-4 text-center text-xs')}>
+            角色库还没有可选角色——先到「角色」页新增。
+          </div>
+        )}
+      </div>
 
-        {hint !== null && <div className={cn(MUTED_CLASS, 'text-xs')}>{hint}</div>}
-        {error !== null && <FormErrorNote>{error}</FormErrorNote>}
+      {hint !== null && <div className={cn(MUTED_CLASS, 'text-xs')}>{hint}</div>}
+      {error !== null && <FormErrorNote>{error}</FormErrorNote>}
 
-        <div className="flex items-center justify-between gap-2">
+      <FormFooterActions
+        className="justify-between gap-2"
+        left={
           <span className={LIST_COUNT_CLASS}>
             已选 {total + leaderTaken} 人 · 成员 {occupied + total + leaderTaken}/{memberCap} ·
             还可加 {left} 人
           </span>
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={busy}
-              onClick={() => close(false)}
-            >
-              取消
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              disabled={busy || (total === 0 && !leaderPicked)}
-              onClick={() => void confirmAdd()}
-            >
-              添加成员
-            </Button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
+        }
+        cancelDisabled={busy}
+        confirmDisabled={busy || (total === 0 && !leaderPicked)}
+        confirmLabel="添加成员"
+        onCancel={() => close(false)}
+        onConfirm={() => void confirmAdd()}
+      />
+    </FormDialog>
   );
 }

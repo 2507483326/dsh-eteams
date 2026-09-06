@@ -6,8 +6,12 @@
  * 日历置顶（扁平渲染见 usageCalendar）。
  * docs/35 §5#1：批准环节下线——建队即生效，staged 横幅与批准弹窗随之删除
  * （面板只剩待决策横幅 + 日历 + 最近动态）。
+ * M5 结构性改造（docs/44 44.3，行为零变更）：44.3 横幅分区；页内三元查表化
+ * ——空态脚注两态收编 EMPTY_FOOTNOTE_META，数据更新行空档占位收编
+ * FETCH_AT_EMPTY（另一支为运行时 relativeTime 计算，条件式保留，见常量区
+ * 注记）。
  *
- * @module dsh-eteams/client/pages/teamsView/boardTab
+ * @module dsh-eteams/client/pages/board/boardPage
  */
 import type { ReactNode } from 'react';
 import { relativeTime, type TeamSnapshot } from '../../lib/monitor';
@@ -20,13 +24,33 @@ import {
   MUTED_CLASS,
   PANEL_CARD_CLASS,
   SECTION_TITLE_CLASS,
-} from './shared'; /* docs/23 S23-3：原 styles.banner（BANNER_CLASS）迁移 shadcn Alert warning
+} from '../shared/styles'; /* docs/23 S23-3：原 styles.banner（BANNER_CLASS）迁移 shadcn Alert warning
    变体（amber 淡底以 className 覆盖保留），使用位内联；原
    PROGRESS_TRACK/FILL_CLASS 迁移 shadcn Progress（transform 技法，轨道
    bg-secondary 即原 layer-2 档），一并删除手写常量。 */
+
+/** ================================== 样式类 ================================== */
+
 /** 原 styles.eventRow（D22f：去满宽下边线的表格观感，改留白分组——行
  * py-1.5 + 列表容器 space-y-1；正文 14px/24，meta 12px muted 见使用位）。 */
 const EVENT_ROW_CLASS = 'py-1.5 text-sm leading-6 text-foreground';
+
+/** ================================== 常量与映射表 ================================== */
+
+/** 空态脚注两态查表（M5 三元收编，44.2.2）：team undefined 早退分支末行的
+ * 状态行——尚未建团队整句 / 状态加载失败前缀。错误支的原始错误串是运行时
+ * 值，表存字面量件、消费位拼接（条件式只选组装形态）；两支文案与收编前
+ * 逐串一致。 */
+const EMPTY_FOOTNOTE_META: Record<'error' | 'noTeam', string> = {
+  error: '状态加载失败：',
+  noTeam: '尚未创建团队',
+};
+
+/** 数据更新行空档占位（M5 收编字面量）：fetchedAt=0 尚未拉到快照——另一
+ * 支为运行时 relativeTime 计算，条件式保留（查表只收字面量件）。 */
+const FETCH_AT_EMPTY = '—';
+
+/** ================================== 主组件 ================================== */
 
 /**
  * 看板：待决策横幅 + Token 消耗日历（置顶扁平）+ 最近动态（原「概览」；
@@ -56,7 +80,11 @@ export function BoardTab({
           也可以在对话中说「用 AgentTeams 做某事」或 <code>/agent-teams</code>
           ，领队会先问询、再拆解计划等你批准。
         </p>
-        <p className={MUTED_CLASS}>{error !== null ? `状态加载失败：${error}` : '尚未创建团队'}</p>
+        <p className={MUTED_CLASS}>
+          {error !== null
+            ? `${EMPTY_FOOTNOTE_META.error}${error}`
+            : EMPTY_FOOTNOTE_META.noTeam}
+        </p>
       </div>
     );
   }
@@ -99,7 +127,7 @@ export function BoardTab({
           {team.latestEvents.length === 0 && <div className={MUTED_CLASS}>暂无事件</div>}
         </div>
         <div className={MUTED_CLASS}>
-          数据更新于 {fetchedAt === 0 ? '—' : relativeTime(fetchedAt, now)}
+          数据更新于 {fetchedAt === 0 ? FETCH_AT_EMPTY : relativeTime(fetchedAt, now)}
         </div>
       </Card>
     </div>

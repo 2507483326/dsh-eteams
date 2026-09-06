@@ -1,7 +1,7 @@
 /**
  * M4 web-surface tests (docs/35 §5/§6): the TeamSnapshot builder over the
  * SQLite state root, the panel write routes, the docs/26 conversation task
- * loop, the GET /board cross-team aggregation and the usage-calendar route —
+ * loop, the GET /board cross-team aggregation and the usageCalendar route —
  * all driven offline through the runtime ops with a fake subagent runtime.
  */
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';

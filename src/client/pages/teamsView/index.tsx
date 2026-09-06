@@ -30,8 +30,8 @@
  * 并新增自管 portal 容器 components/ui/portal.ts——Radix 默认 portal 到
  * body 会逃出 `.eteams-ui` 作用域，改挂 body 下 `eteams-ui-portal eteams-ui`
  * 容器）。开合状态走 ui model（ui/setDrawerTask）；（2026-09-05 八轮 DA21
- * 页面化后该状态语义 = 详情页选中的任务 id，原 Dialog 抽屉撤除，见
- * tasksTab/taskDrawer）。执行槽
+ * 页面化后该状态语义 = 详情页选中的任务 id，原 Dialog 抽屉撤除；M3 起
+ * 读写两端见 routes.tsx location sync 与 tasks/ 两页）。执行槽
  * 站点 ✔/●/◌ 结构原样保留，仅类名替换。
  *
  * S14 收尾批次（docs/21-client-ui-stack.md 21.6 / D19b/D19c）：面板壳
@@ -47,17 +47,28 @@
  * 已撤）。
  * 残余 inline 仅：进度条宽度（运行时动态）×2 与壳高度锚点 ×1。
  *
+ * M1 路由骨架（docs/44 44.2.1，2026-09-06）：面板壳内挂一棵 MemoryRouter
+ * （ETeamsRouter，路由表见 routes.tsx）——rail 宽窄两套点击改 useNavigate
+ * （location 为唯一导航驱动源），五 tab 出口改 Routes（基础路径渲染各 tab，
+ * M2/M3/M4 逐域拆页）；location 变化单向 sync 回 store
+ * （ui/setNav + M3 起 /tasks 域的 ui/setDrawerTask，均在 routes.tsx 内），
+ * ui.activeNav 降为持久层与观察面（刷新/换页
+ * 重挂时经 initialEntries 恢复上次页签）。桥信号 handler 改 navigate，
+ * openAddTick 等组件内瞬态语义保留。
+ *
+ * M8 目录重排（docs/44 44.2.4，2026-09-06）：侧栏（宽窄两套 + 筛选框）拆
+ * rail.tsx（PanelRail）——宽/窄档位测量锚点是本文件的作用域根
+ * 元素，useLayoutEffect/ResizeObserver 测量留驻壳内、railWide 经 props 传入
+ * （阈值常量 RAIL_WIDE_MIN_WIDTH 自 rail 导入，单一档位源）。
+ *
  * @module dsh-eteams/client/pages/teamsView/index
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
-// lucide 深层图标导入（dialog.tsx 先例：主入口 icons 命名空间再导出会让
-// rolldown 拖全量图标进 envelope，深层 .mjs 路径只进用到的图标；类型垫片见
-// components/ui/lucide-icon.d.ts）。D22f：emoji 清零的替换位。
-import Search from 'lucide-react/dist/esm/icons/search.mjs';
-// docs/28 Token 消耗日历（usageCalendar.tsx）：tsdown 虚拟 CSS 插件以字符串
-// 载入，见 usageCalendarCss.d.ts / tsdown.config.ts usageTooltipsCssInline。
+// docs/28 Token 消耗日历（board/usageCalendar.tsx）：tsdown 虚拟 CSS 插件以
+// 字符串载入，见 usageCalendarCss.d.ts / tsdown.config.ts usageTooltipsCssInline。
 import { Provider, useDispatch, useSelector } from 'react-redux';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { prefillComposer, type PrefillOutcome } from '../../lib/addPeople';
 import {
   consumePendingGotoAdd,
@@ -67,99 +78,28 @@ import {
   GOTO_ROSTER_EVENT,
   SELECT_TEAM_EVENT,
 } from '../../lib/bridge';
-import { cn } from '../../lib/cn';
+import { navIdOfPath } from '../../lib/status';
 import { ClientErrorBoundary } from '../../lib/diagnostics';
-import { Input } from '../../components/ui/input';
 import { Toaster } from '../../components/ui/toaster';
+import { usePoll } from '../../hooks/usePoll';
 import { EteamsBackdrop } from '../../features/backdrop/eteamsBackdrop';
 import { fetchAgentActivity } from '../../lib/api';
 import { useActivityMonitor } from '../../lib/monitor';
 import { getApp, type RootState } from '../../store/app';
-import {
-  BORDER_L1_CLASS,
-  FormErrorNote,
-  PageHeader,
-  ROLE_LIST_CSS,
-} from './shared';
-import { BoardTab } from './boardTab';
-import { TasksTab } from './tasksTab';
-import { TeamTab } from './teamTab';
-import { MembersTab } from './membersTab';
-import { ReportsTab } from './reportsTab';
+import { FormErrorNote, PageHeader } from '../shared/components';
+import { ROLE_LIST_CSS } from '../shared/styles';
+import { PanelRail, RAIL_WIDE_MIN_WIDTH } from './rail';
+import { ETeamsRouter, ETeamsViewRoutes } from './routes';
+
+/** ================================== 样式类 ================================== */
 
 /* styles/fns 两个 inline 工厂已随 S14 收尾迁移整体删除（docs/21 21.6 死
-代码清理）：styles.* → 下方「S14 迁移新增的类名常量」段（或沿用 S12/S13
-既有类常量），fns.pill → pillClass（S13 已备、本批全面板统一），
+代码清理）：styles.* → 各批次落位的类名常量（或沿用 S12/S13 既有类常量），
+fns.pill → pillClass（S13 已备、本批全面板统一），
 fns.progressFill → PROGRESS_FILL_CLASS + 宽度百分比 inline（S5 card 先例：
-运行时动态值保留 inline，S14 清点口径）。 */
-
-/* —— S12 迁移后的类名常量（Tailwind 工具类，完整字面量；模板串组合仅限
-const 字面量插值，运行时动态值一律 inline style——S5/S11 既有口径）—— */
-
-/** 原 styles.rail（窄栏态：84px / 3px 纵向间距 / 右分隔线 / 上 2 右 12）。
- * docs/22 S22-2：面板宽 ≥720px 时改用官网风格的宽栏 RAIL_WIDE_CLASS，
- * 窄面板回落本类（84px 窄栏原样保留，窄上下文零回归）。 */
-const RAIL_CLASS = `flex w-[84px] shrink-0 flex-col gap-[3px] border-r border-solid pr-3 pt-0.5 ${BORDER_L1_CLASS}`;
-
-/** 官网 docs 侧栏风格的宽栏（docs/22 D20c，tailwindcss.cn 实测标记还原）：
- * 208px（官网 15rem 等比收窄的 S24-2 加宽档）+ 右分隔线；列表自带连续左
- * 细线（官网 `border-l border-slate-100`，token 化走 --border）。 */
-const RAIL_WIDE_CLASS = `flex w-[208px] shrink-0 flex-col border-r border-solid pr-4 pt-1 ${BORDER_L1_CLASS}`;
-/** 宽栏分组标题（官网 h5：`text-sm mb-3 font-semibold text-slate-900` 的
- * token 版——D22d 侧栏全档 14px/24）。 */
-const RAIL_TITLE_CLASS = 'mb-3 text-sm font-semibold leading-6 text-foreground';
-/** 宽栏导航列表（官网 ul：`space-y-2 border-l` 的 token 版）。 */
-const RAIL_LIST_CLASS = `space-y-2 border-l border-solid ${BORDER_L1_CLASS}`;
-
-/** 宽栏导航链接三态（官网 a 的签名交互，docs/22 22.1.3）：自带 1px 左边线
- * 压在列表线上（`-ml-px`），常态透明、hover 亮线 + 文字加深、**激活 = sky
- * 文字 + 同色左线（border-current）+ semibold**；全部完整字面量（21.5.1
- * content 扫描纪律）。
- * D22f 官网字面量方案：hover 线取官网原味 `border-slate-400`（中灰在浅暗
- * 两态底上都可见）；hover 文字官方是加深到 slate-900，但 slate-900 字面量
- * 在暗色面板（slate-900 底）会隐形——文字加深走 token hover:text-foreground
- * （亮=官网同效，暗=slate-200 随主题翻档）。 */
-const RAIL_LINK_BASE_CLASS =
-  'block border-0 border-l border-solid bg-transparent py-[3px] pl-4 -ml-px text-left text-sm leading-6 [font-family:inherit] transition-colors';
-const RAIL_LINK_IDLE_CLASS =
-  'border-transparent text-muted-foreground hover:border-slate-400 hover:text-foreground';
-const RAIL_LINK_ACTIVE_CLASS = 'border-current font-semibold text-primary';
-
-/** 侧栏按钮（窄栏态，原 fns.railBtn）：active/idle 两态都是完整字面量映射（无拼接，
-teamsButton tabBtnClass 同款）；docs/23 D21b：active 底改品牌淡底 token
-（business-tint 淡底对）、字=brand 主色 token；S24-2 补非激活钮 hover 态
-（官网侧栏 hover 底语义，token --muted）。 */
-const railBtnClass = (active: boolean): string =>
-  cn(
-    'block w-full cursor-pointer rounded-[8px] border-none px-2.5 py-[7px] text-left text-xs leading-[1.55] [letter-spacing:0.2px]',
-    active
-      ? 'bg-business-tint font-semibold text-primary'
-      : 'bg-transparent font-medium text-muted-foreground hover:bg-muted',
-  );
-
-/** 宽栏导航链接类名（官网三态查表；同 railBtnClass 的映射表口径）。 */
-const railLinkClass = (active: boolean): string =>
-  cn(
-    RAIL_LINK_BASE_CLASS,
-    active ? RAIL_LINK_ACTIVE_CLASS : RAIL_LINK_IDLE_CLASS,
-    'cursor-pointer',
-  );
-
-/** 宽栏阈值（docs/22 S22-2）：面板作用域根宽 ≥ 此值用官网风格宽栏，
- * 否则回落 84px 窄栏。宿主 conversation.view 视图区与整页团队页宽度差异大，
- * Tailwind v3 无容器查询（v4 才内置），以作用域根实测为准。 */
-const RAIL_WIDE_MIN_WIDTH = 720;
-
-/* —— S13 迁移新增的类名常量（成员/任务两区块；完整字面量，同 S12 纪律）—— */
-
-/* docs/23 S23-3：原 styles.select（SELECT_CLASS）迁移 shadcn Select（触发器
-   对齐官网输入框签名：rounded-md + ring 边 + shadow-sm），空选项位以哨兵值
-   承载（Radix SelectItem 禁空串 value）；原 styles.btn（BTN_CLASS）迁移
-   shadcn Button outline/sm。手写常量删除，使用位内联。 */
-
-/* —— S14 迁移新增的类名常量（面板壳/团队卡片栅格/构建工作台/角色库收尾；
-完整字面量，同 S12/S13 纪律；置于 S12/S13 段之后——模板串插值在模块初始化
-时求值，须晚于所引用的 BORDER_L1_CLASS/TEXT2_CLASS 等常量）—— */
+运行时动态值保留 inline，S14 清点口径）。类名常量纪律同全仓：完整字面量，
+模板串组合仅限 const 字面量插值，运行时动态值一律 inline style（S5/S11
+既有口径）；侧栏族类常量见 rail.tsx（M8 拆出）。 */
 
 /** 面板壳（原 styles.root 的布局面）：作用域根（.eteams-ui）自身不承工具类
 （`.eteams-ui .utility` 后代选择器机制），壳布局迁进这层内壳；height 锚点
@@ -172,40 +112,32 @@ const CONTENT_CLASS = 'min-w-0 flex-1 overflow-x-hidden overflow-y-auto pr-0.5';
 /* docs/23 S23-3：原 styles.formError（FORM_ERROR_CLASS）迁移 FormErrorNote
    （shadcn Alert destructive 紧凑档，见上方组件），常量删除。 */
 
-/**
- * The eteams conversation view entry — the M4.5 activity panel. 表面根：
- * Provider 包整个面板（S6/D19e），面板体在 Provider 之内消费 dva store；
- * ClientErrorBoundary 保持面板级降级路径不变。
- */
-export function ETeamsView(props: ConvViewProps): ReactNode {
-  return (
-    <Provider store={getApp().store}>
-      <ClientErrorBoundary label="团队面板">
-        <ETeamsViewBody {...props} />
-      </ClientErrorBoundary>
-    </Provider>
-  );
-}
+/** ================================== 子组件 ================================== */
 
 /**
- * Panel body — mounted inside the Provider (see {@link ETeamsView}).
- * S8/S9（docs/21-client-ui-stack.md）：面板导航、团队选择与抽屉/对话框开关
- * 迁入 ui model——tab/activeId/expandedTask/dialogMember 经 useSelector 读取
- * （ui.activeNav / ui.selectedTeamId / ui.drawerTaskId / ui.dialogMember），
- * 变更走 useDispatch 发 `ui/setNav` / `ui/setSelectedTeam` / `ui/setDrawerTask`
- * / `ui/setDialogMember`（goto 桥 handler 的目标状态同样；八轮 DA21 后
- * drawerTaskId 语义 = 任务详情页选中的任务 id）。输入草稿、悬停、
- * openAddTick 信号等组件内瞬态仍留 useState。
+ * Panel body — mounted inside the Provider and the panel MemoryRouter
+ * (see {@link ETeamsView}).
+ * S8/S9（docs/21-client-ui-stack.md）：团队选择与对话框开关迁入
+ * ui model——activeId/dialogMember 经 useSelector 读取
+ * （ui.selectedTeamId / ui.dialogMember），变更走 useDispatch 发
+ * `ui/setSelectedTeam` / `ui/setDialogMember`；drawerTaskId 同为 ui model
+ * 持久键（八轮 DA21 后语义 = 任务详情页选中的任务 id），M3 起由 routes.tsx
+ * 的 location sync 回写（/tasks/:taskId ↔ 详情选中），壳不再读取。
+ * M1 起**面板导航改路由驱动**：location 是唯一导航驱动源
+ * （rail 点击与桥跳转都走 navigate，见 routes.tsx），activeTab 由
+ * location 派生；ui.activeNav 不再被壳读取，仅作持久层/观察面
+ * （location 经 routes.tsx 单向 sync 回写，重挂时恢复上次页签）。
+ * 输入草稿、悬停、openAddTick 信号等组件内瞬态仍留 useState。
  */
 function ETeamsViewBody(props: ConvViewProps): ReactNode {
   const state = useActivityMonitor();
   const dispatch = useDispatch();
-  // 变量名沿用迁移前语义：tab=侧栏导航，activeId=当前选中团队。
-  const tab = useSelector((s: RootState) => s.ui.activeNav);
+  // M1 路由骨架：location = 唯一导航驱动源，activeTab 由路径查表派生
+  // （navIdOfPath 未知值兜底 board——原 activeTab 畸形兜底同口径）。
+  const location = useLocation();
+  const navigate = useNavigate();
+  // 变量名沿用迁移前语义：activeId=当前选中团队。
   const activeId = useSelector((s: RootState) => s.ui.selectedTeamId);
-  // 八轮 DA21（2026-09-05）：任务页拆列表页 + 详情页，导航状态沿用 ui model
-  // drawerTaskId——expandedTask 语义 = 详情页选中的任务 id（null=列表页）。
-  const expandedTask = useSelector((s: RootState) => s.ui.drawerTaskId);
   const dialogMember = useSelector((s: RootState) => s.ui.dialogMember);
   // S10：成员库列表迁入 roster model——useSelector 读、refreshRoster 发
   // `roster/fetchRoster`（takeLatest 防叠）。
@@ -213,14 +145,13 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
   // 成员子代理活动点（docs/20.4 P4）：childId → running/inactive。旧运行时
   // 无 listChildren 时返回空表——面板不渲染点，不误导。
   const [agentActivity, setAgentActivity] = useState<Record<string, string>>({});
-  // 创建卡片/弹层跳转信号（docs/19.9.5）：递增计数驱动 MembersTab 打开新增页。
+  // 创建卡片/弹层跳转信号（docs/19.9.5）：递增计数驱动角色列表页
+  // （roster/rosterPage，M2 拆页）打开新增页。
   const [openAddTick, setOpenAddTick] = useState(0);
-  // 宽栏侧栏筛选框（S24-2 官网 Quick search 签名）：对五个页签名做大小写
-  // 不敏感子串过滤，空串全显；纯前端视觉态，不触碰导航数据。
-  const [railQuery, setRailQuery] = useState('');
-  // docs/22 S22-2：面板作用域根宽 ≥ RAIL_WIDE_MIN_WIDTH 用官网风格宽栏，
-  // 否则回落 84px 窄栏。Tailwind v3 无容器查询，以作用域根实测为准；
-  // useLayoutEffect 首帧前同步测量避免闪栏，ResizeObserver 跟随布局变化，
+  // docs/22 S22-2：面板作用域根宽 ≥ RAIL_WIDE_MIN_WIDTH（rail
+  // 导出的宽栏阈值）用官网风格宽栏，否则回落 84px 窄栏。测量锚点是本作用域
+  // 根元素（rail 组件自身体宽随布局浮动，不能作锚）——useLayoutEffect
+  // 首帧前同步测量避免闪栏，ResizeObserver 跟随布局变化，
   // 仅在阈值两侧翻转时 setState（不重渲染 spam）。观察器缺失（老内核）恒宽栏。
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [railWide, setRailWide] = useState(true);
@@ -243,15 +174,18 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
       // 已挂载路径由窗口事件处理；顺带消费 pending 标记，防止标记滞留到
       // 下一次挂载时把用户误拽回创建页（docs/19.16）。
       consumePendingGotoAdd();
-      dispatch({ type: 'ui/setNav', payload: 'roster' });
+      // M1：跳转改 navigate（location 为唯一导航驱动源）；ui/setNav 由
+      // routes.tsx 的 location sync 回写（持久层更新不再在此直发）。
+      navigate('/roster');
       setOpenAddTick((t) => t + 1);
     };
     // 「成员 tab」信号（按钮成员选中直达，docs/13.8.2）：落成员页，不带新增表单。
     const hRoster = (): void => {
       consumePendingGotoRoster();
-      dispatch({ type: 'ui/setNav', payload: 'roster' });
+      navigate('/roster');
     };
-    // 选中某个团队（弹层团队行点击）：board 视图随选择联动。
+    // 选中某个团队（弹层团队行点击）：board 视图随选择联动。M1 无团队详情
+    // 路由（/team/:teamId 随 M4）——选择仍是纯 store 语义，不导航。
     const hSelect = (event?: Event): void => {
       const id =
         event === undefined ? consumePendingSelectTeam() : (event as CustomEvent<string>).detail;
@@ -263,6 +197,8 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
     window.addEventListener(SELECT_TEAM_EVENT, hSelect);
     // 补消费挂载前的跳转信号：跳转方先点宿主 tab 再触发本面板
     // 挂载，窗口事件会错过——pending 标记在这里兜底（docs/19.16）。
+    // 跳转以 navigate 落地（时序与迁移前 setNav 同为挂载 effect，首帧
+    // 短暂呈现持久页签后跳转，零观感差异）。
     if (consumePendingGotoAdd()) h();
     if (consumePendingGotoRoster()) hRoster();
     hSelect();
@@ -271,7 +207,7 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
       window.removeEventListener(GOTO_ROSTER_EVENT, hRoster);
       window.removeEventListener(SELECT_TEAM_EVENT, hSelect);
     };
-  }, [dispatch]);
+  }, [dispatch, navigate]);
 
   // docs/35 §5：goal 砍掉后快照不再有 captainSessionId——面板不再按会话
   // 过滤，直接展示全部团队（跨会话聚合口径与看板一致）。
@@ -279,18 +215,10 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
   // Derived (no effect): stale/null selection falls back to the first team.
   const team = pool.find((t) => t.teamId === activeId) ?? pool[0];
   const now = state.serverTime || state.fetchedAt;
-  const tabs: { id: 'board' | 'team' | 'roster' | 'tasks' | 'reports'; label: string }[] = [
-    { id: 'board', label: '看板' },
-    { id: 'team', label: '团队' },
-    { id: 'roster', label: '角色' },
-    { id: 'tasks', label: '任务' },
-    { id: 'reports', label: '汇报' },
-  ];
-  const activeTab = tabs.some((t) => t.id === tab) ? tab : 'board';
-  // 侧栏筛选（S24-2）：大小写不敏感子串匹配页签名；空串全显。
-  const railFilter = railQuery.trim().toLowerCase();
-  const visibleTabs =
-    railFilter === '' ? tabs : tabs.filter((t) => t.label.toLowerCase().includes(railFilter));
+  // M1：activeTab 由 location 查表派生（navIdOfPath 未知值兜底 board——原
+  // 畸形 activeNav 兜底同口径）；rail 高亮的 activeTab 由 PanelRail 自查
+  // （同源同值，见 rail.tsx）。
+  const activeTab = navIdOfPath(location.pathname);
   // Dialog target resolved defensively: a vanished member must not crash render.
   const dialogMemberView =
     dialogMember === null || team === undefined
@@ -306,24 +234,23 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
     if (activeTab === 'roster' || activeTab === 'team') refreshRoster();
   }, [activeTab, refreshRoster]);
 
-  // 活动点轮询：跟随当前选中的团队，3s 节流（docs/20.4 P4）。
-  useEffect(() => {
-    if (team === undefined) return;
-    let alive = true;
-    const pull = (): void => {
+  // 活动点轮询：跟随当前选中的团队，3s 节流（docs/20.4 P4）。M7-8 收口
+  // usePoll：挂载/换队即拉一次 + interval 重拉 + 卸载/换队清理（pull 身份
+  // 随 team 变化重启轮询，同原 effect deps）；异步回包经 isCurrent 判定本轮
+  // 询代仍存活（与原 alive 旗号同语义）才回写，防陈旧团队快照。无选中团队
+  // 时 pull 空转（原 effect 早退——不拉不轮询，观察面一致）。
+  const pullAgentActivity = useCallback(
+    (isCurrent: () => boolean): void => {
+      if (team === undefined) return;
       void fetchAgentActivity(team.teamId)
         .then((a) => {
-          if (alive) setAgentActivity(a);
+          if (isCurrent()) setAgentActivity(a);
         })
         .catch(() => undefined);
-    };
-    pull();
-    const h = setInterval(pull, 3000);
-    return () => {
-      alive = false;
-      clearInterval(h);
-    };
-  }, [team]);
+    },
+    [team],
+  );
+  usePoll(pullAgentActivity, 3000);
 
   // 一键预填（docs/19.7.1, D18-1）：共享 helper（addPeople.ts）把命令写入
   // 对话输入框并聚焦；inputActions 不可用时退化为剪贴板复制。不自动发送。
@@ -356,63 +283,16 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
         面板内与整页团队页共用同一渲染根，注入一次即可。 */}
       <style>{ROLE_LIST_CSS}</style>
       <div className={SHELL_CLASS}>
-        {railWide ? (
-          /* docs/22 S22-2 宽栏：官网 docs 侧栏签名——搜索框 + 分组标题 + 连续
-            左细线列表 + 链接自带左边线三态（激活 = sky 文字 + 同色左线 +
-            semibold）。 */
-          <div className={RAIL_WIDE_CLASS}>
-            {/* 官网 Quick search 签名（S24-2）：ring 代替边框、shadow-sm；
-              环色走 --eteams-pill-bg——官网的 ring-slate-900/10 字面量在暗色
-              底上是黑环，pill 底 token 亮=浅灰/暗=深灰两侧都成立。 */}
-            <div className="relative mb-3">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              {/* 官网 Quick search 签名（S24-2）迁 shadcn Input（docs/43 扫描
-                整改）：覆盖层去边框改 ring、补 8 档左内边距给放大镜让位、
-                焦点环压成官网 sky 档；环色走 --eteams-pill-bg——官网的
-                ring-slate-900/10 字面量在暗色底上是黑环，pill 底 token
-                亮=浅灰/暗=深灰两侧都成立。 */}
-              <Input
-                type="text"
-                value={railQuery}
-                placeholder="筛选"
-                onChange={(e) => setRailQuery(e.target.value)}
-                className="h-9 rounded-md border-0 pr-3 pl-8 text-sm leading-6 text-foreground outline-none [font-family:inherit] ring-1 ring-[color:var(--eteams-pill-bg)] focus-visible:ring-2 focus-visible:ring-sky-500/60"
-              />
-            </div>
-            <h5 className={RAIL_TITLE_CLASS}>团队面板</h5>
-            <div className={RAIL_LIST_CLASS}>
-              {visibleTabs.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  className={railLinkClass(activeTab === t.id)}
-                  onClick={() => dispatch({ type: 'ui/setNav', payload: t.id })}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div className={RAIL_CLASS}>
-            {tabs.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                className={railBtnClass(activeTab === t.id)}
-                onClick={() => dispatch({ type: 'ui/setNav', payload: t.id })}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-        )}
+        {/* 侧栏（M8 自本文件拆出 rail.tsx）：宽/窄两套渲染与筛选框
+          在组件内，宽/窄档位由这里的实测结果经 props 传入。 */}
+        <PanelRail railWide={railWide} />
 
         <div className={CONTENT_CLASS}>
           {/* 页签标题（S24-2，官网 h2 签名）：每 tab 内容区顶部一行页头。
-            团队页的页头（含「＋ 新增团队」按钮）由 TeamTab 自渲染——创建
-            弹窗开合是它的组件内瞬态（用户反馈 2026-09：跳转信号自开弹窗
-            撤销，创建只从这里进）。 */}
+            团队域页头（含「＋ 新增团队」按钮）由 team/ 三页自渲染（列表页、
+            详情页与成员详情页同款常驻——拆分前 TeamTab 树内三态共用）——
+            创建弹窗开合是页内瞬态（用户反馈 2026-09：跳转信号自开弹窗撤销，
+            创建只从这里进）。 */}
           {activeTab === 'board' && <PageHeader label="看板" />}
           {activeTab === 'roster' && <PageHeader label="角色" />}
           {activeTab === 'tasks' && <PageHeader label="任务" />}
@@ -423,52 +303,56 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
             <FormErrorNote className="mb-3">状态加载失败：{state.error}</FormErrorNote>
           )}
 
-          {activeTab === 'board' && (
-            <BoardTab team={team} now={now} fetchedAt={state.fetchedAt} error={state.error} />
-          )}
-          {activeTab === 'team' && (
-            <TeamTab
-              sessionId={props.sessionId}
-              pool={pool}
-              team={team}
-              roster={roster}
-              memberCap={state.maxMembers}
-              onSelectTeam={(id) => dispatch({ type: 'ui/setSelectedTeam', payload: id })}
-              agentActivity={agentActivity}
-              onOpenReports={(name) => {
-                dispatch({ type: 'ui/setDialogMember', payload: name });
-                dispatch({ type: 'ui/setNav', payload: 'reports' });
-              }}
-            />
-          )}
-          {activeTab === 'roster' && (
-            <MembersTab
-              members={roster}
-              team={team}
-              onDeleted={refreshRoster}
-              onPrefillAddPeople={prefillAddPeople}
-              openAddTick={openAddTick}
-              onAddTickConsumed={() => setOpenAddTick(0)}
-            />
-          )}
-          {activeTab === 'tasks' && team !== undefined && (
-            <TasksTab
-              team={team}
-              now={now}
-              selectedTaskId={expandedTask}
-              setSelectedTaskId={(id) => dispatch({ type: 'ui/setDrawerTask', payload: id })}
-            />
-          )}
-          {activeTab === 'reports' && team !== undefined && (
-            <ReportsTab
-              team={team}
-              dialogMember={dialogMember}
-              setDialogMember={(name) => dispatch({ type: 'ui/setDialogMember', payload: name })}
-              member={dialogMemberView}
-            />
-          )}
+          {/* M1 路由出口（routes.tsx）：基础路径渲染各 tab，M2/M3 起角色/
+            任务域为拆页路由——路由切换的挂载/卸载语义与迁移前条件渲染
+            逐位一致（离开即卸载，瞬态不复存在）；tasks/reports 的 team
+            undefined 守卫原样保留。 */}
+          <ETeamsViewRoutes
+            team={team}
+            now={now}
+            fetchedAt={state.fetchedAt}
+            error={state.error}
+            sessionId={props.sessionId}
+            pool={pool}
+            roster={roster}
+            memberCap={state.maxMembers}
+            onSelectTeam={(id) => dispatch({ type: 'ui/setSelectedTeam', payload: id })}
+            agentActivity={agentActivity}
+            onOpenReports={(name) => {
+              dispatch({ type: 'ui/setDialogMember', payload: name });
+              navigate('/reports');
+            }}
+            onDeleted={refreshRoster}
+            onPrefillAddPeople={prefillAddPeople}
+            openAddTick={openAddTick}
+            onAddTickConsumed={() => setOpenAddTick(0)}
+            dialogMember={dialogMember}
+            setDialogMember={(name) => dispatch({ type: 'ui/setDialogMember', payload: name })}
+            dialogMemberView={dialogMemberView}
+          />
         </div>
       </div>
     </div>
+  );
+}
+
+/** ================================== 主组件 ================================== */
+
+/**
+ * The eteams conversation view entry — the M4.5 activity panel. 表面根：
+ * Provider 包整个面板（S6/D19e），面板体在 Provider 之内消费 dva store；
+ * ClientErrorBoundary 保持面板级降级路径不变。M1：面板体包一棵
+ * MemoryRouter（routes.tsx）——整页团队页与槽位面板各自渲染 ETeamsView，
+ * 各自一棵内存历史天然隔离。
+ */
+export function ETeamsView(props: ConvViewProps): ReactNode {
+  return (
+    <Provider store={getApp().store}>
+      <ClientErrorBoundary label="团队面板">
+        <ETeamsRouter>
+          <ETeamsViewBody {...props} />
+        </ETeamsRouter>
+      </ClientErrorBoundary>
+    </Provider>
   );
 }

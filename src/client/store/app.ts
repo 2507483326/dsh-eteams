@@ -10,6 +10,7 @@
 import { create, type DvaApp } from 'dva-core';
 import type { Store } from 'redux';
 import { recordClientDiag } from '../lib/diagnostics';
+import { errorMessageOf } from '../lib/errors';
 import type { ActivityState } from '../lib/monitor';
 import { models } from './models';
 import type { BuildState } from './models/build';
@@ -34,7 +35,7 @@ let app: DvaApp | null = null;
 function createDvaApp(): DvaApp {
   const dvaApp = create({
     onError: (error) => {
-      recordClientDiag('dva:onError', error instanceof Error ? error.message : String(error));
+      recordClientDiag('dva:onError', errorMessageOf(error));
     },
   });
   // D19e：models 必须在 start() 前全量注册（start 后 app.model() 虽官方

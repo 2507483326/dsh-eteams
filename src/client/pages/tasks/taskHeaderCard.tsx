@@ -4,12 +4,12 @@
  * 三元改 props（undefined 判断，语义等价），主任务/任务详情页两处调用共用。
  * 原注释逐字随迁（纯移动、零行为变更）。
  *
- * @module dsh-eteams/client/pages/teamsView/taskHeaderCard
+ * @module dsh-eteams/client/pages/tasks/taskHeaderCard
  */
 import type { ReactNode } from 'react';
 import { cn } from '../../lib/cn';
 import type { TaskView } from '../../lib/monitor';
-import { BORDER_L1_CLASS, MUTED_CLASS } from './shared';
+import { MUTED_CLASS, TASK_CARD_CLASS } from '../shared/styles';
 import { BlockedPill, TaskStatusPill } from './taskPills';
 
 /** 详情页头部卡（主任务/任务共用：#id 主题 + 展示态 pill + blocked + assignee）。
@@ -35,10 +35,10 @@ export function TaskHeaderCard({
   editor?: ReactNode;
   subjectEditor?: ReactNode;
 }): ReactNode {
+  // 卡面收编 shared/TASK_CARD_CLASS（M7-11：与 taskSubtaskItem
+  // SUBTASK_CARD_CLASS 的逐字重复合一）。
   return (
-    <div
-      className={cn('rounded-[8px] border border-solid bg-background px-3 py-2.5', BORDER_L1_CLASS)}
-    >
+    <div className={TASK_CARD_CLASS}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
           <strong className="shrink-0">#{task.taskId}</strong>

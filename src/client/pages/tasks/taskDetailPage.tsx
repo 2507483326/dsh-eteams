@@ -1,35 +1,35 @@
 /**
- * 任务 tab（2026-09-05 三十一轮 DA44 结构整理后）：**任务列表页 ↔ 任务详情页**
- * 两级导航（八轮 DA21，用户拍板「将任务做成任务详情页面和任务列表页面，点击
- * 到详情再编排整个任务」），编排全部收进详情页。
- * 列表页 = 平铺小卡栅格（Card 面板 + 任务小卡，一卡一顶层任务，整卡点击进
- * 详情，无拖拽；不列小任务明细——九轮 DA22 口径）+ 空态行。
- * 详情页 = 返回条 + 头部卡（taskHeaderCard）+ 编排——主任务（group）：新增
- * 小任务 + 小任务卡片全套（taskSubtaskItem：执行序号/卡槽/把手拖拽调序——
- * 十轮 DA23 把手化/改删/展开/就地编辑）+ 成员罗列条；任务/小任务：详情正文
- * （taskDrawer 的 TaskDetailContent）+ 卡槽 + 站点行 + 依赖 chips + 成员罗列
- * 条。导航状态复用 ui model drawerTaskId（语义 = 详情页选中的任务 id）；展示
- * 态徽标抽 taskPills（TaskStatusPill/BlockedPill/GroupSummaryChip）、编辑/
- * 删除弹窗抽 taskDialogs（TaskDialogs，组件内瞬态 useState 两页共用）、列表
- * 卡身抽 taskListCard；依赖 features/tasks（拖拽指派）与 shared。
- * 历轮修订（DA22…DA43：列表卡视觉迭代、展开 Accordion 化、就地编辑 MdEditor
- * 化、开始钮判据放宽、状态 pill 统一等）见 docs/29；各抽离文件头注自带轮次
- * 注记。
+ * 任务详情页（docs/44 M3 自 tasksTab 拆出，行为零变更）：路由 /tasks/:taskId
+ * ——返回条 + 头部卡（taskHeaderCard）+ 编排。:taskId 路由参数即选中的任务
+ * id（语义 = 原 ui model drawerTaskId「详情页选中的任务 id」，八轮 DA21
+ * 用户拍板「将任务做成任务详情页面和任务列表页面，点击到详情再编排整个
+ * 任务」；store 持久层回写由 routes.tsx 的 location sync 承担——ui model
+ * 语义不变）；选中任务被删（快照里已无此 id）自动回落列表页（原 tasksTab
+ * 分支注记口径，navigate('/tasks') 落地）。
+ * 主任务（group）详情 = **整个任务的编排面**：新增小任务 + 小任务卡片全套
+ * （taskSubtaskItem：执行序号/卡槽/把手拖拽调序——十轮 DA23 把手化/改删/
+ * 展开/就地编辑）+ 成员罗列条；任务/小任务：详情正文（taskDrawer 的
+ * TaskDetailContent）+ 卡槽 + 站点行 + 依赖 chips + 成员罗列条。编辑/删除
+ * 弹窗（taskDialogs，组件内瞬态 useState）就地挂载；展示态徽标抽 taskPills、
+ * 列表卡身抽 taskListCard（列表页见 tasksPage）。依赖 features/tasks
+ * （拖拽指派——TaskDndProvider 随页包裹，现状本就按分支分别包裹）与
+ * shared、taskDrawer、taskHeaderCard、taskSubtaskItem、taskDialogs、
+ * taskPills。
  *
- * @module dsh-eteams/client/pages/teamsView/tasksTab
+ * @module dsh-eteams/client/pages/tasks/taskDetailPage
  */
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import Plus from 'lucide-react/dist/esm/icons/plus.mjs';
-import ArrowLeft from 'lucide-react/dist/esm/icons/arrow-left.mjs';
 import {
   createTeamTask,
   deleteTeamTask,
-  openTaskFolder,
   startTeamTask,
   updateTeamTask,
   type TaskSlotInput,
 } from '../../lib/api';
 import { cn } from '../../lib/cn';
+import { errorMessageOf, runWithBusy } from '../../lib/errors';
 import { refreshActivitySoon, type TaskView, type TeamSnapshot } from '../../lib/monitor';
 import { MdEditor } from '../../features/mdEditor/mdEditor';
 import {
@@ -43,28 +43,36 @@ import {
   depPatchesForReorder,
   executionOrderOf,
 } from '../../features/tasks/taskAssignCore';
-import { groupDisplayOf } from '../../features/tasks/taskDisplayStatus';
+import { groupDisplayOf, isStartable, isTerminal } from '../../features/tasks/taskDisplayStatus';
+import { BackBar } from '../../components/backBar';
+import { FormFooterActions } from '../../components/formDialog';
 import { Button } from '../../components/ui/button';
-import { Card } from '../../components/ui/card';
 import { Input } from '../../components/ui/input';
 import { Accordion } from '../../components/ui/accordion';
 import { TaskDetailContent, TaskStations } from './taskDrawer';
+import { FormErrorNote } from '../shared/components';
 import {
   CHIP_CLASS,
-  EMPTY_CLASS,
-  FormErrorNote,
   INLINE_SUBJECT_INPUT_CLASS,
-  LIST_COUNT_CLASS,
   LIST_TITLE_CLASS,
   MUTED_CLASS,
-  PANEL_CARD_CLASS,
-  TASK_GRID_CLASS,
-} from './shared';
+} from '../shared/styles';
 import { GroupSummaryChip } from './taskPills';
 import { TaskHeaderCard } from './taskHeaderCard';
 import { SubtaskItem } from './taskSubtaskItem';
-import { TaskListCard } from './taskListCard';
 import { TaskDialogs, type TaskEditTarget } from './taskDialogs';
+
+/** ================================== 类型 ================================== */
+
+/** 路由页入参（壳状态经 routes.tsx 传入，数据流与拆分前逐位一致）。 */
+export interface TaskDetailPageProps {
+  /** 当前团队快照（任务详情取数上下文；routes.tsx 保留 team undefined 守卫）。 */
+  team: TeamSnapshot;
+  /** 服务器时间（快照 serverTime/fetchedAt 派生，尝试时间线相对时间基准）。 */
+  now: number;
+}
+
+/** ================================== 工具函数 ================================== */
 
 /** DA41 就地编辑：说明 + 合同 MD 并读为一个 MD 文本（说明在前、空行分隔），
  * 保存时整篇作为 contractMd 回写（description 落严格空串）。 */
@@ -73,35 +81,36 @@ const mergedBodyOf = (t: TaskView): string =>
     ? `${t.description.replace(/\s+$/, '')}\n\n`
     : '') + (t.contractMd ?? '');
 
-/** 任务 tab：**任务列表页 ↔ 任务详情页**两级导航（八轮 DA21，2026-09-05
-用户拍板「将任务做成任务详情页面和任务列表页面，点击到详情再编排整个任务」；
-九轮 DA22 修订：列表不列小任务明细；十一轮 DA24 修订：列表平铺小卡栅格）。
-列表页：与团队列表同款 Card 面板 + **平铺任务小卡栅格**（不分「对话任务」/
-状态分区——用户十一轮拍板「任务主列表不分对话任务、待指派这种，做成团队那种
-小卡片」；一卡一顶层任务，整卡点击进详情；**不列小任务明细**——用户九轮拍板
-「任务卡片不展示任务详情和整个任务列表，需要点击进去再看到整个任务列表」；
-无编排 UI、无拖拽——卡槽/罗列条/改删按钮全迁详情）。
-详情页（导航状态 = ui model drawerTaskId，语义「选中的任务 id」）：
-- 主任务（group）详情 = **整个任务的编排面**：返回条 + 头部卡 + 新增小任务 +
-  小任务卡片全套（执行序号/卡槽 TaskAssignDropBox/拖拽调执行顺序/修改删除）
-  + 成员罗列条（单条）；
-- 任务/小任务详情 = 头部卡（含小任务的修改/删除）+ 挂靠行 + 详情正文
-  （TaskDetailContent：合同四数组/状态说明/阻塞/产出/尝试时间线）+ 卡槽
-  （小任务可拖拽指派）+ 站点行 + 依赖 chips + 成员罗列条。
-编辑/删除弹窗为组件内瞬态 useState（两页共用），保存/删除成功后
-refreshActivitySoon 回拉快照；assignBusy/assignError/reorderError 瞬态错误
-就地 FormErrorNote。 */
-export function TasksTab({
-  team,
-  now,
-  selectedTaskId,
-  setSelectedTaskId,
-}: {
-  team: TeamSnapshot;
-  now: number;
-  selectedTaskId: number | null;
-  setSelectedTaskId: (id: number | null) => void;
-}): ReactNode {
+/** ================================== 主组件 ================================== */
+
+/**
+ * 任务详情页（原 tasksTab 详情两分支收编，编辑态/编排瞬态随页）：
+ * - 主任务（group）详情 = **整个任务的编排面**：返回条 + 头部卡 + 新增小
+ *   任务 + 小任务卡片全套（执行序号/卡槽 TaskAssignDropBox/拖拽调执行顺序/
+ *   修改删除）+ 成员罗列条（单条）；
+ * - 任务/小任务详情 = 头部卡（含小任务的修改/删除）+ 挂靠行 + 详情正文
+ *   （TaskDetailContent：合同四数组/状态说明/阻塞/产出/尝试时间线）+ 卡槽
+ *   （小任务可拖拽指派）+ 站点行 + 依赖 chips + 成员罗列条。
+ * 编辑/删除弹窗为组件内瞬态 useState（列表页各挂各的实例），保存/删除成功
+ * 后 refreshActivitySoon 回拉快照；assignBusy/assignError/reorderError/
+ * startError 瞬态错误就地 FormErrorNote。
+ */
+export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
+  const navigate = useNavigate();
+  // :taskId 路由参数即选中任务（八轮 DA21 导航：语义 = 原 ui model
+  // drawerTaskId「详情页选中的任务 id」——改经路由参数进入，store 持久层
+  // 由 routes.tsx 的 location sync 回写，语义不变）。
+  const { taskId } = useParams();
+  const selected =
+    taskId === undefined ? null : (team.tasks.find((t) => t.taskId === Number(taskId)) ?? null);
+  // 选中任务被删（快照里已无此 id；含 :taskId 非法段——Number NaN 查无）
+  // 自动回落列表页（原 tasksTab 分支注记口径）：拆页前该窗口原地回落列表
+  // 渲染，拆页后 navigate('/tasks')——渲染一帧空即跳列表（拆页显式接受的
+  // 差异，见 46 清单 M3 验收注记）。
+  const taskFound = selected !== null;
+  useEffect(() => {
+    if (!taskFound) navigate('/tasks');
+  }, [taskFound, navigate]);
   const [editTarget, setEditTarget] = useState<TaskEditTarget | null>(null);
   const [editSubject, setEditSubject] = useState('');
   const [editDesc, setEditDesc] = useState('');
@@ -119,10 +128,6 @@ export function TasksTab({
   const [reorderError, setReorderError] = useState<{ taskId: number; message: string } | null>(
     null,
   );
-  // 十二轮 DA25 文件夹打开瞬态（对齐 assignError 模式）：error 按卡定位行内
-  // 展示（宿主 404/400/500 原样透出——文件夹缺失等）。
-  const [folderBusy, setFolderBusy] = useState<number | null>(null);
-  const [folderError, setFolderError] = useState<{ taskId: number; message: string } | null>(null);
   // 二十四轮 DA37 面板开始任务瞬态（对齐 assignError 模式）：busy 按小任务
   // taskId 定位，error 单槽记录受影响小任务（行内展示——host 400 原文透出，
   // 含「需要选择成员」兜底）。
@@ -147,6 +152,8 @@ export function TasksTab({
   const [inlineBusy, setInlineBusy] = useState(false);
   const [inlineError, setInlineError] = useState<string | null>(null);
 
+  /* —— 事件处理 —— */
+
   const openEdit = (group: TaskView, task: TaskView | null): void => {
     setEditTarget({ group, task });
     setEditSubject(task?.subject ?? '');
@@ -162,28 +169,27 @@ export function TasksTab({
     if (target === null) return;
     // 六轮 DA19：弹窗不再编排链——update 不发 chain（host 不改链，卡槽为
     // 链编排唯一入口）；新增不带 chain（建后经卡槽添加）。
-    setEditBusy(true);
-    setEditError(null);
-    try {
-      if (target.task === null) {
-        await createTeamTask(team.teamId, {
-          subject: editSubject.trim(),
-          ...(editDesc.trim() !== '' ? { description: editDesc.trim() } : {}),
-          parentTaskId: target.group.taskId,
-        });
-      } else {
-        await updateTeamTask(team.teamId, target.task.taskId, {
-          subject: editSubject.trim(),
-          description: editDesc.trim(),
-        });
-      }
-      setEditTarget(null);
-      refreshActivitySoon();
-    } catch (e) {
-      setEditError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setEditBusy(false);
-    }
+    // M7-5 busy/error 壳收口 runWithBusy（守卫留在调用点）。
+    await runWithBusy(
+      async () => {
+        if (target.task === null) {
+          await createTeamTask(team.teamId, {
+            subject: editSubject.trim(),
+            ...(editDesc.trim() !== '' ? { description: editDesc.trim() } : {}),
+            parentTaskId: target.group.taskId,
+          });
+        } else {
+          await updateTeamTask(team.teamId, target.task.taskId, {
+            subject: editSubject.trim(),
+            description: editDesc.trim(),
+          });
+        }
+        setEditTarget(null);
+        refreshActivitySoon();
+      },
+      setEditBusy,
+      setEditError,
+    );
   };
   // DA42 就地编辑：打开（草稿 = 当前主题 + 说明/合同并读文本）。已在本卡
   // 编辑 = 只确保展开（幂等），草稿保留——收起后再点「修改」回到编辑态，
@@ -213,38 +219,36 @@ export function TasksTab({
   const saveInlineEdit = async (): Promise<void> => {
     const target = inlineEdit;
     if (target === null) return;
-    setInlineBusy(true);
-    setInlineError(null);
-    try {
-      await updateTeamTask(team.teamId, target.taskId, {
-        subject: inlineSubject.trim(),
-        contractMd: inlineBody,
-        description: '',
-      });
-      closeInlineEdit();
-      refreshActivitySoon();
-    } catch (e) {
-      setInlineError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setInlineBusy(false);
-    }
+    // M7-5 busy/error 壳收口 runWithBusy。
+    await runWithBusy(
+      async () => {
+        await updateTeamTask(team.teamId, target.taskId, {
+          subject: inlineSubject.trim(),
+          contractMd: inlineBody,
+          description: '',
+        });
+        closeInlineEdit();
+        refreshActivitySoon();
+      },
+      setInlineBusy,
+      setInlineError,
+    );
   };
   const confirmDelete = async (): Promise<void> => {
     const target = deleteTarget;
     if (target === null) return;
-    setDeleteBusy(true);
-    setDeleteError(null);
-    try {
-      await deleteTeamTask(team.teamId, target.taskId);
-      setDeleteTarget(null);
-      // DA42：被删任务正处就地编辑则清编辑槽（防陈旧草稿复活）。
-      if (inlineEdit?.taskId === target.taskId) closeInlineEdit();
-      refreshActivitySoon();
-    } catch (e) {
-      setDeleteError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setDeleteBusy(false);
-    }
+    // M7-5 busy/error 壳收口 runWithBusy。
+    await runWithBusy(
+      async () => {
+        await deleteTeamTask(team.teamId, target.taskId);
+        setDeleteTarget(null);
+        // DA42：被删任务正处就地编辑则清编辑槽（防陈旧草稿复活）。
+        if (inlineEdit?.taskId === target.taskId) closeInlineEdit();
+        refreshActivitySoon();
+      },
+      setDeleteBusy,
+      setDeleteError,
+    );
   };
   // 拖拽指派提交（DA10/A.4）：新链由 TaskAssignDropBox 在 drop 时刻以最新
   // 快照的 chain 现算（不缓存旧链），这里只整链重发 updateTeamTask——
@@ -256,7 +260,8 @@ export function TasksTab({
       await updateTeamTask(team.teamId, taskId, { chain });
       refreshActivitySoon();
     } catch (e) {
-      setAssignError({ taskId, message: e instanceof Error ? e.message : String(e) });
+      // 错误规范化收口 errorMessageOf（M7-5；错误槽是对象——不套 runWithBusy）。
+      setAssignError({ taskId, message: errorMessageOf(e) });
     } finally {
       setAssignBusy(null);
     }
@@ -277,7 +282,8 @@ export function TasksTab({
       }
       refreshActivitySoon();
     } catch (e) {
-      setReorderError({ taskId: toTaskId, message: e instanceof Error ? e.message : String(e) });
+      // 错误规范化收口 errorMessageOf（M7-5）。
+      setReorderError({ taskId: toTaskId, message: errorMessageOf(e) });
       refreshActivitySoon();
     }
   };
@@ -309,41 +315,25 @@ export function TasksTab({
       }
       refreshActivitySoon();
     } catch (e) {
-      setStartError({ taskId, message: e instanceof Error ? e.message : String(e) });
+      // 错误规范化收口 errorMessageOf（M7-5）。
+      setStartError({ taskId, message: errorMessageOf(e) });
     } finally {
       setStartBusy(null);
     }
   };
 
-  // 十二轮 DA25：打开任务文件夹（列表卡文件夹路径点击）。非乐观：成功无
-  // 回执 UI（文件管理器窗口即回执），失败按卡行内 FormErrorNote。
-  const openFolder = async (taskId: number): Promise<void> => {
-    setFolderBusy(taskId);
-    setFolderError((cur) => (cur !== null && cur.taskId === taskId ? null : cur));
-    try {
-      await openTaskFolder(team.teamId, taskId);
-    } catch (e) {
-      setFolderError({ taskId, message: e instanceof Error ? e.message : String(e) });
-    } finally {
-      setFolderBusy(null);
-    }
-  };
+  if (selected === null) {
+    // 防御位：:taskId 在快照里查无此任务（被删/非法段）——回列表导航已在
+    // 上方 effect 落地，本帧渲染空（roster/rosterDetailPage 同款先例，
+    // 名册回拉/导航到位即恢复）。
+    return null;
+  }
 
-  // 八轮 DA21 导航：selectedTaskId（ui model drawerTaskId）非空 = 详情页；
-  // 选中任务被删（快照里已无此 id）自动回落列表页。
-  const selected =
-    selectedTaskId === null ? null : (team.tasks.find((t) => t.taskId === selectedTaskId) ?? null);
-  // 返回列表条（详情页顶部；ArrowLeft + 可点击文字）。
-  const backBar = (
-    <button
-      type="button"
-      className="mb-2.5 inline-flex cursor-pointer items-center gap-1 text-sm leading-6 text-muted-foreground hover:text-foreground"
-      onClick={() => setSelectedTaskId(null)}
-    >
-      <ArrowLeft className="h-4 w-4" />
-      返回列表
-    </button>
-  );
+  // 返回列表条（详情页顶部；ArrowLeft + 可点击文字）。M3 拆页：原
+  // setSelectedTaskId(null) 改导航——drawerTaskId 由 routes.tsx 的
+  // location sync 回写（持久层终态与拆页前逐位一致）。（M7-3 收口
+  // components/backBar 文字钮档——裸 button + 大一号图标原样。）
+  const backBar = <BackBar variant="text" label="返回列表" onClick={() => navigate('/tasks')} />;
   // 详情页成员罗列条（八轮 DA21：编排收进详情，罗列条随编排走——仅
   // 存在可放置任务（draft/ready）时渲染，作为卡槽的拖拽源）。二十四轮
   // DA37：指派提示拆出 StripAssignHint（与罗列条同判据另行渲染）。
@@ -366,30 +356,19 @@ export function TasksTab({
         readOnly={inlineBusy}
       />
       {inlineError !== null && <FormErrorNote>{inlineError}</FormErrorNote>}
-      <div className="flex items-center justify-end gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={inlineBusy}
-          onClick={closeInlineEdit}
-        >
-          取消
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          disabled={inlineBusy || inlineSubject.trim() === ''}
-          onClick={() => void saveInlineEdit()}
-        >
-          保存
-        </Button>
-      </div>
+      {/* 尾行（M7-1 收口 FormFooterActions）。 */}
+      <FormFooterActions
+        cancelDisabled={inlineBusy}
+        confirmDisabled={inlineBusy || inlineSubject.trim() === ''}
+        confirmLabel="保存"
+        onCancel={closeInlineEdit}
+        onConfirm={() => void saveInlineEdit()}
+      />
     </div>
   );
 
-  // 共用弹窗（列表/详情两页都挂）：编辑/新增 + 删除确认。瞬态 useState
-  // 不入 ui model；host 校验合同冻结（领取后），错误就地显示。
+  // 共用弹窗（详情页实例；列表页另有各挂各的）：编辑/新增 + 删除确认。
+  // 瞬态 useState 不入 ui model；host 校验合同冻结（领取后），错误就地显示。
   // 三十一轮 DA44④：弹窗 JSX 抽 taskDialogs（TaskDialogs），状态/提交回调在此。
   const dialogs = (
     <TaskDialogs
@@ -418,7 +397,7 @@ export function TasksTab({
   // DA23）/改删）+ 成员罗列条。二十五轮 DA38：小任务卡点击 → 小任务详情页
   // 的口径撤除（用户拍板「小任务不需要再点击进入任务详情了」）；主任务卡
   // 加整体「开始」按钮（见下任务列表标题行）。
-  if (selected !== null && selected.kind === 'group') {
+  if (selected.kind === 'group') {
     // 七轮 DA20：小任务按执行序展示（兄弟依赖拓扑序，创建序平局）。
     const subs = executionOrderOf(team.tasks.filter((t) => t.parentId === selected.taskId));
     const done = subs.filter((t) => t.status === 'completed').length;
@@ -466,6 +445,7 @@ export function TasksTab({
             // 上移，opts.actions 槽）——非终态且有小任务才渲染（DA40 判据
             // 不变；点击逐个派发 ready 小任务，跳过原因行内就地提示）。
             // 三十一轮 DA44⑥：「编辑」钮加在开始钮之前（开始保持最右）。
+            // M3：状态窗口收拢 isTerminal 谓词（判定逐位等价）。
             actions={
               <>
                 {mutable && (
@@ -478,9 +458,7 @@ export function TasksTab({
                     编辑
                   </Button>
                 )}
-                {selected.status !== 'completed' &&
-                selected.status !== 'cancelled' &&
-                subs.length > 0 ? (
+                {!isTerminal(selected.status) && subs.length > 0 ? (
                   <Button
                     type="button"
                     size="sm"
@@ -619,185 +597,121 @@ export function TasksTab({
   // 撤「修改」钮（就地编辑接管）；卡槽 onOpenEdit 在编辑态防御性哑化。
   // 三十轮 DA43：编辑器撤标题 Input，主题原位编辑走 subjectEditor 槽
   // （编辑态行头 span↔Input 切换）。
-  if (selected !== null) {
-    const parent =
-      selected.parentId !== null
-        ? (team.tasks.find((t) => t.taskId === selected.parentId) ?? null)
-        : null;
-    const subMutable = selected.status === 'draft' || selected.status === 'ready';
-    // DA41 头部卡就地编辑态：本任务 + scope='header' 才开编辑器。
-    const headerEditing =
-      inlineEdit !== null && inlineEdit.taskId === selected.taskId && inlineEdit.scope === 'header';
-    return (
-      <TaskDndProvider>
-        <div>
-          {backBar}
-          <TaskHeaderCard
-            task={selected}
-            actions={
-              subMutable ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => openInlineEdit(selected, 'header')}
-                >
-                  编辑
-                </Button>
-              ) : undefined
-            }
-            // 三十轮 DA43：主题原位编辑（编辑态行头 span↔Input 切换，行头
-            // 编辑器块不再承担标题展示）。
-            subjectEditor={
-              headerEditing ? (
-                <Input
-                  autoFocus
-                  value={inlineSubject}
-                  disabled={inlineBusy}
-                  className={INLINE_SUBJECT_INPUT_CLASS}
-                  placeholder="任务主题"
-                  onChange={(e) => setInlineSubject(e.target.value)}
-                />
-              ) : undefined
-            }
-            editor={headerEditing ? inlineEditor : undefined}
-          />
-          {parent !== null && (
-            <div className={cn(MUTED_CLASS, 'mt-2')}>
-              挂靠：#{parent.taskId} {parent.subject}
-            </div>
-          )}
-          {parent !== null && subMutable && (
-            /* 二十四轮 DA37：行首加开始按钮（与组详情页小任务卡同判据——
-            ready 且有链渲染、ready 无链渲染「需要选择成员」提示）。二十八轮
-            DA41：「修改」钮撤除——头部卡「编辑」钮就地编辑接管。 */
-            <div className="mt-1.5 flex items-center gap-1.5">
-              {selected.status === 'ready' && selected.chain.length > 0 && (
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={startBusy === selected.taskId}
-                  onClick={() => void submitStart(selected.taskId)}
-                >
-                  开始
-                </Button>
-              )}
-              {selected.status === 'ready' && selected.chain.length === 0 && (
-                <span className={MUTED_CLASS}>需要选择成员</span>
-              )}
+  const parent =
+    selected.parentId !== null
+      ? (team.tasks.find((t) => t.taskId === selected.parentId) ?? null)
+      : null;
+  const subMutable = selected.status === 'draft' || selected.status === 'ready';
+  // DA41 头部卡就地编辑态：本任务 + scope='header' 才开编辑器。
+  const headerEditing =
+    inlineEdit !== null && inlineEdit.taskId === selected.taskId && inlineEdit.scope === 'header';
+  return (
+    <TaskDndProvider>
+      <div>
+        {backBar}
+        <TaskHeaderCard
+          task={selected}
+          actions={
+            subMutable ? (
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                onClick={() => setDeleteTarget(selected)}
+                onClick={() => openInlineEdit(selected, 'header')}
               >
-                删除
+                编辑
               </Button>
-            </div>
-          )}
-          <div className="mt-2.5">
-            <TaskDetailContent team={team} task={selected} now={now} />
-          </div>
-          <TaskStations task={selected} />
-          {selected.dependencies.length > 0 && (
-            <div className="mt-1">
-              {selected.dependencies.map((d) => (
-                <span key={d} className={CHIP_CLASS}>
-                  依赖 {d}
-                </span>
-              ))}
-            </div>
-          )}
-          {parent !== null && subMutable && (
-            <div className="mt-2">
-              <TaskAssignDropBox
-                task={selected}
-                members={team.members}
-                busy={assignBusy === selected.taskId}
-                onAssign={(chain) => void submitAssignChain(selected.taskId, chain)}
-                onRemoveStation={(index) =>
-                  void submitAssignChain(selected.taskId, chainAfterRemove(selected, index))
-                }
-                onOpenEdit={
-                  inlineEdit !== null && inlineEdit.taskId === selected.taskId
-                    ? () => undefined
-                    : () => openEdit(parent, selected)
-                }
-              />
-            </div>
-          )}
-          {assignError !== null && assignError.taskId === selected.taskId && (
-            <FormErrorNote>{assignError.message}</FormErrorNote>
-          )}
-          {startError !== null && startError.taskId === selected.taskId && (
-            <FormErrorNote>{startError.message}</FormErrorNote>
-          )}
-          {detailStrip(parent !== null && subMutable)}
-          {parent !== null && subMutable && <StripAssignHint />}
-          {dialogs}
-        </div>
-      </TaskDndProvider>
-    );
-  }
-
-  // docs/29 DA2：DndProvider 只包 TasksTab（消费面唯一，单实例单 Provider，
-  // 随 tab 卸载销毁；1s 轮询只换数据不重挂 Provider）。
-  return (
-    <TaskDndProvider>
-      <div>
-        {/* 十一…十五轮 DA24…DA28：任务主列表**平铺小卡栅格**（用户十一轮拍板
-        「任务主列表不分对话任务、待指派这种，做成团队那种小卡片」；十二轮
-        修订「去掉 #1 这种，文件夹左边…做成可以点击的，卡片再大一点，分行，
-        下面放删除按钮」；十三轮修订「任务卡片内容对齐，没有小任务就显示0，
-        而且目录两个字没有了，路径太长了截断大部分的」；十四轮修订「状态挪到
-        卡片的左边下面，圆角改成 2px／目录样式调整一下，就显示工作目录就行，
-        别显示具体路径了，别用灰色打底了不好看／别小任务 个了，改成 共 x 个
-        任务，已完成 x , 未完成 x 数字用颜色标识一下／删除旁边加一个详情
-        按钮」；十五轮修订「优化一下左下角状态的样式，去掉放上去变淡，加上
-        边框／工作目录还是不协调，修改一下更好融入卡片」）——撤掉「对话任务」
-        区块与 STATUS_GROUPS 十态分区，顶层任务（主任务 + 顶层普通任务）
-        一卡一任务平铺进 Card 面板栅格（TASK_GRID_CLASS 260px 加大一档）；
-        整卡点击进详情（主任务 → 主任务详情、普通任务 → 任务详情），无拖拽
-        （十轮订正）；文件夹路径点击 = 宿主拉起系统文件管理器，删除按钮仅可删
-        的卡渲染。九轮 DA22 口径不变：不列小任务明细，小任务列表在主任务详情页。 */}
-        {(() => {
-          // 平铺列表 = 全部顶层任务（主任务 + 顶层普通任务，快照序）。
-          const mainTasks = team.tasks.filter((t) => t.parentId === null);
-          if (mainTasks.length === 0) {
-            return (
-              <div className={EMPTY_CLASS}>
-                还没有任务。在对话中把任务交给团队，或计划批准后任务会出现在这里。
-              </div>
-            );
+            ) : undefined
           }
-          return (
-            <Card className={cn(PANEL_CARD_CLASS, 'pb-3')}>
-              <div className="mb-2.5 flex items-center gap-2">
-                <h3 className={LIST_TITLE_CLASS}>任务</h3>
-                <span className={LIST_COUNT_CLASS}>{mainTasks.length} 个</span>
-              </div>
-              <div className={TASK_GRID_CLASS}>
-                {mainTasks.map((t) => (
-                  // 三十一轮 DA44④：列表卡身抽 taskListCard（TaskListCard）——
-                  // subs 统计/deletable 判据随迁卡内现算（task/allTasks 进 props）。
-                  <TaskListCard
-                    key={t.taskId}
-                    task={t}
-                    allTasks={team.tasks}
-                    folderBusy={folderBusy}
-                    folderError={folderError}
-                    startError={startError}
-                    startBusy={startBusy}
-                    onOpen={() => setSelectedTaskId(t.taskId)}
-                    onOpenFolder={(taskId) => void openFolder(taskId)}
-                    onDelete={() => setDeleteTarget(t)}
-                    onStart={() => void submitStart(t.taskId)}
-                  />
-                ))}
-              </div>
-            </Card>
-          );
-        })()}
+          // 三十轮 DA43：主题原位编辑（编辑态行头 span↔Input 切换，行头
+          // 编辑器块不再承担标题展示）。
+          subjectEditor={
+            headerEditing ? (
+              <Input
+                autoFocus
+                value={inlineSubject}
+                disabled={inlineBusy}
+                className={INLINE_SUBJECT_INPUT_CLASS}
+                placeholder="任务主题"
+                onChange={(e) => setInlineSubject(e.target.value)}
+              />
+            ) : undefined
+          }
+          editor={headerEditing ? inlineEditor : undefined}
+        />
+        {parent !== null && (
+          <div className={cn(MUTED_CLASS, 'mt-2')}>
+            挂靠：#{parent.taskId} {parent.subject}
+          </div>
+        )}
+        {parent !== null && subMutable && (
+          /* 二十四轮 DA37：行首加开始按钮（与组详情页小任务卡同判据——
+          ready 且有链渲染、ready 无链渲染「需要选择成员」提示）。二十八轮
+          DA41：「修改」钮撤除——头部卡「编辑」钮就地编辑接管。M3：状态
+          窗口收拢 isStartable 谓词（判定逐位等价）。 */
+          <div className="mt-1.5 flex items-center gap-1.5">
+            {isStartable(selected.status) && selected.chain.length > 0 && (
+              <Button
+                type="button"
+                size="sm"
+                disabled={startBusy === selected.taskId}
+                onClick={() => void submitStart(selected.taskId)}
+              >
+                开始
+              </Button>
+            )}
+            {isStartable(selected.status) && selected.chain.length === 0 && (
+              <span className={MUTED_CLASS}>需要选择成员</span>
+            )}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setDeleteTarget(selected)}
+            >
+              删除
+            </Button>
+          </div>
+        )}
+        <div className="mt-2.5">
+          <TaskDetailContent team={team} task={selected} now={now} />
+        </div>
+        <TaskStations task={selected} />
+        {selected.dependencies.length > 0 && (
+          <div className="mt-1">
+            {selected.dependencies.map((d) => (
+              <span key={d} className={CHIP_CLASS}>
+                依赖 {d}
+              </span>
+            ))}
+          </div>
+        )}
+        {parent !== null && subMutable && (
+          <div className="mt-2">
+            <TaskAssignDropBox
+              task={selected}
+              members={team.members}
+              busy={assignBusy === selected.taskId}
+              onAssign={(chain) => void submitAssignChain(selected.taskId, chain)}
+              onRemoveStation={(index) =>
+                void submitAssignChain(selected.taskId, chainAfterRemove(selected, index))
+              }
+              onOpenEdit={
+                inlineEdit !== null && inlineEdit.taskId === selected.taskId
+                  ? () => undefined
+                  : () => openEdit(parent, selected)
+              }
+            />
+          </div>
+        )}
+        {assignError !== null && assignError.taskId === selected.taskId && (
+          <FormErrorNote>{assignError.message}</FormErrorNote>
+        )}
+        {startError !== null && startError.taskId === selected.taskId && (
+          <FormErrorNote>{startError.message}</FormErrorNote>
+        )}
+        {detailStrip(parent !== null && subMutable)}
+        {parent !== null && subMutable && <StripAssignHint />}
         {dialogs}
       </div>
     </TaskDndProvider>

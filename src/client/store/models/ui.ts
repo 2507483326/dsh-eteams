@@ -9,17 +9,27 @@
  * 这些 action，桥本身（bridge.ts 的 pending 标记/窗口事件）不动。输入草稿、
  * 悬停、openAddTick 信号等组件内瞬态仍留 useState。
  *
+ * M1 路由骨架（docs/44 44.2.1，2026-09-06）：面板导航改路由驱动——
+ * MemoryRouter（每表面一棵，routes.tsx）的 location 是唯一导航驱动源，
+ * location 变化经 routes.tsx 单向 sync 回写 activeNav，本 model 降为
+ * **持久层与观察面**：壳不再读 activeNav 渲染（activeTab 由 location 派生），
+ * 重挂时由 initialEntries 恢复上次页签；store 不反向驱动 location（防回环）。
+ *
  * @module dsh-eteams/client/store/models/ui
  */
 import type { DvaModel } from 'dva-core';
 
 /** 面板全局 UI 状态（21.5.3）：纯 reducers；组件内瞬态仍留 useState。 */
 export interface UiState {
-  /** 侧栏当前 tab（与 teamsView 壳 index.tsx 的 tabs 五值对齐）。 */
+  /** 侧栏当前 tab（五值与 lib/status.ts NAV_ITEMS 的 id 对齐）。M1 起为
+   * 路由的持久层/观察面：由 routes.tsx 的 location sync 回写，壳渲染不读它
+   * （activeTab 由 location 派生），重挂时经 initialEntries 恢复。 */
   activeNav: 'board' | 'team' | 'roster' | 'tasks' | 'reports';
   /** 当前选中团队（board 联动与弹层跳转共用；null=未选）。 */
   selectedTeamId: string | null;
-  /** 任务详情抽屉当前展开的任务 id（docs/27：库内整数号；null=全部收起）。 */
+  /** 任务详情抽屉当前展开的任务 id（docs/27：库内整数号；null=全部收起）。
+   * M3 起由 routes.tsx 的 location sync 回写（/tasks/:taskId 写 id、/tasks
+   * 写 null、其余路径不触碰），重挂经 initialEntries 恢复详情。 */
   drawerTaskId: number | null;
   /** 成员对话框当前选中的成员名（null=未选，即「— 选择 —」空态）。 */
   dialogMember: string | null;

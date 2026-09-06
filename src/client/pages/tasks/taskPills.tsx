@@ -6,12 +6,13 @@
  * DisplayStatusPill + STATUS_PILL_CLASS（DA28 底栏描边口径），调用位不再各自
  * 传 pillClassName。
  *
- * @module dsh-eteams/client/pages/teamsView/taskPills
+ * @module dsh-eteams/client/pages/tasks/taskPills
  */
 import type { ReactNode } from 'react';
 import { cn } from '../../lib/cn';
 import { displayStatusOf, type GroupSummary } from '../../features/tasks/taskDisplayStatus';
-import { MUTED_CLASS, Pill, STATUS_PILL_CLASS } from './shared';
+import { Pill } from '../shared/components';
+import { MUTED_CLASS, STATUS_PILL_CLASS } from '../shared/styles';
 
 /** 展示态徽标（docs/29 B.3 渲染位）：中性 pill（Badge secondary + 6px dot，
  * tone 按展示态逐格对表——29-M3 同桶异色）+ 重试计数 detail 小字。八轮 DA21

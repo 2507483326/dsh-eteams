@@ -4,14 +4,16 @@
  * 列表卡身（头行/信息行/文件夹行/底栏）；subs 统计与 deletable 判据在卡内
  * 现算（task/allTasks 进 props）。原注释逐字随迁（纯移动、零行为变更）。
  *
- * @module dsh-eteams/client/pages/teamsView/taskListCard
+ * @module dsh-eteams/client/pages/tasks/taskListCard
  */
 import type { ReactNode } from 'react';
 import { cn } from '../../lib/cn';
 import type { TaskView } from '../../lib/monitor';
-import { groupDisplayOf } from '../../features/tasks/taskDisplayStatus';
+import { groupDisplayOf, isTerminal } from '../../features/tasks/taskDisplayStatus';
+import { DeleteButton } from '../../components/deleteButton';
 import { Button } from '../../components/ui/button';
-import { FormErrorNote } from './shared';
+import { FormErrorNote } from '../shared/components';
+import { LIST_COUNT_CLASS } from '../shared/styles';
 import { BlockedPill, GroupSummaryChip, TaskStatusPill } from './taskPills';
 
 /** 列表页任务小卡（十一轮 DA24 与团队列表小卡同款三段式，十二轮 DA25 修订：
@@ -28,8 +30,10 @@ const TASK_CARD_CLASS = 'flex min-w-0 cursor-pointer flex-col gap-2 rounded-xl p
 /** 列表卡删除按钮显隐判据（十二轮 DA25，用户拍板「仅可删除的卡显示」）——
  * 与 host deleteTask 守卫（assignment.ts）同口径：本身 draft/ready；主任务
  * 级联删除要求全部小任务 draft/ready；删除集（自身 + 小任务）不得被任何
- * 未入集任务依赖。host 仍是最终裁决，弹窗内就地显示拒绝原因。 */
-function deletableOf(t: TaskView, tasks: readonly TaskView[]): boolean {
+ * 未入集任务依赖。host 仍是最终裁决，弹窗内就地显示拒绝原因。
+ * （M3：改具名导出供 tests/taskListCard.test.ts 锁定镜像口径——判定式
+ * 一字未动。） */
+export function deletableOf(t: TaskView, tasks: readonly TaskView[]): boolean {
   if (t.status !== 'draft' && t.status !== 'ready') return false;
   const doomedIds = new Set<number>([t.taskId]);
   for (const sub of tasks) {
@@ -100,7 +104,8 @@ export function TaskListCard({
       <div className="truncate text-sm font-semibold text-foreground">{task.subject}</div>
       {/* 信息分行（十二轮 DA25 分行 + 十三轮 DA26 统一渲染）：
         进度/汇总 chip/阻塞各自独立行，每卡都有进度行（对齐）。 */}
-      <div className="text-xs text-muted-foreground">{progress}</div>
+      {/* 进度行（M7-11 计数行档收编 shared LIST_COUNT_CLASS，原内联同值）。 */}
+      <div className={LIST_COUNT_CLASS}>{progress}</div>
       {summary !== null && <GroupSummaryChip summary={summary} />}
       {task.blocked && <BlockedPill blockedFrom={task.blockedFrom} />}
       {/* 文件夹行（十二轮 DA25 可点击 + 十三轮 DA26 目录标签 +
@@ -164,6 +169,7 @@ export function TaskListCard({
             不触发整卡进详情。二十七轮 DA40：判据放宽——
             非终态（completed/cancelled 外）一律渲染（用户
             「还是没看到开始按钮」——终态才收，详情页同口径）。
+            M3：状态窗口收拢 isTerminal 谓词（判定逐位等价）。
             二十八轮 DA41：渲染序改**组卡 [删除][开始]（开始
             最右）、顶层普通任务 [详情][删除] 逐位不变**——
             组卡整卡点击即进详情，「详情」钮对组卡是冗余件
@@ -173,30 +179,13 @@ export function TaskListCard({
               详情
             </Button>
           )}
-          {deletable && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="text-destructive hover:text-destructive"
-              onClick={onDelete}
-            >
-              删除
+          {/* 删除（M7-4 收口 components/deleteButton，destructive 默认档）。 */}
+          {deletable && <DeleteButton label="删除" onClick={onDelete} />}
+          {task.kind === 'group' && !isTerminal(task.status) && subs.length > 0 && (
+            <Button type="button" size="sm" disabled={startBusy === task.taskId} onClick={onStart}>
+              开始
             </Button>
           )}
-          {task.kind === 'group' &&
-            task.status !== 'completed' &&
-            task.status !== 'cancelled' &&
-            subs.length > 0 && (
-              <Button
-                type="button"
-                size="sm"
-                disabled={startBusy === task.taskId}
-                onClick={onStart}
-              >
-                开始
-              </Button>
-            )}
         </div>
       </div>
     </div>
