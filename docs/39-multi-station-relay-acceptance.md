@@ -738,3 +738,16 @@ GUI 装机冒烟持续**未验证**（链式接力交棒、开始钮显示需装
 改动面：`src/client/pages/teamsView/taskPills.tsx`、`taskHeaderCard.tsx`、`taskSubtaskItem.tsx`、`taskListCard.tsx`、`taskDialogs.tsx`（五新文件，纯移动）、`tasksTab.tsx`（1429→805 行）、`shared.tsx`（INLINE_SUBJECT_INPUT_CLASS）、`taskDrawer.tsx`（mt-1 + prettier 规范化缩进，无语义变化）。无宿主路由/api/tests 变更，用例数持平。
 
 **三十一轮四绿门（2026-09-05）**：typecheck / lint（0 error，taskDrawer.tsx:116 既有 1 条 exhaustive-deps warning 保留）/ test（23 文件 **328 用例**全过——持平）/ build（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿。GUI 装机冒烟持续**未验证**（抽离后五页回归、行头去 #id 观感、Input 宽度、拖拽环 inset、组页编辑钮需装机后在 DSH 面板人工过一遍；请重启 DSH 载入最新构建包后再验）。
+
+## 三十二轮追加（2026-09-05，DA45：头像边框全局统一）
+
+用户原话：「头像加上边框」。
+
+| 项 | 落法 |
+| --- | --- |
+| 描边进组件默认 | Avatar 容器默认类追加 `border border-solid border-[color:var(--border)]`（本仓惯例补 border-solid）——任务区 5 处二十三轮 DA36 已显式加描边，用户仍见无边框头像在其它表面（团队卡/成员库/添加成员弹窗/teamsButton/汇报卡），全局默认一次统一；双渲染分支（seeded SVG 主干 + 首字母 fallback）同吃；className 仍可覆盖 |
+| 任务区去冗余 | taskAssign.tsx 撤 AVATAR_BORDER_CLASS 常量与 5 处调用位显式传参（罗列条 chip/领队 chip/只读框/多选面板行/卡槽 chip）——twMerge 合并语义下改前改后 set 相等，视觉零变化 |
+
+改动面：`src/client/features/avatar/avatar.tsx`（容器默认类 + 头注/常量/组件注释）、`src/client/features/tasks/taskAssign.tsx`（常量与 5 处显式传参撤除）。无宿主路由/api/tests 变更。
+
+**三十二轮四绿门（2026-09-05）**：typecheck / lint（0 error）/ test（24 文件 **337 用例**全过——基线随用户并行提交上移：前轮 328→337，非本轮改动面）/ build（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿。GUI 装机冒烟持续**未验证**（各表面头像描边观感——尤其 AvatarRing 双线环面四处（构建台/角色添加/角色详情/成员详情）随之多内层 1px 细线，嫌重可在 AvatarRing 传 className 覆盖；需装机后在 DSH 面板人工过一遍；请重启 DSH 载入最新构建包后再验）。

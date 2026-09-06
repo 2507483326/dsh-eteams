@@ -1,10 +1,11 @@
 /**
  * Continuable builder-child dispatch（docs/19.16 持续构建子代理迭代，取代
  * 一次性阶段制）：每构建一个持久可继续子代理——受理时 `startContinuable`
- * 建立（builderChildId 落盘 rolebuilder.json），后续环节（访谈答案中转/
- * 恢复/重启）宿主经 `followup` 送进同一子代理；放弃时 `interrupt` 中断
- * （durable 会话保留，恢复经 followup 或冷恢复重建续聊）；入库时
- * `drainContinuableChildren` 释放驻留。followup 失败（lineage 不符/会话
+ * 建立（childId 预生成先落盘 rolebuilder.json，docs/19.17.1），后续环节（访
+ * 谈答案中转/恢复/重启）宿主经 `followup` 送进同一子代理；等待用户动作期间
+ * 子代理经 eteams_build_wait 停驻（回合不收束，docs/19.17.1）；放弃时
+ * `interrupt` 中断（durable 会话保留，恢复经 followup 或冷恢复重建续聊）。
+ * followup 失败（lineage 不符/会话
  * 记录被回收）→ 以快照提示词重建并覆盖落盘 childId（captainDispatch 同款
  * 先续聊后重建）。机制镜像 captainDispatch.ts（docs/26）与 members.ts。
  *
@@ -15,6 +16,7 @@
  */
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { SessionId } from '@deepseek-ai/dsh-session';
+import { randomUUID } from 'node:crypto';
 import type { RuntimeContext } from './base.js';
 import type { ETeamsResolvedConfig } from '../config.js';
 import { locks } from '../state/lock.js';
@@ -38,7 +40,13 @@ import {
 
 export type { BuildPhaseKind } from '../prompts/spawn/builderPhases.js';
 
-const BUILDER_TOOLS = ['eteams_build_report', 'eteams_member_list', 'eteams_member_save', 'ask_user_question'];
+const BUILDER_TOOLS = [
+  'eteams_build_report',
+  'eteams_build_wait',
+  'eteams_member_list',
+  'eteams_member_save',
+  'ask_user_question',
+];
 
 /** followup/interrupt 消息来源（与 notifier/captainDispatch 保持一致）。 */
 const BUILDER_SOURCE = { kind: 'plugin' as const, plugin: 'dsh-eteams' };
@@ -99,8 +107,9 @@ function subagentsReady(ctx: BuilderDispatchArgs['ctx']): boolean {
 }
 
 /**
- * 受理即建立持续构建子代理（fire-and-forget）：`startContinuable` 建立并把
- * durable childId 落盘（builderChildId）。60 秒 start 派发锁保留，且检查与
+ * 受理即建立持续构建子代理（fire-and-forget）：`startContinuable` 建立；
+ * durable childId 预生成先落盘（builderChildId，eteams_build_wait 守卫的
+ * 凭据，docs/19.17.1），创建后再写一次（幂等）。60 秒 start 派发锁保留，且检查与
  * 落位走单构建文件锁（check+mark 原子化——两个真正并发的受理源只有一个
  * 起代理）。失败策略与一次性时代一致：本函数不抛，但失败必经 logger/
  * onSpawnFailure 显式上浮——吞掉的 spawn 失败看起来就像「/eteam 没有反
@@ -132,9 +141,19 @@ export function startBuilderChild(args: BuilderDispatchArgs): void {
       await setBuildParentSession(stateRoot, String(parent.id)).catch((error) => {
         logger?.warn(failMessage('parent-ref write failed', error));
       });
+      // 预生成 childId 先落盘（docs/19.17.1）：eteams_build_wait 的调用者
+      // 守卫按 builderChildId 严格相等放行——若等 startContinuable 返回再
+      // 落盘，子代理开跑到首次播报之间有一个「凭据不在盘上」的窗口。随机
+      // id 经 spec.childId 传入（运行时按它建会话），创建失败由 spawn 失败
+      // 回滚兜底（会话翻 cancelled，残留 childId 无害——唤醒路径重建时覆写）。
+      const childId = randomUUID();
+      await markBuilderChild(stateRoot, childId).catch((error) => {
+        logger?.warn(failMessage('child-id pre-write failed', error));
+      });
       const start = await subagents.startContinuable!({
         provider: config.memberProvider,
         label: BUILDER_LABEL,
+        childId,
         request: {
           prompt: textTurn(builderPhasePrompt('start', snapshotOf(stateRoot))),
           parent,
@@ -235,49 +254,38 @@ export function wakeBuilderChild(args: {
 }
 
 /**
- * Release/stop the continuable builder child（cancel → interrupt，confirm →
- * drain）：interrupt 只停当前回合、durable 会话保留（恢复经 followup 或
- * 冷恢复重建续聊）；drain 是新运行时的版本门控回收 API（feature-detect，
- * 老运行时静默退化——驻留会话随后续父会话回收）。两类目标缺失/竞态都是
- * 可接受的 no-op，绝不抛错外溢。
+ * Stop the continuable builder child（cancel → interrupt）：interrupt 只停
+ * 当前回合（含停驻轮询——abort 即打断 eteams_build_wait）、durable 会话保留
+ * （恢复经 followup 或冷恢复重建续聊）。确认路径不再代收（docs/19.17.1）：
+ * 停驻中的子代理自己看到 confirmed 后静默收束，watchSettlement 自然释放。
+ * 目标缺失/竞态是可接受的 no-op，绝不抛错外溢。
  */
 export async function stopBuilderChild(args: {
   ctx: { subagents: RuntimeContext['subagents'] };
   parent?: Agent;
   stateRoot: string;
-  mode: 'interrupt' | 'drain';
+  mode: 'interrupt';
   logger?: { warn(message: string): void };
 }): Promise<void> {
-  const { ctx, parent, stateRoot, mode, logger } = args;
+  const { ctx, parent, stateRoot } = args;
   const subagents = ctx.subagents;
   const childId = readBuildSession(stateRoot)?.builderChildId ?? '';
   if (childId === '') return;
-  if (mode === 'interrupt') {
-    if (subagents?.interrupt === undefined) return;
-    // authority：活父在 → ancestor（members.ts 同款）；父离线退回 user
-    // 权限（父会话 id 从 parent-ref 侧车读取）；两者都拿不到就放弃中断
-    // ——终态守卫会挡住子代理的迟到播报，安全网不缺。
-    const parentSessionId = readBuildParentSession(stateRoot);
-    const authority =
-      parent !== undefined
-        ? ({ kind: 'ancestor', agent: parent } as const)
-        : parentSessionId !== null
-          ? ({ kind: 'user', parentSessionId: parentSessionId as unknown as SessionId } as const)
-          : undefined;
-    if (authority === undefined) return;
-    try {
-      subagents.interrupt(childId as unknown as SessionId, authority);
-    } catch {
-      // absent target is an accepted no-op
-    }
-    return;
-  }
-  if (subagents?.drainContinuableChildren === undefined || parent === undefined) return;
+  if (subagents?.interrupt === undefined) return;
+  // authority：活父在 → ancestor（members.ts 同款）；父离线退回 user
+  // 权限（父会话 id 从 parent-ref 侧车读取）；两者都拿不到就放弃中断
+  // ——终态守卫会挡住子代理的迟到播报，安全网不缺。
+  const parentSessionId = readBuildParentSession(stateRoot);
+  const authority =
+    parent !== undefined
+      ? ({ kind: 'ancestor', agent: parent } as const)
+      : parentSessionId !== null
+        ? ({ kind: 'user', parentSessionId: parentSessionId as unknown as SessionId } as const)
+        : undefined;
+  if (authority === undefined) return;
   try {
-    await subagents.drainContinuableChildren(parent, [
-      childId as unknown as SessionId,
-    ] as unknown as readonly SessionId[]);
-  } catch (error) {
-    logger?.warn(failMessage('drain failed (kept resident)', error));
+    subagents.interrupt(childId as unknown as SessionId, authority);
+  } catch {
+    // absent target is an accepted no-op
   }
 }

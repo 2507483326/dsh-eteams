@@ -200,11 +200,17 @@ export function RosterPage({
                     onClick={() => navigate(`/roster/${encodeURIComponent(m.name)}`)}
                   >
                     <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={40} />
-                    {/* 角色（用户反馈）：不再需要标签——名字即身份。 */}
+                    {/* 角色（用户反馈）：不再需要标签——名字即身份；简介
+                    （用户迭代 2026-09-06）跟在名字下一行，单行截断。 */}
                     <div className="min-w-0 flex-1">
                       <span className="eteams-role-name block max-w-full text-sm font-semibold text-foreground">
                         {m.name}
                       </span>
+                      {m.profile !== undefined && m.profile.trim() !== '' && (
+                        <span className="eteams-role-name mt-0.5 block max-w-full truncate text-xs leading-5 text-muted-foreground">
+                          {m.profile.trim()}
+                        </span>
+                      )}
                     </div>
                     {isProtected ? null : (
                       /* 删除（M7-4 收口 components/deleteButton）：悬停红描边/

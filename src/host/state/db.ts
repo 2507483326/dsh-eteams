@@ -528,6 +528,9 @@ export function personaToMd(persona: PersonaRecord, name: string): string {
   const summary = [
     `# 人设 · ${name}`,
     `- 角色：${persona.role}`,
+    ...(persona.profile !== undefined && persona.profile.trim() !== ''
+      ? [`- 简介：${persona.profile.trim()}`]
+      : []),
     `- 职责边界：${persona.duty}`,
     `- 工作风格：${persona.style}`,
     `- 能力：${persona.skills}`,
@@ -544,6 +547,7 @@ export function personaToMd(persona: PersonaRecord, name: string): string {
 /** 从 persona_md 全文解析回结构字段（非本层格式的文本整体视作角色手册）。 */
 export function personaFromMd(md: string, name: string, roleFallback: string): PersonaRecord {
   let role: string | undefined;
+  let profile: string | undefined;
   let duty: string | undefined;
   let style: string | undefined;
   let skills: string | undefined;
@@ -556,6 +560,7 @@ export function personaFromMd(md: string, name: string, roleFallback: string): P
       line.startsWith(prefix) ? line.slice(prefix.length).trim() : undefined;
     const picked =
       field('- 角色：') ??
+      field('- 简介：') ??
       field('- 职责边界：') ??
       field('- 工作风格：') ??
       field('- 能力：') ??
@@ -571,6 +576,7 @@ export function personaFromMd(md: string, name: string, roleFallback: string): P
     inRules = false;
     if (picked === undefined || picked === '') continue;
     if (line.startsWith('- 角色：')) role = picked;
+    else if (line.startsWith('- 简介：')) profile = picked;
     else if (line.startsWith('- 职责边界：')) duty = picked;
     else if (line.startsWith('- 工作风格：')) style = picked;
     else if (line.startsWith('- 能力：')) skills = picked;
@@ -585,6 +591,7 @@ export function personaFromMd(md: string, name: string, roleFallback: string): P
   return {
     frameworkVersion: PERSONA_FRAMEWORK_VERSION,
     role: role ?? roleFallback,
+    ...(profile !== undefined && profile !== '' ? { profile } : {}),
     duty: duty ?? '',
     style: style ?? '',
     skills: skills ?? '',

@@ -37,6 +37,7 @@ export const BUILD_STEPS = [
 export interface DraftEdit {
   name: string;
   role: string;
+  profile: string;
   duty: string;
   style: string;
   skills: string;
@@ -48,6 +49,7 @@ export interface DraftEdit {
 export const EMPTY_EDIT: DraftEdit = {
   name: '',
   role: '',
+  profile: '',
   duty: '',
   style: '',
   skills: '',
@@ -60,6 +62,7 @@ export function fromBuildDraft(d: BuildDraft): DraftEdit {
   return {
     name: d.name,
     role: d.role,
+    profile: d.profile ?? '',
     duty: d.duty ?? '',
     style: d.style ?? '',
     skills: d.skills ?? '',
@@ -99,11 +102,7 @@ export function DraftPreview({ draft }: { draft: BuildDraft }): ReactNode {
   const rows: [string, string][] = [
     ['角色名', draft.name],
     ['角色', draft.role],
-    ['职责边界', draft.duty ?? ''],
-    ['工作风格', draft.style ?? ''],
-    ['能力', draft.skills ?? ''],
-    ['工作纪律', (draft.rules ?? []).join('；')],
-    ['执行提示', draft.executionPrompt ?? ''],
+    ['简介', draft.profile ?? ''],
   ];
   return (
     <Card className={cn(PANEL_CARD_CLASS, 'mt-2 p-2.5')}>

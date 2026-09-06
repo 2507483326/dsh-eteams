@@ -203,6 +203,7 @@ export function BuildWorkbench({ build, addMode, onConfirmed }: BuildWorkbenchPr
           // 2026-09-05「去掉角色名下面的角色输入框」），role 空时随名回填
           // ——host 契约要求非空 role。
           role: draftEdit.role.trim() !== '' ? draftEdit.role.trim() : draftEdit.name.trim(),
+          profile: draftEdit.profile.trim(),
           duty: draftEdit.duty,
           style: draftEdit.style,
           skills: draftEdit.skills,
@@ -420,6 +421,13 @@ export function BuildWorkbench({ build, addMode, onConfirmed }: BuildWorkbenchPr
             <Input
               value={draftEdit.name}
               onChange={(e) => setDraftEdit({ ...draftEdit, name: e.target.value })}
+            />
+          </div>
+          <div className={FORM_ROW_CLASS}>
+            <span className={FORM_LABEL_CLASS}>简介（一句话，展示在角色列表卡片上）</span>
+            <Input
+              value={draftEdit.profile}
+              onChange={(e) => setDraftEdit({ ...draftEdit, profile: e.target.value })}
             />
           </div>
           <div className={FORM_ROW_CLASS}>

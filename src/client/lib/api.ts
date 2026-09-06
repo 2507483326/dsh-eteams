@@ -16,6 +16,8 @@ export interface RosterMember {
   /** 工号 (docs/21): host 发整数工号（显示补零走 host 快照的格式化串）。 */
   employeeId?: number;
   role: string;
+  /** 一句话简介（列表卡片/详情头展示；空/缺省=不展示）。 */
+  profile?: string;
   duty?: string;
   style?: string;
   skills?: string;
@@ -35,6 +37,8 @@ export interface RosterMember {
 export interface NewMemberInput {
   name: string;
   role: string;
+  /** 一句话简介（列表卡片/详情头展示）。 */
+  profile?: string;
   duty?: string;
   style?: string;
   skills?: string;
@@ -415,6 +419,8 @@ export async function startTeamTask(
 export interface BuildDraft {
   name: string;
   role: string;
+  /** 一句话简介（列表卡片/详情头展示用）。 */
+  profile?: string;
   duty?: string;
   style?: string;
   skills?: string;

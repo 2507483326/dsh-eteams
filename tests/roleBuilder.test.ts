@@ -198,9 +198,33 @@ describe('D18 对话式新增成员', () => {
     // 只有 cancelled 可恢复；confirmed 已落库，重开走 /eteam 新构建
     await cancelBuildSession(stateRoot);
     await reportBuildProgress(stateRoot, { status: 'active', newBuild: true });
-    await reportBuildProgress(stateRoot, { status: 'awaiting_confirmation' });
+    await reportBuildProgress(stateRoot, {
+      status: 'awaiting_confirmation',
+      draft: { personaMd: '# partial 手册' },
+    });
     await confirmBuildSession(stateRoot, { name: 'partial', role: 'engineer' });
     await expect(resumeBuildSession(stateRoot)).rejects.toThrow(/仅已放弃/);
+  });
+
+  it('awaiting_confirmation requires a non-empty personaMd (docs/19.17.2)', async () => {
+    await reportBuildProgress(stateRoot, { request: 'r' });
+    // 无 draft / 空白手册一律拒绝——确认页直接渲染 personaMd，空手册= 空白页
+    await expect(
+      reportBuildProgress(stateRoot, { status: 'awaiting_confirmation' }),
+    ).rejects.toThrow(/personaMd/);
+    await expect(
+      reportBuildProgress(stateRoot, {
+        status: 'awaiting_confirmation',
+        draft: { name: 'x', role: 'y', personaMd: '   ' },
+      }),
+    ).rejects.toThrow(/personaMd/);
+    // 带手册全文则放行
+    const s = await reportBuildProgress(stateRoot, {
+      status: 'awaiting_confirmation',
+      draft: { name: 'x', role: 'y', personaMd: '# x 手册' },
+    });
+    expect(s.status).toBe('awaiting_confirmation');
+    expect(s.draft?.personaMd).toBe('# x 手册');
   });
 
   it('intent interview lands in the session and records answers (docs/19.16)', async () => {
@@ -241,8 +265,9 @@ describe('D18 对话式新增成员', () => {
     expect(readBuildParentSession(join(stateRoot, 'nonexistent-dir'))).toBeNull();
   });
 
-  it('eteams_build_report is denied to team members (D18-4)', () => {
+  it('eteams_build_report / eteams_build_wait are denied to team members (D18-4, docs/19.17.1)', () => {
     expect(MEMBER_DENIED_TOOLS).toContain('eteams_build_report');
+    expect(MEMBER_DENIED_TOOLS).toContain('eteams_build_wait');
   });
 
   it('state file lives at <stateRoot>/rolebuilder.json (docs/19.9.1)', () => {

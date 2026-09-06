@@ -65,6 +65,8 @@ export interface AttemptRecord {
 export interface PersonaRecord {
   frameworkVersion: 1;
   role: string;
+  /** 一句话简介（列表卡片/详情头展示用；空串视同无）。 */
+  profile?: string;
   duty: string;
   style: string;
   skills: string;

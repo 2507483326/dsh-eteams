@@ -494,7 +494,7 @@ popup 增加 **「＋ 新增成员」** 项：执行与 19.7.1 相同的一键�
 - **构建期头像（vue-avatar 脸）**：`BuildDraft` 增加 `avatar: {seed, salt}`——`reportBuildProgress` 在草稿首次出现名字时一次性生成（seed=`avatarSeedFor(name)`，salt 随机）并随会话持久化；卡片/工作台构建头/确认表单均渲染该脸，confirm 原样透传给 `upsertRosterMember`，脸从预览到入库稳定不变。
 - **构建时可达对话页**：`bridge.activateConversationTab()`（点击宿主 对话 tab，兜底选非本面板 tab）；工作台加「💬 对话页看进度」按钮；`refreshBuild` 不再对新会话强制跳 add 视图（发送时刻的卡片跳转已覆盖），用户可自由浏览面板与对话。
 - **md 编辑器精简**：去掉语法工具栏，仅保留 头部条（Markdown 标识 + 编辑/预览分段切换）+ 编辑器质感文本区（等宽、占位示例 frontmatter、无内框线）。
-- **意图访谈（强制）**：构建流程新增步骤「意图访谈」——起草前必须一次问全（≤5 问，附默认建议）：使用场景/期望产出/语气风格/与现有成员边界/模型路线；用户回复「按你建议」或明确说不用问才可跳过。`BUILD_STEPS` 同步为六步。
+- **意图访谈（强制）**：构建流程新增步骤「意图访谈」——起草前必须一次问全（≤5 问，附默认建议）：使用场景/期望产出/语气风格/与现有成员边界（2026-09-06 用户反馈「访谈问模型路线越界」——模型路线是派发配置不是人设，从话题面剔除；用户不明示就留空，起草纪律「用户不明示就不写」不变）；用户回复「按你建议」或明确说不用问才可跳过。`BUILD_STEPS` 同步为六步。
 
 **体验打磨第三轮（用户反馈 3 项）**：
 - **选项框访谈**：意图访谈改为调用 harness `ask_user_question`——一次问全 ≤5 问，每问 2-4 个 options，推荐项放首位加「（推荐）」；工具不可用时降级为 `build_report` note 列问题并结束回合。
@@ -514,3 +514,40 @@ popup 增加 **「＋ 新增成员」** 项：执行与 19.7.1 相同的一键�
 - **入库确认页二项减负（用户反馈 2026-09-05）**：① **页头头像撤除**——「草稿已就绪」标题旁不再渲染 30px 小像（此前与下方头像行一页两像）；下方「头像」行（预览 + 随机换一枚）保留，就是它的去处。② **「角色」输入框撤除**——确认表单只留角色名 / 头像 / 人设手册；`draftEdit.role` 仍随草稿带来，提交时空则**随名回填**（名字即身份，与手动创建同口径，host 契约要求非空 role），「确认入库」按钮的禁用条件随之去掉 role 判空（只看名字）。
 - **入库后直落角色列表（用户反馈 2026-09-05「确认入库后应该直接跳到角色列表页面」）**：`confirmDraft` 成功路径在原有清理（方式选择复位、预填横幅清除、名册重拉）之后加 `setView('list')`——与手动创建保存后同款落点：入库后用户要看到的是新角色出现在列表里，而不是停留在方式选择页。
 - **持续构建子代理（用户反馈 2026-09-05「不要使用一次性子代理，使用支持后续消息的，避免同一个角色创建要创建两个子代理才能完成」）**：构建管线从「一次性阶段制」改为「每构建一个持续（可续聊）子代理」，机制镜像 `eteams_dispatch_captain`（docs/26）与成员派发（docs/20）的成熟机关——`startContinuable` 建立、`followup` 续聊、`interrupt` 中断、`drainContinuableChildren` 释放（全部 feature-detect/容错）。① **受理**（/eteam 处理器、`eteams_build_dispatch` 工具，两路同语义）：受理即写盘照旧 → 60 秒 start 派发锁与「派发失败回滚 cancelled」保留 → `startContinuable` 建持续构建子代理（persona=持续构建师人格，toolFilter 不变），`builderChildId` 落进 `rolebuilder.json`（`markBuilderChild`：受理时写入、冷恢复重建时覆盖 = 新持有者接手；其余合并永不触碰）；派发前 `setBuildParentSession` 记父会话 id 照旧。subagents 能力探测（startContinuable+followup 任一缺失 → onSpawnFailure 回滚）。② **访谈作答三路**：(a) 主路径——子代理直接 `ask_user_question` 弹窗（continuable 子代理是运行时根、弹窗直落主对话，不再像 owned 一次性子代理那样被拒），答案经 `eteams_build_report(answers)` 内联落盘后**同回合继续起草**直达 awaiting_confirmation；宿主对该路**只落盘不唤醒**（toolFilter 决定调用者就是子代理本身——不代唤醒即根除「childId 未落盘误判外部作答 → 多余 followup → 双起草」竞态）。(b) 面板 `POST /rolebuilder/interview` 与主对话 `eteams_interview_answer`（父代理中转）——落盘答案后宿主 `followup(childId, 逐题作答+起草指令)` 唤醒同一子代理；去重键 `${startedAt}:${answeredAt}` 落盘会话（`builderWakeKey`，`markBuilderWake`），面板与工具双入口竞态时第二个在锁内跳过。(c) **弹窗失败兜底改事件驱动**（替代设计稿的 45 秒盲定时器——子代理阻塞在自家弹窗等答案时定时器分不清「在等答案」与「已失败」，必双弹）：子代理 `ask_user_question` 被拒/报错不重试，立即 `eteams_build_report(interview={questions, popFailed=true})` 上报后结束回合；`eteams_build_report` 播报路径在「popFailed 由本次播报**新置位**」（播报前读盘 `beforeReport` 做边沿判定，重复播报不重复打扰）且访谈未答时，把问题 steer 到活父/在场会话补弹（presence 心跳定位优先，目标永不指向子代理自身）。③ **resume（继续构建）**：路由侧只做诚实前置（无会话 400、非 cancelled 409、父会话在线闸 409）；`cancelled→active` 的翻转移进**单构建文件锁**（`rolebuilder:<stateRoot>`）内由 `wakeBuilderChild` 权威执行——双入口竞态只有第一个看见 cancelled 并翻转，第二个锁内看到 active 直接跳过；路由 `await` 唤醒完成后才 200（200 = 唤醒已落定，不再有「响应先于翻转」的测试不可见窗口）。followup 失败（lineage 不符/会话记录被回收/宿主重启后冷恢复失败）→ `startContinuable` 以快照提示词重建并覆盖落盘 childId；重建也失败 → onSpawnFailure 回滚 cancelled（不留无代理的 active 卡门禁）。④ **restart（重启代理）**：路由守卫保留（active + 访谈待答 + 10 秒 updatedAt 防抖 + 父在线）→ `reportBuildProgress(重启核查)` → `followup(restart 提示词)` 唤醒同一子代理，失败 → 冷恢复重建。⑤ **cancel（放弃）**：状态翻 cancelled → `stopBuilderChild` **interrupt** 当前回合（authority：活父在 → `{kind:'ancestor'}`；父离线退 `{kind:'user', parentSessionId}`；两者皆缺 → 放弃中断，终态守卫挡迟到播报）——durable 会话保留，继续构建经 followup 或冷恢复重建从中断处接着跑。⑥ **confirm（确认入库）**：`stopBuilderChild` **drain**（`drainContinuableChildren(父, [childId])` feature-detect，老运行时/父离线静默退化——驻留会话随后续父会话回收）。identity 不变：build_report/member_list 不走 resolveCaller，构建子代理与一次性时代同样无需注册表；播报消息通道与卡片轮询机制不变。提示词层：persona 改写为「持续构建代理」（一次构建只有一个你，持久记忆是会话文件，宿主以 followup 送来后续任务，做完当前任务自然收束回合，不轮询等待）；start 提示词 = 受理回合（查重 → 发布访谈 → 直接弹窗 → 同回合起草到 awaiting；弹窗被拒不重试，上报 popFailed 后结束回合等宿主中转）；continue/resume/restart 为 followup 回合按快照驱动。`reportBuildProgress` 的两个开会分支（newBuild 与首轮）都保留 `report.interview`（此前首轮带访谈会被静默丢弃）；`eteams_interview_answer` 工具与面板路由共用 `wakeBuilderChild`（面板 await、工具 void）。
+
+## 19.17 用户迭代 ⑥：主对话零播报 / 手册防空 / 跳转守门（2026-09-06）
+
+三条用户反馈（「草稿还没确认怎么在主对话里出现子代理汇报」「显示完成但人设手册没有内容」「AI 创建后强制自动跳转团队→角色页面，应先判断是否在团队 tab 中」）。逐条根因与修复：
+
+### 19.17.1 停驻等待（`eteams_build_wait`）——主对话零播报
+
+**根因（harness 运行时行为，读 `@deepseek-ai/dsh-subagent` 源码确认）**：可续聊子代理的**每个回合收束**都会向其直接父会话（= 主对话）无条件投递结算通知——`notifySettlement` 在激活被 `watchSettlement` 判定 settled（回合结束、无排队唤醒、无子代理）而释放时触发，消息体为固定英文摘要（`Background subagent <id> finished and will do no further work unless you send it more.`）+ 「Its closing message:」+ 子代理的收束文本；父会话空闲时走 `parent.followup` = **唤醒主对话代理开新回合**，主模型随即生成一轮解读（用户看到英文分析与视角跳走）。该投递在激活首次提交（announced）之后不可关闭——`startContinuable` 的初始 prompt 提交即置 announced，运行时无静默开关；一次性代理（`subagents.start()`）不进此生命周期（无结算行），所以「主对话里的播报行」是持续化改造（19.16 末条）才出现的新噪音。旧文案（「草稿已完成，正在等待确认以便保存」）出自子代理 persona 的「对话内只回一句简短确认」收束纪律——它恰好成了结算通知的正文。
+
+**修复方向：让构建子代理在等待用户动作期间不结束回合。** 新增插件工具 `eteams_build_wait`（`captainTools.ts`）：
+
+- 参数：`maxWaitSeconds?`（缺省 1800，钳制 10–3600）；**不得声明 timeoutMs**（`dsh-tool-call-timeout-policy` 是唯一强制超时点，声明即拦腰打断停驻），并全程响应 `exec.signal`（放弃中断即时退出）。
+- 行为：进入即读会话——**已终态（confirmed/cancelled）或缺失直接返回/报错，不停驻**；否则阻塞轮询 `.eteams/rolebuilder.json`（每 2.5s 一拍），**变更令牌 = 原始文件内容字符串比对**（不能用 updatedAt：`markBuilderWake` 唤醒标记不动 updatedAt，且 updatedAt 驱动工作台草稿表单重置，不能拿来当唤醒信号）——确认/放弃翻态、面板或中转写入访谈答案、宿主唤醒标记、新构建覆写都会立即返回；到时未变返回 `changed:false`，子代理再调一次即续驻。返回 `{ok, changed, status, step, waitedSeconds}`，presentCall/presentResult 收敛为一行静默呈现。工具阻塞期间无模型步进、零 token 成本。
+- 调用者守卫：会话 `builderChildId` **严格等于**调用者会话 id 才放行，否则报错（只有构建子代理能停驻，主对话/成员都被拒）。受理竞态不留毫秒放行窗口：`startBuilderChild` 改为**预生成 childId 先落盘**（`markBuilderChild` → `startContinuable(spec.childId)`），子代理开跑时守卫凭据已在盘上。
+- `MEMBER_DENIED_TOOLS` 补录本工具（成员子代理拒刀清单原样下发，不补录则成员侧工具可见）。`BUILDER_TOOLS` 增补（builder 豁免面随之扩大）。
+
+**提示词层（`prompts/personas/builder.ts` + `prompts/spawn/builderPhases.ts`）**：
+
+- persona 收束纪律重写：回合结束**不要写任何收束文字**（任何结束语都会随运行时结算通知变成主对话噪音行）；等待用户动作（确认入库/访谈作答/宿主唤醒）一律 `eteams_build_wait` 停驻保持回合开启。**停驻返回后的决策表（审核定稿）**：(a) 变更且会话已终态（confirmed/cancelled）或收到「会话已结束」类报错 → 静默结束回合；(b) 变更但非终态（访谈答案落盘/宿主唤醒标记/新覆写）→ **同样静默结束回合让位**——宿主中转（面板提交访谈答案/「继续构建」/重启）的续聊指令是 next-turn 队列消息，只在**回合边界**被消费（dsh-agent `Inbox.claim`），继续停驻会把排队的 followup 饿死在队列里（构建卡死在「恢复中」）；此时序安全：宿主先写盘后 followup，停驻回合收束瞬间队列里已有排队消息，`stateOf` 判 running 不会触发提前释放或结算行；(c) 未变化纯超时 → 再次停驻；(d) 工具报错 → 立即结束回合。弹窗被拒/被关：上报后停驻（答案写入与唤醒标记都会唤醒轮询）。弹窗正常作答路径不变（ask_user_question 本就阻塞在回合内，无需停驻）。
+
+**宿主路由层（`webui.ts`）**：confirm 路由**移除 drain**——停驻中的子代理在数秒内自行看到 confirmed 并静默收束（`watchSettlement` 自然释放激活，无需宿主代收；子代理若已不在驻留态，本来就已释放）。cancel 路由 interrupt 语义不变（中断当前回合 = 中断停驻轮询）。最终收束（确认/放弃）仍会产生**一条**运行时固定格式结算行——这是运行时无条件投递的底线，无法从插件侧关闭；由下述常驻段纪律让主对话对它保持沉默。
+
+**常驻段（`prompts/system/roleBuilder.ts`）新增**：主对话收到「Background subagent …」类消息（含 finished/stopped 字样）时——这只是构建子代理回合收束的信号，**不代表构建完成**，进度与结果一律以创建卡片与面板为准；不解读、不转述、不输出分析，直接静默收束回合（无需任何回应文字）；仅当消息明示构建错误时用一句话说明并引导去面板。
+
+### 19.17.2 手册防空——`awaiting_confirmation` 必须带非空 personaMd
+
+**根因**：起草发生在受理回合同回合（弹窗作答后直达 awaiting_confirmation）时，start 提示词只有「完整草稿 + status=awaiting_confirmation」而**没有**【人设规格】尾与「全部字段一次报告给全（含 personaMd）」的显式要求（continue/resume/restart 都有）——子代理可能漏报 personaMd，浅合并无从补起，面板确认页的人设手册即空。
+
+**修复**：① start 提示词补 `ROLE_BUILDER_SPEC_TAIL` + 全字段一次给全要求；② 宿主硬守卫——`reportBuildProgress` 对把状态置为 `awaiting_confirmation` 的播报，要求合并后 `draft.personaMd` 非空，否则报错「人设手册（personaMd）不能为空——请把完整手册全文随草稿一并上报后再置待确认」，子代理看到报错即补报手册全文（宿主终守卫，提示词漂移也兜得住）。面板 confirm 路径不受此限（用户可自选清空手册，入库后按结构字段合成骨架）。`tests/roleBuilder.test.ts` 的待确认播报用例随守卫补上带 personaMd 的草稿。
+
+### 19.17.3 自动跳转守门——删除卡片的定时强跳（审核修订稿）
+
+**根因**：对话卡片的「发送即跳转」（受理 20s 窗口内无条件 `openMemberBuilder()`：点宿主团队 tab + 面板导航到新增工作台）把刚发送完、正看对话的用户拽走。
+
+**为什么不是「加在团队 tab 判定」而是删除**（审核 P1 修订）：构建卡片经 `conversation.chat.commandview` 槽渲染在 chat 视图内，宿主对非活跃视图是**整体卸载**（`renderSlot` 的 `only: active.id` 过滤）——用户在团队 tab 时卡片连同轮询根本不在运行，「当前是否在团队 tab」在卡片侧物理不可判定；加了判定的跳转是双向不可达的死代码（在对话 tab → 判定为假；在团队 tab → 卡片不在）。且 19.17.1 的新模型（留在对话看卡片）下，定时强跳与用户意图相反。
+
+**修复**：删除 buildCard 的 20s 窗口自动跳转（连同 `jumpedSessionAt` 去重与 `userClickedSince` 接管判定——其唯一消费者随之消失，bridge 的点击锁存一并撤除）；`openMemberBuilder` 保留为卡片点击与用户主动入口。确认页落地由面板侧既有自动导航承担：`useBuildSession` 的 awaiting→`navigate('/roster/add')` 只在用户已浏览角色页时运行——天然满足「在面板内才跳」。

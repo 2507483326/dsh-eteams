@@ -78,6 +78,8 @@ export function RosterDetailPage({ members, team, onDeleted }: RosterDetailPageP
   // 「新增角色」另建。改名 = 保存新名 + 删除旧条目（两步，非事务）。
   const [detailEditing, setDetailEditing] = useState(false);
   const [detailDraftName, setDetailDraftName] = useState('');
+  // 一句话简介（用户迭代 2026-09-06）：编辑态随保存整条 upsert 落库。
+  const [detailDraftProfile, setDetailDraftProfile] = useState('');
   const [detailDraftAvatar, setDetailDraftAvatar] = useState<{ seed: number; salt: number } | null>(
     null,
   );
@@ -90,6 +92,7 @@ export function RosterDetailPage({ members, team, onDeleted }: RosterDetailPageP
   const startDetailEdit = (): void => {
     if (detail === null) return;
     setDetailDraftName(detail.name);
+    setDetailDraftProfile(detail.profile ?? '');
     setDetailDraftAvatar(detail.avatar ?? null);
     setDetailDraftMd(handbookSeed(detail));
     setDetailError(null);
@@ -127,6 +130,7 @@ export function RosterDetailPage({ members, team, onDeleted }: RosterDetailPageP
           payload: {
             name: newName,
             role: detail.role,
+            ...(detailDraftProfile.trim() !== '' ? { profile: detailDraftProfile.trim() } : {}),
             ...(detail.duty !== undefined ? { duty: detail.duty } : {}),
             ...(detail.style !== undefined ? { style: detail.style } : {}),
             ...(detail.skills !== undefined ? { skills: detail.skills } : {}),
@@ -191,8 +195,9 @@ export function RosterDetailPage({ members, team, onDeleted }: RosterDetailPageP
             />
             {detailEditing && <RandomAvatarButton onRoll={rollDetailAvatar} />}
           </div>
-          {/* 页头不再有标签与常驻副注（用户反馈）：名字即身份——所属团队
-          chips 已撤，副注仅领队/系统保留/编辑中三种情形。 */}
+          {/* 页头（用户反馈）：名字即身份——所属团队 chips 已撤，副注仅
+          领队/系统保留两种情形；简介（用户迭代 2026-09-06）是内容行——
+          只读态有值才显示，编辑态换成简介输入框。 */}
           <div className="min-w-0 flex-1">
             {detailEditing && !nameLocked ? (
               <Input
@@ -206,14 +211,27 @@ export function RosterDetailPage({ members, team, onDeleted }: RosterDetailPageP
                 {detail.name}
               </div>
             )}
-            {(isLeader || nameLocked || detailEditing) && (
-              <div className={cn(MUTED_CLASS, 'mt-0.5')}>
-                {
-                  ROSTER_DETAIL_SUBTITLE_META[
-                    isLeader ? 'leader' : nameLocked ? 'protected' : 'editing'
-                  ]
-                }
-              </div>
+            {detailEditing ? (
+              <Input
+                value={detailDraftProfile}
+                onChange={(e) => setDetailDraftProfile(e.target.value)}
+                aria-label="角色简介"
+                placeholder="一句话简介，展示在角色列表卡片上"
+                className="mt-1.5 h-8 max-w-[420px] text-sm"
+              />
+            ) : (
+              <>
+                {(isLeader || nameLocked) && (
+                  <div className={cn(MUTED_CLASS, 'mt-0.5')}>
+                    {ROSTER_DETAIL_SUBTITLE_META[isLeader ? 'leader' : 'protected']}
+                  </div>
+                )}
+                {detail.profile !== undefined && detail.profile.trim() !== '' && (
+                  <div className={cn(MUTED_CLASS, 'mt-0.5 max-w-[520px]')}>
+                    {detail.profile.trim()}
+                  </div>
+                )}
+              </>
             )}
           </div>
           {/* 编辑/保存/取消（用户迭代 2026-09-03）：编辑钮从手册卡上移到

@@ -22,7 +22,7 @@ import { Provider } from 'react-redux';
 // lucide 深层图标导入（dialog.tsx 先例：深层 .mjs 只进用到的图标）。
 import PenLine from 'lucide-react/dist/esm/icons/pen-line.mjs';
 import { Avatar } from '../features/avatar/avatar';
-import { openMemberBuilder, userClickedSince } from '../lib/bridge';
+import { openMemberBuilder } from '../lib/bridge';
 import { cn } from '../lib/cn';
 import { Badge } from '../components/ui/badge';
 import { ClientErrorBoundary } from '../lib/diagnostics';
@@ -74,8 +74,8 @@ const BUILD_VIEW_META: Record<
   orphanConfirmed: { text: '本次构建已完成入库——新构建请发起 /eteam', spin: false, stepFallback: '' },
   orphanEnded: { text: '本次构建已结束（会话已被新构建取代）', spin: false, stepFallback: '' },
   loading: { text: '连接构建会话…', spin: false, stepFallback: '' },
-  // 访谈未答 = 持续构建子代理按设计已收束回合，不是卡死——别转圈装忙。
-  // 作答入口在主会话（本卡片所在会话）的 ask_user_question 选择框。
+  // 访谈未答 = 子代理停驻等待（eteams_build_wait，docs/19.17.1）——不是
+  // 卡死，别转圈装忙。作答入口在主会话（本卡片所在会话）的 ask_user_question 选择框。
   activeInterview: { text: '意图访谈待作答——在本会话作答后自动续跑', spin: false, stepFallback: '' },
   building: { text: '角色构建师工作中 · ', spin: true, stepFallback: '准备中' },
   awaitingConfirm: { text: '草稿就绪——待你确认入库', spin: true, stepFallback: '' },
@@ -84,11 +84,14 @@ const BUILD_VIEW_META: Record<
 };
 
 /**
- * 发送即跳转的去重标记（模块级，docs/19.16）：卡片会随聊天重渲染频繁重
- * 挂载，useRef 每次归零会把用户从对话页反复拽回面板——按 startedAt 全局
- * 只跳一次，用户之后可以自由切回对话 tab。
+ * 发送即跳转已删除（用户反馈 2026-09-06「AI 创建后强制自动跳转 团队→角色
+ * 页面，应先判断是否在团队 tab 中，在团队 tab 中才跳转」＝ docs/19.17.3）：
+ * 构建卡片只挂载在 chat 视图（宿主对非活跃视图是 only 过滤整体卸载）——
+ * 用户在团队 tab 时卡片连同轮询根本不在运行，「当前是否在团队 tab」在卡片
+ * 侧物理不可判定，带判定的跳转是双向不可达的死代码；且持续构建子代理的新
+ * 模型（留在对话看卡片更新）下，定时强跳与用户意图相反。openMemberBuilder
+ * 只保留卡片点击跳转（用户主动）。
  */
-let jumpedSessionAt: number | null = null;
 
 /** ================================== 主组件 ================================== */
 
@@ -138,21 +141,6 @@ export function EteamBuildCard(props: { node?: unknown }): ReactNode {
             // 槽里是别人的构建——本卡片归属的构建已被覆盖，冻结终态并停轮询。
             setOrphaned(true);
             return;
-          }
-          if (
-            s !== null &&
-            s.status === 'active' &&
-            Date.now() - s.startedAt < 20_000 &&
-            // 用户接管判定（docs/19.16 自动跳转让位）：startedAt 之后点过
-            // 任何东西就不再拽人。判定读 bridge 的全局点击锁存——bundle 装载
-            // 即挂监听，用户先点进对话、卡片模块才首次求值的「刚创建」时序
-            // 下，那次点击也能记上（此前锁存挂卡片模块，迟生 0 值让判定
-            // 失灵 → 点了对话又被拽回团队，再点一次才稳住）。
-            !userClickedSince(s.startedAt) &&
-            jumpedSessionAt !== s.startedAt
-          ) {
-            jumpedSessionAt = s.startedAt;
-            openMemberBuilder();
           }
           const status = s?.status;
           if (status === 'active' || status === 'awaiting_confirmation') {

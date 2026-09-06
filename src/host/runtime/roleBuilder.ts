@@ -21,6 +21,8 @@ export type BuildStatus = 'active' | 'awaiting_confirmation' | 'confirmed' | 'ca
 export interface BuildDraft {
   name: string;
   role: string;
+  /** 一句话简介（列表卡片/详情头展示用）。 */
+  profile?: string;
   duty?: string;
   style?: string;
   skills?: string;
@@ -108,7 +110,8 @@ export function roleBuilderFile(stateRoot: string): string {
  * build (docs/19.16): host routes (interview answers / resume) need a live
  * parent Agent to attribute followup wakes to. Written on every spawn.
  * The BUILDER CHILD id lives in the session file (`builderChildId`) —
- * continuable children are interrupt/followup/drain handles.
+ * continuable children are interrupt/followup handles（确认不再代收，停驻
+ * 子代理自行看到终态静默收束，docs/19.17.1）.
  */
 function parentRefFile(stateRoot: string): string {
   return join(stateRoot, 'rolebuilder-parent.json');
@@ -229,6 +232,18 @@ export interface BuildReport {
 }
 
 /**
+ * 待确认守卫（docs/19.17.2）：报告把会话置为 awaiting_confirmation 时，
+ * 解析后的草稿必须带非空 personaMd（人设手册全文）——确认页直接渲染该
+ * 字段，空手册= 用户看到「显示完成但没有内容」。start/continue/restart
+ * 各回合提示词已要求完整草稿一次报全，本守卫是最后一道硬闸。
+ */
+function requirePersonaMd(draft: BuildDraft | null): void {
+  if (draft === null || (draft.personaMd ?? '').trim() === '') {
+    throw new Error('人设手册（personaMd）不能为空——请把完整手册全文随草稿一并上报后再置待确认');
+  }
+}
+
+/**
  * Merge one report into the session slot. A terminal session accepts only
  * an explicit `newBuild: true` (which opens a NEW session, 覆盖); anything
  * else on a terminal session is rejected. `draft` merges shallowly so
@@ -243,6 +258,7 @@ export async function reportBuildProgress(
   // 新请求让位旧草稿，与 /eteam 处理器语义一致）。后台构建代理被纪律禁止
   // 传该标记，其迟到播报仍走下方终态守卫（docs/19.16）。
   if (report.newBuild === true) {
+    if (report.status === 'awaiting_confirmation') requirePersonaMd(report.draft ?? null);
     const fresh: BuildSession = {
       schemaVersion: 1,
       startedAt: now,
@@ -292,19 +308,21 @@ export async function reportBuildProgress(
     await writeSession(stateRoot, fresh);
     return fresh;
   }
+  const draft = ensureDraftAvatar(
+    report.draft === undefined
+      ? current.draft
+      : current.draft === null
+        ? report.draft
+        : { ...current.draft, ...report.draft },
+  );
+  if (requested === 'awaiting_confirmation') requirePersonaMd(draft);
   const next: BuildSession = {
     ...current,
     status: requested,
     step: report.step ?? current.step,
     stepsDone: report.stepsDone ?? current.stepsDone,
     request: report.request ?? current.request,
-    draft: ensureDraftAvatar(
-      report.draft === undefined
-        ? current.draft
-        : current.draft === null
-          ? report.draft
-          : { ...current.draft, ...report.draft },
-    ),
+    draft,
     note: report.note ?? current.note,
     interview:
       report.interview !== undefined ? interviewOf(report) : current.interview,
@@ -465,7 +483,16 @@ export interface InterviewState {
 
 /** One-time avatar assignment: stable face from first preview through confirm. */
 function ensureDraftAvatar(draft: BuildDraft | null): BuildDraft | null {
-  if (draft === null || draft.avatar !== undefined || draft.name === '') return draft;
+  // 还没起名的草稿（docs/19.17.2 允许 awaiting 报告先到、名字后补）不预分配
+  // 头像——undefined 不等于 ''，放过它会在 avatarSeedFor 里炸。
+  if (
+    draft === null ||
+    draft.avatar !== undefined ||
+    draft.name === undefined ||
+    draft.name === ''
+  ) {
+    return draft;
+  }
   return {
     ...draft,
     avatar: { seed: avatarSeedFor(draft.name), salt: Math.floor(Math.random() * 1000) },
@@ -489,6 +516,7 @@ export async function confirmBuildSession(
   const stored = await upsertRosterMember(stateRoot, {
     name: draft.name,
     role: draft.role,
+    ...(draft.profile !== undefined ? { profile: draft.profile } : {}),
     ...(draft.duty !== undefined ? { duty: draft.duty } : {}),
     ...(draft.style !== undefined ? { style: draft.style } : {}),
     ...(draft.skills !== undefined ? { skills: draft.skills } : {}),

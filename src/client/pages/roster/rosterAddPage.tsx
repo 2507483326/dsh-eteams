@@ -96,6 +96,8 @@ export function RosterAddPage({
   // 用户取消覆盖），驱动 AI 创建页的状态行。
   const [aiPrefill, setAiPrefill] = useState<PrefillOutcome | null>(null);
   const [name, setName] = useState('');
+  // 一句话简介（用户迭代 2026-09-06）：列表卡片/详情头展示，可留空。
+  const [profile, setProfile] = useState('');
   const [personaMd, setPersonaMd] = useState('');
   // 手动创建（用户迭代 2026-09-03）：面板直连名册保存（`roster/saveRoster`
   // → POST /roster，与详情页 HandbookEditor 同一写路径），不再借对话命令
@@ -155,6 +157,7 @@ export function RosterAddPage({
           name: trimmed,
           // 名字即身份：role 随名回填（host 契约要求非空，见 roster.ts upsert）。
           role: trimmed,
+          ...(profile.trim() !== '' ? { profile: profile.trim() } : {}),
           ...(personaMd.trim() !== '' ? { personaMd } : {}),
           ...(manualAvatar !== null ? { avatar: manualAvatar } : {}),
         },
@@ -225,6 +228,14 @@ export function RosterAddPage({
                   value={name}
                   placeholder="角色名，如：alice"
                   onChange={(e) => setName(e.target.value)}
+                />
+              </div>
+              <div className={FORM_ROW_CLASS}>
+                <span className={FORM_LABEL_CLASS}>简介（一句话，展示在角色列表卡片上，可留空）</span>
+                <Input
+                  value={profile}
+                  placeholder="如：负责后端接口与数据库调优"
+                  onChange={(e) => setProfile(e.target.value)}
                 />
               </div>
               <div className={FORM_ROW_CLASS}>

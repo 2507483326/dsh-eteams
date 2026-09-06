@@ -37,6 +37,11 @@ export interface RuntimeContext {
     startContinuable(spec: {
       provider: string;
       label: string;
+      /**
+       * 调用方预留的子代理身份（docs/19.17.1）：受理即预落盘 builderChildId，
+       * 子代理开跑时 eteams_build_wait 的守卫凭据已在盘上。缺省由运行时分配。
+       */
+      childId?: string;
       request: {
         prompt: { type: 'text'; text: string }[];
         parent: Agent;

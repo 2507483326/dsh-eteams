@@ -45,6 +45,8 @@ export interface RosterMember {
   employeeId?: number;
   /** Role label (engineer / researcher / …). Free-form, non-empty. */
   role: string;
+  /** 一句话简介（列表卡片与详情头展示；空/缺省=不展示）。 */
+  profile?: string;
   /** Persona framework fields (D13) — content is copied on team adoption. */
   duty?: string;
   style?: string;
@@ -93,6 +95,7 @@ function rosterPersona(m: RosterMember, name: string): PersonaRecord {
   return {
     frameworkVersion: PERSONA_FRAMEWORK_VERSION,
     role,
+    ...(m.profile !== undefined && m.profile.trim() !== '' ? { profile: m.profile.trim() } : {}),
     duty: m.duty ?? '',
     style: m.style ?? '',
     skills: m.skills ?? '',
@@ -122,6 +125,7 @@ function rowToRosterMember(row: {
     name,
     ...(row.employee_id !== null ? { employeeId: row.employee_id } : {}),
     role: row.role_label ?? name,
+    ...(persona.profile !== undefined ? { profile: persona.profile } : {}),
     duty: persona.duty,
     style: persona.style,
     skills: persona.skills,

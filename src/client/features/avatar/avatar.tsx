@@ -13,7 +13,7 @@
  * attribution in NOTICE.md.
  *
  * S14（docs/21-client-ui-stack.md 21.6）：本组件是纯 SVG 渲染器，仅容器样式
- * 迁 Tailwind——静态面（圆角/裁切/居中/字重/前景白）走工具类（全部 Avatar
+ * 迁 Tailwind——静态面（圆角/裁切/居中/字重/前景白/描边）走工具类（全部 Avatar
  * 消费方都在 `.eteams-ui` 表面内，后代选择器可命中）；随 props 运行时变化的
  * 尺寸/底色/字号保留 inline（S14 清点口径：动态值）。
  *
@@ -32,15 +32,18 @@ function hueOf(name: string): number {
   return h % 360;
 }
 
-/** 静态容器面（S14）：工具类；尺寸/底色/字号随 props 动态（见 AVATAR_STYLE）。 */
+/** 静态容器面（S14）：工具类；尺寸/底色/字号随 props 动态（见 AVATAR_STYLE）。
+ * 三十二轮 DA45：加 1px `--border` 描边——用户拍板「头像加上边框」，全仓
+ * 各表面（任务区/团队/成员库/汇报…）统一生效；className 仍可覆盖。 */
 const AVATAR_CONTAINER_CLASS =
-  'inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full font-semibold text-white';
+  'inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full border border-solid border-[color:var(--border)] font-semibold text-white';
 
 /**
  * The member avatar: seeded vue-color-avatar face when (seed, salt) are
  * supplied, else a stable initial-letter circle. Same pair always renders
- * the same face. 二十三轮 DA36：增 optional `className` 透传（任务区头像
- * 描边用——默认无附加类，其它表面零变化）。
+ * the same face. 二十三轮 DA36：增 optional `className` 透传；三十二轮
+ * DA45：容器默认加 1px `--border` 描边（用户拍板「头像加上边框」，全表面
+ * 统一——className 仍可覆盖默认）。
  */
 export function Avatar({
   name,

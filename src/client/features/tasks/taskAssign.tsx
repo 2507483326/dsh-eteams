@@ -191,10 +191,8 @@ const BOX_OVER_SHADOW_CLASS = 'shadow-[0_1px_2px_rgba(15,23,42,0.08)]';
 const CHIP_RING_CLASS = 'ring-1 ring-inset ring-primary';
 /** 「已移出」弱化小标（悬空名，DA9/A.5.1）。 */
 const BOX_DANGLING_CLASS = 'text-[10px] font-normal text-muted-foreground';
-/** 任务区头像描边（二十三轮 DA36：用户拍板「任务中的成员头像加上border」
- * ——罗列条/卡槽 chip/领队 chip/多选面板行，1px --border 细线，其余表面
- * （成员库等）不传保持原观感）。 */
-const AVATAR_BORDER_CLASS = 'border border-solid border-[color:var(--border)]';
+/* 任务区头像描边：二十三轮 DA36 起 5 处显式传入；三十二轮 DA45 描边进
+ * Avatar 容器默认（用户拍板「头像加上边框」全表面统一），调用位显式类撤除。 */
 /** 罗列条 chip（可拖签名 = ROLE_CHIP_CLASS 品牌淡底变体，A.5.3；hover 提示
  * 走 title，光标 grab/grabbing；DA14 26→30、DA16 30→32、DA18 圆角 4px）。 */
 const STRIP_CHIP_CLASS =
@@ -221,13 +219,7 @@ function MemberDragChip({ member }: { member: MemberView }): ReactNode {
       style={isDragging ? { opacity: 0.5 } : undefined}
       title="拖拽成员到下方的成员卡槽完成指派"
     >
-      <Avatar
-        name={member.name}
-        seed={member.avatar?.seed}
-        salt={member.avatar?.salt}
-        size={26}
-        className={AVATAR_BORDER_CLASS}
-      />
+      <Avatar name={member.name} seed={member.avatar?.seed} salt={member.avatar?.salt} size={26} />
       <span>{member.name}</span>
       {badge && <span className={STRIP_BADGE_CLASS}>{badge}</span>}
       <span className={cn(DOT_BASE_CLASS, DOT_TONE_CLASS[memberTone(member.status)])} />
@@ -241,13 +233,7 @@ function MemberDragChip({ member }: { member: MemberView }): ReactNode {
 function CaptainChip({ captain }: { captain: CaptainView }): ReactNode {
   return (
     <div className={CAPTAIN_CHIP_CLASS} title="领队不接任务：负责拆解、指派与调度">
-      <Avatar
-        name={captain.name}
-        seed={captain.avatar.seed}
-        salt={captain.avatar.salt}
-        size={26}
-        className={AVATAR_BORDER_CLASS}
-      />
+      <Avatar name={captain.name} seed={captain.avatar.seed} salt={captain.avatar.salt} size={26} />
       <span>{captain.name}</span>
       <span className={CHIP_TAG_CLASS}>领队</span>
     </div>
@@ -416,7 +402,6 @@ export function TaskAssignDropBox({
           seed={stationAvatar?.avatar?.seed}
           salt={stationAvatar?.avatar?.salt}
           size={26}
-          className={AVATAR_BORDER_CLASS}
         />
         <span>{stationMember}</span>
         {dangling && <span className={BOX_DANGLING_CLASS}>已移出</span>}
@@ -582,13 +567,7 @@ function StationPicker({
               )}
               onClick={() => onToggle(m.name)}
             >
-              <Avatar
-                name={m.name}
-                seed={m.avatar?.seed}
-                salt={m.avatar?.salt}
-                size={20}
-                className={AVATAR_BORDER_CLASS}
-              />
+              <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={20} />
               <span className="font-medium">{m.name}</span>
               <span className="text-[10px] font-normal text-muted-foreground">{m.role}</span>
               <span
@@ -701,13 +680,7 @@ function StationChip({
         isOver && BOX_OVER_SHADOW_CLASS,
       )}
     >
-      <Avatar
-        name={member}
-        seed={record?.avatar?.seed}
-        salt={record?.avatar?.salt}
-        size={26}
-        className={AVATAR_BORDER_CLASS}
-      />
+      <Avatar name={member} seed={record?.avatar?.seed} salt={record?.avatar?.salt} size={26} />
       <span>{member}</span>
       {dangling && <span className={BOX_DANGLING_CLASS}>已移出</span>}
       {removable && (

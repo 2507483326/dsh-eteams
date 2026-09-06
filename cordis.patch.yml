@@ -22,7 +22,7 @@
         # (README.md, tasks/, notes.md — see docs/12).
         workRoot: teams
         # Hard cap on concurrently existing members per team.
-        maxMembers: 8
+        maxMembers: 20
         # Same-member auto-retry budget before a task fails hard (D6).
         maxRetries: 3
         # Provider used to spawn member subagents ('spawn' or 'fork').

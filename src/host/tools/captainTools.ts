@@ -227,6 +227,7 @@ export function createCaptainTools(
     parameters: {
       name: strR('成员名（成员库唯一键）'),
       role: strR('角色：researcher/engineer/reviewer/writer/…'),
+      profile: str('一句话简介（面板角色列表/详情头展示）'),
       duty: str('职责边界'),
       style: str('工作风格'),
       skills: str('能力'),
@@ -253,6 +254,7 @@ export function createCaptainTools(
       const stored = await upsertRosterMember(stateRootOf(env), {
         name: args.name,
         role: args.role,
+        ...(args.profile !== undefined ? { profile: args.profile } : {}),
         ...(args.duty !== undefined ? { duty: args.duty } : {}),
         ...(args.style !== undefined ? { style: args.style } : {}),
         ...(args.skills !== undefined ? { skills: args.skills } : {}),
@@ -321,6 +323,7 @@ export function createCaptainTools(
         properties: {
           name: str('成员名（成员库唯一键）'),
           role: str('角色标签'),
+          profile: str('一句话简介（面板角色列表/详情头展示）'),
           duty: str('职责边界'),
           style: str('工作风格'),
           skills: str('能力'),
@@ -346,7 +349,7 @@ export function createCaptainTools(
       interview: {
         type: 'object' as const,
         description:
-          '意图访谈（docs/19.16）：把问题写入会话（发布前先播报步骤「意图访谈」）。发布后立即用 ask_user_question 把问题逐题弹给用户（选择框落在主对话）；拿到答案 eteams_build_report(answers=[{id, choice}]) 落盘后同回合继续起草。弹窗被拒/报错：不重试——再发一次本参数并带 popFailed=true 上报后结束回合（宿主会把问题经主对话中转回来）；弹窗被用户关闭/未答也直接结束回合。',
+          '意图访谈（docs/19.16）：把问题写入会话（发布前先播报步骤「意图访谈」）。发布后立即用 ask_user_question 把问题逐题弹给用户（选择框落在主对话）；拿到答案 eteams_build_report(answers=[{id, choice}]) 落盘后同回合继续起草。弹窗被拒/报错：不重试——再发一次本参数并带 popFailed=true 上报，然后 eteams_build_wait 停驻（宿主把问题经主对话中转回来，答案落盘即唤醒你）；弹窗被用户关闭/未答也照样停驻。',
         properties: {
           questions: {
             type: 'array' as const,
@@ -528,6 +531,111 @@ export function createCaptainTools(
         status: session.status,
         step: session.step,
         updatedAt: session.updatedAt,
+      };
+    },
+  });
+
+  const buildWaitTool = defineTool({
+    name: 'eteams_build_wait',
+    description:
+      '停驻等待（docs/19.17.1，持续构建子代理专用）：阻塞轮询构建会话文件，直到确认入库/放弃/访谈答案落盘/宿主唤醒标记/新覆写使会话变化，或到达最长等待；会话已终态（confirmed/cancelled）即时返回（changed=true），缺失则报错。等待用户动作期间用它保持回合开启（回合收束会向主对话投递结算通知，属噪音行）。返回 changed=false（纯超时）时再次调用即续驻；changed=true 时按状态与提示词停驻决策表决定去留（终态或非终态都静默结束回合让位给排队的续聊指令）。',
+    parameters: {
+      maxWaitSeconds: int('最长等待秒数（缺省 1800，钳制 10-3600）'),
+    },
+    output: {
+      schema: {
+        type: 'object' as const,
+        properties: {
+          ok: bool('是否成功'),
+          changed: bool('等待期间会话是否发生变化'),
+          status: str('当前会话状态'),
+          step: str('当前步骤'),
+          waitedSeconds: int('实际等待秒数'),
+        },
+        additionalProperties: false as const,
+      },
+      render: (_a, v) =>
+        text(v.changed ? `构建会话已变化：${v.status} · ${v.step}` : '构建会话无变化（超时）'),
+    },
+    // 静默呈现（docs/19.17.1）：停驻是构建子代理的常态动作，默认卡会把
+    // 整包渲染成大 JSON 行——收敛为一行，细节只在面板。
+    presentCall: () => ({ card: 'generic' as const, title: '构建停驻等待中…' }),
+    presentResult: (_args, result) => {
+      if (result.isError) return undefined;
+      return { card: 'generic' as const, title: '停驻返回（细节见面板）', content: [] };
+    },
+    execute: async (args, exec) => {
+      const env = envForAgent(config, runtime, exec.agent, exec.signal);
+      const root = stateRootOf(env);
+      if (!exec.agent) throw new ETeamsError('无法识别调用者（exec.agent 缺失）');
+      const session = readBuildSession(root);
+      if (session === null) throw new ETeamsError('没有进行中的构建会话（无法停驻）');
+      // 调用者守卫（docs/19.17.1）：只有当前持有本构建的持续子代理能停驻
+      //——主对话/成员拿不到凭据。严格相等；受理即预落盘 childId（builderPhases
+      // 预生成写入），子代理开跑时凭据已在盘上，无毫秒放行窗口。
+      if (session.builderChildId === undefined || session.builderChildId !== String(exec.agent.id)) {
+        throw new ETeamsError('只有当前构建子代理可以停驻等待（eteams_build_wait）');
+      }
+      // 已终态（confirmed/cancelled）立即返回不停驻（docs/19.17.1）：按
+      // changed=true 呈现，子代理决策表 (a) 静默收束——返回 changed=false
+      // 会让它走「纯超时 → 续驻」分支在死会话上空转。
+      if (session.status === 'confirmed' || session.status === 'cancelled') {
+        return {
+          ok: true as const,
+          changed: true,
+          status: session.status,
+          step: session.step,
+          waitedSeconds: 0,
+        };
+      }
+      const maxWaitSeconds = Math.min(3600, Math.max(10, args.maxWaitSeconds ?? 1800));
+      // signal 兜底（直接 execute 的测试调用方可能不带 signal）。
+      const signal = exec.signal ?? new AbortController().signal;
+      // 分片睡眠（2.5s 一拍）且全程响应放弃中断（cancel 路由 interrupt =
+      // 打断停驻）：abort 即 reject，工具报错让子代理按决策表立即收束回合。
+      const sleepChunk = (ms: number): Promise<void> =>
+        new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => {
+            signal.removeEventListener('abort', onAbort);
+            resolve();
+          }, ms);
+          const onAbort = () => {
+            clearTimeout(timer);
+            reject(new ETeamsError('停驻等待已中断'));
+          };
+          signal.addEventListener('abort', onAbort, { once: true });
+        });
+      if (signal.aborted) throw new ETeamsError('停驻等待已中断');
+      // 变更令牌 = 原始文件内容字符串比对（docs/19.17.1）：不能用 updatedAt
+      //——markBuilderWake 唤醒标记不动它，且它驱动工作台草稿表单重置，
+      // 拿来当唤醒信号会误重置用户正在编辑的表单。
+      const startedAt = Date.now();
+      const baseline = JSON.stringify(readBuildSession(root));
+      let changed = false;
+      for (;;) {
+        // 每拍入口先查（验收 P2-1）：interrupt 若落在两片睡眠之间的同步段
+        // （读盘+比对的毫秒窗口），abort 事件已成过去式、监听器不会触发——
+        // 轮询位自查保证停驻在最迟下一拍前退出。
+        if (signal.aborted) throw new ETeamsError('停驻等待已中断');
+        const remaining = startedAt + maxWaitSeconds * 1000 - Date.now();
+        if (remaining <= 0) break;
+        await sleepChunk(Math.min(2500, remaining));
+        if (JSON.stringify(readBuildSession(root)) === baseline) continue;
+        // 确认读（防瞬时读失败误报变更 → 子代理无谓收束回合多一条结算
+        // 噪音行）：100ms 后复读，仍不同于基线才算变更。
+        await sleepChunk(100);
+        if (JSON.stringify(readBuildSession(root)) !== baseline) {
+          changed = true;
+          break;
+        }
+      }
+      const latest = readBuildSession(root);
+      return {
+        ok: true as const,
+        changed,
+        status: latest !== null ? latest.status : session.status,
+        step: latest !== null ? latest.step : session.step,
+        waitedSeconds: Math.round((Date.now() - startedAt) / 1000),
       };
     },
   });
@@ -1252,6 +1360,7 @@ export function createCaptainTools(
     memberSaveTool,
     memberListTool,
     buildReportTool,
+    buildWaitTool,
     buildDispatchTool,
     interviewAnswerTool,
     removeMemberTool,

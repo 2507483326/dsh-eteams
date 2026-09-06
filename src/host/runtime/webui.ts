@@ -718,6 +718,7 @@ export function installWebSurface(
                 {
                   name: str(body.name, ''),
                   role: str(body.role, ''),
+                  ...(body.profile !== undefined ? { profile: str(body.profile) } : {}),
                   ...(body.duty !== undefined ? { duty: str(body.duty) } : {}),
                   ...(body.style !== undefined ? { style: str(body.style) } : {}),
                   ...(body.skills !== undefined ? { skills: str(body.skills) } : {}),
@@ -1377,6 +1378,7 @@ export function installWebSurface(
               const draft: BuildDraft = {
                 name: str(body.name, ''),
                 role: str(body.role, ''),
+                ...(body.profile !== undefined ? { profile: str(body.profile) } : {}),
                 ...(body.duty !== undefined ? { duty: str(body.duty) } : {}),
                 ...(body.style !== undefined ? { style: str(body.style) } : {}),
                 ...(body.skills !== undefined ? { skills: str(body.skills) } : {}),
@@ -1398,19 +1400,9 @@ export function installWebSurface(
               try {
                 const root = rootForWrites(ctx, config);
                 const { session, memberName } = await confirmBuildSession(root, draft);
-                // 入库即释放持续构建子代理的驻留（版本门控 drain，
-                // feature-detect——老运行时静默退化，fire-and-forget）。
-                const drainParentSessionId = readBuildParentSession(root);
-                void stopBuilderChild({
-                  ctx: { subagents: (ctx as unknown as RuntimeContext).subagents },
-                  parent:
-                    drainParentSessionId !== null
-                      ? (ctx as unknown as RuntimeContext).agents?.get(drainParentSessionId)
-                      : undefined,
-                  stateRoot: root,
-                  mode: 'drain',
-                  logger: (ctx as unknown as RuntimeContext).logger,
-                });
+                // 不再代收子代理（docs/19.17.1）：停驻中的子代理靠 eteams_build_wait
+                // 轮询在数秒内自行看到 confirmed 并静默收束回合（watchSettlement
+                // 自然释放激活）；宿主 drain 反而抢在它读盘前打断，少一拍变更。
                 sendJson(res, 200, {
                   ok: true,
                   status: session.status,
