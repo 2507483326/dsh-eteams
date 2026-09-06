@@ -12,9 +12,8 @@ import type { TaskView } from '../../lib/monitor';
 import { groupDisplayOf, isTerminal } from '../../features/tasks/taskDisplayStatus';
 import { DeleteButton } from '../../components/deleteButton';
 import { Button } from '../../components/ui/button';
-import { FormErrorNote } from '../shared/components';
+import { BlockedPill, FormErrorNote, GroupSummaryChip, TaskStatusPill } from '../shared/components';
 import { LIST_COUNT_CLASS } from '../shared/styles';
-import { BlockedPill, GroupSummaryChip, TaskStatusPill } from './taskPills';
 
 /** 列表页任务小卡（十一轮 DA24 与团队列表小卡同款三段式，十二轮 DA25 修订：
  * 头行（主题截断，**无 #id 前缀**）、信息**逐行分行**（进度行/汇总 chip 行/

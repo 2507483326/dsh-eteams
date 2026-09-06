@@ -253,6 +253,9 @@ export function installMemberRuntime(
     registerMemberSession(String(child.id), {
       teamId: String(team.id),
       memberName: identity.memberName,
+      // 19.18：直接父（领队主会话 id）随登记落表——访谈投递冷恢复按它定位
+      // 领队代理（运行时按 lineage 授权，parent 必须是真实直接父）。
+      parentSessionId: leader.mainSessionId,
     });
     return () => undefined;
   });

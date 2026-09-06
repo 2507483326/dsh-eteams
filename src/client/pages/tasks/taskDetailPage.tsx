@@ -10,11 +10,11 @@
  * （taskSubtaskItem：执行序号/卡槽/把手拖拽调序——十轮 DA23 把手化/改删/
  * 展开/就地编辑）+ 成员罗列条；任务/小任务：详情正文（taskDrawer 的
  * TaskDetailContent）+ 卡槽 + 站点行 + 依赖 chips + 成员罗列条。编辑/删除
- * 弹窗（taskDialogs，组件内瞬态 useState）就地挂载；展示态徽标抽 taskPills、
+ * 弹窗（taskDialogs，组件内瞬态 useState）就地挂载；展示态徽标居 shared/
+ * components（docs/47 DB10 自 taskPills 纯移动，跨域复用归 shared/）、
  * 列表卡身抽 taskListCard（列表页见 tasksPage）。依赖 features/tasks
  * （拖拽指派——TaskDndProvider 随页包裹，现状本就按分支分别包裹）与
- * shared、taskDrawer、taskHeaderCard、taskSubtaskItem、taskDialogs、
- * taskPills。
+ * shared、taskDrawer、taskHeaderCard、taskSubtaskItem、taskDialogs。
  *
  * @module dsh-eteams/client/pages/tasks/taskDetailPage
  */
@@ -49,15 +49,15 @@ import { FormFooterActions } from '../../components/formDialog';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Accordion } from '../../components/ui/accordion';
+import { mergedBodyOf } from './taskBody';
 import { TaskDetailContent, TaskStations } from './taskDrawer';
-import { FormErrorNote } from '../shared/components';
+import { FormErrorNote, GroupSummaryChip } from '../shared/components';
 import {
   CHIP_CLASS,
   INLINE_SUBJECT_INPUT_CLASS,
   LIST_TITLE_CLASS,
   MUTED_CLASS,
 } from '../shared/styles';
-import { GroupSummaryChip } from './taskPills';
 import { TaskHeaderCard } from './taskHeaderCard';
 import { SubtaskItem } from './taskSubtaskItem';
 import { TaskDialogs, type TaskEditTarget } from './taskDialogs';
@@ -73,13 +73,6 @@ export interface TaskDetailPageProps {
 }
 
 /** ================================== 工具函数 ================================== */
-
-/** DA41 就地编辑：说明 + 合同 MD 并读为一个 MD 文本（说明在前、空行分隔），
- * 保存时整篇作为 contractMd 回写（description 落严格空串）。 */
-const mergedBodyOf = (t: TaskView): string =>
-  (t.description !== null && t.description.trim() !== ''
-    ? `${t.description.replace(/\s+$/, '')}\n\n`
-    : '') + (t.contractMd ?? '');
 
 /** ================================== 主组件 ================================== */
 
@@ -138,6 +131,10 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
   // DA42：展开内容 = 只读正文（说明 + 合同 MD，MarkdownDoc 只读渲染，docs/41）
   // / 就地编辑器二选一；「修改」未展开先展开——编辑器在展开区渲染。
   const [expandedSubIds, setExpandedSubIds] = useState<number[]>([]);
+  // 三十三轮 DA46 头部卡展开瞬态：单槽 id——详情页一次只有一张头部卡，
+  // 切换任务即视为收起（陈旧 id 无副作用）；「编辑」未展开先展开、编辑中
+  // 收起仅隐藏草稿保留（DA42 语义同构——只读正文/编辑器二选一在展开区）。
+  const [headerExpandedId, setHeaderExpandedId] = useState<number | null>(null);
   // DA41 就地编辑瞬态（与弹窗态 editTarget/editSubject/editDesc 完全分离）：
   // scope='sub' = 主任务详情页小任务卡内编辑；scope='header' = 任务详情页头部
   // 卡编辑。说明 + 合同并读为一个 MD 文本（mergedBodyOf），保存整篇回写
@@ -198,6 +195,9 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
     if (inlineEdit !== null && inlineEdit.taskId === t.taskId && inlineEdit.scope === scope) {
       if (scope === 'sub') {
         setExpandedSubIds((ids) => (ids.includes(t.taskId) ? ids : [...ids, t.taskId]));
+      } else {
+        // DA46 头部卡同语义：同卡同 scope 重开 = 幂等确保展开（草稿保留）。
+        setHeaderExpandedId(t.taskId);
       }
       return;
     }
@@ -208,6 +208,9 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
     // DA42：原「打开编辑收起该卡」撤除——点「修改」未展开先展开、已展开保持。
     if (scope === 'sub') {
       setExpandedSubIds((ids) => (ids.includes(t.taskId) ? ids : [...ids, t.taskId]));
+    } else {
+      // DA46 头部卡同语义：「编辑」未展开先展开（编辑器在展开区渲染）。
+      setHeaderExpandedId(t.taskId);
     }
   };
   const closeInlineEdit = (): void => {
@@ -485,6 +488,13 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
               ) : undefined
             }
             editor={headerEditing ? inlineEditor : undefined}
+            // 三十三轮 DA46：头部卡展开接线——编辑器入展开区（「编辑」先
+            // 展开，编辑中可收起隐藏草稿保留；单槽 id 切换任务即收起）。
+            editing={headerEditing}
+            expanded={headerExpandedId === selected.taskId}
+            onToggleExpanded={() =>
+              setHeaderExpandedId((cur) => (cur === selected.taskId ? null : selected.taskId))
+            }
           />
           {/* 二十四轮 DA37：指派提示块置头部卡下方（左小竖线；渲染判据与
             罗列条同源——存在 draft/ready 小任务才渲染）。二十八轮 DA41：
@@ -638,6 +648,13 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
             ) : undefined
           }
           editor={headerEditing ? inlineEditor : undefined}
+          // 三十三轮 DA46：头部卡展开接线（同组页——编辑器入展开区，
+          // 「编辑」先展开，编辑中可收起隐藏草稿保留）。
+          editing={headerEditing}
+          expanded={headerExpandedId === selected.taskId}
+          onToggleExpanded={() =>
+            setHeaderExpandedId((cur) => (cur === selected.taskId ? null : selected.taskId))
+          }
         />
         {parent !== null && (
           <div className={cn(MUTED_CLASS, 'mt-2')}>

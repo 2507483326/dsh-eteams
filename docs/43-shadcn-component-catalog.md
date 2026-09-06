@@ -103,7 +103,7 @@ shadcn/ui 不是 npm 组件库，而是「把组件源码拷进你的仓库」�
 | tooltip.tsx | new-york tooltip（Radix） | cn 相对导入；Tooltip **内嵌 TooltipProvider**（本仓多表面各自成树、无全局根可挂 Provider——Radix Root 缺 Provider 直接抛错，内嵌让调用位自足；代价是跨提示 skip-delay 协调不保留）；Content 强制挂自管 portal 容器（getPortalContainer，dialog.tsx 同款） | 暂无消费方（预留；二十轮撤回——悬浮提示回归原生 title=，十九轮的 hint.tsx 组合件删除） |
 | toast.tsx | new-york toast（Radix） | cn 相对导入；X 走深层 `.mjs` 导入；`border` 补 `border-solid`；`text-foreground/50` 改 color-mix（token 色禁 /alpha）；Viewport 就地渲染无 portal——**Toaster 必须挂 `.eteams-ui` 子树内** | 经 ui/toaster.tsx 消费（挂载位 = teamsView/index.tsx 面板根） |
 | toaster.tsx | new-york toaster | 文案本地化（关闭 sr-only）；渲染 useToast 全局单例 store | teamsView/index.tsx |
-| pagination.tsx | new-york pagination | cn 相对导入；类型自足（size 内联联合）；MoreHorizontal 深层导入（lucide-icon.d.ts 增补声明）；PaginationLink 以 **Slot 承 asChild**（上游 `<a>` 链接语义 → 无路由面板，消费位 asChild 包 `<Button>`，非 asChild 仍渲染 `<a>`）；Previous/Next 去上游内嵌箭头（中文文字钮观感）；aria-label 本地化 | membersTab 角色列表分页（十九轮） |
+| pagination.tsx | new-york pagination | cn 相对导入；类型自足（size 内联联合）；ChevronLeft/Right/MoreHorizontal 深层导入（lucide-icon.d.ts 增补声明）；PaginationLink 以 **Slot 承 asChild**（上游 `<a>` 链接语义 → 无路由面板，消费位 asChild 包 `<Button>`，非 asChild 仍渲染 `<a>`）；Previous/Next **内嵌箭头 + 中文文字**（官方 base/pagination 文档页观感，2026-09-06 用户拍板还原——十九轮「去箭头文字钮」适配撤销），经 `Slottable` 落位进消费位 Button（`@radix-ui/react-slot` 具名导出）；激活档 outline / 非激活 ghost（buttonVariants）；aria 本地化；PaginationContent 补 `m-0 list-none p-0`（preflight 关闭下压住 ul 的 disc 标记与 40px 缩进） | membersTab 角色列表分页 → 组装收口 listPagination（ListPagination，2026-09-06） |
 | hooks/useToast.ts | new-york use-toast hook | camelCase 文件名（hooks/ 目录 eslint 强制）；toast() 全局单例 store——任意表面可发、挂了 Toaster 的树渲染 | membersTab（复制反馈）、teamMembers（保存/同步反馈） |
 | separator.tsx | new-york separator（Radix） | 同上 | 暂无消费方（预留） |
 | skeleton.tsx | new-york skeleton | 同上 | 暂无消费方（预留） |
@@ -128,7 +128,7 @@ shadcn/ui 不是 npm 组件库，而是「把组件源码拷进你的仓库」�
 5. **页签** → `<Tabs>`；进度 → `<Progress>`；横幅 → `<Alert>`；徽标 → `<Badge>`；卡片容器 → `<Card>`；受控折叠 → `<Collapsible>`；浮层 → `<Popover>`。
 6. **悬浮提示** → 原生 `title=` 属性（**二十轮用户拍板**：撤回十九轮的 Hint/Tooltip 迁移，恢复原生浏览器提示——`hint.tsx` 随之删除，`tooltip.tsx` 转预留件；十九轮的「原生 title= 禁止」规则废止）。条件提示直接 `title={cond ? 'a' : undefined}`；禁用态控件收不到 pointer 事件、原生提示同样不弹（与十九轮前行为一致，不改）。
 7. **操作结果轻提示** → `toast()`（useToast 全局 store + ui/toaster.tsx）；就地瞬时文案（「✓ 已复制 2 秒」这类状态翻转/下方小字）禁止——结果反馈统一浮层 toast（成功 default / 失败 destructive）。表单校验错误仍走就地 `<Alert>`（FormErrorNote，用户视线在表单内）。
-8. **分页** → `<Pagination>` 骨架（PaginationContent/Item + Previous/Next asChild 包 `<Button>`）；计数 pill 作 PaginationItem 中位内容。
+8. **分页** → `<ListPagination page totalPages onChange>`（components/listPagination.tsx，2026-09-06 统一收口）：上一页/下一页（内嵌箭头 + 文字）+ 页码窗口（首尾页恒在 + 当前页 ±1，跨档省略号，激活 outline 档）。0 基 page/totalPages；totalPages ≤ 1 组件自不渲染，调用位免守卫。禁止页面各自拼 PaginationContent/Item。
 
 **保留手写的场景**（均为 list-item / 画布语义，不是 chrome 控件；shadcn 无对应件或组件语义不匹配）：
 
@@ -187,7 +187,7 @@ shadcn/ui 不是 npm 组件库，而是「把组件源码拷进你的仓库」�
 | Collapsible | 暂无（预留；原小任务展开位已升级 Accordion） |
 | Dialog | 任务编辑/删除确认、添加成员、创建团队、汇报记录等全部弹窗 |
 | Input | 弹窗表单、rail 快捷搜索、构建工作台 |
-| Pagination | membersTab 角色列表分页（Previous/Next asChild + 计数 pill，十九轮） |
+| Pagination | membersTab 角色列表分页（组装收口 ListPagination，2026-09-06 照官方 base/pagination 样式还原） |
 | Popover | modelRoutePicker（模型二级菜单）、taskAssign（成员多选） |
 | Progress | eteamsCard 进度条 |
 | Select | reportsTab 成员筛选、teamTab 等 |

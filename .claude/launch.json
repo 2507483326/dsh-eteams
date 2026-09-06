@@ -91,6 +91,19 @@
       ],
       "port": 8797,
       "autoPort": true
+    },
+    {
+      "name": "pagination-preview",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "-y",
+        "serve",
+        "-l",
+        "8798",
+        ".tmp-pagination-preview"
+      ],
+      "port": 8798,
+      "autoPort": true
     }
   ]
 }

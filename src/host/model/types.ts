@@ -102,19 +102,24 @@ export interface AvatarRecord {
 }
 
 /**
- * One team member template (docs/35 §3#9：member = 纯模板，一人一行，无状态
- * 无会话锚点；执行实例在 TaskMemberRecord)。`employeeId` 是库里的工号整数
- * （显示补零为 `ET-0001`，roster.formatEmployeeId）。
+ * One team member template (docs/35 §3#9：班底 = 纯模板，一人一行，无状态
+ * 无会话锚点；执行实例在 TaskMemberRecord)。v3（成员=角色合并）起班底行落在
+ * team_members 表，人设/工号/头像经 role_id 解析自 roles 角色行（成员=角色，
+ * 全局一份）——成员详情与角色详情同源。`employeeId` 是库里的工号整数（显示
+ * 补零为 `ET-0001`，roster.formatEmployeeId）。
  */
 export interface MemberRecord {
-  /** member 表行号（member_id，只作行标识；工号见 employeeId）。 */
+  /** team_members.team_member_id（自增主键；内存新建行 0 落库发号）。 */
   memberId: number;
+  /** roles.role_id（松引用；人设/工号/头像都在角色行上，写端保证行存在）。 */
+  roleId: number | null;
   name: string;
   /**
-   * 工号 (docs/21)：库里的整数工号，插入成员模板时取 member 表最大工号 +1，
-   * 同人跨团队同号。undefined = 尚未发号（旧数据补齐前）。
+   * 工号 (docs/21)：roles.employee_id 的整数工号，插入角色行时取 roles 表
+   * 最大工号 +1，同人同号。undefined = 尚未发号（旧数据补齐前）。
    */
   employeeId?: number;
+  /** 角色标签 = persona.role（persona_md 的「角色：」行；成员名=角色名）。 */
   role: string;
   persona: PersonaRecord;
   modelRoute: ModelRouteSnapshot;
@@ -136,15 +141,14 @@ export interface TaskMemberRecord {
   /** 当前执行任务 id（链推进/改派时更新）。 */
   nowTaskId: number | null;
   name: string;
-  /** 工号副本（引用 member.employee_id，松引用）。 */
+  /** 工号副本（引用 roles.employee_id，松引用）。 */
   employeeId: number | null;
   /** 主代理会话 id；未启动时是空串（领队行存领队会话 id）。 */
   mainSessionId: string;
   /** 持续子代理会话 id；spawn 后回填，空串 = 尚未启动。 */
   childSessionId: string;
-  roleId: number | null;
   status: MemberStatus;
-  /** 执行时的人设手册（沿用模板手册，可按任务微调；库内 persona_md 列）。 */
+  /** 执行时的人设手册（沿用角色行手册，可按任务微调；库内 persona_md 列）。 */
   personaMd?: string;
   /** 执行时采用的模型（空串 = 会话默认，用户迭代 2026-09-04）。 */
   model?: string;
@@ -273,7 +277,7 @@ export interface TeamState {
   updatedAt: number;
   /** 执行实例行（含领队主持行；docs/35 §5#12 按大任务粒度建）。 */
   taskMembers: TaskMemberRecord[];
-  /** 成员模板（班底 + 工作区公共模板都从这里装；member 表）。 */
+  /** 班底模板行（team_members ⨝ roles 装回；人设/工号/头像在角色行上）。 */
   members: MemberRecord[];
   /** 任务树（task 表按 task_id 升序装回；attempts 拆表装回）。 */
   tasks: TaskRecord[];

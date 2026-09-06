@@ -18,13 +18,7 @@ import { DeleteButton } from '../../components/deleteButton';
 import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
 import { Input } from '../../components/ui/input';
-import {
-  Pagination,
-  PaginationContent,
-  PaginationItem,
-  PaginationNext,
-  PaginationPrevious,
-} from '../../components/ui/pagination';
+import { ListPagination } from '../../components/listPagination';
 import type { RosterAddLocationState } from './buildWorkbench';
 import { useBuildSession } from './buildWorkbench';
 import { FormErrorNote } from '../shared/components';
@@ -59,14 +53,11 @@ export interface RosterPageProps {
  * 名称（与所属团队）随后、删除钮常驻行尾（不再 hover 显形）。 */
 const ROLE_CARD_CLASS =
   'flex min-w-0 cursor-pointer items-center gap-2.5 rounded-xl p-4 text-left text-foreground';
-/** 原 styles.pagePill（分页计数 pill：D22e 中性 pill 口径 12px/20）。 */
-const PAGE_PILL_CLASS =
-  'inline-flex w-fit items-center whitespace-nowrap rounded-full bg-[color:var(--eteams-pill-bg)] px-2.5 py-0.5 text-xs text-[color:var(--eteams-pill-ink)]';
 
 /** ================================== 常量与映射表 ================================== */
 
-/** 角色列表每页条数（原组件内常量，用户反馈口径 8 条/页）。 */
-const MEMBER_PAGE_SIZE = 8;
+/** 角色列表每页条数（原组件内常量，用户反馈口径 25 条/页）。 */
+const MEMBER_PAGE_SIZE = 25;
 
 /** ================================== 主组件 ================================== */
 
@@ -228,44 +219,11 @@ export function RosterPage({
                 );
               })}
             </div>
-            {totalPages > 1 && (
-              /* shadcn Pagination（docs/43 十九轮一对一检索整改）：nav/ul/li
-              语义骨架，Previous/Next asChild 包 Button（无路由面板——上游
-              <a> 链接语义经 Slot 改道）；中位计数 pill 照旧。 */
-              <Pagination className="mt-2.5">
-                <PaginationContent>
-                  <PaginationItem>
-                    <PaginationPrevious asChild>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={safePage === 0}
-                        onClick={() => setPage(safePage - 1)}
-                      >
-                        上一页
-                      </Button>
-                    </PaginationPrevious>
-                  </PaginationItem>
-                  <PaginationItem>
-                    <span className={PAGE_PILL_CLASS}>
-                      第 {safePage + 1} / {totalPages} 页 · 共 {filtered.length} 个
-                    </span>
-                  </PaginationItem>
-                  <PaginationItem>
-                    <PaginationNext asChild>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={safePage >= totalPages - 1}
-                        onClick={() => setPage(safePage + 1)}
-                      >
-                        下一页
-                      </Button>
-                    </PaginationNext>
-                  </PaginationItem>
-                </PaginationContent>
-              </Pagination>
-            )}
+            {/* shadcn Pagination（2026-09-06 用户拍板「分页照官方 base/pagination
+            样式还原」）：组装收口 listPagination（ListPagination）——上一页/
+            下一页内嵌箭头 + 页码窗口（outline 激活档），各列表页统一走它；
+            totalPages ≤ 1 组件自不渲染，页内免守卫。 */}
+            <ListPagination page={safePage} totalPages={totalPages} onChange={setPage} />
           </>
         )}
       </Card>

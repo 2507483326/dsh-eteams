@@ -24,8 +24,9 @@
 | `pages/shared/styles.ts` | 175 | 跨页共享层 · 类名常量与注入样式（**M8 自 shared.tsx 拆分**）：领域常量（LEADER_NAME 族/memberRank）、tone 徽标族（TONE_CLASS/PILL_*/pillClass/dotClass）、页面级类名常量（BORDER_L1_CLASS/PANEL_CARD_CLASS…）、ROLE_LIST_CSS 注入样式表 |
 | `pages/shared/components.tsx` | 77 | 跨页共享层 · 小组件（**M8 自 shared.tsx 拆分**）：Pill/FormErrorNote/PageHeader |
 | `pages/shared/markdownDoc.tsx` | 30 | Markdown 只读渲染包装（**M8 自 markdownDoc.tsx 移入**；typeset 双类容器，×4 消费位） |
-| `pages/board/boardPage.tsx` | 134 | 看板页（**M8 自 boardTab.tsx 移入**）：待决策横幅 + 日历挂载 + 最近动态事件流（EMPTY_FOOTNOTE_META/FETCH_AT_EMPTY 查表收编） |
+| `pages/board/boardPage.tsx` | 134 | 看板页（**M8 自 boardTab.tsx 移入**）：待决策横幅 + 日历挂载 + 任务动态分区挂载（docs/47）+ 最近动态事件流（EMPTY_FOOTNOTE_META/FETCH_AT_EMPTY 查表收编） |
 | `pages/board/usageCalendar.tsx` | 311 | Token 消耗日历卡（**M8 自 usageCalendar.tsx 移入**；react-activity-calendar + 档位标尺，已表驱动） |
+| `pages/board/taskActivity.tsx` | 174 | 看板「任务动态」分区卡（**docs/47 新增**）：顶层任务平铺只读小卡 + 主任务小任务窗口（executionOrderOf 执行序最多 4 行，超出折叠；subtaskWindowOf 具名导出，tests/boardTaskActivity.test.ts 锁定窗口口径） |
 | `pages/reports/reportsPage.tsx` | 83 | 汇报页（**M8 自 reportsTab.tsx 移入**）：成员选择 + 汇报时间线（D15 只读；MEMBER_SELECT_PLACEHOLDER 收编） |
 | `pages/team/teamPage.tsx` | 294 | 团队列表页（M4 新增，/team）：卡片栅格 + 建团/删团弹窗留页内 + 空态（页头建团入口与详情页同款常驻） |
 | `pages/team/teamDetailPage.tsx` | 460 | 团队详情页（M4 新增，/team/:teamId）：返回条 + 成员卡列表 + 模型路线乐观补丁链 + 添加成员弹窗 + 页头建团常驻，not-found 一帧 null 后 navigate('/team') |
@@ -46,7 +47,7 @@
 | `pages/tasks/taskHeaderCard.tsx` | 65 | 详情页头部卡（**M8 自 taskHeaderCard.tsx 移入**；actions/editor/subjectEditor 槽） |
 | `pages/tasks/taskListCard.tsx` | 193 | 列表小卡 + deletableOf（**M8 自 taskListCard.tsx 移入**；具名导出，tests/taskListCard.test.ts 锁定镜像宿主 deleteTask 守卫口径） |
 | `pages/tasks/taskSubtaskItem.tsx` | 311 | 组页小任务 AccordionItem（**M8 自 taskSubtaskItem.tsx 移入**；拖拽把手/钮簇/卡槽/展开区；开始钮/需选成员判据经 isStartable 消费） |
-| `pages/tasks/taskPills.tsx` | 99 | 展示态徽标族（**M8 自 taskPills.tsx 移入**）：DisplayStatusPill/BlockedPill/GroupSummaryChip/TaskStatusPill |
+| `pages/tasks/taskPills.tsx` | ~~99~~ 已撤 | 展示态徽标族（**docs/47 DB10 移入 pages/shared/components.tsx**——看板「任务动态」分区成为第二个消费域，跨域复用归 shared/；tasks 域四消费位改导入） |
 
 ## 45.3 features / lib / hooks / store
 
@@ -78,6 +79,7 @@
 | --- | --- |
 | `components/ui/*`（18 件） | vendored shadcn（docs/43 管辖）：alert/badge/button/card/dialog/input/popover/progress/select/separator/skeleton/tabs/textarea/accordion/collapsible/pagination/toast/toaster + portal.ts + lucide-icon.d.ts + tooltip.tsx（**预留件**，二十轮拍板悬浮提示回归原生 title=） |
 | **M7 新增**（components/ 领域组件层，camelCase） | `formDialog.tsx`（FormDialog 壳 + FormFooterActions）、`confirmDeleteDialog.tsx`、`avatarRing.tsx`（AvatarRing+RandomAvatarButton+rollAvatarPair）、`backBar.tsx`、`deleteButton.tsx`、`stepGlyph.tsx`、`avatarStack.tsx` —— 逐一消费位见 46 清单 M7 段 |
+| `listPagination.tsx` | ListPagination 列表分页条（2026-09-06 新建）：ui/pagination 骨架唯一组装位——上一页/下一页（内嵌箭头+文字）+ 页码窗口（首尾恒在 + 当前 ±1，跨档省略号，激活 outline），0 基 page/totalPages，totalPages ≤ 1 不渲染；各列表页统一走它（rosterPage 角色列表为首位消费方） |
 
 ## 45.5 项目组件清单（可复用件与消费位）
 
@@ -89,7 +91,7 @@
 | 类名常量族（MUTED_CLASS/PANEL_CARD_CLASS/BORDER_L1_CLASS…） | teamsView/shared/styles.ts（M8 起） | 全面板 17 文件 |
 | MarkdownDoc | teamsView/shared/markdownDoc.tsx（M8 起） | ×4 只读渲染位 |
 | ModelRoutePicker | teamsView/team/modelRoutePicker.tsx（M8 起） | 领队卡/成员卡 |
-| DisplayStatusPill 族 | teamsView/tasks/taskPills.tsx（M8 起） | 任务域各件 |
+| DisplayStatusPill 族 | shared/components.tsx（docs/47 DB10 起，自 tasks/taskPills 纯移动） | 任务域各件 + 看板任务动态分区 |
 | Avatar 族 | features/avatar/* | 成员卡/头像栈/弹层 |
 | useActivityMonitor / relativeTime / refreshActivitySoon | lib/monitor.ts | 壳/弹层/任务域/团队域 19 文件 |
 | TaskDndProvider | features/tasks/taskAssign.tsx | 任务列表/详情两页 |

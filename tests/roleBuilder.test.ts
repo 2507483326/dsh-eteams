@@ -149,7 +149,7 @@ describe('D18 对话式新增成员', () => {
       draft: { name: 'data-eng', role: '数据工程师' },
     });
     expect(s2.draft?.name).toBe('data-eng');
-    const s3 = await reportBuildProgress(stateRoot, { step: '撰写角色手册', draft: { personaMd: '# 手册' } });
+    const s3 = await reportBuildProgress(stateRoot, { step: '撰写角色手册', draft: { personaMd: '# 手册', profile: '一句话简介' } });
     expect(s3.draft?.name).toBe('data-eng');
     expect(s3.draft?.personaMd).toBe('# 手册');
     const s4 = await reportBuildProgress(stateRoot, { status: 'awaiting_confirmation', note: '等确认' });
@@ -200,13 +200,13 @@ describe('D18 对话式新增成员', () => {
     await reportBuildProgress(stateRoot, { status: 'active', newBuild: true });
     await reportBuildProgress(stateRoot, {
       status: 'awaiting_confirmation',
-      draft: { personaMd: '# partial 手册' },
+      draft: { personaMd: '# partial 手册', profile: '一句话简介' },
     });
     await confirmBuildSession(stateRoot, { name: 'partial', role: 'engineer' });
     await expect(resumeBuildSession(stateRoot)).rejects.toThrow(/仅已放弃/);
   });
 
-  it('awaiting_confirmation requires a non-empty personaMd (docs/19.17.2)', async () => {
+  it('awaiting_confirmation requires a non-empty personaMd and profile (docs/19.17.2 + 19.19)', async () => {
     await reportBuildProgress(stateRoot, { request: 'r' });
     // 无 draft / 空白手册一律拒绝——确认页直接渲染 personaMd，空手册= 空白页
     await expect(
@@ -218,13 +218,21 @@ describe('D18 对话式新增成员', () => {
         draft: { name: 'x', role: 'y', personaMd: '   ' },
       }),
     ).rejects.toThrow(/personaMd/);
-    // 带手册全文则放行
+    // 顺序钉死（docs/19.19）：手册在而简介缺 → 报 profile，不冒充 personaMd 错
+    await expect(
+      reportBuildProgress(stateRoot, {
+        status: 'awaiting_confirmation',
+        draft: { name: 'x', role: 'y', personaMd: '# x 手册' },
+      }),
+    ).rejects.toThrow(/profile/);
+    // 带手册全文 + 一句话简介则放行
     const s = await reportBuildProgress(stateRoot, {
       status: 'awaiting_confirmation',
-      draft: { name: 'x', role: 'y', personaMd: '# x 手册' },
+      draft: { name: 'x', role: 'y', personaMd: '# x 手册', profile: '一句话简介' },
     });
     expect(s.status).toBe('awaiting_confirmation');
     expect(s.draft?.personaMd).toBe('# x 手册');
+    expect(s.draft?.profile).toBe('一句话简介');
   });
 
   it('intent interview lands in the session and records answers (docs/19.16)', async () => {

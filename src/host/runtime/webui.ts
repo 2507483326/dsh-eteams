@@ -119,8 +119,9 @@ function stationStatusOf(
 }
 
 /** Per-member view row (docs/12.2; avatar/persona editors land in M6/M5).
- * 模板行承载人设/路线（docs/35 §3#5），状态与会话锚点按名聚合实例行
- * （§5#12：同一人每条大任务一行实例行，行数不当人数）。 */
+ * 人设经 role_id 装自 roles 角色行（v3 成员=角色，成员详情与角色详情同源），
+ * 状态与会话锚点按名聚合实例行（§5#12：同一人每条大任务一行实例行，行数
+ * 不当人数）。 */
 function memberView(team: TeamState, m: MemberRecord) {
   const currentTask = team.tasks.find(
     (t) => t.assignee === m.name && ACTIVE_STATUSES.includes(t.status),
@@ -131,9 +132,9 @@ function memberView(team: TeamState, m: MemberRecord) {
     /** 工号 (docs/21)：格式化显示串（ET-0001）；null for legacy members. */
     employeeId: m.employeeId !== undefined ? formatEmployeeId(m.employeeId) : null,
     role: m.role,
-    // 成员详情（用户迭代 2026-09 四）：成员自己的角色手册副本——加入团队时
-    // 从角色库复制，之后与角色详情各自独立；/persona 改写、/sync-roster 同步
-    // 回角色库。personaMd 为空（旧成员）时客户端按结构字段合成骨架。
+    profile: m.persona.profile ?? null,
+    // 成员手册：装自 roles 角色行（v3 人设单一来源）；/persona 改写即改
+    // 角色行（全局生效）。personaMd 为空（旧成员）时客户端按结构字段合成骨架。
     personaMd: m.persona.personaMd ?? null,
     duty: m.persona.duty,
     style: m.persona.style,
@@ -727,10 +728,6 @@ export function installWebSurface(
                     ? { executionPrompt: str(body.executionPrompt) }
                     : {}),
                   ...(body.personaMd !== undefined ? { personaMd: str(body.personaMd) } : {}),
-                  ...(body.model !== undefined ? { model: str(body.model) } : {}),
-                  ...(body.reasoningEffort !== undefined
-                    ? { reasoningEffort: str(body.reasoningEffort) }
-                    : {}),
                   ...(bodyAvatar !== undefined ? { avatar: bodyAvatar } : {}),
                 },
                 { allowLeader: true },
@@ -822,20 +819,8 @@ export function installWebSurface(
                       : {}),
                   ...(str(body.employeeId, '') !== ''
                     ? { employeeId: str(body.employeeId) }
-                    : entry?.employeeId !== undefined
-                      ? { employeeId: String(entry.employeeId) }
-                      : {}),
+                    : {}),
                   ...(entry?.avatar !== undefined ? { avatar: entry.avatar } : {}),
-                  ...(str(body.model, '') !== ''
-                    ? { model: str(body.model) }
-                    : entry?.model !== undefined
-                      ? { model: entry.model }
-                      : {}),
-                  ...(body.reasoningEffort !== undefined
-                    ? { reasoningEffort: str(body.reasoningEffort) }
-                    : entry?.reasoningEffort !== undefined
-                      ? { reasoningEffort: entry.reasoningEffort }
-                      : {}),
                   via: 'panel',
                 });
               } catch (e) {

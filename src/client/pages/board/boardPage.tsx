@@ -1,11 +1,14 @@
 /**
- * 看板 tab：Token 消耗日历（置顶扁平区）+ 最近动态（docs/13.3 看板）。
- * 符号自 eteamsView.tsx 原样搬出（docs/32 32.5.1 纯移动、零行为变更），
+ * 看板 tab：Token 消耗日历（置顶扁平区）+ 任务动态 + 最近动态（docs/13.3
+ * 看板）。符号自 eteamsView.tsx 原样搬出（docs/32 32.5.1 纯移动、零行为变更），
  * 依赖 usageCalendar（Token 消耗区）与 shared（页内跨 tab 共享层）。
  * 用户迭代 2026-09-04：目标卡（目标/进度/阶段徽标）整卡撤销；Token 消耗
  * 日历置顶（扁平渲染见 usageCalendar）。
  * docs/35 §5#1：批准环节下线——建队即生效，staged 横幅与批准弹窗随之删除
- * （面板只剩待决策横幅 + 日历 + 最近动态）。
+ * （面板只剩待决策横幅 + 日历 + 任务动态 + 最近动态）。
+ * docs/47：任务动态分区（TaskActivityCard，board/taskActivity）——顶层任务
+ * 平铺只读小卡 + 主任务小任务窗口（执行序最多 4 行，超出折叠），插在日历
+ * 与最近动态之间（日历置顶定稿位不动）。
  * M5 结构性改造（docs/44 44.3，行为零变更）：44.3 横幅分区；页内三元查表化
  * ——空态脚注两态收编 EMPTY_FOOTNOTE_META，数据更新行空档占位收编
  * FETCH_AT_EMPTY（另一支为运行时 relativeTime 计算，条件式保留，见常量区
@@ -18,6 +21,7 @@ import { relativeTime, type TeamSnapshot } from '../../lib/monitor';
 import { Alert } from '../../components/ui/alert';
 import { Card } from '../../components/ui/card';
 import { UsageCalendarCard } from './usageCalendar';
+import { TaskActivityCard } from './taskActivity';
 import {
   EMPTY_CLASS,
   LINE_CLASS,
@@ -109,6 +113,11 @@ export function BoardTab({
       分支不会打断任何 hook 序（docs/30 28-M2 的「hooks 在早退前」约束等价
       成立）。 */}
       <UsageCalendarCard />
+      {/* docs/47 任务动态分区（board/taskActivity）：顶层任务平铺只读小卡 +
+      主任务小任务窗口（执行序最多 4 行，超出折叠）——插在日历（置顶定稿位
+      不动）与最近动态之间；hooks 在子组件内部，只在有团队时挂载（与
+      usageCalendar 同款约束）。 */}
+      <TaskActivityCard team={team} />
       <Card className={PANEL_CARD_CLASS}>
         <div className={SECTION_TITLE_CLASS}>最近动态</div>
         {/* D22f：事件流去满宽下边线，改留白分组（列表 space-y-1 + 行 py-1.5）。 */}

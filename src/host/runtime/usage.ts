@@ -58,19 +58,37 @@ export interface SessionIdentity {
 }
 
 /**
- * 成员子代理注册表：childId → 团队/成员。由 installMemberRuntime 的 setup
- * hook 在每次 Activation（含 cold resume）登记（members.ts 先例：重启后
- * 重登记）。
+ * 成员子代理注册表：childId → 团队/成员/直接父。由 installMemberRuntime 的
+ * setup hook 在每次 Activation（含 cold resume）登记（members.ts 先例：重启
+ * 后重登记）。parentSessionId = 成员的真实直接父（领队主会话 id）——19.18
+ * 访谈投递按它冷恢复，模块级 Map 跨 dispose 存活所以闲置成员对话框也查得到。
  */
-const memberSessions = new Map<string, { teamId: string; memberName: string }>();
+export interface MemberSessionRecord {
+  readonly teamId: string;
+  readonly memberName: string;
+  readonly parentSessionId: string;
+}
+
+const memberSessions = new Map<string, MemberSessionRecord>();
 
 /** Register one member child session (setup hook 调用，docs/28.7)。 */
 export function registerMemberSession(
   childId: string,
-  identity: { teamId: string; memberName: string },
+  identity: { teamId: string; memberName: string; parentSessionId: string },
 ): void {
-  if (childId === '' || identity.teamId === '' || identity.memberName === '') return;
-  memberSessions.set(childId, { teamId: identity.teamId, memberName: identity.memberName });
+  if (
+    childId === '' ||
+    identity.teamId === '' ||
+    identity.memberName === '' ||
+    identity.parentSessionId === ''
+  )
+    return;
+  memberSessions.set(childId, { ...identity });
+}
+
+/** 查登记（19.18 访谈投递判定 presence 命中的成员会话用）；不在册返回 undefined。 */
+export function lookupMemberSession(childId: string): MemberSessionRecord | undefined {
+  return memberSessions.get(childId);
 }
 
 // ---------- 路线折叠缓存（28.3.3/E4） ----------

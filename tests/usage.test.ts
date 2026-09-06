@@ -204,7 +204,11 @@ function seedRow(partial: {
 
 describe('attribution priority', () => {
   it('member registry wins with memberName', async () => {
-    registerMemberSession('mem-1', { teamId: 'team-a', memberName: 'Alice' });
+    registerMemberSession('mem-1', {
+      teamId: 'team-a',
+      memberName: 'Alice',
+      parentSessionId: 'leader-1',
+    });
     const meter = installMeter();
     meter.emit(
       makeSession('mem-1'),
@@ -335,7 +339,11 @@ describe('live accounting', () => {
 
   it('increments the day-total row across events of the same day', async () => {
     const meter = installMeter();
-    registerMemberSession('s-inc', { teamId: 'team-a', memberName: 'Alice' });
+    registerMemberSession('s-inc', {
+      teamId: 'team-a',
+      memberName: 'Alice',
+      parentSessionId: 'leader-1',
+    });
     meter.emit(
       makeSession('s-inc'),
       usageEvent(1, noon(2025, 6, 15), { inputTokens: 10, outputTokens: 1 }),

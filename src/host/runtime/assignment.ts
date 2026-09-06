@@ -662,7 +662,6 @@ function resolveAssigneeRow(team: TeamState, task: TaskRecord, name: string): Ta
     employeeId: template.employeeId ?? null,
     mainSessionId: '',
     childSessionId: '',
-    roleId: null,
     status: 'staged',
     createdAt: Date.now(),
   };

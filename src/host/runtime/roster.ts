@@ -1,8 +1,9 @@
 /**
- * Member roster (D16 → docs/27 member/roles 表)：工作区级可复用成员模板目录
- * （member 表 team_id 为空的公共模板行；roles 表存角色定义）。条目带人设
- * 框架字段 + 可选模型路线；团队按名引入并采用其人设。工号发号改为 SQL
- * （member 表最大工号 +1，docs/27），employee-seq.json 计数器文件弃用删除；
+ * Member roster (D16 → docs/27 v3 roles 表)：工作区级角色库目录（roles 表，
+ * 成员=角色全局一份；人设/工号/头像/一句话简介都挂在角色行上，班底经
+ * team_members.role_id 松引用引入）。条目带人设框架字段；模型路线不再入
+ * 角色库（v3：路线属班底 team_members.model / 领队行）。工号发号为 SQL
+ * （roles 表最大工号 +1，docs/27），employee-seq.json 计数器文件弃用删除；
  * roster.json 不再读写（导入走 import.ts）。Pure Node — no cordis.
  *
  * @module dsh-eteams/runtime/roster
@@ -32,18 +33,16 @@ export interface AvatarPair {
 }
 
 /**
- * One reusable member definition (persona framework + optional route)。
+ * One reusable role definition (persona framework；成员=角色，全局一份)。
  * `employeeId` 是库里的整数工号（显示补零走 {@link formatEmployeeId}）；
- * 旧版 provider 字段随 docs/35 §3#5 砍掉（provider 由派发时按配置解析）。
+ * 模型路线字段随 v3 移出角色库（路线属班底 team_members，见 teamOps）。
  */
 export interface RosterMember {
   /** Unique key across the workspace roster (trimmed, non-empty). */
   name: string;
-  /**
-   * 工号 (employee id, docs/21)：member 表整数工号；undefined = 尚未发号。
-   */
+  /** 工号 (employee id, docs/21)：roles 表整数工号；undefined = 尚未发号。 */
   employeeId?: number;
-  /** Role label (engineer / researcher / …). Free-form, non-empty. */
+  /** Role label (engineer / researcher / …)，= persona_md 的「角色：」行。 */
   role: string;
   /** 一句话简介（列表卡片与详情头展示；空/缺省=不展示）。 */
   profile?: string;
@@ -55,9 +54,6 @@ export interface RosterMember {
   executionPrompt?: string;
   /** Full Markdown role playbook (agency-agents-zh style) for the detail view. */
   personaMd?: string;
-  /** Optional per-member model route, applied when a team adopts the entry. */
-  model?: string;
-  reasoningEffort?: string;
   /** Pre-generated avatar (docs/14 first slice); auto-assigned when absent. */
   avatar?: AvatarPair;
   updatedAt: number;
@@ -69,9 +65,9 @@ export function formatEmployeeId(n: number): string {
 }
 
 /**
- * Allocate the next 工号 for a workspace (docs/21)：member 表最大工号 +1
+ * Allocate the next 工号 for a workspace (docs/21)：roles 表最大工号 +1
  * （docs/27——计数器从库来，employee-seq.json 不再存在）。独立调用只做
- * 「取号」预览；插入成员模板时请在同一事务内用 {@link nextEmployeeIdInTx}
+ * 「取号」预览；插入角色行时请在同一事务内用 {@link nextEmployeeIdInTx}
  * 现算现用，避免并发下重号。
  */
 export function allocateEmployeeId(stateRoot: string): number {
@@ -108,49 +104,48 @@ function rosterPersona(m: RosterMember, name: string): PersonaRecord {
   };
 }
 
-/** member 表行 → RosterMember（手册全文解析回六字段）。 */
+/** roles 角色行 → RosterMember（手册全文解析回六字段；profile 列值优先）。 */
 function rowToRosterMember(row: {
   role_name: string;
-  role_label: string | null;
   employee_id: number | null;
   persona_md: string | null;
-  model: string | null;
-  reasoning_effort: string | null;
+  profile: string | null;
   avatar: string | null;
   update_time: number;
 }): RosterMember {
   const name = row.role_name;
-  const persona = personaFromMd(row.persona_md ?? '', name, row.role_label ?? name);
+  const persona = personaFromMd(row.persona_md ?? '', name, name);
   return {
     name,
     ...(row.employee_id !== null ? { employeeId: row.employee_id } : {}),
-    role: row.role_label ?? name,
-    ...(persona.profile !== undefined ? { profile: persona.profile } : {}),
+    role: persona.role,
+    // profile 独立成列（v3）：列值优先，旧库烘进手册的 `- 简介：` 行兜底。
+    ...(row.profile !== null && row.profile !== ''
+      ? { profile: row.profile }
+      : persona.profile !== undefined
+        ? { profile: persona.profile }
+        : {}),
     duty: persona.duty,
     style: persona.style,
     skills: persona.skills,
     rules: persona.rules,
     executionPrompt: persona.executionPrompt,
     ...(persona.personaMd !== undefined ? { personaMd: persona.personaMd } : {}),
-    ...(row.model !== null ? { model: row.model } : {}),
-    ...(row.reasoning_effort !== null ? { reasoningEffort: row.reasoning_effort } : {}),
     ...(row.avatar !== null ? { avatar: avatarFromJson(row.avatar) } : {}),
     updatedAt: row.update_time,
   };
 }
 
-/** 公共模板行的公共 SELECT（roles 左联出角色标签）。 */
+/** roles 角色库行的公共 SELECT（成员=角色，全局一份）。 */
 const ROSTER_ROW_SQL =
-  'SELECT m.role_name, r.role_name AS role_label, m.employee_id, m.persona_md, m.model, ' +
-  'm.reasoning_effort, m.avatar, m.update_time FROM member m ' +
-  'LEFT JOIN roles r ON r.role_id = m.role_id WHERE m.team_id IS NULL';
+  'SELECT role_name, employee_id, persona_md, profile, avatar, update_time FROM roles';
 
-/** Read the workspace roster（公共模板行，member_id 升序）. */
+/** Read the workspace roster（角色库全表，role_id 升序）. */
 export function readRoster(stateRoot: string): RosterMember[] {
   const db = getDb(stateRoot);
   ensureWorkspaceReady(stateRoot, db);
   const rows = db
-    .prepare(`${ROSTER_ROW_SQL} ORDER BY m.member_id`)
+    .prepare(`${ROSTER_ROW_SQL} ORDER BY role_id`)
     .all() as Array<Parameters<typeof rowToRosterMember>[0]>;
   return rows.map(rowToRosterMember);
 }
@@ -170,11 +165,11 @@ export function avatarSeedFor(name: string): number {
 // --------------------------------------------------------------------------
 
 /**
- * Insert or update one roster entry (keyed by trimmed name). Returns the
- * stored entry. Throws when name/role are empty after trimming. An entry
- * without an avatar gets one pre-generated here (docs/14 first slice) so
- * every member always has a stable face; updates keep the existing avatar.
- * `roles` 表缺角色行时顺带补上（role_id 需要落到它上面）。
+ * Insert or update one roster entry (roles 角色行，keyed by trimmed name —
+ * 成员名=角色名). Returns the stored entry. Throws when name/role are empty
+ * after trimming. An entry without an avatar gets one pre-generated here
+ * (docs/14 first slice) so every member always has a stable face; updates
+ * keep the existing avatar. 角色入库主路径：插库即建角色行（v3）。
  */
 export async function upsertRosterMember(
   stateRoot: string,
@@ -195,10 +190,10 @@ export async function upsertRosterMember(
   const stored: RosterMember = await withTeamTx(stateRoot, undefined, (tx) => {
     const db = tx.db;
     const now = tx.now;
-    // 工号（docs/21）：新建时从 member 表最大工号 +1 分配；更新保留原号。
+    // 工号（docs/21）：新建时从 roles 表最大工号 +1 分配；更新保留原号。
     // 调用方显式传入（导入/迁移）时尊重传入值（0 视同未传）。
     const previous = db
-      .prepare(`${ROSTER_ROW_SQL} AND m.role_name = ? LIMIT 1`)
+      .prepare(`${ROSTER_ROW_SQL} WHERE role_name = ? LIMIT 1`)
       .get(name) as Parameters<typeof rowToRosterMember>[0] | undefined;
     const employeeId =
       (typeof member.employeeId === 'number' && member.employeeId > 0
@@ -221,40 +216,20 @@ export async function upsertRosterMember(
       },
       updatedAt: now,
     };
-    // roles 行（角色标签的登记处）缺则补空定义，保证 role_id 可落；内容
-    // 一律烘在 member.persona_md（docs/27：roles 只留角色名/手册/头像）。
-    let roleId: number;
-    const roleRow = db.prepare('SELECT role_id FROM roles WHERE role_name = ?').get(role) as
-      | { role_id: number }
-      | undefined;
-    if (roleRow !== undefined) {
-      roleId = roleRow.role_id;
-    } else {
-      roleId = Number(
-        db
-          .prepare(
-            "INSERT INTO roles (role_name, source, created_time, update_time) " +
-              "VALUES (?, 'user', ?, ?)",
-          )
-          .run(role, now, now).lastInsertRowid,
-      );
-    }
     const persona = rosterPersona(stored, name);
     const personaMd = personaToMd(persona, name);
     const avatarJson = avatarToJson(stored.avatar);
+    const profile = persona.profile ?? null;
     if (previous === undefined) {
       db.prepare(
-        'INSERT INTO member (team_id, role_name, employee_id, persona_md, model, ' +
-          'reasoning_effort, avatar, role_id, created_time, update_time) ' +
-          'VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      ).run(name, employeeId, personaMd, stored.model ?? null, stored.reasoningEffort ?? null,
-        avatarJson, roleId, now, now);
+        'INSERT INTO roles (role_name, employee_id, persona_md, profile, avatar, created_time, update_time) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?)',
+      ).run(name, employeeId, personaMd, profile, avatarJson, now, now);
     } else {
       db.prepare(
-        'UPDATE member SET employee_id = ?, persona_md = ?, model = ?, reasoning_effort = ?, ' +
-          'avatar = ?, role_id = ?, update_time = ? WHERE team_id IS NULL AND role_name = ?',
-      ).run(employeeId, personaMd, stored.model ?? null, stored.reasoningEffort ?? null,
-        avatarJson, roleId, now, name);
+        'UPDATE roles SET employee_id = ?, persona_md = ?, profile = ?, avatar = ?, update_time = ? ' +
+          'WHERE role_name = ?',
+      ).run(employeeId, personaMd, profile, avatarJson, now, name);
     }
     return stored;
   });
@@ -309,7 +284,6 @@ export async function ensurePresetMembers(stateRoot: string): Promise<void> {
     ) {
       upgradePresetHandbook(db, {
         name: LEADER_NAME,
-        role: leader.role,
         personaMd: captain.personaMd,
         now,
       });
@@ -331,22 +305,21 @@ export async function ensurePresetMembers(stateRoot: string): Promise<void> {
       ) {
         upgradePresetHandbook(db, {
           name: role,
-          role: existing.role,
           personaMd: template.personaMd,
           now,
         });
       }
     }
-    // 工号回填（docs/21）：补齐所有缺号的成员（含旧版入库的非预设成员），
-    // 顺序按 member_id 逐行取 member 表最大工号 +1。
+    // 工号回填（docs/21）：补齐所有缺号的角色行（含旧版入库的非预设角色），
+    // 顺序按 role_id 逐行取 roles 表最大工号 +1。
     const rows = db
-      .prepare('SELECT member_id FROM member WHERE employee_id IS NULL ORDER BY member_id')
-      .all() as Array<{ member_id: number }>;
+      .prepare('SELECT role_id FROM roles WHERE employee_id IS NULL ORDER BY role_id')
+      .all() as Array<{ role_id: number }>;
     for (const row of rows) {
-      db.prepare('UPDATE member SET employee_id = ?, update_time = ? WHERE member_id = ?').run(
+      db.prepare('UPDATE roles SET employee_id = ?, update_time = ? WHERE role_id = ?').run(
         nextEmployeeId(db),
         now,
-        row.member_id,
+        row.role_id,
       );
     }
   });
@@ -361,25 +334,25 @@ function staleDistilledDoc(md: string | undefined): boolean {
   return md !== undefined && md.includes('## 交付标准') && !md.includes('核心使命');
 }
 
-/** 事务内按名写公共模板行（陈旧手册升级用，不碰工号/头像/模型）。 */
+/** 事务内按名写 roles 角色行手册（陈旧手册升级用，不碰工号/头像）。 */
 function upgradePresetHandbook(
   db: DatabaseSync,
-  patch: { name: string; role: string; personaMd: string; now: number },
+  patch: { name: string; personaMd: string; now: number },
 ): void {
-  const roleIdRow = db.prepare('SELECT role_id FROM roles WHERE role_name = ?').get(patch.role) as
-    | { role_id: number }
-    | undefined;
-  if (roleIdRow === undefined) return;
-  db.prepare(
-    'UPDATE member SET persona_md = ?, role_id = ?, update_time = ? ' +
-      'WHERE team_id IS NULL AND role_name = ?',
-  ).run(patch.personaMd, roleIdRow.role_id, patch.now, patch.name);
+  db.prepare('UPDATE roles SET persona_md = ?, update_time = ? WHERE role_name = ?').run(
+    patch.personaMd,
+    patch.now,
+    patch.name,
+  );
 }
 
 /**
- * Remove one roster entry by name. The leader (项目牧羊人) and the role
- * builder (角色构建师) are system members and protected: deletion is
- * rejected (用户模型：领队/角色构建师不可删除).
+ * Remove one roster entry by name (v3：删 roles 角色行). The leader
+ * (项目牧羊人) and the role builder (角色构建师) are system members and
+ * protected: deletion is rejected (用户模型：领队/角色构建师不可删除).
+ * 活跃成员守卫（成员=角色全局一份）：仍有非 removed 实例行（按名关联）时
+ * 拒删——删掉角色行会让在队成员的人设悬空，先从团队移除；实例行全 removed
+ * 的休眠班底行不挡删除（悬空班底行由 loadMembers 防御性跳过）。
  */
 export async function removeRosterMember(stateRoot: string, name: string): Promise<void> {
   const trimmed = name.trim();
@@ -388,9 +361,13 @@ export async function removeRosterMember(stateRoot: string, name: string): Promi
     throw new Error(`「${trimmed}」为系统保留成员，不可删除`);
   }
   withTeamTx(stateRoot, undefined, (tx) => {
-    const info = tx.db
-      .prepare('DELETE FROM member WHERE team_id IS NULL AND role_name = ?')
-      .run(trimmed);
+    const active = tx.db
+      .prepare('SELECT COUNT(*) AS n FROM task_members WHERE name = ? AND status <> ?')
+      .get(trimmed, 'removed') as { n: number };
+    if (active.n > 0) {
+      throw new Error(`角色「${trimmed}」仍在团队中担任成员，先从团队移除再删除`);
+    }
+    const info = tx.db.prepare('DELETE FROM roles WHERE role_name = ?').run(trimmed);
     if (Number(info.changes) === 0) throw new Error(`成员「${trimmed}」不存在`);
   });
 }

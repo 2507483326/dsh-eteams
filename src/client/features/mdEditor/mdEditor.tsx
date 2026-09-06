@@ -240,10 +240,14 @@ export function MdEditor({
   // overflow 裁剪）后弹层与锚点同坐标系，定位精准。
   const [overlayEl, setOverlayEl] = useState<HTMLDivElement | null>(null);
 
-  // 受控同步：仅当外部 value ≠ 最近一次发出的值（面板换成员/构建刷新）
-  // 时整体重置；用户打字产生的回环（value === lastEmitted）不动编辑器。
+  // 受控同步：外部 value ≠ 最近一次发出的值（面板换成员/构建刷新草稿/值
+  // 后到——确认表单先以空态挂载、全量草稿下一拍才到，docs/19.19）时整体
+  // 重置；用户打字产生的回环（value === lastEmitted）不动编辑器。不设
+  // 「键入过才同步」前置：挂载初始化不走 onChange，前置会让首个外部值永远
+  // 同步不进去（编辑器空白而 state 持有全量）。未就绪的 setMarkdown 由库
+  // 的 pendingMethodCalls 重放兜住。
   useEffect(() => {
-    if (lastEmittedRef.current !== null && value !== lastEmittedRef.current) {
+    if (value !== lastEmittedRef.current) {
       lastEmittedRef.current = value;
       methodsRef.current?.setMarkdown(value);
     }

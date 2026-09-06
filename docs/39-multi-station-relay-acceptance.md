@@ -751,3 +751,53 @@ GUI 装机冒烟持续**未验证**（链式接力交棒、开始钮显示需装
 改动面：`src/client/features/avatar/avatar.tsx`（容器默认类 + 头注/常量/组件注释）、`src/client/features/tasks/taskAssign.tsx`（常量与 5 处显式传参撤除）。无宿主路由/api/tests 变更。
 
 **三十二轮四绿门（2026-09-05）**：typecheck / lint（0 error）/ test（24 文件 **337 用例**全过——基线随用户并行提交上移：前轮 328→337，非本轮改动面）/ build（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿。GUI 装机冒烟持续**未验证**（各表面头像描边观感——尤其 AvatarRing 双线环面四处（构建台/角色添加/角色详情/成员详情）随之多内层 1px 细线，嫌重可在 AvatarRing 传 className 覆盖；需装机后在 DSH 面板人工过一遍；请重启 DSH 载入最新构建包后再验）。
+
+## 三十三轮追加（2026-09-06，DA46：详情页头部卡去 #id + 编辑态标题 Input 拉长 + 展开钮/展开区（小任务卡同款） + 抽屉合同区 dedupe）
+
+用户原话：「任务详情页面 把 #1 去掉，然后编辑时 标题input框拉长自适应，和下面的小任务一样加载展开按钮」。
+
+| 项 | 落法 |
+| --- | --- |
+| ①头部卡去 #id | taskHeaderCard 信息组撤 `#{task.taskId}`（列表卡 DA25/小任务行头 DA44 之后头部卡对齐；挂靠行 `#{parent.taskId}` 与阻塞 `#{task.blockedFrom}` 引用不动——修 DA25「详情页头部卡的 #id 不动」口径） |
+| ②编辑态标题 Input 拉长自适应 | 信息组 className 改 cn 条件合并 `subjectEditor !== undefined && 'flex-1'`（非编辑态零变化）；Input 保持 INLINE_SUBJECT_INPUT_CLASS——组 flex-1 后 Input 真正占满标题行剩余宽度（短 Input 根因：信息组无 flex-grow，Input 的 flex-1 basis-0% 无处伸展）。小任务行头 Input 未动（用户未点名，可选跟进） |
+| ③展开钮/展开区（小任务卡同款） | TaskHeaderCard 增 editing/expanded/onToggleExpanded 三 optional props（未接线调用位零变化）；expandable 判据组件内自足（说明/合同 trim，同 SubtaskItem 口径）；arrowShow = 接线 && (expandable \|\| editing)；箭头 ghost icon Button 居 actions 簇最右（h-6 w-6 flex-none py-0 剥焦点环同 DA41 口径、ChevronDown rotate-180）；actions 簇判据 (actions !== undefined \|\| arrowShow)；展开区 arrowShow && expanded 门 + mt-1.5 border-t pt-2 分区（编辑器/只读正文二选一）——原 {editor} 无条件槽位撤除；DA42 语义同构：编辑先展开（openInlineEdit 两分支 setHeaderExpandedId）、编辑中收起草稿保留、幂等重开、保存后留展开态显新只读内容、正文清空后箭头与展开区整段卸载无悬挂分隔线 |
+| ④页面接线 | taskDetailPage 新状态 headerExpandedId: number \| null（单槽 id——详情页一次一张头部卡，切换任务即视为收起）；组页/任务页两处 TaskHeaderCard 调用接三 props |
+| ⑤抽屉合同区 dedupe | taskDrawer TaskDetailContent 撤 ContractMd 函数 + 用例行 + MarkdownDoc import——合同/说明展示与编辑归头部卡展开区，避免同页双份合同（详情正文区只承阻塞/状态说明/幂等说明/产出/尝试时间线） |
+
+改动面：`src/client/pages/tasks/taskHeaderCard.tsx`（65→136 行）、`taskDetailPage.tsx`（状态 + openInlineEdit + 两调用位）、`taskDrawer.tsx`（155→137 行）。无宿主路由/api/tests 变更。
+
+**三十三轮四绿门（2026-09-06）**：typecheck / lint（0 error，taskDrawer 既有 1 条 exhaustive-deps warning 保留）/ test（27 文件 **363 用例**全过——工作树含用户未提交 host 侧测试，高于基线 24 文件 337 用例且无失败）/ build（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿。GUI 装机冒烟持续**未验证**（头部卡去 #id、编辑态标题 Input 拉长、展开钮/展开区开合、正文清空后无悬挂分隔线、抽屉正文区无双份合同需装机后在 DSH 面板人工过一遍；请重启 DSH 载入最新构建包后再验）。
+
+## 三十四轮追加（2026-09-06，DA47：详情/小任务展开区只读正文改单篇 MD 渲染——说明段独换行升格硬断行）
+
+用户原话：「任务详情展示怎么不是按照MD展示的，文字都粘一起了」。
+
+根因（读库实锤）：主任务 description 是**单换行多行纯文本**（`\n` 分隔、无空行），contractMd 为 null；DA46 展开区把说明渲染成纯文本行（HTML 折叠换行）→ 全粘一行；合同部分（子任务带 `##` 与空行）经 MarkdownDoc 渲染正常。
+
+| 项 | 落法 |
+| --- | --- |
+| ①新 shared taskBody.ts | mergedBodyOf 自 taskDetailPage 逐字迁出共用（DA41 说明+合同并读口径不变）；新增 readBodyOf 只读版：说明段独换行（`/(?<!\n)\n(?!\n)/g`）升格 GFM 硬断行（行尾两空格，remark break → `<br/>`，逐行可见）、空行段落断不动、**合同段逐字透传**（紧凑列表/代码块不吃进升格——升格只作用于说明段） |
+| ②展开区只读统一 MD | taskHeaderCard 与 taskSubtaskItem 展开区只读分支统一 `<MarkdownDoc text={readBodyOf(task)} />`——说明+合同单篇 MD 文档（与就地编辑器 mergedBodyOf 同源），「说明：」标签行随并读撤除；LINE_CLASS 两处撤除 |
+| ③编辑器载荷不动 | 就地编辑器仍走 mergedBodyOf（无升格）——保存不回写升格后的行尾空格，无数据污染 |
+
+改动面：`src/client/pages/tasks/taskBody.ts`（新）、`taskDetailPage.tsx`（本地 mergedBodyOf 撤除改引）、`taskHeaderCard.tsx`、`taskSubtaskItem.tsx`。无宿主路由/api/tests 变更。
+
+**三十四轮四绿门（2026-09-06）**：typecheck / lint（0 error）/ test（28 文件 **369 用例**全过——工作树含用户未提交 host 测试 buildInterviewRelay 6 例，高于基线 27/363 无失败）/ build（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿。GUI 装机冒烟持续**未验证**（主任务展开区说明逐行显示、说明+合同并读结构、小任务展开区同款回归需装机后在 DSH 面板人工过一遍；请重启 DSH 载入最新构建包后再验）。
+
+
+## 三十五轮追加（2026-09-06，DA48：成员槽拖入改松手放置判位插入——chip 定点替换废止）
+
+用户原话：「小任务列表拖拽成员到成员槽不是松手追加，而是松手放置，此外需要判断是放置在成员之前还是之后」。
+
+| 项 | 落法 |
+| --- | --- |
+| ①判位插入纯函数 | taskAssignCore 新增 `insertionIndexOf(midpoints, x)`（逐 chip 中点比距：x < 中点 → 插其前；等中点归右半；全越过 → 末尾；空数组 → 0）+ `chainAfterInsert(task, member, index)`（不可编辑/链内同名 → null、index 夹取 [0, 链长]、splice 插入新站 stageBrief 空串、其余站 stageBrief 保真）；`nextChainAfterDrop` 删除——「空白处=末尾追加」由判位插入空链/末尾位承接，「chip 定点替换」废止 |
+| ②容器 drop 判位 | drop 期以 `monitor.getClientOffset().x`（视口坐标）对 `stationMetricsOf` 测出的 chip 中点判位（容器 `querySelectorAll('[data-station-index]')` 按序）；测不到容器/落点退末尾追加；`didDrop` 守卫保留 |
+| ③悬停插入指示线 | collect 补 offset，悬停期间容器内渲染品牌色 2px 竖线（`INSERT_CARET_CLASS` absolute，锚落点判位 chip 左缘-1px / 末 chip 右缘+2；offsetLeft 内容坐标滚动稳定；`BOX_MULTI_CLASS` 加 relative）；「＋」钮悬停文案交换（松手追加）撤除，常显 ＋ |
+| ④chip 替换废止 | StationChip drop target accept 收窄为 `STATION_DRAG_TYPE`（只剩 chip 调序），chip 上拖成员不再替换该站；替换改走 ×移除 + 再拖入，悬空名修复同走 ×+再拖入；chip title「拖到另一 chip=调序」、容器 title「拖入成员按落点插入（成员前/后）」 |
+| ⑤去重闪现落容器 | 成员 drop 全落容器（chip 不再收成员类型），同名去重 no-op 的 200ms 闪现统一落容器边框；StationChip 内 useFlash200 撤除 |
+| ⑥空框等价 | 空链卡槽同走判位路径（mids 空 → index 0 = 追加），「松手追加/＋ 拖入成员」文案保留 |
+
+改动面：`src/client/features/tasks/taskAssignCore.ts`（`nextChainAfterDrop` 删、`insertionIndexOf`/`chainAfterInsert` 增）、`taskAssign.tsx`（容器 drop/caret/StationChip/title 文案）、`tests/taskAssign.test.ts`（`nextChainAfterDrop` 用例改写为 insertionIndexOf 5 例 + chainAfterInsert 6 例；含 chip 定点替换 3 例随语义废止删除）。
+
+**三十五轮四绿门（2026-09-06）**：typecheck / lint（0 error）/ test（28 文件 **373 用例**全过——基线 369：撤 7 增 11 净 +4，含用户未提交 host 测试无失败）/ build（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿。GUI 装机冒烟持续**未验证**（拖拽落点前后判位、插入指示线位置、chip 调序回归、去重闪现落容器需装机后在 DSH 面板人工过一遍；请重启 DSH 载入最新构建包后再验）。

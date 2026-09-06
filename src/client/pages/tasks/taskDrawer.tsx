@@ -8,6 +8,9 @@
  * （docs/27），显示口径 #N。十六轮 DA29：合同四数组（验收标准/范围内/
  * 范围外/交付物）合并为一篇 Markdown（task.contractMd），详情区改
  * MarkdownText 只读渲染（MarkdownDoc typeset 包装，docs/41；成员手册同款原语）。
+ * 2026-09-06 三十三轮 DA46：合同区自本组件撤除（合同/说明的展示与编辑归
+ * 详情页头部卡展开区，与小任务卡展开区同款）——本组件只承阻塞/状态说明/
+ * 幂等说明/产出/尝试时间线。
  *
  * @module dsh-eteams/client/pages/tasks/taskDrawer
  */
@@ -17,7 +20,6 @@ import { cn } from '../../lib/cn';
 import { relativeTime, type TaskView, type TeamSnapshot } from '../../lib/monitor';
 import { BORDER_L1_CLASS, LINE_CLASS, MUTED_CLASS } from '../shared/styles';
 import { StepGlyph } from '../../components/stepGlyph';
-import { MarkdownDoc } from '../shared/markdownDoc';
 
 /** 原 styles.attempt（执行线路尝试条目：--border 左描边）。M7-11 统一
  * token 口径：border-border 即 border-[color:var(--border)]（tailwind.config
@@ -39,19 +41,6 @@ interface TrackBody {
     error?: string;
     result?: { output: string };
   }[];
-}
-
-/** 合同区（十六轮 DA29）：contractMd 一篇 Markdown 经 MarkdownDoc（MarkdownText
- * + typeset 排版包装，docs/41）只读
- * 渲染（成员手册同款原语）；空串/null 整段不渲染。 */
-function ContractMd({ text }: { text: string }): ReactNode {
-  if (text.trim() === '') return null;
-  return (
-    <div className="my-1">
-      <span className="text-xs font-semibold text-muted-foreground">任务合同：</span>
-      <MarkdownDoc text={text} />
-    </div>
-  );
 }
 
 /** S13：执行链站点行——✔/●/◌ 结构原样保留，仅样式改 Tailwind 类。D22f：
@@ -117,7 +106,6 @@ export function TaskDetailContent({
         <div className="text-warning">阻塞中：前置任务 #{task.blockedFrom} 未完成。</div>
       )}
       {task.statusNote !== null && <div className={LINE_CLASS}>状态说明：{task.statusNote}</div>}
-      {task.contractMd !== null && <ContractMd text={task.contractMd} />}
       {task.idempotencyNote !== null && (
         <div className={MUTED_CLASS}>幂等说明：{task.idempotencyNote}</div>
       )}

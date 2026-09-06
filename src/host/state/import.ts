@@ -2,7 +2,7 @@
  * 首次启动导入器（docs/35 §6、docs/36 建议 6）：库里还没有 db_schema_version
  * 时，若工作区仍存在旧文件布局（各团队目录的 team.json / events.jsonl /
  * inbox、工作区 roster.json）就在一个事务里整库导入；旧文件不存在则空库
- * 起步。两条路都以 roles 预置 + 公共成员模板行收尾并写版本号；已有版本号
+ * 起步。两条路都以 roles 角色库行收尾并写版本号；已有版本号
  * 直接返回（重启不重复导入）。旧文件导入后停读写、原样保留作备份
  * （docs/35 §3#1），本层不删除、不改写它们。
  *
@@ -10,7 +10,7 @@
  * events/inbox 的 per-team seq 丢弃换全库号；inbox 文件名 → box_key、
  * MailMessage.id 原样保留为 message_id；存量任务目录按字面路径进
  * task.work_dir（旧目录不迁移）；archive/ 目录跳过；工号 `ET-0001` → 整数；
- * employee-seq.json 不导入（新号 = member 表最大工号 +1）。
+ * employee-seq.json 不导入（新号 = roles 表最大工号 +1）。
  *
  * @module dsh-eteams/state/import
  */
@@ -39,7 +39,7 @@ import {
   writeSchemaVersion,
 } from './db.js';
 import { insertEventInTx, insertMailInTx, parseJsonl } from './events.js';
-import { insertTaskMemberRow } from './store.js';
+import { ensureRolesRowInTx, insertTaskMemberRow, rolesRowByName } from './store.js';
 import type { TeamTx } from './store.js';
 import { defaultCaptainPersona } from '../prompts/personas/captain.js';
 import { fallbackExecutionPrompt, PERSONA_FRAMEWORK_VERSION } from '../prompts/personas/framework.js';
@@ -273,8 +273,8 @@ function legacyTaskDir(
 }
 
 // --------------------------------------------------------------------------
-// 预置种子：roles 预置行 + 公共成员模板行（领队 + 预置角色；docs/36 建议 6
-// 「roster.ts:238 逻辑平移」——建库/导入同一事务收尾时写入，幂等）。
+// 预置种子：roles 角色库行（领队 + 预置角色；docs/36 建议 6「roster.ts:238
+// 逻辑平移」——建库/导入同一事务收尾时写入，幂等）。
 // --------------------------------------------------------------------------
 
 /** Preset avatar salts so the presets look the same in every workspace. */
@@ -282,7 +282,7 @@ const PRESET_SALTS: Record<string, number> = {
   角色构建师: 67,
 };
 
-/** One preset member to seed as a workspace-public template row. */
+/** One preset role to seed into the workspace 角色库. */
 export interface PresetMemberSeed {
   name: string;
   role: string;
@@ -290,7 +290,7 @@ export interface PresetMemberSeed {
   avatar: AvatarRecord;
 }
 
-/** The preset members（领队 + PRESET_MEMBER_ROLES；名字即角色）。 */
+/** The preset roles（领队 + PRESET_MEMBER_ROLES；名字即角色）。 */
 export function presetMemberSeeds(): PresetMemberSeed[] {
   const captain = defaultCaptainPersona();
   const seeds: PresetMemberSeed[] = [
@@ -313,60 +313,29 @@ export function presetMemberSeeds(): PresetMemberSeed[] {
   return seeds;
 }
 
-/** roles 行按角色名解析 role_id（无该行返回 null）。 */
-function resolveRoleId(db: DatabaseSync, role: string | undefined): number | null {
-  if (role === undefined || role.trim() === '') return null;
-  const row = db
-    .prepare('SELECT role_id FROM roles WHERE role_name = ?')
-    .get(role) as { role_id: number } | undefined;
-  return row?.role_id ?? null;
-}
-
 /**
- * 首次建库/导入事务的收尾种子（幂等）：预置角色的 roles 行（缺则建，
- * source='preset'，已有行不覆盖）与领队/预置角色的公共成员模板行
- * （team_id 为空；已有同名行不重开）。工号 = member 表最大工号 +1。
+ * 首次建库/导入事务的收尾种子（幂等）：领队/预置角色的 roles 角色行
+ * （缺则建，已有同名行不覆盖——成员=角色，全局一份）。工号 = roles 表
+ * 最大工号 +1；一句话简介入 profile 列（v3）。
  */
 export function seedPresetRows(tx: TeamTx, now: number): void {
   const { db } = tx;
   const selectRole = db.prepare('SELECT role_id FROM roles WHERE role_name = ?');
   const insertRole = db.prepare(
-    'INSERT INTO roles (role_name, persona_md, avatar, source, created_time, update_time) ' +
-      'VALUES (?, ?, ?, ?, ?, ?)',
-  );
-  const selectMember = db.prepare(
-    'SELECT member_id FROM member WHERE team_id IS NULL AND role_name = ?',
-  );
-  const insertMember = db.prepare(
-    'INSERT INTO member (team_id, role_id, role_name, employee_id, persona_md, model, ' +
-      'reasoning_effort, avatar, created_time, update_time) ' +
-      'VALUES (NULL, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)',
+    'INSERT INTO roles (role_name, employee_id, persona_md, profile, avatar, created_time, update_time) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?)',
   );
   for (const seed of presetMemberSeeds()) {
-    const md = personaToMd(seed.persona, seed.name);
-    let roleId = (selectRole.get(seed.role) as { role_id: number } | undefined)?.role_id ?? null;
-    if (roleId === null) {
-      const info = insertRole.run(
-        seed.role,
-        md,
-        avatarToJson(seed.avatar),
-        'preset',
-        now,
-        now,
-      );
-      roleId = Number(info.lastInsertRowid);
-    }
-    if (selectMember.get(seed.name) === undefined) {
-      insertMember.run(
-        roleId,
-        seed.name,
-        nextEmployeeId(db),
-        md,
-        avatarToJson(seed.avatar),
-        now,
-        now,
-      );
-    }
+    if (selectRole.get(seed.name) !== undefined) continue;
+    insertRole.run(
+      seed.name,
+      nextEmployeeId(db),
+      personaToMd(seed.persona, seed.name),
+      seed.persona.profile ?? null,
+      avatarToJson(seed.avatar),
+      now,
+      now,
+    );
   }
 }
 
@@ -422,12 +391,12 @@ export function ensureWorkspaceReady(stateRoot: string, db: DatabaseSync): void 
 }
 
 // --------------------------------------------------------------------------
-// 旧文件导入：roster.json → 公共模板行；各团队目录 → team 行 + 模板/实例行
+// 旧文件导入：roster.json → 角色库行；各团队目录 → team 行 + 班底/实例行
 // + 任务/尝试/决策 + 事件 + 邮箱，全部在调用方（ensureWorkspaceReady）的
 // 同一个事务里完成。
 // --------------------------------------------------------------------------
 
-/** roster.json → 工作区公共成员模板行（team_id 为空）；返回原条目供班底复用工号。 */
+/** roster.json → 角色库行（roles，按名入库）；返回原条目供班底复用工号。 */
 function importRosterFile(db: DatabaseSync, stateRoot: string, now: number): LegacyRosterMember[] {
   const file = join(stateRoot, 'roster.json');
   if (!existsSync(file)) return [];
@@ -438,23 +407,21 @@ function importRosterFile(db: DatabaseSync, stateRoot: string, now: number): Leg
     return []; // 损坏的 roster 跳过，预置种子仍会补齐领队/角色构建师
   }
   const members = Array.isArray(parsed.members) ? parsed.members : [];
-  const insertMember = db.prepare(
-    'INSERT INTO member (team_id, role_id, role_name, employee_id, persona_md, model, ' +
-      'reasoning_effort, avatar, created_time, update_time) ' +
-      'VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-  );
   for (const m of members) {
     if (typeof m.name !== 'string' || m.name.trim() === '') continue;
     const name = m.name.trim();
     const role = (m.role ?? name).trim() || name;
     const persona = personaFromFields(m, name, role);
-    insertMember.run(
-      resolveRoleId(db, role),
+    // 同名角色行已存在则跳过（幂等；不覆盖已有角色定义）
+    if (rolesRowByName(db, name) !== undefined) continue;
+    db.prepare(
+      'INSERT INTO roles (role_name, employee_id, persona_md, profile, avatar, created_time, update_time) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run(
       name,
       parseEmployeeId(m.employeeId) ?? nextEmployeeId(db),
       personaToMd(persona, name),
-      m.model ?? null,
-      m.reasoningEffort ?? null,
+      persona.profile ?? null,
       avatarToJson(m.avatar ?? { seed: hashName(name), salt: 0 }),
       m.updatedAt ?? now,
       now,
@@ -684,15 +651,14 @@ function importLegacyTeam(
   const maps = buildIdMaps(tasks, decisions);
   const tx: TeamTx = { db, now };
 
-  // ---- 班底模板行（member 表；领队不进班底——它是领队实例行）----
-  const insertMember = db.prepare(
-    'INSERT INTO member (team_id, role_id, role_name, employee_id, persona_md, model, ' +
-      'reasoning_effort, avatar, created_time, update_time) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  // ---- 班底行（team_members；领队不进班底——它是领队实例行）----
+  const insertTeamMember = db.prepare(
+    'INSERT INTO team_members (team_id, role_id, model, reasoning_effort, created_time, update_time) ' +
+      'VALUES (?, ?, ?, ?, ?, ?)',
   );
   const employeeByMember = new Map<string, number | null>();
   for (const m of old.members ?? []) {
-    if (m.name === LEADER_NAME) continue; // 领队行见下：不入班底模板
+    if (m.name === LEADER_NAME) continue; // 领队行见下：不入班底
     const name = m.name;
     const role = (m.role ?? name).trim() || name;
     const persona = personaFromFields(m.persona ?? {}, name, role);
@@ -702,28 +668,21 @@ function importLegacyTeam(
       parseEmployeeId(m.employeeId) ??
       (fromRoster !== undefined ? parseEmployeeId(fromRoster.employeeId) : undefined) ??
       nextEmployeeId(db);
-    const route = legacyRouteColumns(m.modelRoute);
-    insertMember.run(
-      teamId,
-      resolveRoleId(db, role),
-      name,
+    // 加成员即入库（v3）：同名角色行缺则从班底行自建（工号/手册/头像带上）；
+    // 已有同名行（roster.json 导入）以角色行为准，班底行只留派发路线。
+    const roleId = ensureRolesRowInTx(tx, name, persona, {
+      avatar: m.avatar ?? { seed: hashName(name), salt: 0 },
       employeeId,
-      personaToMd(persona, name),
-      route.model,
-      route.effort,
-      avatarToJson(m.avatar ?? { seed: hashName(name), salt: 0 }),
-      m.createdAt ?? now,
-      now,
-    );
+    });
+    const route = legacyRouteColumns(m.modelRoute);
+    insertTeamMember.run(teamId, roleId, route.model, route.effort, m.createdAt ?? now, now);
     employeeByMember.set(name, employeeId);
   }
 
   // ---- 领队实例行（docs/35 §5#2：captainSessionId/captainChildId 落这里）----
   const leaderTemplate = roster.find((r) => r.name === LEADER_NAME);
   const leaderRow = db
-    .prepare(
-      'SELECT employee_id, persona_md FROM member WHERE team_id IS NULL AND role_name = ?',
-    )
+    .prepare('SELECT employee_id, persona_md FROM roles WHERE role_name = ?')
     .get(LEADER_NAME) as { employee_id: number | null; persona_md: string | null } | undefined;
   const leaderPersona = personaFromFields(
     leaderTemplate ?? {},
@@ -739,7 +698,6 @@ function importLegacyTeam(
     employeeId: leaderRow?.employee_id ?? null,
     mainSessionId: old.captainSessionId ?? '',
     childSessionId: old.captainChildId ?? '',
-    roleId: null,
     status: hasLeader ? 'ready' : 'removed',
     personaMd: leaderRow?.persona_md ?? personaToMd(leaderPersona, LEADER_NAME),
     createdAt: old.createdAt ?? now,
@@ -762,7 +720,6 @@ function importLegacyTeam(
       employeeId: employeeByMember.get(m.name) ?? null,
       mainSessionId: '',
       childSessionId,
-      roleId: null,
       status: mapMemberStatus(m.status),
       personaMd: personaToMd(persona, m.name),
       ...(route.model !== null ? { model: route.model } : {}),

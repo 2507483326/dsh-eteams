@@ -69,9 +69,10 @@ pages/teamsView/
   rail.tsx                   宽/窄侧栏（自 index 拆出）
 pages/shared/
   styles.ts                  类名常量层（shared.tsx 拆分，17 引用方改导入）
-  components.tsx             Pill/FormErrorNote/PageHeader 小组件层
+  components.tsx             Pill/FormErrorNote/PageHeader 小组件层 +
+                             任务展示态 pill 族（docs/47 DB10 自 taskPills 纯移动）
   markdownDoc.tsx            Markdown 只读渲染包装
-pages/board/    boardPage.tsx  usageCalendar.tsx
+pages/board/    boardPage.tsx  usageCalendar.tsx  taskActivity.tsx
 pages/reports/  reportsPage.tsx
 pages/team/     teamPage.tsx  teamDetailPage.tsx  memberCards.tsx
                 memberDetailPage.tsx  memberDialog.tsx
@@ -80,7 +81,7 @@ pages/roster/   rosterPage.tsx  rosterAddPage.tsx  rosterDetailPage.tsx
                 buildWorkbench.tsx  buildDraft.tsx
 pages/tasks/    tasksPage.tsx  taskDetailPage.tsx  taskDialogs.tsx
                 taskDrawer.tsx  taskHeaderCard.tsx  taskListCard.tsx
-                taskSubtaskItem.tsx  taskPills.tsx
+                taskSubtaskItem.tsx  taskBody.ts
 ```
 
 pages 根 5 个表面（teamsButton/teamsPanel/heroTeamsButton/eteamsCard/buildCard）是独立注册面，留在 pages/ 根。

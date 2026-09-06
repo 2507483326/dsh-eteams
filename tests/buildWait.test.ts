@@ -96,7 +96,7 @@ describe('eteams_build_wait（docs/19.17.1 停驻等待）', () => {
   it('wakes on confirm — raw-content token, no updatedAt dependency', async () => {
     await reportBuildProgress(stateRoot(), {
       request: 'r',
-      draft: { name: 'data-eng', role: '数据工程师', personaMd: '# 手册' },
+      draft: { name: 'data-eng', role: '数据工程师', personaMd: '# 手册', profile: '一句话简介' },
     });
     await reportBuildProgress(stateRoot(), { status: 'awaiting_confirmation' });
     await markBuilderChild(stateRoot(), 'builder-child-1');

@@ -8,6 +8,10 @@
  * 「＋」点开多选追加（chainAfterAppendMany）——弹窗不再做链编排。
  * 2026-09-05 七轮（DA20 卡片拖拽调执行顺序）：兄弟依赖链语义——
  * executionOrderOf（拓扑展示序）+ depPatchesForReorder（拖卡→依赖改写补丁）。
+ * 2026-09-06 三十五轮（DA48 松手放置判位插入）：成员拖入成员槽=按落点 X
+ * 判位插入（insertionIndexOf + chainAfterInsert，空链=追加即放置）；二轮
+ * DA13 的「chip drop=定点替换」废止（nextChainAfterDrop 删除——替换与悬空
+ * 名修复改走 × 移除 + 再拖入）。
  * 本模块不 import React，可被 vitest 直测（tests/taskAssign.test.ts）。
  *
  * @module dsh-eteams/client/taskAssignCore
@@ -35,34 +39,40 @@ export function isAssignEditable(task: ChainTaskLike): boolean {
 }
 
 /**
- * drop → 新链（A.3.1 规则表，二轮 DA13）：
+ * 三十五轮 DA48：松手放置判位——成员拖入成员槽按落点 X 判插入位：逐个站点
+ * chip 中点比距，`x < midpoints[i]`（最近 chip 中点**左半**）= 插其前，右半 =
+ * 插其后；全越过 → midpoints.length（末尾追加）；空数组 → 0（空链=追加）。
+ */
+export function insertionIndexOf(midpoints: readonly number[], x: number): number {
+  for (const [i, mid] of midpoints.entries()) {
+    if (x < mid) return i;
+  }
+  return midpoints.length;
+}
+
+/**
+ * 三十五轮 DA48：成员拖入成员槽 = 松手放置（原「空白处=末尾追加」改「按落
+ * 点判位插入」——落点 X 经 {@link insertionIndexOf} 判位，空链=追加）：
+ * 在 `index` 处插入 `{member, stageBrief:''}`（update 通道空 brief 合法，
+ * E4/29.5 冲突①；**接力链不设上限**，DA15 曾限 2 站已废止）。
  * - 不可编辑 → null（不注册 drop target，双保险）；
- * - 拖入成员与链内**任一站点**同名 → null（DA8 二轮：全链去重——接力链同
- *   一成员占两站无意义且防误操作；不发请求，组件给出 200ms 微反馈）；
- * - `stationIndex` 缺省（空白处 drop）= 末尾追加 `{member, stageBrief:''}`
- *   （update 通道空 brief 合法，E4/29.5 冲突①）——**接力链不设上限**（DA15
- *   曾限 2 站，2026-09-05 四轮拍板废止）；
- * - `stationIndex` 显式（chip drop）= 定点替换该站成员、stageBrief 原值保留；
- *   越界（快照中途变化）→ null（no-op，不误追加）。
+ * - 拖入成员与链内**任一站点**同名 → null（DA8 去重同源——接力链同一成员
+ *   占两站无意义且防误操作；不发请求，组件给出 200ms 微反馈）；
+ * - `index` 夹取到 [0, chain.length]（快照中途变化防越界，不误投）。
  * 返回 null = no-op（不发请求）。
  */
-export function nextChainAfterDrop(
+export function chainAfterInsert(
   task: ChainTaskLike,
   member: string,
-  stationIndex?: number,
+  index: number,
 ): TaskSlotInput[] | null {
   if (!isAssignEditable(task) || task.chain.some((s) => s.member === member)) return null;
+  const clamped = Math.min(Math.max(index, 0), task.chain.length);
   const chain: TaskSlotInput[] = task.chain.map((s) => ({
     member: s.member,
     stageBrief: s.stageBrief,
   }));
-  if (stationIndex === undefined) {
-    chain.push({ member, stageBrief: '' });
-    return chain;
-  }
-  const replaced: { member: string; stageBrief: string } | undefined = task.chain[stationIndex];
-  if (replaced === undefined) return null;
-  chain[stationIndex] = { member, stageBrief: replaced.stageBrief };
+  chain.splice(clamped, 0, { member, stageBrief: '' });
   return chain;
 }
 
@@ -244,11 +254,9 @@ export function depPatchesForReorder(
     const deps =
       prev === undefined || external.includes(prev) ? [...external] : [...external, prev];
     const changed =
-      deps.length !== task.dependencies.length ||
-      deps.some((d) => !task.dependencies.includes(d));
+      deps.length !== task.dependencies.length || deps.some((d) => !task.dependencies.includes(d));
     if (!changed) return;
     patches.push({ taskId: task.taskId, dependencies: deps });
   });
   return patches.length > 0 ? patches : null;
 }
-

@@ -10,7 +10,7 @@
 /** Base URL prefix for every eteams route. */
 const API_BASE = '/eteams-api';
 
-/** One reusable member definition in the workspace roster (D16). */
+/** One reusable member definition in the workspace roster (D16, v3 角色库). */
 export interface RosterMember {
   name: string;
   /** 工号 (docs/21): host 发整数工号（显示补零走 host 快照的格式化串）。 */
@@ -23,9 +23,6 @@ export interface RosterMember {
   skills?: string;
   rules?: string[];
   executionPrompt?: string;
-  /** Optional per-member model route（docs/35 §3#5：provider 已砍）。 */
-  model?: string;
-  reasoningEffort?: string;
   /** Pre-generated avatar pair (docs/14); host assigns one when absent. */
   avatar?: { seed: number; salt: number };
   /** Full Markdown role playbook (agency-agents-zh style). */
@@ -48,9 +45,6 @@ export interface NewMemberInput {
   personaMd?: string;
   /** Pre-generated avatar pair（详情页「随机头像」透传，用户迭代 2026-09-03）. */
   avatar?: { seed: number; salt: number };
-  /** Optional model route re-sent by the role-detail save (host replaces the entry). */
-  model?: string;
-  reasoningEffort?: string;
 }
 
 async function requestJson(url: string, init?: RequestInit): Promise<unknown> {

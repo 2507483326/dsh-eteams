@@ -138,17 +138,24 @@ export function RosterDetailPage({ members, team, onDeleted }: RosterDetailPageP
             ...(detail.executionPrompt !== undefined
               ? { executionPrompt: detail.executionPrompt }
               : {}),
-            ...(detail.model !== undefined ? { model: detail.model } : {}),
-            ...(detail.reasoningEffort !== undefined
-              ? { reasoningEffort: detail.reasoningEffort }
-              : {}),
             ...(detailDraftAvatar !== null ? { avatar: detailDraftAvatar } : {}),
             personaMd: detailDraftMd,
           },
         });
         if (nameChanged && !nameLocked) {
           // 改名 = 新条目已落库后移除旧条目；保留角色锁名不会走到这里。
-          await dispatch({ type: 'roster/deleteRoster', payload: detail.name });
+          // 失败回滚（v3 角色行按名 upsert）：删旧名失败时把刚建的新条目删掉
+          // 再报错，避免留下重复条目（新旧行同库共存会互相遮蔽）。
+          try {
+            await dispatch({ type: 'roster/deleteRoster', payload: detail.name });
+          } catch (rollbackError) {
+            try {
+              await dispatch({ type: 'roster/deleteRoster', payload: newName });
+            } catch {
+              // 回滚失败尽力而为：以原错误为准上报
+            }
+            throw rollbackError;
+          }
         }
         // 详情跟随新名（改名后停在详情页）：:name 路由参数即角色名——改名
         // 即换参（同路由换参不重挂，编辑态就地退出）。

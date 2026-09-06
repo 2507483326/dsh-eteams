@@ -640,12 +640,14 @@ describe('panel write routes (M5 first slice)', () => {
     expect(added.code).toBe(200);
     const directId = readTeam(teamId).members[0]!.employeeId;
     expect(typeof directId).toBe('number');
-    // 后续 roster upsert 取下一个号，不与团队直加撞号。
+    // 后续 roster upsert 取下一个号，不与团队直加撞号（v3：加成员即入库，
+    // 直加成员同样出现在角色库里）。
     await h.post('/eteams-api/roster', { name: 'Later', role: 'tester' });
     const seeded = await h.get('/eteams-api/roster');
     const parsed = json<{ members: { name: string; employeeId?: number }[] }>(seeded.body);
     const ids = parsed.members.map((m) => m.employeeId);
-    expect(ids).not.toContain(directId);
+    expect(ids).toContain(directId);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   it('projects 工号 through the team snapshot (members and captain)', async () => {

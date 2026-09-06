@@ -34,8 +34,11 @@
  * 同交互尾部的焦点默认动作落在 portal 内容之外的锚面上，刚挂载的 Radix
  * focusin 外出关闭路径立即触发 onDismiss，弹窗一开即收，用户拍板「弹出
  * 弹窗后马上就消失了」；click 开合在整个交互结束后才挂外出监听，同交互
- * 不再自伤，点锚面收起由本处显式翻转承担、不依赖 deferred 关闭）；
- * 以拖放时刻最新快照的 chain 为底改后整链重发，DA10 复用
+ * 不再自伤，点锚面收起由本处显式翻转承担、不依赖 deferred 关闭）；三十五
+ * 轮 DA48：成员拖入成员槽改**松手放置**——按落点 X 判位插入（chip 中点左
+ * 半=插其前、右半=插其后，悬停插入指示线可视化；空链=追加即放置），「拖
+ * 到 chip=替换该站」废止（替换与悬空名修复改走 × 移除 + 再拖入），chip
+ * 嵌套 drop 只剩调序；以拖放时刻最新快照的 chain 为底改后整链重发，DA10 复用
  * updateTeamTask、非乐观更新）。
  *
  * 拖拽 item 类型 'eteams-member'（A.2）；类名全部完整字面量映射（E17/
@@ -56,10 +59,11 @@ import type { CaptainView, MemberView, TeamSnapshot, TaskView } from '../../lib/
 import {
   canRemoveStation,
   chainAfterAppendMany,
+  chainAfterInsert,
   chainAfterReorder,
   employeeBadgeOf,
+  insertionIndexOf,
   isAssignEditable,
-  nextChainAfterDrop,
   readonlyStationMember,
 } from './taskAssignCore';
 import { DOT_BASE_CLASS, DOT_TONE_CLASS, memberTone } from './taskDisplayStatus';
@@ -67,7 +71,8 @@ import { Button } from '../../components/ui/button';
 import { Popover, PopoverAnchor, PopoverContent } from '../../components/ui/popover';
 
 /** 每条拖拽 item 的类型常量（A.2：同一任务 Provider 内拖拽源/目标配对）。
- * 'eteams-member'=罗列条成员 chip（drop=追加/替换）；'eteams-station'=卡槽内
+ * 'eteams-member'=罗列条成员 chip（drop=按落点判位插入，三十五轮 DA48——
+ * 原「追加/替换」废止）；'eteams-station'=卡槽内
  * 站点 chip（六轮 DA19：drop 到另一 chip=调序，容器不接受该类型——空白处
  * 落点无目标即 not-allowed，语义「调序只能 chip→chip」）；'eteams-subtask'=
  * 小任务卡片**把手**（七轮 DA20 调序 + 十轮 DA23 把手化：drop 到另一张卡=
@@ -102,8 +107,9 @@ export function TaskDndProvider({ children }: { children: ReactNode }): ReactNod
   return <DndProvider backend={HTML5Backend}>{children}</DndProvider>;
 }
 
-/** 去重微反馈（A.3.1：200ms 边框/环闪现，不发请求）——落点跟随 drop 命中面
- * （chip drop 闪 chip、空白处 drop 闪容器，二轮 DA13），卸载时清定时器。 */
+/** 去重微反馈（A.3.1：200ms 边框/环闪现，不发请求）——三十五轮 DA48 起
+ * flash 只落容器（成员 drop 不再命中 chip——判位插入/同名去重都在容器判，
+ * chip 侧闪现随「chip=替换」废止一并撤除），卸载时清定时器。 */
 function useFlash200(): [boolean, () => void] {
   const [flash, setFlash] = useState(false);
   const flashTimer = useRef<number | null>(null);
@@ -119,6 +125,27 @@ function useFlash200(): [boolean, () => void] {
     flashTimer.current = window.setTimeout(() => setFlash(false), 200);
   };
   return [flash, flashOnce];
+}
+
+/**
+ * 三十五轮 DA48 判位测量（drop 判位与悬停插入指示线共用）：按 DOM 序取容器
+ * 内站点 chip 的几何——mids=chip 视口中点 X（getBoundingClientRect，与
+ * getClientOffset 同一视口坐标系，insertionIndexOf 判位用）；lefts=chip
+ * offsetLeft（内容坐标，滚动容器下 caret 定位稳）；endLeft=末 chip 右缘 +
+ * 2（无 chip → 8，空链 caret 缺省位）。chip 以 data-station-index 锚定。
+ */
+function stationMetricsOf(box: HTMLElement): { mids: number[]; lefts: number[]; endLeft: number } {
+  const chips = box.querySelectorAll<HTMLElement>('[data-station-index]');
+  const mids: number[] = [];
+  const lefts: number[] = [];
+  for (const chip of chips) {
+    const rect = chip.getBoundingClientRect();
+    mids.push(rect.left + chip.offsetWidth / 2);
+    lefts.push(chip.offsetLeft);
+  }
+  const last = chips.item(chips.length - 1);
+  const endLeft = last === null ? 8 : last.offsetLeft + last.offsetWidth + 2;
+  return { mids, lefts, endLeft };
 }
 
 /** 成员 chip 的拖拽源 hook：deps 携带成员名（空 deps 会冻结 spec——见文件头）。 */
@@ -162,9 +189,13 @@ const BOX_CAN_DROP_CLASS = `${BOX_BASE_CLASS} border border-dashed border-[color
 const BOX_OVER_CLASS = `${BOX_BASE_CLASS} border border-solid border-primary bg-[color:var(--eteams-pill-bg)] text-foreground`;
 /** 多站容器（可编辑框承整链，DA13/DA5 二轮）：虚线圆角框**横向单行**（五轮
  * DA18：去 280px 宽上限与换行，超宽横向滚动），行尾「＋」追加提示；chip 与
- * 容器 canDrop 同条件（A.3.1 注记）。 */
+ * 容器 canDrop 同条件（A.3.1 注记）；三十五轮 DA48 加 relative——悬停插入
+ * 指示线（INSERT_CARET_CLASS 绝对定位）以容器为 containing block。 */
 const BOX_MULTI_CLASS =
-  'inline-flex max-w-full flex-nowrap items-center gap-1 overflow-x-auto rounded-[4px] border border-dashed px-1.5 py-1 text-xs leading-none transition-colors';
+  'inline-flex max-w-full flex-nowrap items-center gap-1 overflow-x-auto rounded-[4px] border border-dashed px-1.5 py-1 text-xs leading-none transition-colors relative';
+/** 悬停插入指示线（三十五轮 DA48：落点前后判位可视化——2px 品牌色竖线，
+ * 锚 chip 左缘/末 chip 右缘；top/bottom 撑满容器可见高）。 */
+const INSERT_CARET_CLASS = 'absolute bottom-0 top-0 w-0.5 bg-primary';
 /** 多站容器悬停（空白处）：虚线转实线 + 品牌边 + 品牌淡底（color-mix——
  * 二十三轮 DA36：原中性 pill 底与 chip 底同色，chip 列表顶满时高亮看不出
  * （用户拍板「拖拽时高亮显示被遮挡了」），改品牌淡底让悬停面始终可辨）。 */
@@ -184,7 +215,8 @@ const BOX_CHIP_CLASS =
 const BOX_READONLY_CLASS = `${BOX_CHIP_CLASS} opacity-60`;
 /** 悬停时 chip 轻微上浮阴影（A.5.1；D22f 阴影档同 MEMBER_CARD）。 */
 const BOX_OVER_SHADOW_CLASS = 'shadow-[0_1px_2px_rgba(15,23,42,0.08)]';
-/** chip 被悬停（=替换该站）/去重闪现：brand 环（box-shadow 不引发回流）。
+/** chip 被悬停（站点拖拽=调序目标；三十五轮 DA48 起成员拖拽不再命中 chip
+ * ——判位插入/去重闪现落容器）：brand 环（box-shadow 不引发回流）。
  * 二十三轮 DA36：加 ring-inset——环画进 chip 内缘，滚动容器（overflow-x-auto）
  * 裁不掉（chip 列表顶到左边/滚动态时外缘环会被裁，用户拍板「拖拽时高亮
  * 显示被遮挡了」）。 */
@@ -288,20 +320,22 @@ export function StripAssignHint(): ReactNode {
  * drop target。可编辑窗口（DA6：`draft/ready && chainCursor===-1`）内框承
  * 整链——空链时容器即空槽（拖入或点击多选=追加站点，不设上限，DA15 已废止）；
  * 有链时容器横向单行排布站点 chips（Avatar 26px + 名字，工号入悬浮提示）+
- * 行尾「＋」多选按钮，拖到空白处=追加、拖到 chip=替换该站、chip 拖到另一
+ * 行尾「＋」多选按钮，成员拖入=松手放置**判位插入**（三十五轮 DA48：按落
+ * 点 X 判位——空链=追加即放置、悬停插入指示线可视化；原「拖到 chip=替换
+ * 该站」废止，替换改走 × + 再拖入）、chip 拖到另一
  * chip=调序、「＋」点开=多选追加（嵌套 drop target：dnd-core 内层先 drop，
  * 容器以 `didDrop` 让位、`isOver({shallow})` 区分悬停面；chip 与容器对成员
  * 类型 canDrop 同条件；容器不接受站点类型——调序只能 chip→chip，空白处
  * not-allowed）。drop 以**拖放时刻最新快照的 chain**为底现算新链整链重发
  * （不缓存旧 chain，A.7 风险②）；同名成员拖入 = no-op（DA8 全链去重 +
- * 200ms 微反馈，闪现落点跟随命中面）。
+ * 200ms 微反馈，闪现落容器）。
  *
  * 「修改」弹窗不再做链编排（DA19）：容器空白处/chip 点击仍打开弹窗（任务
  * 主题/说明），链增删调序只走卡槽（＋多选 / × / chip 拖动）。
  *
  * 只读（已领取/合同冻结/开跑）：chip 静态渲染，承单站（assignee 优先，
- * readonlyStationMember）。悬空名 chip（可编辑窗口内任意站）可被拖拽定点
- * 替换修复（DA9 二轮）；报错经 FormErrorNote 就地展示，不绕过。
+ * readonlyStationMember）。悬空名 chip 修复改走 × 移除 + 再拖入（三十五轮
+ * DA48：原「拖拽定点替换修复」废止）；报错经 FormErrorNote 就地展示，不绕过。
  */
 export function TaskAssignDropBox({
   task,
@@ -316,7 +350,7 @@ export function TaskAssignDropBox({
   members: readonly MemberView[];
   /** 该小任务的指派提交中（assignBusy，A.5.1 提交中行）。 */
   busy: boolean;
-  /** drop 命中且 nextChainAfterDrop 产出新链：整链重发。 */
+  /** drop 命中且 chainAfterInsert 产出新链：整链重发。 */
   onAssign: (chain: TaskSlotInput[]) => void;
   /** chip ×（移除该站）：chainAfterRemove 后整链重发。 */
   onRemoveStation: (index: number) => void;
@@ -326,7 +360,8 @@ export function TaskAssignDropBox({
 }): ReactNode {
   const editable = isAssignEditable(task);
   const eligible = editable && !busy;
-  // 容器级去重微反馈（空白处 drop 的 no-op：chip 级闪现在 StationChip 内部）。
+  // 容器级去重微反馈（三十五轮 DA48：成员 drop 全落容器，flash 也只落容器——
+  // chip 侧闪现已撤，chip 悬停环只剩调序目标高亮）。
   const [flash, flashOnce] = useFlash200();
   // 「＋」多选追加面板（六轮 DA19）：picked=勾选中的成员名（按勾选顺序追
   // 加为站点）；openPicker 清空上轮勾选。
@@ -345,27 +380,59 @@ export function TaskAssignDropBox({
     setPicked([]);
     setPickerOpen(true);
   };
-  // 容器 drop target（空白处 = 追加）：shallow 区分悬停面；didDrop 让位 chip。
+  // 容器 drop target（三十五轮 DA48：成员拖入=松手放置**判位插入**——原
+  // 「空白处=末尾追加」改按落点 X 判位，空链 mids 空 → index 0=追加，行为
+  // 等价）：shallow 区分悬停面；didDrop 让位 chip（防御位保留）。判位测量
+  // 锚点=容器 DOM（boxRef），collect 顺带取落点坐标（悬停 caret 渲染用）。
   // chip 与容器 canDrop 同条件（A.3.1 注记——更严方会被 dnd-core 滤掉改变落
   // 点语义；三轮曾收容器为满员禁投，四轮废止恢复对称）。
   // deps 携带最新 task/回调：spec 闭包逐渲染刷新（drop 不缓存旧 chain）。
-  const [{ isOver }, dropRef] = useDrop<MemberDragItem, unknown, { isOver: boolean }>(
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const [{ isOver, offset }, dropRef] = useDrop<
+    MemberDragItem,
+    unknown,
+    { isOver: boolean; offset: { x: number; y: number } | null }
+  >(
     () => ({
       accept: MEMBER_DRAG_TYPE,
       canDrop: () => eligible,
       drop: (item, monitor) => {
         if (monitor.didDrop()) return;
-        const chain = nextChainAfterDrop(task, item.member);
+        // 三十五轮 DA48：按落点 X 判插入位（视口坐标，与 chip 中点同系）；
+        // 测不到容器/落点（防御）退回末尾追加。
+        const dropOffset = monitor.getClientOffset();
+        const box = boxRef.current;
+        const index =
+          box === null || dropOffset === null
+            ? task.chain.length
+            : insertionIndexOf(stationMetricsOf(box).mids, dropOffset.x);
+        const chain = chainAfterInsert(task, item.member, index);
         if (chain !== null) {
           onAssign(chain);
           return;
         }
         if (isAssignEditable(task)) flashOnce();
       },
-      collect: (monitor) => ({ isOver: monitor.isOver({ shallow: true }) && monitor.canDrop() }),
+      collect: (monitor) => ({
+        isOver: monitor.isOver({ shallow: true }) && monitor.canDrop(),
+        offset: monitor.getClientOffset(),
+      }),
     }),
     [task, eligible, onAssign, flashOnce],
   );
+
+  // 三十五轮 DA48 悬停插入指示（落点前后判位可视化——caret 锚 chip 左缘/
+  // 末 chip 右缘，offsetLeft 内容坐标滚动稳；非悬停/测不到落点 → null 不
+  // 渲染）。容器 DOM 节点走回调 ref 存进 state（react-hooks/refs 禁渲染期
+  // 读 ref.current——commit 期回调存节点、渲染期读 state 不受限；boxRef 供
+  // drop 处理器取节点用，与 boxEl 同一回调写入、不会分叉）。
+  const [boxEl, setBoxEl] = useState<HTMLDivElement | null>(null);
+  let caret: number | null = null;
+  if (isOver && eligible && offset !== null && boxEl !== null) {
+    const metrics = stationMetricsOf(boxEl);
+    const anchored = metrics.lefts[insertionIndexOf(metrics.mids, offset.x)];
+    caret = anchored === undefined ? metrics.endLeft : anchored - 1;
+  }
 
   const onKeyOpen = (e: KeyboardEvent<HTMLDivElement>): void => {
     if (e.key === 'Enter' || e.key === ' ') {
@@ -409,7 +476,8 @@ export function TaskAssignDropBox({
     );
   }
 
-  // 可编辑 + 空链：容器即空槽（拖入 = 追加站点；六轮 DA19：点击/键盘 =
+  // 可编辑 + 空链：容器即空槽（拖入 = 追加站点；三十五轮 DA48：drop 走判位
+  // 路径——空链 mids 空 → index 0 = 追加，与原追加等价；六轮 DA19：点击/键盘 =
   // 「＋」多选面板——弹窗不再编排链，一轮空框口径的点击行为随之改道）。
   // 二十五轮 DA38→二十六轮 DA39 修订：开合承载事件从 pointerdown 改回
   // click（用户拍板「弹出弹窗后马上就消失了」——pointerdown 开合让刚挂载
@@ -423,7 +491,11 @@ export function TaskAssignDropBox({
       <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
         <PopoverAnchor asChild>
           <div
-            ref={dropRef}
+            ref={(node) => {
+              dropRef(node);
+              boxRef.current = node;
+              setBoxEl(node);
+            }}
             tabIndex={0}
             title="拖入成员=追加站点；点击多选添加"
             className={cn(
@@ -458,14 +530,19 @@ export function TaskAssignDropBox({
   }
 
   // 可编辑 + 有链：容器承整链 chips（按序=接力顺序）+ 行尾「＋」多选按钮
-  // （六轮 DA19：点开面板勾选追加；容器空白处/chip 点击仍开「修改」弹窗）。
-  // busy 时整框禁用。
+  // （六轮 DA19：点开面板勾选追加；容器点击仍开「修改」弹窗）。busy 时整框
+  // 禁用。三十五轮 DA48：悬停成员拖拽时渲染插入指示线（caret 判位见上方
+  // boxEl 状态分支——与 drop 同源 stationMetricsOf）。
   return (
     <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
       <div
-        ref={dropRef}
+        ref={(node) => {
+          dropRef(node);
+          boxRef.current = node;
+          setBoxEl(node);
+        }}
         tabIndex={0}
-        title="拖到空白处=追加站点；拖到成员上=替换该站；chip 拖动=调序；×=移除该站；点击打开修改弹窗"
+        title="拖入成员按落点插入（成员前/后）；chip 拖动=调序；×=移除该站；点击打开修改弹窗"
         className={cn(
           BOX_MULTI_CLASS,
           isOver && eligible && BOX_MULTI_OVER_CLASS,
@@ -509,9 +586,11 @@ export function TaskAssignDropBox({
               else openPicker();
             }}
           >
-            {isOver ? '松手追加' : '＋'}
+            ＋
           </button>
         </PopoverAnchor>
+        {/* 三十五轮 DA48：悬停插入指示线（判位可视化）——落点判位与 drop 一致 */}
+        {caret !== null && <span className={INSERT_CARET_CLASS} style={{ left: caret }} />}
       </div>
       <StationPicker
         members={members}
@@ -600,16 +679,20 @@ function StationPicker({
 
 /**
  * 站点 chip（二轮 DA13 嵌套 drop target；四轮 DA17 恢复 pill；五轮 DA18
- * 工号撤出版面；六轮 DA19 兼作拖拽源=调序）：
- * - 罗列条成员 chip 拖到本 chip = 定点替换该站（nextChainAfterDrop 显式
- *   stationIndex）；同名去重 → 闪现该 chip（flash 落点跟随命中面）。
+ * 工号撤出版面；六轮 DA19 兼作拖拽源=调序；三十五轮 DA48 accept 收窄为
+ * 站点单一类型）：
  * - 本 chip 拖到另一 chip = 调序（chainAfterReorder 数组搬移，stageBrief
- *   随站走）；自拖自放 no-op；容器不接受站点类型——空白处无落点。
+ *   随站走）；自拖自放 no-op；容器不接受站点类型——空白处无落点。isOver =
+ *   站点拖拽悬停（调序目标）提示——成员拖拽不再命中 chip（判位插入与去重
+ *   反馈由容器承担，DA48）。
  * 中性 pill：Avatar 26px + 名字（工号与悬空标入悬浮提示，legacy 无工号不提）
- * + 悬空标（DA9：拖到本 chip 替换即修复）；× 移除该站（整链重发）。
+ * + 悬空标（DA9；修复改走 × 移除 + 再拖入，DA48 替换废止）；× 移除该站
+ * （整链重发）。
  * canDrop 与容器同 eligible（A.3.1 注记——更严方会被 dnd-core 滤掉、落点
  * 语义改变；三轮非对称已随 DA15 废止）；deps 携带最新 task/回调（不缓存旧
  * chain）。拖拽中半透明；点击冒泡到容器 = 打开「修改」弹窗。
+ * data-station-index=本站下标（三十五轮 DA48 判位测量锚点——容器
+ * stationMetricsOf 按 DOM 序取中点/offsetLeft）。
  */
 function StationChip({
   task,
@@ -630,37 +713,24 @@ function StationChip({
   onAssign: (chain: TaskSlotInput[]) => void;
   onRemove: () => void;
 }): ReactNode {
-  const [flash, flashOnce] = useFlash200();
   // 六轮 DA19：站点 chip 兼作拖拽源（调序）。拖拽中半透明（罗列条同款）。
   const [{ isDragging }, dragRef] = useStationDrag(index, member);
   // deps 携带最新 task/回调：spec 闭包逐渲染刷新（drop 不缓存旧 chain）。
-  // accept 为成员/站点双类型数组：成员 chip=替换该站、站点 chip=调序（drop
-  // 按 'index' in item 分流；容器只收成员类型——空白处对站点类型无落点）。
-  const [{ isOver }, dropRef] = useDrop<
-    MemberDragItem | StationDragItem,
-    unknown,
-    { isOver: boolean }
-  >(
+  // 三十五轮 DA48：accept 收窄为站点单一类型（原成员/站点双类型——成员拖到
+  // chip 的「定点替换」废止），drop 只剩调序分支；useFlash200 随之在本组件
+  // 无消费（成员 drop 不再命中 chip，同名去重/判位插入闪现都在容器）。
+  const [{ isOver }, dropRef] = useDrop<StationDragItem, unknown, { isOver: boolean }>(
     () => ({
-      accept: [MEMBER_DRAG_TYPE, STATION_DRAG_TYPE],
+      accept: STATION_DRAG_TYPE,
       canDrop: () => eligible,
       drop: (item) => {
-        if ('index' in item) {
-          // 站点 chip → 调序：被拖站搬到本站位置（自拖自放 no-op）。
-          const chain = chainAfterReorder(task, item.index, index);
-          if (chain !== null) onAssign(chain);
-          return;
-        }
-        const chain = nextChainAfterDrop(task, item.member, index);
-        if (chain !== null) {
-          onAssign(chain);
-          return;
-        }
-        if (isAssignEditable(task)) flashOnce();
+        // 站点 chip → 调序：被拖站搬到本站位置（自拖自放 no-op）。
+        const chain = chainAfterReorder(task, item.index, index);
+        if (chain !== null) onAssign(chain);
       },
       collect: (monitor) => ({ isOver: monitor.isOver() && monitor.canDrop() }),
     }),
-    [task, index, eligible, onAssign, flashOnce],
+    [task, index, eligible, onAssign],
   );
   const record = members.find((m) => m.name === member);
   const dangling = !members.some((m) => m.name === member);
@@ -672,13 +742,10 @@ function StationChip({
         dragRef(node);
         dropRef(node);
       }}
+      data-station-index={index}
       style={isDragging ? { opacity: 0.5 } : undefined}
-      title={`站点 ${index + 1}：${member}${detail ? `（${detail}）` : ''} · 拖到本 chip 上=替换该站；点击打开修改弹窗`}
-      className={cn(
-        BOX_CHIP_CLASS,
-        (isOver || flash) && CHIP_RING_CLASS,
-        isOver && BOX_OVER_SHADOW_CLASS,
-      )}
+      title={`站点 ${index + 1}：${member}${detail ? `（${detail}）` : ''} · 拖到另一 chip=调序；点击打开修改弹窗`}
+      className={cn(BOX_CHIP_CLASS, isOver && CHIP_RING_CLASS, isOver && BOX_OVER_SHADOW_CLASS)}
     >
       <Avatar name={member} seed={record?.avatar?.seed} salt={record?.avatar?.salt} size={26} />
       <span>{member}</span>

@@ -297,3 +297,180 @@ describe('v1→v2 task contract migration (DA29)', () => {
     }
   });
 });
+
+// v3 成员=角色合并（docs/27 v3）：member 表拆成 roles 角色库表 + team_members
+// 班底表，旧 roles 标签登记表删除，task_members 的 role_id 死列移除。旧库在
+// getDb 首次连接时单事务迁移；全新库 DDL 即新形状、迁移零操作（store 读写
+// 用例覆盖新库路径，这里只锁 v2 旧库迁移）。
+describe('v2→v3 member/roles consolidation migration', () => {
+  // v2 DDL（与 HEAD 的 SCHEMA_SQL 同形状，字段名以迁移读取列为准）。
+  const V2_ROLES_DDL = `CREATE TABLE roles (
+    role_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    role_name      TEXT NOT NULL,
+    persona_md     TEXT,
+    description    TEXT,
+    avatar         TEXT,
+    source         TEXT,
+    created_time   INTEGER NOT NULL,
+    update_time    INTEGER NOT NULL
+  );`;
+  const V2_MEMBER_DDL = `CREATE TABLE member (
+    member_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_id          INTEGER,
+    role_id          INTEGER,
+    role_name        TEXT NOT NULL,
+    employee_id      INTEGER,
+    persona_md       TEXT,
+    model            TEXT,
+    reasoning_effort TEXT,
+    avatar           TEXT,
+    created_time     INTEGER NOT NULL,
+    update_time      INTEGER NOT NULL
+  );`;
+  const V2_TASK_MEMBERS_DDL = `CREATE TABLE task_members (
+    task_member_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_id          INTEGER NOT NULL,
+    main_task_id     INTEGER,
+    now_task_id      INTEGER,
+    name             TEXT NOT NULL,
+    employee_id      INTEGER,
+    main_session_id  TEXT NOT NULL DEFAULT '',
+    child_session_id TEXT NOT NULL DEFAULT '',
+    role_id          INTEGER,
+    status           TEXT NOT NULL DEFAULT 'staged',
+    persona_md       TEXT,
+    model            TEXT,
+    reasoning_effort TEXT,
+    avatar           TEXT,
+    created_time     INTEGER NOT NULL,
+    update_time      INTEGER NOT NULL
+  );`;
+  const LEGACY_PERSONA_MD =
+    '# 人设 · 张工程师\n- 角色：前端工程师\n- 简介：负责页面骨架与交互\n- 职责边界：写页面\n- 执行提示：p';
+
+  it('moves member rows into roles + team_members on connect', () => {
+    const legacyRoot = mkdtempSync(join(tmpdir(), 'eteams-mig-v3-'));
+    try {
+      mkdirSync(dbDirOf(legacyRoot), { recursive: true });
+      const legacy = new DatabaseSync(dbFileOf(legacyRoot));
+      legacy.exec(V2_ROLES_DDL);
+      legacy.exec(V2_MEMBER_DDL);
+      legacy.exec(V2_TASK_MEMBERS_DDL);
+      // 工作区公共行（角色库本体）：工号保留、简介从手册提取。
+      legacy
+        .prepare(
+          'INSERT INTO member (member_id, team_id, role_name, employee_id, persona_md, avatar, ' +
+            'created_time, update_time) VALUES (1, NULL, ?, 7, ?, ?, 10, 11)',
+        )
+        .run('张工程师', LEGACY_PERSONA_MD, '{"seed":3,"salt":4}');
+      // 旧 roles 标签行：与公共行不同名（role_id=1 与 member_id=1 同号起步，
+      // 迁移不得撞主键），补缺成角色条目。
+      legacy
+        .prepare(
+          "INSERT INTO roles (role_id, role_name, persona_md, source, created_time, update_time) " +
+            "VALUES (1, '前端', NULL, 'user', 10, 11)",
+        )
+        .run();
+      // 班底行 1：同名公共行已有角色行 → role_id 按名解析 + 路线搬列。
+      legacy
+        .prepare(
+          'INSERT INTO member (member_id, team_id, role_name, employee_id, persona_md, model, ' +
+            'reasoning_effort, created_time, update_time) ' +
+            "VALUES (10, 1, '张工程师', 7, ?, 'deepseek-chat', 'high', 20, 21)",
+        )
+        .run(LEGACY_PERSONA_MD);
+      // 班底行 2：无同名角色行 → 从班底行自建 roles 行。
+      legacy
+        .prepare(
+          'INSERT INTO member (member_id, team_id, role_name, employee_id, persona_md, avatar, ' +
+            'created_time, update_time) ' +
+            "VALUES (11, 1, '李新员', 8, ?, NULL, 22, 23)",
+        )
+        .run('# 人设 · 李新员\n- 角色：测试\n- 执行提示：q');
+      // task_members 旧行带 role_id 数据：移除死列后行数不丢。
+      legacy
+        .prepare(
+          "INSERT INTO task_members (task_member_id, team_id, name, role_id, status, created_time, update_time) " +
+            "VALUES (1, 1, '张工程师', 99, 'ready', 30, 31)",
+        )
+        .run();
+      legacy.close();
+
+      const db = getDb(legacyRoot);
+      const tableNames = (
+        db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{
+          name: string;
+        }>
+      ).map((r) => r.name);
+      // 旧表已删，新形状表已建。
+      expect(tableNames).toContain('roles');
+      expect(tableNames).toContain('team_members');
+      expect(tableNames).not.toContain('member');
+      expect(tableNames).not.toContain('member_legacy');
+      expect(tableNames).not.toContain('roles_legacy');
+
+      // roles：公共行工号/手册/头像原样，简介从 `- 简介：` 行提取成列。
+      const zhang = db.prepare('SELECT * FROM roles WHERE role_name = ?').get('张工程师') as {
+        role_id: number;
+        employee_id: number | null;
+        persona_md: string | null;
+        profile: string | null;
+        avatar: string | null;
+      };
+      expect(zhang.employee_id).toBe(7);
+      expect(zhang.profile).toBe('负责页面骨架与交互');
+      expect(zhang.persona_md).toBe(LEGACY_PERSONA_MD);
+      expect(zhang.avatar).toBe('{"seed":3,"salt":4}');
+      // 旧标签行补缺（发新号，不撞公共行主键）。
+      const label = db.prepare('SELECT role_id FROM roles WHERE role_name = ?').get('前端') as {
+        role_id: number;
+      };
+      expect(label.role_id).not.toBe(zhang.role_id);
+      // 班底行自建角色行：工号/手册带上。
+      const li = db.prepare('SELECT * FROM roles WHERE role_name = ?').get('李新员') as {
+        employee_id: number | null;
+        persona_md: string | null;
+      };
+      expect(li.employee_id).toBe(8);
+      expect(li.persona_md).toContain('李新员');
+
+      // team_members：班底行搬表，role_id 按名解析，路线列跟着走。
+      const teamRows = db
+        .prepare(
+          'SELECT team_member_id, team_id, role_id, model, reasoning_effort FROM team_members ' +
+            'WHERE team_id = 1 ORDER BY team_member_id',
+        )
+        .all() as Array<{
+        team_member_id: number;
+        team_id: number;
+        role_id: number;
+        model: string | null;
+        reasoning_effort: string | null;
+      }>;
+      expect(teamRows).toHaveLength(2);
+      expect(teamRows[0]).toMatchObject({ team_member_id: 10, role_id: zhang.role_id,
+        model: 'deepseek-chat', reasoning_effort: 'high' });
+      expect(teamRows[1]).toMatchObject({ team_member_id: 11, role_id: li.role_id,
+        model: null, reasoning_effort: null });
+
+      // task_members 的 role_id 死列已移除，行数不丢。
+      const tmColumns = (
+        db.prepare('PRAGMA table_info(task_members)').all() as Array<{ name: string }>
+      ).map((c) => c.name);
+      expect(tmColumns).not.toContain('role_id');
+      expect((db.prepare('SELECT COUNT(*) AS n FROM task_members').get() as { n: number }).n).toBe(
+        1,
+      );
+
+      // 幂等：关连接重开（迁移重入）不再改写、不报错。
+      closeDb(legacyRoot);
+      const again = getDb(legacyRoot);
+      expect(
+        (again.prepare('SELECT COUNT(*) AS n FROM roles').get() as { n: number }).n,
+      ).toBe(3);
+      closeDb(legacyRoot);
+    } finally {
+      cleanupTempWorkspace(legacyRoot);
+    }
+  });
+});

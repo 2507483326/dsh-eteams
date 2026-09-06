@@ -551,3 +551,124 @@ popup 增加 **「＋ 新增成员」** 项：执行与 19.7.1 相同的一键�
 **为什么不是「加在团队 tab 判定」而是删除**（审核 P1 修订）：构建卡片经 `conversation.chat.commandview` 槽渲染在 chat 视图内，宿主对非活跃视图是**整体卸载**（`renderSlot` 的 `only: active.id` 过滤）——用户在团队 tab 时卡片连同轮询根本不在运行，「当前是否在团队 tab」在卡片侧物理不可判定；加了判定的跳转是双向不可达的死代码（在对话 tab → 判定为假；在团队 tab → 卡片不在）。且 19.17.1 的新模型（留在对话看卡片）下，定时强跳与用户意图相反。
 
 **修复**：删除 buildCard 的 20s 窗口自动跳转（连同 `jumpedSessionAt` 去重与 `userClickedSince` 接管判定——其唯一消费者随之消失，bridge 的点击锁存一并撤除）；`openMemberBuilder` 保留为卡片点击与用户主动入口。确认页落地由面板侧既有自动导航承担：`useBuildSession` 的 awaiting→`navigate('/roster/add')` 只在用户已浏览角色页时运行——天然满足「在面板内才跳」。
+
+## 19.18 用户迭代 ⑦：访谈弹窗跟随用户所在会话（2026-09-06）
+
+**反馈**：角色的意图访谈没有判断用户是在主会话还是子会话——弹窗固定落在主对话；用户正在看成员子会话（成员对话框）时看不到弹窗。要求判断后：在主会话就主会话显示，在子会话就子会话显示。
+
+**现状**：主路径里构建子代理发布访谈（`eteams_build_report interview=…`）后**自行**调 ask_user_question——选择框投影在主对话，与用户当前位置无关。「弹到用户眼前」的零件其实已齐：presence 心跳（teamsButton 挂每个打开对话的输入栏，5s 一跳上报 sessionId → presence.json）、`readBuildPresence` 定位、`steer` 任意活会话代理、`followup` 冷恢复投递、`interviewSteerText` 中转全文——只是这些只接在 popFailed 兜底上，主路径不判定。
+
+**方案（审核定稿：发布边沿就地判定 + popSelf 快路径，不做一律中转）**：主对话场景（大头）零额外往返——popSelf 就在发布播报的返回里，子代理同回合拿答案的快路径原样保留；只有 presence 指向成员会话才多一次投递。审核在补齐下述「冷恢复投递」前置后认可此选型。
+
+**前置补强——成员会话登记补父指针（审核 P1-1）**：闲置成员对话框**没有活代理**（成员激活空闲即 dispose，`ctx.agents` 查不到）——这恰是用户反馈的确切场景，不做本补强则分支①在关键场景扑空。补法：
+
+- `usage.ts` 登记身份加第三字段：`registerMemberSession(childId, { teamId, memberName, parentSessionId })`（模块级 Map 本就跨 dispose 存活）；parentSessionId 为空串不登记。补只读查询 `lookupMemberSession(childId)`。
+- `members.ts` 的 installMemberRuntime setup hook 登记点传入 `String(child.session?.header?.parentSession ?? '')`（该值即领队主会话 id，登记处现成可得）；成员子会话被冷恢复后 childId 与 parentSession 均不变，登记长期有效。
+
+**发布边沿判定（`captainTools.ts` `eteams_build_report` execute，新增于 popFailed 中转之后）**。触发前提（审核 P2-1/P2-2 收窄）：
+
+- **只对构建子代理调用者生效**：`session.builderChildId === String(exec.agent.id)` 才做 presence 判定；其它调用者不判定、不 steer，返回**不带** `popSelf` 字段。
+- **只在访谈发布边沿**：本次播报新写入 interview（无 popFailed、无 answers），且问题集与播报前不同——问题 JSON 与 beforeReport 逐一比对，**同题复发（重启代理后重新发布）不重复中转**，直接返回 `popSelf: false`（子代理停驻；作答入口 = 已中转弹窗或面板）。
+- 读 `readBuildPresence(root, 15_000)`（审核 P2-5：心跳 5s 一跳，窗口从默认 60s 收紧到 15s，容 3 跳内的切换抖动）；过期/缺失 → 视为「用户在主对话」。
+
+判定分支：
+
+- **① presence 命中注册在册成员会话**（`lookupMemberSession(presence.sessionId)` 非空，且 ≠ 调用者自己——自守卫）：
+  - 活代理在册（`agents.get(presence.sessionId)` 命中）→ 直接 `steer`（`interviewSteerText` 全文，summary=「意图访谈——请在本对话作答」）→ `popSelf: false`；
+  - 活代理不在册（闲置成员对话框）→ **经成员真实直接父冷恢复投递**：`agents.get(登记的 parentSessionId)` 命中领队主会话代理 → `subagents.followup(领队代理, presence.sessionId, 中转全文)`——parent 必须传成员的**真实直接父**（运行时按 lineage 授权，传错父会把成员子会话改挂到错误拓扑下）；followup 报 UNAUTHORIZED/NOT_RESUMABLE 或领队主会话不在线 → 落回 `popSelf: true`；
+  - 投递成功（steer 或 followup）→ `popSelf: false`。
+- **② 其余一律 `popSelf: true`**：presence 指向构建父（用户在主对话）/ 过期 / 指向无关会话（不在「构建父 ∪ 注册成员会话」集合内——审核 P2-6，不向陌生会话投递）。
+
+**中转文本（审核 P2-3）**：`interviewSteerText` 补一段弹窗失败降级——收到方（主对话代理或被中转的成员代理）ask_user_question 被拒/报错/被用户关闭时：把问题以纯文本列出请用户直接回复选项 label，收到回复解析成 `answers` 经 `eteams_interview_answer` 提交（成员没有 `eteams_build_report`，不能走 popFailed 上报）；保留「不要调用 `eteams_build_dispatch` / 不要重开构建」禁令。summary 由调用点给定：popFailed 路径沿用「意图访谈弹窗不可用——请用选择框补弹」，发布边沿用「意图访谈——请在本对话作答」。
+
+**工具面与提示词触点（审核 P2-4）**：
+
+- `eteams_build_report` output schema 补可选布尔 `popSelf`（`additionalProperties: false` 下未声明字段会被校验丢弃，必须显式声明）；仅构建子代理调用路径填充。
+- 参数描述同步：「interview」补 popSelf 分支语义（发布后看返回，false 不弹直接停驻）；`eteams_interview_answer` 描述改为「弹出访谈的对话（主对话或被中转的成员会话）均可提交」。
+- 提示词：`prompts/spawn/builderPhases.ts` start/restart/resume 三处弹窗句补分支——`popSelf=true` → 立即 ask_user_question 逐题弹（选择框落主对话，同回合拿答案继续起草）；`false` → 用户在别的对话，宿主已把问题中转过去，直接 `eteams_build_wait` 停驻，本回合不起草不追问；`prompts/personas/builder.ts` 访谈纪律句同步。
+
+**答案回流配套（必需，否则子会话路径断头）**：中转到成员子会话后，提交答案的调用者是成员代理——`eteams_interview_answer` 现以 `exec.agent` 当父做 followup（成员 ≠ 子代理的父 → followup 失败 → 冷恢复重建把子代理改挂到成员会话下，拓扑损坏）。改为按 `readBuildParentSession` 侧车定位真父（与面板 interview 路由同口径）：父不在线时诚实报错「答案未保存 + 指引」，不在场也绝不重建错挂；工具描述从「主对话构建师专用」改为「弹出访谈的对话（主对话或被中转的成员会话）均可提交」。`eteams_build_dispatch` 对成员的可见性是另一件事（既有口径备查），不在本迭代。
+
+**面板兜底不变**：工作台渲染待答访谈 + `POST /rolebuilder/interview` 提交（父在线性前置校验）原样；弹窗被关/未答时用户仍可在面板作答——面板是所有投递路径的万能兜底。
+
+**装机前置验证点（审核 P1-2——仓内不可判定，装机先验）**：① 成员子会话里 ask_user_question 的弹窗渲染位置（成员对话框内 / 主对话 / 不渲染）：人工触发一次中转观察；② 成员对话框是否挂 TeamsButton 心跳（presence.json 是否出现成员子会话足迹）：只开一个成员对话框观察 presence.json。两点的降级均已内建：弹窗不可用走中转文本的纯文本问答段（与弹窗位置无关）；presence 无成员足迹则分支①不命中，自然落回主对话弹窗 + 面板兜底。
+
+**竞态与恢复（审核 P2-5 注记）**：读 presence 到投递之间用户可能切走——主→成员：弹窗落主对话，卡片仍在（损失小）；成员→主：中转进了成员对话框而人在主对话——作答入口 = 已中转弹窗或面板，子代理停驻不会被饿死。
+
+**验收要点**：① 发布边沿三分支（注册成员会话活代理 → steer + false；闲置成员会话 → 领队冷恢复 followup + false；父/过期/无关 → true）；② 成员调用 `eteams_interview_answer` 的 parent 取自侧车而非调用者；③ popFailed 中转不回归；④ 停驻模型唤醒链（答案落盘 → 让位 → continue followup）不断；⑤ 登记父指针、同题复发去重、output schema popSelf 声明；⑥ 非构建子代理调用者不判 presence、不带 popSelf。
+
+## 19.19 用户迭代 ⑧：确认表单双空 + 主对话噪音行（2026-09-06）
+
+**反馈**：「已开始构建 📚 文档技术调研大师——访谈完成、草稿已就绪并进入待确认，请在面板确认入库或提出调整。 就没有后续了。 简介 人设手册 没有填充内容」
+
+**诊断（三条独立根因，现场实证）**：
+
+1. **主对话噪音行 + 「没有后续」= 宿主跑的是旧构建**。出事会话宿主 boot 2026-09-06 14:24:52，装载的 lib builtAt 13:40:55——早于 §19.17.1 停驻模型（当天 16:01 构建才内建）。子代理初始提示词（会话转录可证）是旧纪律「做完当前任务自然收束回合，不需要你轮询等待任何东西」：草稿落盘（15:37:56）后子代理**收束回合** → 运行时结算通知被主对话模型转述成那行一句话（该文案在仓库里 grep 无出处——不是脚本文案，是转述）；无停驻 → 回合终止，再无后续。**处置 = 先提交工作区里未提交的 19.17.1/19.18 改动再重建、重启宿主加载新构建（重建若以提交树为准，未提交代码会被丢掉），本迭代不为此新增代码。**
+2. **简介空 = profile 特性晚于出事构建**。profile 整条链（提示词采集规则 / 守卫 / 保存字段 / 面板行）在提交 489f20e（15:38:38）落地，出事宿主（13:40:55 构建）没有 profile 概念——子代理自然不填，草稿 `profile: null` 进待确认。重启后提示词规则即生效；但 §19.17.2 宿主守卫只盯 personaMd，profile 漏报仍能静默进待确认——本迭代把守卫补成双字段硬闸。
+3. **人设手册在确认表单里空 = MdEditor 首同步死区**（4142997 引入的真 bug，cb52bc4 仅搬家）。确认表单首渲染时 `draftEdit` 还是 `EMPTY_EDIT`，编辑器以空文挂载；下一拍 draft-init effect 才把全量草稿填进 `draftEdit`，编辑器受控同步 effect 的守卫 `lastEmittedRef.current !== null` 在用户从未键入时恒为 null → `setMarkdown` 被跳过。而 mdxeditor 挂载初始化**不发** onChange（仅 `mutableMarkdownSignal$` 变更时发），`lastEmittedRef` 永远停在 null——编辑器视觉空白，`draftEdit` 里却揣着全量手册（rolebuilder.json 的 personaMd 3295 字符可证）。同款死区波及一切「值后到」的 MdEditor 场景（成员详情页、任务正文、子任务展开区）。
+
+**改动一（client，mdEditor.tsx）**：受控同步 effect 去掉 `lastEmittedRef.current !== null` 前置——条件收为 `value !== lastEmittedRef.current` 即 `setMarkdown(value)`。首拍 value 为空串时对未就绪的编辑器调 `setMarkdown` 由库的 pendingMethodCalls 重放机制兜住；打字回环（`value === lastEmittedRef`）依旧不触发；「对话里调整 → 表单跟随刷新」的外部整体同步语义不变。一处修复痊愈全部「值后到」消费位。
+
+**改动二（host，roleBuilder.ts §19.17.2 守卫补强）**：`requirePersonaMd` 扩为草稿完整性双字段闸——**personaMd 先查、profile 后查**（顺序钉死：`tests/roleBuilder.test.ts` 既有无草稿/空白手册用例断言匹配 /personaMd/，profile 先查会错配），各自独立报错语：profile 缺失时报「简介（profile）不能为空——请从手册提炼一句话随草稿一并上报后再置待确认」。两处调用点（newBuild 开会话边沿 + 合并报告 awaiting 边沿）同闸；手动创建路径（面板表单、简介可留空）不经此守卫，不受影响。测试影响面：`tests/roleBuilder.test.ts` 三处（状态机放行用例 L155、resume 用例 L201-204、19.17.2 守卫放行用例 L222-227——拒绝用例随顺序钉死不受影响）与 `tests/buildWait.test.ts` 确认唤醒用例 L97-101 的草稿补 profile。
+
+**遗留态兼容（审核 P2-4）**：重启后已存在的 awaiting 会话（profile=null）GET /rolebuilder 原样返回，确认表单简介列空——**可接受、不做迁移**：简介是可编辑 Input，用户可当场补一句；且该会话任何后续 awaiting 播报都会被新闸逼出含 profile 的全量草稿（自愈路径）。为一过性状态做「从手册合成简介」的迁移不值得（启发式代码 + 与故意留空语义冲突）。
+
+**验收要点**：① 待确认表单：会话翻到 awaiting 后手册编辑器呈现全量草稿（不再空白）；② 构建子代理报 awaiting 缺 profile → 工具报错且状态不翻页，补报后放行；③ 打字无回环、对话里调整后表单仍整体刷新；④ 成员详情/任务正文的编辑器在数据后到时正常填充；⑤ 手动创建路径简介留空仍可入库。
+
+## 19.20 用户迭代 ⑨：简介随手册自动提炼（2026-09-06）
+
+**反馈**：「现在人设手册出来了，出来了之后应该总结一句话简介」
+
+**定位**：重启后手册已在确认表单正常呈现（§19.19 改动一生效）；当前待确认草稿是重启前旧构建的遗留（15:37:56 落盘），profile 没采集过。用户新诉求——手册出来后，一句话简介应当自动跟着出来，而不是让用户手填。
+
+**方案（两层，均无启发式代码）**：
+
+1. **构建侧（新构建，规格重申对齐）**：`ROLE_BUILDER_SPEC_TAIL`（continue/restart/resume/start 四回合共用的规格重申——四阶段提示词本就内嵌含 L39 纪律句的 CHILD_PERSONA，此清单是对全部回合的冗余重申）的摘炼项补 profile——「简介（profile）从手册提炼成一句随草稿一并给出」，使重申清单与 persona 纪律句对齐。
+2. **面板侧（旧草稿/兜底，结构化提取而非合成）**：agency 规格要求手册 frontmatter 必带 `description:` 一段话——那就是构建师自己写的一句话简介。`fromBuildDraft` 在 `d.profile` 缺失（null/undefined）时以手册 frontmatter 的 `description:` 预填简介输入框（用户可改；`d.profile` 为空串视为显式留空，不预填）。提取规格钉死：仅取文档开头的 frontmatter 围栏块（`\r?\n` CRLF 兼容，同 mdEditor 口径）内、行首 `description:` 后的单行纯量，值两侧成对引号剥除；块标量指示符（`>`/`|` 开头）视为缺失返回空串。`fromBuildDraft` 只被确认表单的 draft-init effect 消费，构建中预览（DraftPreview）不受影响——预览仍只显示构建师真正上报的 profile。预填是 draft-init 一拍的一次性动作，此后编辑器里改 description 不回灌简介框。
+
+**不做的**：宿主 confirm 时从手册合成简介（静态代码无摘要能力，frontmatter 提取已在面板完成）；为遗留会话做迁移写盘（确认表单即所见即所存，确认动作自然落库）；confirm 不设简介防线——用户清空简介后确认合法入库、列表卡不展示（roster 既有语义），与 §19.19 构建侧硬闸（只约束构建师上报边沿）分工不同。
+
+**验收要点**：① 打开 §19.19 遗留的 awaiting 会话确认表单——简介框自动呈现手册 frontmatter 的 description 原文；② 手动改简介后确认，落库值为修改值；③ 构建中预览的简介行不因预填而变化（仍显示真实上报值或空档）；④ 新构建草稿带 profile 时表单显示上报值（frontmatter 不参与）；⑤ `d.profile` 为空串与 frontmatter 缺 description 两种形态输入框留空。
+
+## 19.21 用户迭代 ⑩：访谈弹窗跟随用户所在会话——子会话就地弹、否则弹主对话（2026-09-06）
+
+**反馈**：「角色的提问还是弹出在子会话，参考 deepseek-harness 的 subsystems 文档——首先判断用户当前所在的活动会话是不是子会话中，如果是直接弹出，如果不是则弹出到主会话中去」
+
+**定位（§19.18 的残余缺口）**：§19.18 发布边沿判定把「presence 指向构建父/过期/缺席/无关」四种情形全部折进 `member === undefined → popSelf: true`——子代理就地自弹。但 dsh-user-questions 是单一 provider（README 明言「不支持路由或扇出到多个 UI」），**弹窗渲染位置由请求里的 agent 决定——谁提问就落在谁的对话框**。子代理自弹的弹窗永远落在构建子会话对话框，而此刻用户正看着主对话——这就是「提问弹出在子会话」。§19.18 只把「用户在看成员对话框」一格投递对了；「用户在看主对话」这格（最常见场景）依旧弹错位置。popSelf:true 快路径（同回合拿答案）只在用户真的在看子会话时成立。
+
+**方案（改动一，host captainTools.ts 发布边沿判定重排）**：`member === undefined` 分支不再单一 popSelf:true，先问「presence 是否就是构建子会话自己」：
+
+- **presence === 构建子会话自身**（targetChildId === String(exec.agent.id)）→ popSelf:true 不变——用户正看着子会话对话框，子代理自弹就落在用户眼前，快路径语义成立。
+- **其余**（presence 指向构建父/过期（15s TTL）/缺席/无关会话）→ 用户不在子会话 → **steer 构建父代理**（agents?.get(parentSessionId)，侧车 readBuildParentSession 定位）：relayBlocks 与成员中转同款（interviewSteerText 全文），summary「意图访谈——请在本对话作答」，popSelf:false → 子代理 eteams_build_wait 停驻等答案落盘。领队收到 steer 后在主对话弹 ask_user_question（领队是活 runtime 根，provider 放行），用户作答，领队调 eteams_interview_answer——该工具对任意活调用者开放（「调用者无须是父会话」）、父由侧车定位、followup 唤醒持续构建子代理（§19.18 答案回流已通，主对话路径零新增回流代码）。
+  - **降级**：父离线（agents 查不到，主对话已 dispose 无从冷恢复——主会话无「父之父」，dsh-subagent 的 followup/冷恢复硬要求持久 continuable 描述符与 lineage 授权，主会话两者皆无）/ 侧车缺失（parentSessionId === null）/ steer 抛错 → popSelf:true 回自弹（与今日行为一致，用户回子会话能看到）。
+  - **防自我指涉**：parentAgent.id === 调用者 id 的异常态不 steer（popSelf:true）。
+  - warn 文案与成员路区分：父路 `interview relay to parent failed`，成员路保持 `… to member failed`。
+- relayBlocks 从成员分支上提到分支前，成员中转（活 steer/闲置领队冷恢复，§19.18 原样不动）与父中转共用。
+
+不向陌生会话投递（P2-6）保持：陌生 presence 不投——但改走父中转（投给父不是投给陌生）。同题复发去重（P2-2）、非构建子代理调用者不判定（P2-1）不动。**去重优先于就地弹（审核 P2-1 钉死语义）**：同题复发即使用户恰在看子会话也不就地补弹——入口只剩已中转弹窗或面板，避免与仍挂着的已中转弹窗双弹（先提交者胜）。
+
+**presence 抖动注记（审核 P2-3）**：多对话框同开时心跳都跳、presence 单槽 last-writer-wins，发布边沿单读可能读到非当前注视会话——误判的两面（该弹主对话却就地弹 / 反之）都可能；降级兜底都是面板作答入口，子代理停驻等答案的链路照常闭合。治本（presence 带打开集合+焦点位）留后续迭代。
+
+**装机先验（审核 P1-1，承重假设）**：「presence===构建子会话自身 → 就地弹」依赖子会话对话框也挂 TeamsButton 心跳（TeamsButton 挂 `conversation.input.right`，凡渲染 composer 输入栏的对话视图都跳）——装机验证：只开构建子会话对话框观察 presence.json 是否出现该会话足迹。若不挂（无足迹），该分支成死码，验收②不可测，该场景退化为弹主对话+面板兜底（不劣于今日，可接受）。
+
+**改动二（提示词口径对齐，四处）**：popSelf:true 的弹窗实际落在提问者自己的对话框，「落在主对话」的说法是错误前提，更正：
+
+1. `eteams_build_report` interview 参数描述：true 分支改「用户正看着本对话，就地弹」；false 分支改「用户在别的对话（主对话或成员对话），宿主已把问题中转过去」。
+2. output schema popSelf 描述同步（true=用户正看着本对话由你本回合弹；false=宿主已中转到用户所在对话）。
+3. `personas/builder.ts` CHILD_PERSONA 的 popSelf 分支句同步（true 就地弹；false 中转到主对话或成员对话）。
+4. `personas/builder.ts` L37「意图访谈」规则句的作答入口：「（本会话选择框弹窗或主对话中转）」改「（本会话选择框弹窗，或由宿主中转到用户所在对话）」——§19.18 起中转目标已含成员对话，本句此前就已过期。
+5. 顺手（审核 P2-2）：popFailed 参数描述「宿主把问题经主对话中转回来」改「宿主把问题中转到用户所在对话」；prompts/steering/interview.ts 模块注释补发布边沿父中转。
+
+**改动三（tests/buildInterviewRelay.test.ts）**：
+
+- 「no presence → popSelf:true」改为「no presence + 活领队 → steer 父 + popSelf:false」（断言 leader.steer 收到含问题全文的 steer 消息，且只投一次）；侧车未记录（parentSessionId=null）与领队离线两种形态各留一条 popSelf:true 降级用例。
+- 「unregistered presence → popSelf:true」改为「stranger presence → 父 steer + popSelf:false，stranger 不被投递」。
+- 新增「presence=父会话 → steer 父 + popSelf:false 且只投一次」（主干场景显式钉住，成员查找排除条件 targetChildId !== parentSessionId 的行为不再无测试）。
+- 新增「父 steer 抛错 → popSelf:true 降级」（leader.steer 桩实现为 throw）。
+- 新增「presence=构建子会话自身 → popSelf:true 就地弹」，显式断言 leader.steer 未被调用。
+- 同题去重用例：第一发无 presence 且 ctx 无领队（父离线降级）→ popSelf:true 断言不变，注释改准；第二发断言不变。
+- 成员两支（活 steer/闲置冷恢复 + 领队离线回退）与 answer 真父定位两用例不动。
+
+**验收要点**：① 用户停在主对话（presence=父会话）、构建子代理发布访谈 → 主对话出现领队的「意图访谈——请在本对话作答」消息并弹选择框；子会话无弹窗、子代理停驻；② 用户停在构建子会话对话框 → 子代理就地弹（popSelf:true），无重复中转（**装机必验**，依赖装机先验）；③ 用户停在成员对话框 → §19.18 成员投递不变；④ 父离线/侧车缺失/steer 失败 → 子代理自弹（降级）；⑤ 主对话作答提交 → 侧车定位父 → followup 唤醒子代理继续起草。
+
+**取代声明（审核 P2-4）**：§19.18 验收要点①的「父/过期/无关 → popSelf:true」自本节起由本节验收①④取代；§19.18 的成员投递两支与去重/收窄验收继续有效。

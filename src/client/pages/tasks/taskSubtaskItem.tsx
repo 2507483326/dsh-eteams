@@ -25,11 +25,11 @@ import { isStartable } from '../../features/tasks/taskDisplayStatus';
 import { AccordionContent, AccordionItem, AccordionTrigger } from '../../components/ui/accordion';
 import { DeleteButton } from '../../components/deleteButton';
 import { Button } from '../../components/ui/button';
+import { readBodyOf } from './taskBody';
 import { TaskStations } from './taskDrawer';
 import { MarkdownDoc } from '../shared/markdownDoc';
-import { FormErrorNote } from '../shared/components';
-import { LINE_CLASS, MUTED_CLASS, TASK_CARD_CLASS } from '../shared/styles';
-import { BlockedPill, TaskStatusPill } from './taskPills';
+import { BlockedPill, FormErrorNote, TaskStatusPill } from '../shared/components';
+import { MUTED_CLASS, TASK_CARD_CLASS } from '../shared/styles';
 
 /** 瞬态错误槽（assignError/reorderError/startError 同构：taskId 定位 + 行内展示）。 */
 interface TaskErrorSlot {
@@ -281,19 +281,12 @@ export function SubtaskItem({
         {/* DA42：展开内容区 = 只读正文 / 就地编辑器二选一；节点级门
         (expandable || editing)——无内容卡仅在编辑中挂载（防「取消」
         后残留空分隔线且无箭头可收）；Radix 关闭即卸载，内部无需
-        再挂 expanded 门。 */}
+        再挂 expanded 门。DA47：只读正文改说明+合同并读单 MD 文档
+        （readBodyOf，与头部卡展开区同款并读——与编辑器 mergedBodyOf
+        同源，「说明：」标签行随并读撤除）。 */}
         {(expandable || editing) && (
           <AccordionContent className="mt-1.5 border-t border-solid pt-2">
-            {editing ? (
-              editor
-            ) : (
-              <>
-                {task.description !== null && task.description.trim() !== '' && (
-                  <div className={LINE_CLASS}>说明：{task.description}</div>
-                )}
-                {task.contractMd !== null && <MarkdownDoc text={task.contractMd} />}
-              </>
-            )}
+            {editing ? editor : <MarkdownDoc text={readBodyOf(task)} />}
           </AccordionContent>
         )}
       </SubtaskCard>

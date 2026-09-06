@@ -1,29 +1,28 @@
 /**
- * 拖拽指派纯逻辑单测（docs/29 A.3.1 规则表锁，二轮 DA13；四轮撤上限）：drop =
- * chain 全量替换的纯计算——空白处 drop 追加站点（不设上限）、chip drop 定点
- * 替换保 brief、越界 stationIndex 拒改、全链同名 no-op 去重、只读窗口拒改；
- * 逐站移除、可编辑框承整链与只读框展示成员；罗列条工号徽章文案（五轮
- * DA18）；卡槽内调序与「＋」多选追加（六轮 DA19）；小任务卡片拖拽调执行
- * 顺序 = 兄弟依赖链改写（七轮 DA20：executionOrderOf 拓扑展示序 +
- * depPatchesForReorder 依赖补丁）。组件交互（HTML5 拖拽）
- * 不在 vitest 环境（无 DOM 拖拽事件合成）覆盖，见完成报告说明。
+ * 拖拽指派纯逻辑单测（docs/29 A.3.1 规则表锁；四轮撤上限）：drop =
+ * chain 全量替换的纯计算——成员拖入成员槽按落点判位插入（三十五轮 DA48：
+ * insertionIndexOf 落点判位 + chainAfterInsert 判位插入，空链=追加即放置、
+ * 越界 index 夹取、全链同名 no-op 去重、只读窗口拒改；原「chip drop 定点
+ * 替换」随 DA48 废止，不再有规则锁）；逐站移除、可编辑框承整链与只读框
+ * 展示成员；罗列条工号徽章文案（五轮 DA18）；卡槽内调序与「＋」多选追加
+ * （六轮 DA19）；小任务卡片拖拽调执行顺序 = 兄弟依赖链改写（七轮 DA20：
+ * executionOrderOf 拓扑展示序 + depPatchesForReorder 依赖补丁）。组件交互
+ * （HTML5 拖拽）不在 vitest 环境（无 DOM 拖拽事件合成）覆盖，见完成报告说明。
  */
 import { describe, expect, it } from 'vitest';
-import type {
-  ChainTaskLike,
-  OrderableTaskLike,
-} from '../src/client/features/tasks/taskAssignCore';
+import type { ChainTaskLike, OrderableTaskLike } from '../src/client/features/tasks/taskAssignCore';
 import {
   boxCoversChain,
   canRemoveStation,
   chainAfterAppendMany,
+  chainAfterInsert,
   chainAfterRemove,
   chainAfterReorder,
   depPatchesForReorder,
   employeeBadgeOf,
   executionOrderOf,
+  insertionIndexOf,
   isAssignEditable,
-  nextChainAfterDrop,
   readonlyStationMember,
 } from '../src/client/features/tasks/taskAssignCore';
 
@@ -50,83 +49,103 @@ describe('isAssignEditable（DA6 客户端守卫：draft/ready && chainCursor===
   });
 });
 
-describe('nextChainAfterDrop（A.3.1 规则表，二轮 DA13）', () => {
-  it('空白处 drop（stationIndex 缺省）+ 空链：追加单站，stageBrief 空串（29.5 冲突①）', () => {
-    const task: ChainTaskLike = { status: 'draft', chain: [], chainCursor: -1 };
-    expect(nextChainAfterDrop(task, '张三')).toEqual([st('张三', '')]);
+describe('insertionIndexOf（三十五轮 DA48：按落点 X 判插入位）', () => {
+  const mids = [10, 30, 50];
+  it('空数组 → 0（空链=追加即放置）', () => {
+    expect(insertionIndexOf([], 100)).toBe(0);
+  });
+  it('x 小于首中点 → 0（插首站前）', () => {
+    expect(insertionIndexOf(mids, 5)).toBe(0);
+  });
+  it('两中点之间按左右半分：最近 chip 中点右半 → 插其后（i+1）', () => {
+    expect(insertionIndexOf(mids, 25)).toBe(1);
+    expect(insertionIndexOf(mids, 35)).toBe(2);
+    expect(insertionIndexOf(mids, 55)).toBe(3);
+  });
+  it('越过全部中点 → len（末尾）', () => {
+    expect(insertionIndexOf(mids, 999)).toBe(3);
+  });
+  it('恰等于中点 → 归右半（x < mid 才左，等号归后）', () => {
+    expect(insertionIndexOf(mids, 10)).toBe(1);
+    expect(insertionIndexOf(mids, 30)).toBe(2);
+    expect(insertionIndexOf(mids, 50)).toBe(3);
+  });
+});
+
+describe('chainAfterInsert（三十五轮 DA48：松手放置判位插入）', () => {
+  it('插中位：前后站点 stageBrief 保真，新站 brief 空串（29.5 冲突①）', () => {
+    const task: ChainTaskLike = {
+      status: 'ready',
+      chain: [st('张三', '设计'), st('王五', '验收')],
+      chainCursor: -1,
+    };
+    expect(chainAfterInsert(task, '李四', 1)).toEqual([
+      st('张三', '设计'),
+      st('李四', ''),
+      st('王五', '验收'),
+    ]);
   });
 
-  it('空白处 drop：末尾追加站点，既有站点原样保留（接力顺序不变；不设上限，DA15 已废止）', () => {
+  it('插 0 = 首站前；插 len = 末尾追加（原「空白处追加」等价承接，不设上限）', () => {
     const task: ChainTaskLike = {
       status: 'ready',
       chain: [st('张三', '设计'), st('李四', '实现')],
       chainCursor: -1,
     };
-    expect(nextChainAfterDrop(task, '王五')).toEqual([
+    expect(chainAfterInsert(task, '王五', 0)).toEqual([
+      st('王五', ''),
+      st('张三', '设计'),
+      st('李四', '实现'),
+    ]);
+    expect(chainAfterInsert(task, '王五', 2)).toEqual([
       st('张三', '设计'),
       st('李四', '实现'),
       st('王五', ''),
     ]);
   });
 
-  it('chip drop（stationIndex 显式）：定点替换该站成员，stageBrief 原值保留', () => {
-    const task: ChainTaskLike = {
-      status: 'ready',
-      chain: [st('张三', '设计'), st('李四', '实现'), st('王五', '验收')],
-      chainCursor: -1,
-    };
-    expect(nextChainAfterDrop(task, '赵六', 1)).toEqual([
-      st('张三', '设计'),
-      st('赵六', '实现'),
-      st('王五', '验收'),
-    ]);
-    expect(nextChainAfterDrop(task, '赵六', 2)).toEqual([
-      st('张三', '设计'),
-      st('李四', '实现'),
-      st('赵六', '验收'),
-    ]);
-  });
-
-  it('chip drop 末站：替换最后一站（接力收尾换人）', () => {
+  it('全链同名去重（DA8 同源）→ null（不发请求）', () => {
     const task: ChainTaskLike = {
       status: 'ready',
       chain: [st('张三', '设计'), st('李四', '实现')],
       chainCursor: -1,
     };
-    expect(nextChainAfterDrop(task, '王五', 1)).toEqual([st('张三', '设计'), st('王五', '实现')]);
-  });
-
-  it('stationIndex 越界（快照中途变化）→ null（不误追加）', () => {
-    const task: ChainTaskLike = {
-      status: 'ready',
-      chain: [st('张三', '设计')],
-      chainCursor: -1,
-    };
-    expect(nextChainAfterDrop(task, '李四', 1)).toBeNull();
-    expect(nextChainAfterDrop(task, '李四', 5)).toBeNull();
-  });
-
-  it('全链同名去重（DA8 二轮）：与任一站点同名 → null（不发请求）', () => {
-    const task: ChainTaskLike = {
-      status: 'ready',
-      chain: [st('张三', '设计'), st('李四', '实现')],
-      chainCursor: -1,
-    };
-    // 追加同名（空白处）
-    expect(nextChainAfterDrop(task, '张三')).toBeNull();
-    expect(nextChainAfterDrop(task, '李四')).toBeNull();
-    // 定点替换同名（chip 上）
-    expect(nextChainAfterDrop(task, '张三', 0)).toBeNull();
-    expect(nextChainAfterDrop(task, '李四', 0)).toBeNull();
+    expect(chainAfterInsert(task, '张三', 0)).toBeNull();
+    expect(chainAfterInsert(task, '张三', 2)).toBeNull();
+    expect(chainAfterInsert(task, '李四', 1)).toBeNull();
   });
 
   it('不可编辑窗口 → null（只读，双保险不重发）', () => {
     expect(
-      nextChainAfterDrop({ status: 'ready', chain: [st('张三')], chainCursor: 0 }, '李四'),
+      chainAfterInsert({ status: 'ready', chain: [st('张三')], chainCursor: 0 }, '李四', 1),
     ).toBeNull();
     expect(
-      nextChainAfterDrop({ status: 'in_progress', chain: [st('张三')], chainCursor: -1 }, '李四'),
+      chainAfterInsert({ status: 'in_progress', chain: [st('张三')], chainCursor: -1 }, '李四', 0),
     ).toBeNull();
+  });
+
+  it('越界 index 夹取到 [0, len]（快照中途变化防越界，不误投）', () => {
+    const task: ChainTaskLike = {
+      status: 'ready',
+      chain: [st('张三', '设计'), st('李四', '实现')],
+      chainCursor: -1,
+    };
+    expect(chainAfterInsert(task, '王五', -5)).toEqual([
+      st('王五', ''),
+      st('张三', '设计'),
+      st('李四', '实现'),
+    ]);
+    expect(chainAfterInsert(task, '王五', 99)).toEqual([
+      st('张三', '设计'),
+      st('李四', '实现'),
+      st('王五', ''),
+    ]);
+  });
+
+  it('空链：任意 index 夹取 → 单站链（拖入=追加即放置）', () => {
+    const task: ChainTaskLike = { status: 'draft', chain: [], chainCursor: -1 };
+    expect(chainAfterInsert(task, '张三', 0)).toEqual([st('张三', '')]);
+    expect(chainAfterInsert(task, '张三', 7)).toEqual([st('张三', '')]);
   });
 });
 
@@ -196,9 +215,7 @@ describe('boxCoversChain（可编辑框承整链 → 抑制 TaskStations，DA5/D
     expect(
       boxCoversChain({ status: 'draft', chain: [st('张三'), st('李四')], chainCursor: -1 }),
     ).toBe(true);
-    expect(
-      boxCoversChain({ status: 'ready', chain: [st('张三')], chainCursor: -1 }),
-    ).toBe(true);
+    expect(boxCoversChain({ status: 'ready', chain: [st('张三')], chainCursor: -1 })).toBe(true);
   });
   it('可编辑 + 空链：false（TaskStations 本就渲染 null，无需抑制）', () => {
     expect(boxCoversChain({ status: 'draft', chain: [], chainCursor: -1 })).toBe(false);
@@ -321,9 +338,10 @@ describe('chainAfterAppendMany（「＋」多选追加，六轮 DA19）', () => 
     };
     expect(chainAfterAppendMany(task, [])).toBeNull();
     expect(
-      chainAfterAppendMany({ ...task, status: 'in_progress', chain: [st('张三')], chainCursor: 0 }, [
-        '李四',
-      ]),
+      chainAfterAppendMany(
+        { ...task, status: 'in_progress', chain: [st('张三')], chainCursor: 0 },
+        ['李四'],
+      ),
     ).toBeNull();
   });
 });

@@ -325,17 +325,9 @@ describe('teamView 团队现状精简 (用户迭代 2026-09-03)', () => {
   it('members keep only 工号/角色/状态 and the mailbox is trimmed', async () => {
     const env = envFor(ws);
     const seeded = seedTeam();
-    // 角色标签走 roles 表松引用：先补一条「前端」角色行，模板行的角色才能
-    // 在 round-trip 里解析回「前端」（role_name 存的是成员名）。
-    withTeamTx(root, undefined, (tx) => {
-      tx.db
-        .prepare(
-          'INSERT INTO roles (role_name, persona_md, source, created_time, update_time) ' +
-            'VALUES (?, NULL, ?, ?, ?)',
-        )
-        .run('前端', 'user', 1, 1);
-    });
     // 班底模板行（teamView.members 的来源）+ 一条 ready 实例行（聚合状态）。
+    // v3 成员=角色：角色名随 persona.role 烘进 roles 角色行（writeTeamInTx
+    // 的 ensureRolesRowInTx 自愈入库），无需手工补角色行。
     const withTemplate: TeamState = {
       ...seeded,
       members: [

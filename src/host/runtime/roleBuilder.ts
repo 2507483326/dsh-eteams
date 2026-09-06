@@ -232,14 +232,20 @@ export interface BuildReport {
 }
 
 /**
- * 待确认守卫（docs/19.17.2）：报告把会话置为 awaiting_confirmation 时，
- * 解析后的草稿必须带非空 personaMd（人设手册全文）——确认页直接渲染该
- * 字段，空手册= 用户看到「显示完成但没有内容」。start/continue/restart
- * 各回合提示词已要求完整草稿一次报全，本守卫是最后一道硬闸。
+ * 待确认守卫（docs/19.17.2 + 19.19）：报告把会话置为 awaiting_confirmation
+ * 时，解析后的草稿必须带非空 personaMd（人设手册全文）与非空 profile
+ * （一句话简介）——确认页两列直接渲染这两个字段，空值= 用户看到「显示完成
+ * 但没有内容」（用户迭代 2026-09-06：profile 漏报曾静默进待确认，确认页
+ * 简介列空）。顺序钉死 personaMd 先查、profile 后查（19.17.2 既有用例按
+ * /personaMd/ 断言，profile 先查会错配）。start/continue/restart 各回合
+ * 提示词已要求完整草稿一次报全，本守卫是最后一道硬闸。
  */
-function requirePersonaMd(draft: BuildDraft | null): void {
+function requireAwaitingDraft(draft: BuildDraft | null): void {
   if (draft === null || (draft.personaMd ?? '').trim() === '') {
     throw new Error('人设手册（personaMd）不能为空——请把完整手册全文随草稿一并上报后再置待确认');
+  }
+  if ((draft.profile ?? '').trim() === '') {
+    throw new Error('简介（profile）不能为空——请从手册提炼一句话随草稿一并上报后再置待确认');
   }
 }
 
@@ -258,7 +264,7 @@ export async function reportBuildProgress(
   // 新请求让位旧草稿，与 /eteam 处理器语义一致）。后台构建代理被纪律禁止
   // 传该标记，其迟到播报仍走下方终态守卫（docs/19.16）。
   if (report.newBuild === true) {
-    if (report.status === 'awaiting_confirmation') requirePersonaMd(report.draft ?? null);
+    if (report.status === 'awaiting_confirmation') requireAwaitingDraft(report.draft ?? null);
     const fresh: BuildSession = {
       schemaVersion: 1,
       startedAt: now,
@@ -315,7 +321,7 @@ export async function reportBuildProgress(
         ? report.draft
         : { ...current.draft, ...report.draft },
   );
-  if (requested === 'awaiting_confirmation') requirePersonaMd(draft);
+  if (requested === 'awaiting_confirmation') requireAwaitingDraft(draft);
   const next: BuildSession = {
     ...current,
     status: requested,

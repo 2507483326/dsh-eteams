@@ -28,12 +28,14 @@ import {
   writeTeamInTx,
   insertTeamRow,
   insertTaskMemberRow,
+  ensureRolesRowInTx,
+  rolesRowByName,
   withTeamTx,
   findTeamByCaptain,
   type TeamKey,
   type TeamTx,
 } from '../state/store.js';
-import { hashName, LEADER_NAME, nextAutoincrementId, nextEmployeeId } from '../state/db.js';
+import { hashName, LEADER_NAME, nextAutoincrementId, nextEmployeeId, personaFromMd, personaToMd } from '../state/db.js';
 import { insertEventInTx, insertMailInTx } from '../state/events.js';
 import { applyTransition, sanitizeKey, taskSlug } from '../model/taskMachine.js';
 import { ETeamsError, captainActor, memberActor, stateRootOf, type RuntimeEnv } from './base.js';
@@ -115,11 +117,9 @@ export async function createTeam(
       teamId = insertTeamRow(tx, name, true, now);
       // 领队行（docs/35 §5#12 / docs/36 建议 3）：领队锚点在 task_members——
       // name=项目牧羊人、main_task_id 为空、main_session_id=本会话；工号与
-      // 手册沿公共模板行（项目牧羊人预设，import.ts 播种）。
+      // 手册沿角色库行（项目牧羊人预设，import.ts 播种）。
       const template = tx.db
-        .prepare(
-          'SELECT employee_id, persona_md FROM member WHERE team_id IS NULL AND role_name = ? LIMIT 1',
-        )
+        .prepare('SELECT employee_id, persona_md FROM roles WHERE role_name = ? LIMIT 1')
         .get(LEADER_NAME) as { employee_id: number | null; persona_md: string | null } | undefined;
       const row: TaskMemberRecord = {
         id: 0,
@@ -130,7 +130,6 @@ export async function createTeam(
         employeeId: template?.employee_id ?? null,
         mainSessionId: captainId,
         childSessionId: '',
-        roleId: null,
         status: 'ready',
         ...(template?.persona_md ? { personaMd: template.persona_md } : {}),
         createdAt: now,
@@ -211,9 +210,8 @@ export async function addMember(
     /** Pre-generated avatar (docs/14); generated from the name when absent. */
     avatar?: { seed: number; salt: number };
     /**
-     * 工号 (docs/21). Callers that already resolved a roster entry pass its
-     * 工号 through; otherwise one is adopted from the roster or the 班底
-     * template, or freshly allocated in-transaction.
+     * 工号 (docs/21). 显式 > 角色库同名角色行 > 事务内新分配（分配一次；
+     * 角色行缺号时回填，同人同号）。
      */
     employeeId?: string;
     /** Origin marker for events (tool / panel). */
@@ -224,8 +222,6 @@ export async function addMember(
     params.teamId !== undefined
       ? await requireTeamById(env, captain, params.teamId)
       : await requireCaptainTeam(env, captain);
-  const root = stateRootOf(env);
-  const rosterEntry = findRosterMember(root, params.name.trim());
   const { team: fresh, member } = await withTeam(env, team.id, (teamNow, _root, tx) => {
     const leader = leaderRowOf(teamNow);
     if (!leader || leader.status === 'removed' || leader.mainSessionId !== String(captain.id)) {
@@ -256,37 +252,65 @@ export async function addMember(
     }
     const now = tx.now;
     const employeeIdParam = Number.parseInt(params.employeeId ?? '', 10);
-    // 模板行：同名班底模板复用（不重开）；否则新建（memberId 事务内发号，
-    // writeTeamInTx 按显式 member_id 重插）。
+    // 角色行（v3 成员=角色，全局一份）：同名行已存在 → 人设以角色行为准
+    // （显式 role 参数只在角色行缺失时生效，面板本就传角色库同名条目的
+    // role）；缺行 → 按本次参数现烘 persona，随后 ensureRolesRowInTx 入库
+    // （加成员即入库）。
+    const rolesRow = rolesRowByName(tx.db, name);
+    const persona =
+      rolesRow !== undefined
+        ? personaFromMd(rolesRow.persona_md ?? '', name, name)
+        : mergePersona(defaultPersonaFor(name, params.role ?? '', params.executionPrompt), {
+            ...(params.duty !== undefined ? { duty: params.duty } : {}),
+            ...(params.style !== undefined ? { style: params.style } : {}),
+            ...(params.skills !== undefined ? { skills: params.skills } : {}),
+            ...(params.rules !== undefined ? { rules: params.rules } : {}),
+            ...(params.personaMd !== undefined ? { personaMd: params.personaMd } : {}),
+          });
+    // 班底行：同名班底复用（不重开）；否则新建（team_member_id 事务内发号，
+    // writeTeamInTx 按显式 id 重插）。
     let member: MemberRecord | undefined = teamNow.members.find((m) => m.name === name);
     if (member === undefined) {
       const created: MemberRecord = {
-        memberId: nextAutoincrementId(tx.db, 'member'),
+        memberId: nextAutoincrementId(tx.db, 'team_members'),
+        roleId: null, // ensureRolesRowInTx 后回填
         name,
         employeeId: undefined,
-        role: params.role.trim() || 'member',
-        persona: mergePersona(defaultPersonaFor(name, params.role, params.executionPrompt), {
-          ...(params.duty !== undefined ? { duty: params.duty } : {}),
-          ...(params.style !== undefined ? { style: params.style } : {}),
-          ...(params.skills !== undefined ? { skills: params.skills } : {}),
-          ...(params.rules !== undefined ? { rules: params.rules } : {}),
-          ...(params.personaMd !== undefined ? { personaMd: params.personaMd } : {}),
-        }),
+        role: persona.role,
+        persona,
         modelRoute: routeFromParams(params.model, params.reasoningEffort),
         avatar: params.avatar ?? { seed: hashName(name), salt: Math.floor(Math.random() * 1000) },
         createdAt: now,
       };
       teamNow.members.push(created);
       member = created;
-    } else if (params.role !== undefined && params.role.trim() !== '') {
-      member.role = params.role.trim();
+    } else {
+      // 成员详情与角色详情同源（v3）：班底行的 persona/role 刷新自角色行。
+      member.persona = persona;
+      member.role = persona.role;
+      if (rolesRow !== undefined) member.roleId = rolesRow.role_id;
     }
-    // 工号（docs/21）：显式 > 班底模板行 > 公共角色库 > 事务内新分配。
-    const employeeId =
-      (Number.isFinite(employeeIdParam) && employeeIdParam > 0 ? employeeIdParam : undefined) ??
-      member.employeeId ??
-      rosterEntry?.employeeId;
-    member.employeeId = employeeId ?? nextEmployeeId(tx.db);
+    // 工号（docs/21）：显式 > 角色行 > 事务内新分配（分配一次；角色行缺号
+    // 时经 ensureRolesRowInTx 回填，同人同号）。显式工号是对角色行工号的
+    // 重定义（v3 工号只挂角色行）：同名角色行已有号也被压过，全局生效。
+    const explicitEmployeeId =
+      Number.isFinite(employeeIdParam) && employeeIdParam > 0 ? employeeIdParam : undefined;
+    let employeeId = explicitEmployeeId ?? rolesRow?.employee_id ?? undefined;
+    if (employeeId === undefined) employeeId = nextEmployeeId(tx.db);
+    member.roleId = ensureRolesRowInTx(tx, name, persona, {
+      ...(member.avatar !== undefined ? { avatar: member.avatar } : {}),
+      employeeId,
+    });
+    member.employeeId = employeeId;
+    if (
+      explicitEmployeeId !== undefined &&
+      rolesRow !== undefined &&
+      rolesRow.employee_id !== explicitEmployeeId
+    ) {
+      tx.db
+        .prepare('UPDATE roles SET employee_id = ?, update_time = ? WHERE role_id = ?')
+        .run(explicitEmployeeId, tx.now, member.roleId);
+    }
     const route = member.modelRoute;
     // 执行实例行：staged（未起会话），团队级未锚定（main_task_id 为空），
     // 首派时才锚定到大任务并起子会话（assignment.ts 首派按链起人）。
@@ -299,7 +323,6 @@ export async function addMember(
       employeeId: member.employeeId ?? null,
       mainSessionId: '',
       childSessionId: '',
-      roleId: null,
       status: 'staged',
       ...(member.persona.personaMd !== undefined && member.persona.personaMd !== ''
         ? { personaMd: member.persona.personaMd }
@@ -326,13 +349,6 @@ export async function addMember(
     });
     return { team: teamNow, member };
   });
-  // 事务外（独立事务，最佳努力）：角色库同号回填——同名公共模板缺号时把
-  // 刚分配的工号写回，保证同名成员在角色库与各团队共号（docs/21）。
-  if (rosterEntry !== undefined && rosterEntry.employeeId === undefined) {
-    await upsertRosterMember(root, { ...rosterEntry, employeeId: member.employeeId }).catch(
-      () => undefined,
-    );
-  }
   renderTeamDocs(env.workspace, fresh, (msg) => env.ctx.logger.warn(msg));
   return { team: fresh, member };
 }
@@ -379,7 +395,9 @@ export async function updateMember(
       : await requireCaptainTeam(env, captain);
   const fresh = await withTeam(env, team.id, (teamNow, _root, tx) => {
     const member = requireMemberTemplate(teamNow, params.name);
-    if (params.role !== undefined) member.role = params.role.trim() || member.role;
+    // 角色定义全局一份（v3 成员=角色）：成员详情改动即改角色行手册，全局
+    // 生效——role 变化也烘进手册（persona.role 即 MemberRecord.role 的来源）。
+    if (params.role !== undefined) member.persona.role = params.role.trim() || member.persona.role;
     member.persona = mergePersona(member.persona, {
       duty: params.duty,
       style: params.style,
@@ -388,6 +406,11 @@ export async function updateMember(
       executionPrompt: params.executionPrompt,
       personaMd: params.personaMd,
     });
+    member.role = member.persona.role;
+    // 人设单一来源：按名更新 roles.persona_md（成员详情与角色详情同源）。
+    tx.db
+      .prepare('UPDATE roles SET persona_md = ?, update_time = ? WHERE role_name = ?')
+      .run(personaToMd(member.persona, member.name), tx.now, member.name);
     // 模板手册变化同步到该成员未锚定的 staged 实例行（执行时的人设副本）。
     const row = teamNow.taskMembers.find(
       (r) => r.name === params.name && r.status === 'staged' && r.mainTaskId === null,
@@ -602,7 +625,6 @@ export async function setLeaderRemoved(
         employeeId: null,
         mainSessionId: String(captain.id),
         childSessionId: '',
-        roleId: null,
         status: params.removed ? 'removed' : 'ready',
         createdAt: tx.now,
       };
@@ -861,8 +883,9 @@ export function rmTree(target: string): void {
 
 /**
  * Delete a team permanently（docs/27 删除规则）：库事务里逐表按 team_id 删
- * （含领队行；member 只删本队班底行，公共模板行不动）。归档已随 docs/35
- * §3#7 下线；对话内确认放在工具层（波次 3）。存在未收尾任务的团队拒绝删除。
+ * （含领队行；班底行在 team_members，随队删除；roles 角色库行全局共享，
+ * 不随队删）。归档已随 docs/35 §3#7 下线；对话内确认放在工具层（波次 3）。
+ * 存在未收尾任务的团队拒绝删除。
  */
 export async function deleteTeam(env: RuntimeEnv, captain: Agent, teamId: TeamKey): Promise<void> {
   const team = await requireTeamById(env, captain, teamId);
@@ -898,12 +921,11 @@ export async function deleteTeam(env: RuntimeEnv, captain: Agent, teamId: TeamKe
         'mail_messages',
         'task_status_changes',
         'task_members',
+        'team_members',
       ]) {
         tx.db.prepare(`DELETE FROM ${table} WHERE team_id = ?`).run(fresh.id);
       }
-      // 班底模板行只删本队（team_id 非空）；工作区公共模板行（team_id 为
-      // 空）不属于任何团队，保留。
-      tx.db.prepare('DELETE FROM member WHERE team_id = ?').run(fresh.id);
+      // 角色库行（roles）是全局共享的，不随团队删除。
       tx.db.prepare('DELETE FROM team WHERE team_id = ?').run(fresh.id);
     });
     // 提交后：回收成员子代理驻留（子会话已随团队删除，只能尽量清场）。
