@@ -609,21 +609,26 @@ describe('member spawn route resolution (per-member model, docs/35 §3#5)', () =
     });
   });
 
-  it('setLeaderModel writes the 领队行 route (团队默认路线, 团队页领队卡)', async () => {
+  it('setLeaderModel writes the 班底领队行 route (团队默认路线, 团队页领队卡)', async () => {
     const created = await cap<{ teamId: number }>('eteams_create_team', { name: '领队路线' });
     const teamId = created.teamId;
     await setLeaderModel(runtimeEnvFor(), captain as never, {
       teamId,
+      provider: 'tr-test',
       model: 'deepseek-chat',
       reasoningEffort: 'low',
     });
-    const leader = readTeam(teamId).taskMembers.find((r) => r.mainTaskId === null)!;
-    expect(leader.model).toBe('deepseek-chat');
-    expect(leader.reasoningEffort).toBe('low');
+    // v9 存储位 = 班底领队行（team_members.is_leader=1 的 modelRoute，与
+    // 成员同表同列——用户手改/查看都在 team_members）。
+    const leader = readTeam(teamId).members.find((m) => m.isLeader === true)!;
+    expect(leader.modelRoute.model).toBe('deepseek-chat');
+    expect(leader.modelRoute.provider).toBe('tr-test');
+    expect(leader.modelRoute.reasoningEffort).toBe('low');
     // 空 model 重置为会话默认（round-trip 后空串落库为 null → 内存缺省）。
     await setLeaderModel(runtimeEnvFor(), captain as never, { teamId });
-    const after = readTeam(teamId).taskMembers.find((r) => r.mainTaskId === null)!;
-    expect(after.model ?? '').toBe('');
+    const after = readTeam(teamId).members.find((m) => m.isLeader === true)!.modelRoute;
+    expect(after.model).toBe('');
+    expect(after.provider).toBeUndefined();
     expect(after.reasoningEffort).toBeUndefined();
   });
 });

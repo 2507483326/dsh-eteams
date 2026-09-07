@@ -122,9 +122,9 @@ function memberRow(teamId: number, childSessionId: string): TaskMemberRecord {
   };
 }
 
-/** SQLite 契约播种（team.json 已退场）：team 行 + 领队实例行（可预置持久
- * 子会话 id 与建队时烘焙的手册缓存）+ 可选成员实例行；领队身份锚点盖章在
- * 任务行快照（v6）。 */
+/** SQLite 契约播种（team.json 已退场）：team 行 + 演示主任务的领队副本行
+ * （可预置子会话 id 与建队时烘焙的手册缓存——v8+ 主持行取消，领队会话锚
+ * 在副本行）+ 可选成员实例行；领队身份锚点盖章在任务行快照（v6）。 */
 function seedTeam(
   opts: { memberChild?: string; leaderChild?: string; leaderHandbook?: string } = {},
 ): TeamState {
@@ -134,7 +134,11 @@ function seedTeam(
     teamId = insertTeamRow(tx, name, true, tx.now);
   });
   const taskMembers: TaskMemberRecord[] = [
-    leaderRow(teamId, opts.leaderChild ?? '', opts.leaderHandbook),
+    {
+      // 领队副本行（v8+：主持行取消——会话锚在 mainTaskId=演示任务 的行上）。
+      ...leaderRow(teamId, opts.leaderChild ?? '', opts.leaderHandbook),
+      mainTaskId: 1,
+    },
   ];
   // v7：成员有工牌才有身份——拉人即落班底行（工牌发放处），实例行（工牌 1）
   // 靠它过 resolveCaller 的 R1 离职截断。
@@ -258,14 +262,16 @@ describe('eteams_dispatch_captain', () => {
     expect(promptText).toContain('【用户/主对话最新消息】');
     expect(promptText).toContain('帮我做一个导出功能');
 
-    // Identity registry + durable child id persisted on the 领队行（调用方
-    // 预留 childId 被兑现——registry 以预留 id 为键，先登记后 spawn）。
+    // Identity registry + durable child id persisted on the 领队副本行（调用
+    // 方预留 childId 被兑现——registry 以预留 id 为键，先登记后 spawn）。
     const persisted = readTeamSync(root, seeded.id);
-    const childId = persisted?.taskMembers.find((r) => r.mainTaskId === null)?.sessionId ?? '';
+    const childId =
+      persisted?.taskMembers.find((r) => r.mainTaskId === 1 && r.isLeader === true)?.sessionId ??
+      '';
     expect(childId).not.toBe('');
     expect(runtime.spawnedIds).toContain(childId);
     expect(captainChildTeamOf(childId)).toBe(String(seeded.id));
-    // fixture 无建队缓存 → 插槽 provider 退内置手册（绝不返回空）。
+    // fixture 副本行无手册缓存 → 插槽 provider 退内置手册（绝不返回空）。
     expect(leaderHandbookForChild(config, childId)).toBe(composeCaptainPersona(root).personaMd);
     // The child's eteams_* calls resolve as this team's captain.
     const caller = await resolveCaller(envFor(ws), agentOf(childId));
@@ -288,7 +294,7 @@ describe('eteams_dispatch_captain', () => {
     expect(runtime.followups[0]!.text).toContain('eteams_team_status');
     expect(captainChildTeamOf('sess-child-1')).toBe(String(seeded.id));
     const persisted = readTeamSync(root, seeded.id);
-    expect(persisted?.taskMembers.find((r) => r.mainTaskId === null)?.sessionId).toBe(
+    expect(persisted?.taskMembers.find((r) => r.mainTaskId === 1 && r.isLeader === true)?.sessionId).toBe(
       'sess-child-1',
     );
   });
@@ -338,11 +344,11 @@ describe('eteams_dispatch_captain', () => {
     expect(out.ok).toBe(true);
     expect(runtime.followups).toHaveLength(0);
     expect(runtime.starts).toHaveLength(1);
-    const freshId = runtime.spawnedIds[0]!;
+    const freshId = String(runtime.starts[0]!.childId);
     expect(captainChildTeamOf('sess-stale')).toBeUndefined();
     expect(captainChildTeamOf(freshId)).toBe(String(seeded.id));
     const persisted = readTeamSync(root, seeded.id);
-    expect(persisted?.taskMembers.find((r) => r.mainTaskId === null)?.sessionId).toBe(freshId);
+    expect(persisted?.taskMembers.find((r) => r.mainTaskId === 1 && r.isLeader === true)?.sessionId).toBe(freshId);
   });
 
   it('rejects a member caller (只有团队领队会话可以转交)', async () => {
@@ -358,15 +364,38 @@ describe('eteams_dispatch_captain', () => {
 
   it('spawns the fresh child on the leader route override (领队模型选择)', async () => {
     const seeded = seedTeam();
-    // 领队行预置路线（setLeaderModel 的写入路径由 lifecycle.test.ts 覆盖，
-    // 这里按整存整取快照直接播种；v9 路线含目录 provider）。
+    // 领队行预置路线（setLeaderModel 的写入路径由 lifecycle.test.ts 覆盖）。
+    // v9 存储位 = 班底领队行（team_members.is_leader=1 的 modelRoute）——
+    // seedTeam 不带成员班底，这里显式补一条领队班底行并挂覆盖路线。
     const withRoute: TeamState = {
       ...seeded,
-      taskMembers: seeded.taskMembers.map((r) =>
-        r.mainTaskId === null
-          ? { ...r, model: 'deepseek-reasoner', provider: 'tr-test', reasoningEffort: 'high' }
-          : r,
-      ),
+      members: [
+        ...seeded.members,
+        {
+          memberId: 100,
+          roleId: null,
+          name: LEADER_NAME,
+          employeeId: 100,
+          role: '领队',
+          persona: {
+            frameworkVersion: 1,
+            role: '领队',
+            duty: '',
+            style: '',
+            skills: '',
+            rules: [],
+            executionPrompt: '',
+          },
+          modelRoute: {
+            model: 'deepseek-reasoner',
+            provider: 'tr-test',
+            reasoningEffort: 'high',
+          },
+          avatar: { seed: 9, salt: 9 },
+          isLeader: true,
+          createdAt: 1,
+        },
+      ],
     };
     withTeamTx(root, seeded.id, (tx) => writeTeamInTx(tx, withRoute));
     await tool.execute(

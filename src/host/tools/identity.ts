@@ -125,7 +125,14 @@ export async function resolveCaller(env: RuntimeEnv, agent: Agent): Promise<Call
         r.status !== 'removed' &&
         (r.employeeId === null || team.members.some((m) => m.employeeId === r.employeeId)),
     );
-    if (row) return { kind: 'member', team, member: row, actor: memberActor(row) };
+    if (row) {
+      // 领队副本行（随大任务生灭的领队子会话，用户迭代 2026-09-08）按
+      // captain 解析——它不是干活的成员，是本任务的主持者。
+      if (row.isLeader === true) {
+        return { kind: 'captain', team, actor: captainActor(team) };
+      }
+      return { kind: 'member', team, member: row, actor: memberActor(row) };
+    }
   }
   throw new ETeamsError(
     '当前会话不在任何 eteams 团队中',

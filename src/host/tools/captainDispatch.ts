@@ -38,6 +38,7 @@ const strR = (description: string) => ({
   description,
   required: true as const,
 });
+const int = (description: string) => ({ type: 'integer' as const, description });
 const bool = (description: string) => ({ type: 'boolean' as const, description });
 
 function text(value: string): ContentBlock[] {
@@ -58,8 +59,9 @@ export function createCaptainDispatchTool(
   return defineTool({
     name: 'eteams_dispatch_captain',
     description:
-      '把用户交给团队的任务（或对任务的答复/追问、团队邮件通知）转交持续领队子代理主持——首次转交建立每团队一个的持久子代理会话，后续转交在同一会话续聊。子代理直接向用户弹问询（ask_user_question），每轮汇报经子代理汇报消息送达本对话；本会话原样展示到达的汇报即可（简短确认，不要复述全文），不要直接调用 eteams_* 工具，也不要自己动手执行任务。',
+      '把用户交给团队的任务（或对任务的答复/追问、团队邮件通知）转交领队子代理主持——子会话按大任务锚定（随任务生灭），同一任务的后续转交在同一会话续聊。子代理直接向用户弹问询（ask_user_question），每轮汇报经子代理汇报消息送达本对话；本会话原样展示到达的汇报即可（简短确认，不要复述全文），不要直接调用 eteams_* 工具，也不要自己动手执行任务。',
     parameters: {
+      taskId: int('锚定的大任务号（主任务/任务单；band 流程要求先建任务再转交时透传。不传 = 自动取该团队最近的一个主任务）'),
       message: strR('转交内容：用户任务/答复原话，或团队通知的要点'),
     },
     output: {
@@ -82,12 +84,19 @@ export function createCaptainDispatchTool(
       }
       const team: TeamState | undefined = readTeamSync(stateRootOf(env), caller.team.id);
       if (!team) throw new ETeamsError(`团队「${caller.team.id}」不存在`);
+      // 锚定任务：显式 taskId 优先；缺省取该团队最近的一个主任务（band 两步
+      // 走要求先建任务再转交，答复/通知也应带任务号——兜底仅防漏传）。
+      const mainTasks = team.tasks.filter((t) => t.parentId === null);
+      const task =
+        (args.taskId !== undefined ? mainTasks.find((t) => t.id === args.taskId) : undefined) ??
+        [...mainTasks].sort((a, b) => b.id - a.id)[0];
+      if (!task) throw new ETeamsError('团队还没有主任务——先用 eteams_submit_task 建任务，再转交领队');
       // 现状不随 prompt 内嵌（用户迭代 2026-09-08）：子代理先调
       // eteams_team_status 自取（快照永远现读，单一事实源）。
       const prompt = captainDispatchPrompt(args.message);
-      // 派发核（dispatchCaptainCore）：续聊/重建/登记/落盘——与面板手动建
-      // 任务路径共用同一链路（docs/panelTaskCommission）。
-      return dispatchCaptainCore(env, config, exec.agent, team, prompt, exec.signal);
+      // 派发核（锚定本任务的领队副本行，随任务生灭）：与面板手动建任务路
+      // 径共用同一链路（docs/panelTaskCommission）。
+      return dispatchCaptainCore(env, config, exec.agent, team, task.id, prompt, exec.signal);
     },
   });
 }

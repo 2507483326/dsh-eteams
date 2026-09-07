@@ -61,6 +61,7 @@ import {
 } from './assignment.js';
 import {
   leaderRowOf,
+  leaderRouteOf,
   latestInstanceRow,
   memberStatusOf,
   teamMainSessionOf,
@@ -322,6 +323,7 @@ export function teamSnapshot(
   // 行按 team_members.is_leader——不再按保留名匹配。
   const rosterLeader = readRoster(stateRoot).find((m) => m.isLeader === true);
   const leader = leaderRowOf(team);
+  const leaderRoute = leaderRouteOf(team);
   const leaderBadge =
     team.members.find((m) => m.isLeader === true)?.employeeId ?? leader?.employeeId ?? 1;
   // 组收口产出（docs/26）：task.completed 事件 payload.via='subtasks.completed'
@@ -337,8 +339,8 @@ export function teamSnapshot(
   return {
     teamId: team.id,
     name: team.name,
-    // 领队移出/回团即行 status；主会话快照在任务行（v6，不在领队行）。
-    leaderRemoved: leader?.status === 'removed',
+    // 领队移出 = 班底配置开关（v8+ 主持行取消）：hasLeader false 即移出态。
+    leaderRemoved: !team.hasLeader,
     // docs/27 §27.9#4：goal / phase / planReviewState / version / workDir /
     // leaderModelRoute 已随审批重构与成员模型收敛砍掉——面板不再消费。
     // docs/26：任务单（group 容器）不计入进度——进度只反映真实小任务。
@@ -366,11 +368,11 @@ export function teamSnapshot(
       // 头像（用户迭代 2026-09-03）：优先名册领队条目——面板「随机头像」
       // 换脸后团队页领队卡同步；缺省回落固定 (hashName, 7)。
       avatar: rosterLeader?.avatar ?? { seed: avatarSeedFor('项目牧羊人'), salt: 7 },
-      // 模型路线（用户迭代 2026-09-04 恢复领队模型选择）：领队主持行
-      // model/provider/reasoning_effort（v9 加 provider），空 model = 会话默认。
-      model: leader?.model ?? '',
-      provider: leader?.provider ?? null,
-      reasoningEffort: leader?.reasoningEffort ?? null,
+      // 模型路线（用户迭代 2026-09-04 恢复领队模型选择；v9 存班底领队行
+      // leaderRouteOf——provider/model/effort 整组），空 model = 会话默认。
+      model: leaderRoute.model,
+      provider: leaderRoute.provider ?? null,
+      reasoningEffort: leaderRoute.reasoningEffort ?? null,
     },
     // 成员 = 班底行（v7）。领队也是班底一行，但领队卡单独走 captain 段，
     // 成员列表跳过它避免重复出卡；副本行全部 removed 的成员不再展示
@@ -1336,7 +1338,7 @@ export function installWebSurface(
                 const prompt = captainCommissionPrompt(task.id, task.subject, description);
                 if (team.hasLeader) {
                   try {
-                    await dispatchCaptainCore(env, config, anchor, team, prompt);
+                    await dispatchCaptainCore(env, config, anchor, team, task.id, prompt);
                     return '';
                   } catch (e) {
                     return `领队子代理派发失败：${e instanceof Error ? e.message : String(e)}`;

@@ -12,7 +12,7 @@ import { sanitizeKey, stationProgress, taskSlug } from '../model/taskMachine.js'
 import type { MemberRecord, ModelRouteSnapshot, TaskRecord, TeamState } from '../model/types.js';
 import { renderContract, stationLabel } from '../prompts/handoff/mails.js';
 import { formatEmployeeId } from './roster.js';
-import { leaderRowOf, memberStatusOf } from './notifier.js';
+import { memberStatusOf } from './notifier.js';
 
 /** 团队工作目录基准段（相对工作区；任务 work_dir 在它之下分配）。 */
 export function teamWorkDirRel(team: TeamState): string {
@@ -49,12 +49,13 @@ export function taskDirAbs(workspace: string, team: TeamState, task: TaskRecord)
 
 /** Render the idempotent team README (overview view). */
 export function renderTeamReadme(team: TeamState): string {
-  const leader = leaderRowOf(team);
+  // 领队就位判据（v8+ 主持行取消）：班底有 is_leader 行即配置了领队。
+  const leaderInRoster = team.members.some((m) => m.isLeader === true);
   const lines: string[] = [
     `# ${team.name}`,
     '',
     `- 团队 id：${team.id}`,
-    `- 领队：${leader !== undefined && leader.status !== 'removed' ? '项目牧羊人（在册）' : '（未设领队）'}`,
+    `- 领队：${leaderInRoster ? '项目牧羊人（在册）' : '（未设领队）'}`,
     '',
     '## 成员',
   ];

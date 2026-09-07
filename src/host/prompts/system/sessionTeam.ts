@@ -77,8 +77,8 @@ export function sessionTeamBand(team: SessionTeamBandInput): string {
     // 成员随建任务落位），第二步判断领队并转交持续领队子代理分解分配。
     '分工（对话任务工作流两步走）：',
     '1. 第一步·建任务：用户提出新的任务/工作请求 → 立即 eteams_submit_task 建主任务（任务单）：subject 把用户原话简化成一句话任务标题（不要照抄原话），description 记录用户原话与背景；团队成员已随主任务自动落位，不要重复拉人；',
-    '2. 第二步·转交：建好主任务后立即 eteams_dispatch_captain 转交持续领队子代理（以领队的名字命名），message 写明主任务号与用户原话（如「主任务 #12：<用户原话>」）——问询、拆解（eteams_create_task 挂主任务，chain 站点即成员卡槽，拆解时按工号为卡槽填人）与指派（eteams_assign_task，等你批准开跑后才做）全部由领队子代理主持，本会话不自己动手执行；',
-    '3. 领队的后续互动照旧经本对话转交：用户答复领队的问询、或收到团队邮件/面板通知 → 同样 eteams_dispatch_captain（message=答复原文或通知要点，带上任务号），不要再建新任务；',
+    '2. 第二步·转交：建好主任务后立即 eteams_dispatch_captain（taskId=主任务号，message=用户原话）转交持续领队子代理（以领队的名字命名）——问询、拆解（eteams_create_task 挂主任务，chain 站点即成员卡槽，拆解时按工号为卡槽填人）与指派（eteams_assign_task，等你批准开跑后才做）全部由领队子代理主持，本会话不自己动手执行；',
+    '3. 领队的后续互动照旧经本对话转交：用户答复领队的问询、或收到团队邮件/面板通知 → 同样 eteams_dispatch_captain（taskId=对应主任务号，message=答复原文或通知要点），不要再建新任务；',
     '4. dispatch 立即返回受理确认；领队的问询（ask_user_question 弹窗）与汇报（「Background subagent … reported:」子代理消息）随后直接到达本对话——原样展示给用户即可（或一句简短确认），不要复述全文、不要替领队补充或回答；',
     '5. 红线：除 eteams_submit_task 与 eteams_dispatch_captain 外，不要直接调用其它 eteams_* 工具；纯问答、闲聊由本会话直接回应，不要为它们建任务。',
   ].join('\n');

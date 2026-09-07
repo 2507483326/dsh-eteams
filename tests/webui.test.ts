@@ -780,23 +780,20 @@ describe('panel write routes (M5 first slice)', () => {
 
     const remove = await h.post(`/eteams-api/team/${teamId}/leader/remove`, {});
     expect(remove.code).toBe(200);
-    expect(
-      readTeam(teamId).taskMembers.find((r) => r.mainTaskId === null && r.name === '项目牧羊人')!
-        .status,
-    ).toBe('removed');
+    // v8+：主持行取消——移除 = 班底领队行硬删 + hasLeader false（配置开关）。
+    expect(readTeam(teamId).members.some((m) => m.isLeader === true)).toBe(false);
+    expect(readTeam(teamId).hasLeader).toBe(false);
     expect(teamSnapshot(readTeam(teamId), workspace, config).leaderRemoved).toBe(true);
 
     // 幂等重发不翻转。
     await h.post(`/eteams-api/team/${teamId}/leader/remove`, {});
-    expect(
-      readTeam(teamId).taskMembers.some((r) => r.name === '项目牧羊人' && r.status === 'removed'),
-    ).toBe(true);
+    expect(readTeam(teamId).members.some((m) => m.isLeader === true)).toBe(false);
 
-    // 领队行 removed 后 restore 走通（requireTeamById 放行 removed 行，
-    // 身份按任务行快照/建队留痕/绑定判定；需要活跃领队的操作自带更严守卫）。
+    // 加回：班底领队行重建（续新工牌），leaderRemoved 翻回。
     const restore = await h.post(`/eteams-api/team/${teamId}/leader/restore`, {});
     expect(restore.code, restore.body).toBe(200);
     expect(teamSnapshot(readTeam(teamId), workspace, config).leaderRemoved).toBe(false);
+    expect(readTeam(teamId).members.some((m) => m.isLeader === true)).toBe(true);
   });
 
   it('exposes maxMembers and leaderRemoved through GET /state', async () => {
@@ -831,13 +828,13 @@ describe('panel write routes (M5 first slice)', () => {
     expect(dropOne.code, dropOne.body).toBe(200);
     const late = await h.post(`/eteams-api/team/${teamId}/member`, { name: '成员-10' });
     expect(late.code, late.body).toBe(200);
-    // v7 上限口径：按班底行数计（领队班底行占 1 名额）——领队 + 9 在册成员
-    // （成员-9 硬删、成员-10 补位）；无任务时不产团队级实例行（仅领队主持行）。
+    // v8+ 上限口径：按班底行数计（领队班底行占 1 名额）——领队 + 9 在册成员
+    // （成员-9 硬删、成员-10 补位）；主持行取消（v8+）——任务成员表为空。
     const fresh = readTeam(teamId);
     expect(fresh.members).toHaveLength(10);
     expect(fresh.members.find((m) => m.name === '成员-9')).toBeUndefined();
     expect(fresh.members.find((m) => m.name === '成员-10')).toBeDefined();
-    expect(fresh.taskMembers).toHaveLength(1);
+    expect(fresh.taskMembers).toHaveLength(0);
   });
 
   it('deletes a team via POST /team/:id/delete and guards active tasks', async () => {
@@ -1691,8 +1688,9 @@ describe('conversation task workflow (docs/26)', () => {
     // 补章：本任务行未登记快照时以本次派发锚点补登（cap-second）；已登记行
     // 不改写（group 任务的 cap-conv 原样保留）。
     expect(team.tasks.find((t) => t.id === subId)!.mainSessionId).toBe('cap-second');
+    // v8+：主持行取消——领队的会话锚在本大任务的领队副本行上（未派发保持空串）。
     const leaderRow = team.taskMembers.find(
-      (r) => r.mainTaskId === null && r.name === '项目牧羊人',
+      (r) => r.mainTaskId === group && r.isLeader === true,
     );
     expect(leaderRow).toBeDefined();
     expect(leaderRow!.sessionId).toBe('');
@@ -1820,11 +1818,11 @@ describe('conversation task workflow (docs/26)', () => {
     const team = readTeam(teamId);
     expect(team.tasks.find((t) => t.id === subId)!.status).toBe('wait');
     const leaderRow = team.taskMembers.find(
-      (r) => r.mainTaskId === null && r.name === '项目牧羊人',
+      (r) => r.mainTaskId === group && r.isLeader === true,
     );
     expect(leaderRow).toBeDefined();
-    // v6：快照/心跳都在领队行上无痕——领队行只记自己的子代理会话（未派发
-    // 保持空串）；派发锚点补章在任务行（本行未登记 → cap-second）。
+    // v8+：主持行取消——领队副本行只作会话锚（未派发保持空串）；派发锚点
+    // 补章在任务行（本行未登记 → cap-second）。
     expect(leaderRow!.sessionId).toBe('');
     expect(team.tasks.find((t) => t.id === subId)!.mainSessionId).toBe('cap-second');
   });
@@ -1861,9 +1859,10 @@ describe('panel task commission (docs/panelTaskCommission)', () => {
     // 与对话建任务同口径：建任务即物化文档树（contract.md）。
     expect(existsSync(join(workspace, task.workDir!, 'contract.md'))).toBe(true);
 
-    // 有领队 → dispatchCaptainCore 建立持续领队子代理（durable id 落主持行）。
+    // 有领队 → dispatchCaptainCore 建立本任务的领队副本子代理（durable id
+    // 落领队副本行——v8+ 主持行取消）。
     const leaderRow = team.taskMembers.find(
-      (r) => r.mainTaskId === null && r.name === '项目牧羊人',
+      (r) => r.mainTaskId === task.id && r.isLeader === true,
     )!;
     expect(leaderRow.sessionId).toMatch(/^sess-child-/);
 

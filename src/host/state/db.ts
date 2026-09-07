@@ -712,6 +712,29 @@ function migrateRouteProviderV9(db: DatabaseSync): void {
   if (taskMemberColumns.length > 0 && !taskMemberColumns.includes('provider')) {
     db.exec('ALTER TABLE task_members ADD COLUMN provider TEXT;');
   }
+  // 领队路线存储位搬迁（一次性，schema_meta 标记防重）：v9 起领队路线统一
+  // 存班底领队行（team_members.is_leader=1，与成员同表同列——用户手改/
+  // 查看都在 team_members），主持行只留会话锚。只搬班底行 model 为空的
+  // （不覆盖用户更新）。
+  if (rosterColumns.length === 0 || taskMemberColumns.length === 0) return;
+  const marker = db
+    .prepare("SELECT value FROM schema_meta WHERE key = 'v9_leader_route_migrated'")
+    .get() as { value: string } | undefined;
+  if (marker !== undefined) return;
+  const now = Date.now();
+  db.prepare(
+    "INSERT INTO schema_meta (key, value, created_time, update_time) VALUES (?, '1', ?, ?)",
+  ).run('v9_leader_route_migrated', now, now);
+  db.exec(
+    `UPDATE team_members SET ` +
+      `model = (SELECT tm.model FROM task_members tm WHERE tm.team_id = team_members.team_id ` +
+      `AND tm.is_leader = 1 AND tm.main_task_id IS NULL LIMIT 1), ` +
+      `provider = (SELECT tm.provider FROM task_members tm WHERE tm.team_id = team_members.team_id ` +
+      `AND tm.is_leader = 1 AND tm.main_task_id IS NULL LIMIT 1), ` +
+      `reasoning_effort = (SELECT tm.reasoning_effort FROM task_members tm WHERE tm.team_id = team_members.team_id ` +
+      `AND tm.is_leader = 1 AND tm.main_task_id IS NULL LIMIT 1) ` +
+      `WHERE is_leader = 1 AND model IS NULL`,
+  );
 }
 
 /**

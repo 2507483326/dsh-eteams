@@ -268,6 +268,8 @@ export async function createTask(
     // 任务副本（v7 决策 5）：建大任务即把全员班底（含领队）整行抄进本任务
     // ——副本行工号抄班底、staged 待首派起会话；后续加成员再补铺。小任务
     // 挂在大任务下，副本锚定大任务粒度、已在建大任务时铺过，不重复抄。
+    // 领队同样铺行（用户迭代 2026-09-08 确认）：领队也算普通成员，每个
+    // 大任务给他开独立的子会话锚点。
     if (task.parentId === null) {
       for (const m of team.members) {
         team.taskMembers.push({

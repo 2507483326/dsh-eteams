@@ -15,6 +15,7 @@ import type {
   Actor,
   MailMessage,
   MemberStatus,
+  ModelRouteSnapshot,
   TaskMemberRecord,
   TaskRecord,
   TeamState,
@@ -66,9 +67,20 @@ export function deliverMailInTx(
 // --------------------------------------------------------------------------
 
 /** 领队行（领队锚点）：v8 按领队标识定位（is_leader=1 且主持行 mainTaskId
- * 为空），不再按名字匹配。 */
+ * 为空），不再按名字匹配。主持行只承担会话锚（session_id）职责。 */
 export function leaderRowOf(team: TeamState): TaskMemberRecord | undefined {
   return team.taskMembers.find((r) => r.isLeader === true && r.mainTaskId === null);
+}
+
+/**
+ * 领队模型路线（v9 统一存储位 = 班底领队行 team_members.is_leader=1 的
+ * modelRoute，与成员同表同列——用户手改/查看都在 team_members；此前存
+ * task_members 主持行 model 列的 2026-09-04 旧设计废止，旧值经 v9 迁移
+ * 一次性搬到班底行）。班底无领队行（领队未就位）返回会话默认（空路线）。
+ */
+export function leaderRouteOf(team: TeamState): ModelRouteSnapshot {
+  const rosterLeader = team.members.find((m) => m.isLeader === true);
+  return rosterLeader?.modelRoute ?? { model: '' };
 }
 
 /**
