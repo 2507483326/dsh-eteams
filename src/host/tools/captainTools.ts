@@ -36,7 +36,7 @@ import {
 } from '../runtime/assignment.js';
 import { listTeams, envForAgent, resolveCaller } from './identity.js';
 import { readBox } from '../runtime/notifier.js';
-import { readRoster, upsertRosterMember } from '../runtime/roster.js';
+import { readRoster, taskMemberBadge, upsertRosterMember } from '../runtime/roster.js';
 import {
   answerBuildInterview,
   hasBuildSessionFile,
@@ -95,12 +95,25 @@ const chainParam = () => ({
   items: {
     type: 'object' as const,
     properties: {
-      member: str('站点成员名（须在团队中）'),
+      // v7 站点写工号（数字串也收，运行层统一解析）：同名成员各拿各的号，
+      // 按名指派会随机命中同名行——工号是唯一可靠指称。
+      member: str('站点成员工号（数字，如 7 = ET-0007；同名成员必须用工号）'),
       stageBrief: str('本站简报：该站产出与交接物'),
     },
     additionalProperties: false,
   },
 });
+
+/** 站点/成员 ref 显示（v7）：工号 → `T{n}-ETxxxx` 任务作用域工牌（n=任务
+ * 主任务号）；旧名字站点原样显示（legacy）。 */
+function stationDisplay(task: TaskRecord, ref: string | number): string {
+  const trimmed = typeof ref === 'string' ? ref.trim() : '';
+  const numeric = typeof ref === 'number' ? ref : Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(numeric) || (typeof ref === 'string' && String(numeric) !== trimmed)) {
+    return typeof ref === 'string' ? ref : String(ref);
+  }
+  return taskMemberBadge(task.parentId ?? task.id, numeric);
+}
 
 /** Task summary rendered into captain tool output. */
 function taskSummary(task: TaskRecord) {
@@ -119,7 +132,10 @@ function taskSummary(task: TaskRecord) {
             // 末站完成即 completed（chainCursor 不再推进）——完成态按满进度口径显示。
             done: task.status === 'completed' ? station.total : station.done,
             total: station.total,
-            next: task.chain[task.chainCursor + 1]?.member ?? null,
+            // 下一站 ref 是工号（v7）——显示层转任务作用域工牌。
+            next: task.chain[task.chainCursor + 1]?.member
+              ? stationDisplay(task, task.chain[task.chainCursor + 1]!.member)
+              : null,
           }
         : null,
   };
@@ -171,7 +187,7 @@ export function createCaptainTools(
   const addMemberTool = defineTool({
     name: 'eteams_add_member',
     description:
-      '添加团队成员（新团队或运行中团队均可）。不指定 model 时执行会话跟随领队路线（派发时解析）；同名成员已有工号则沿用。',
+      '添加团队成员（新团队或运行中团队均可）。不指定 model 时执行会话跟随领队路线（派发时解析）。v7 工号（表自增）：每次添加发新班底行，工号 = 班底行自增主键（同名成员各拿各的号；号全局只增不复用，不支持指定号）。',
     parameters: {
       name: strR('成员名（任务链与指派都用它）'),
       role: strR('角色：researcher/engineer/reviewer/writer/…（决定默认人设）'),
@@ -1149,7 +1165,7 @@ export function createCaptainTools(
       '把 ready 任务指派给成员并投递指派信。链任务默认指派执行链下一站；改派其他成员必须给 deviationNote（D11）。handoff 是给受派成员的上一站交接说明。',
     parameters: {
       taskId: intR('任务号'),
-      member: strR('受派成员名'),
+      member: strR('受派成员（成员工号数字，如 7 = ET-0007；同名成员必须用工号）'),
       deviationNote: str('偏离执行链的原因（改派非下一站成员时必填）'),
       handoff: str('交接说明（可选）'),
     },
@@ -1217,7 +1233,7 @@ export function createCaptainTools(
       '改派进行中/待决策（wait_decision）任务：吊销当前 attempt（旧 token 立即失效），任务转新成员。链任务偏离需 deviationNote。也用于处置待决策任务。',
     parameters: {
       taskId: intR('任务号'),
-      member: str('新成员（缺省=原成员重派）'),
+      member: str('新成员工号（缺省=原成员重派；同名成员必须用工号）'),
       deviationNote: str('偏离原因（偏离链时必填）'),
     },
     output: {

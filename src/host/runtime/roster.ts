@@ -1,25 +1,16 @@
 /**
  * Member roster (D16 → docs/27 v3 roles 表)：工作区级角色库目录（roles 表，
- * 成员=角色全局一份；人设/工号/头像/一句话简介都挂在角色行上，班底经
+ * 成员=角色全局一份；人设/头像/一句话简介都挂在角色行上，班底经
  * team_members.role_id 松引用引入）。条目带人设框架字段；模型路线不再入
- * 角色库（v3：路线属班底 team_members.model / 领队行）。工号发号为 SQL
- * （roles 表最大工号 +1，docs/27），employee-seq.json 计数器文件弃用删除；
- * roster.json 不再读写（导入走 import.ts）。Pure Node — no cordis.
+ * 角色库（v3：路线属班底 team_members / 领队行）。v7：工号也挪出角色库
+ * ——班底行 team_members 自增主键即工号（表自增），roles.employee_id 列
+ * 保留但不读写；roster.json 不再读写（导入走 import.ts）。Pure Node — no
+ * cordis.
  *
  * @module dsh-eteams/runtime/roster
  */
-import type { DatabaseSync } from 'node:sqlite';
 import type { PersonaRecord } from '../model/types.js';
-import {
-  avatarFromJson,
-  avatarToJson,
-  getDb,
-  hashName,
-  LEADER_NAME,
-  nextEmployeeId,
-  personaFromMd,
-  personaToMd,
-} from '../state/db.js';
+import { avatarFromJson, avatarToJson, getDb, hashName, LEADER_NAME, personaFromMd, personaToMd } from '../state/db.js';
 import { ensureWorkspaceReady, seedPresetRows } from '../state/import.js';
 import { rolesRowByName, syncTeamMemberRoleMirrorInTx, withTeamTx } from '../state/store.js';
 import type { TeamTx } from '../state/store.js';
@@ -35,13 +26,14 @@ export interface AvatarPair {
 
 /**
  * One reusable role definition (persona framework；成员=角色，全局一份)。
- * `employeeId` 是库里的整数工号（显示补零走 {@link formatEmployeeId}）；
- * 模型路线字段随 v3 移出角色库（路线属班底 team_members，见 teamOps）。
+ * v7：工号不在角色库（roles.employee_id 弃用不读写）——班底工号 = 工牌发放处
+ * `team_members.team_member_id` 自增主键（表自增）；`employeeId` 字段仅为
+ * 旧 roster 文件导入保留的透传入参。
  */
 export interface RosterMember {
   /** Unique key across the workspace roster (trimmed, non-empty). */
   name: string;
-  /** 工号 (employee id, docs/21)：roles 表整数工号；undefined = 尚未发号。 */
+  /** 【v7 弃用】旧 roster 文件导入透传；角色库不再存工号。 */
   employeeId?: number;
   /** Role label (engineer / researcher / …)，= persona_md 的「角色：」行。 */
   role: string;
@@ -66,20 +58,12 @@ export function formatEmployeeId(n: number): string {
 }
 
 /**
- * Allocate the next 工号 for a workspace (docs/21)：roles 表最大工号 +1
- * （docs/27——计数器从库来，employee-seq.json 不再存在）。独立调用只做
- * 「取号」预览；插入角色行时请在同一事务内用 {@link nextEmployeeIdInTx}
- * 现算现用，避免并发下重号。
+ * 任务成员显示标识（v7）：`T{mainTaskId}-ET{工号补零}`（如 `T3-ET0007`）。
+ * 任务成员的工牌作用域是任务（副本行 = 工牌），班底成员标识用
+ * {@link formatEmployeeId}——同号在任务卡上带任务前缀，同名成员靠号区分。
  */
-export function allocateEmployeeId(stateRoot: string): number {
-  const db = getDb(stateRoot);
-  ensureWorkspaceReady(stateRoot, db);
-  return nextEmployeeId(db);
-}
-
-/** 事务内取下一个工号（插入成员模板的同步取号路径，docs/35 §2）。 */
-export function nextEmployeeIdInTx(db: DatabaseSync): number {
-  return nextEmployeeId(db);
+export function taskMemberBadge(mainTaskId: number, employeeId: number): string {
+  return `T${mainTaskId}-ET${String(Math.max(0, Math.floor(employeeId))).padStart(4, '0')}`;
 }
 
 // --------------------------------------------------------------------------
@@ -105,10 +89,10 @@ function rosterPersona(m: RosterMember, name: string): PersonaRecord {
   };
 }
 
-/** roles 角色行 → RosterMember（手册全文解析回六字段；profile 列值优先）。 */
+/** roles 角色行 → RosterMember（手册全文解析回六字段；profile 列值优先）。
+ * v7：roles.employee_id 弃用不读——工号在班底（team_members.employee_id）。 */
 function rowToRosterMember(row: {
   role_name: string;
-  employee_id: number | null;
   persona_md: string | null;
   profile: string | null;
   avatar: string | null;
@@ -118,7 +102,6 @@ function rowToRosterMember(row: {
   const persona = personaFromMd(row.persona_md ?? '', name, name);
   return {
     name,
-    ...(row.employee_id !== null ? { employeeId: row.employee_id } : {}),
     role: persona.role,
     // profile 独立成列（v3）：列值优先，旧库烘进手册的 `- 简介：` 行兜底。
     ...(row.profile !== null && row.profile !== ''
@@ -137,9 +120,10 @@ function rowToRosterMember(row: {
   };
 }
 
-/** roles 角色库行的公共 SELECT（成员=角色，全局一份）。 */
+/** roles 角色库行的公共 SELECT（成员=角色，全局一份；v7 不读弃用的
+ * employee_id 列）。 */
 const ROSTER_ROW_SQL =
-  'SELECT role_name, employee_id, persona_md, profile, avatar, update_time FROM roles';
+  'SELECT role_name, persona_md, profile, avatar, update_time FROM roles';
 
 /** Read the workspace roster（角色库全表，role_id 升序）. */
 export function readRoster(stateRoot: string): RosterMember[] {
@@ -191,17 +175,12 @@ export async function upsertRosterMember(
   const stored: RosterMember = await withTeamTx(stateRoot, undefined, (tx) => {
     const db = tx.db;
     const now = tx.now;
-    // 工号（docs/21）：新建时从 roles 表最大工号 +1 分配；更新保留原号。
-    // 调用方显式传入（导入/迁移）时尊重传入值（0 视同未传）。
+    // v7：工号不入角色库（roles.employee_id 弃用）——班底工号 = 工牌发放处
+    // team_members 自增主键（表自增，teamOps 建班底行时自然拿到）；角色行只
+    // 管人设/头像/简介。更新保留原头像。
     const previous = db
       .prepare(`${ROSTER_ROW_SQL} WHERE role_name = ? LIMIT 1`)
       .get(name) as Parameters<typeof rowToRosterMember>[0] | undefined;
-    const employeeId =
-      (typeof member.employeeId === 'number' && member.employeeId > 0
-        ? member.employeeId
-        : undefined) ??
-      previous?.employee_id ??
-      nextEmployeeId(db);
     const previousAvatar =
       previous === undefined || previous.avatar === null
         ? undefined
@@ -210,7 +189,8 @@ export async function upsertRosterMember(
       ...member,
       name,
       role,
-      employeeId,
+      // 入库表示不带工号（v7 角色库无工号）：调用方透传的旧字段就地剥离。
+      employeeId: undefined,
       avatar: member.avatar ?? previousAvatar ?? {
         seed: hashName(name),
         salt: Math.floor(Math.random() * 1000),
@@ -223,14 +203,14 @@ export async function upsertRosterMember(
     const profile = persona.profile ?? null;
     if (previous === undefined) {
       db.prepare(
-        'INSERT INTO roles (role_name, employee_id, persona_md, profile, avatar, created_time, update_time) ' +
-          'VALUES (?, ?, ?, ?, ?, ?, ?)',
-      ).run(name, employeeId, personaMd, profile, avatarJson, now, now);
+        'INSERT INTO roles (role_name, persona_md, profile, avatar, created_time, update_time) ' +
+          'VALUES (?, ?, ?, ?, ?, ?)',
+      ).run(name, personaMd, profile, avatarJson, now, now);
     } else {
       db.prepare(
-        'UPDATE roles SET employee_id = ?, persona_md = ?, profile = ?, avatar = ?, update_time = ? ' +
+        'UPDATE roles SET persona_md = ?, profile = ?, avatar = ?, update_time = ? ' +
           'WHERE role_name = ?',
-      ).run(employeeId, personaMd, profile, avatarJson, now, name);
+      ).run(personaMd, profile, avatarJson, now, name);
     }
     // v4 副本列刷新：角色行刚落库，team_members 里引用它的班底行镜像随之同步
     const roleId = rolesRowByName(db, name)?.role_id;
@@ -262,11 +242,11 @@ const PROTECTED_FROM_DELETE: readonly string[] = [LEADER_NAME, ROLE_BUILDER_NAME
  * first access. Idempotent and non-destructive: existing entries (including
  * user edits to a preset) are never overwritten; only missing presets are
  * inserted. 播种本体在 state/import.ts 的 seedPresetRows（与首启导入同一
- * 事务，保证建库一次成团）；这里只做旧版陈旧手册升级 + 工号回填。
+ * 事务，保证建库一次成团）；这里只做旧版陈旧手册升级。v7：工号回填循环
+ * 已废——角色库不再存工号，班底工号由建队/建任务路径发号。
  */
 export async function ensurePresetMembers(stateRoot: string): Promise<void> {
   await withTeamTx(stateRoot, undefined, (tx) => {
-    const db = tx.db;
     const now = tx.now;
     // 预设播种（幂等：缺才补）在这里再跑一遍——withTeamTx 入口的
     // ensureWorkspaceReady 只在建库/导入首启时播种，此处保证「删库不删
@@ -314,18 +294,6 @@ export async function ensurePresetMembers(stateRoot: string): Promise<void> {
         });
       }
     }
-    // 工号回填（docs/21）：补齐所有缺号的角色行（含旧版入库的非预设角色），
-    // 顺序按 role_id 逐行取 roles 表最大工号 +1。
-    const rows = db
-      .prepare('SELECT role_id FROM roles WHERE employee_id IS NULL ORDER BY role_id')
-      .all() as Array<{ role_id: number }>;
-    for (const row of rows) {
-      db.prepare('UPDATE roles SET employee_id = ?, update_time = ? WHERE role_id = ?').run(
-        nextEmployeeId(db),
-        now,
-        row.role_id,
-      );
-    }
   });
 }
 
@@ -354,9 +322,10 @@ function upgradePresetHandbook(
  * Remove one roster entry by name (v3：删 roles 角色行). The leader
  * (项目牧羊人) and the role builder (角色构建师) are system members and
  * protected: deletion is rejected (用户模型：领队/角色构建师不可删除).
- * 活跃成员守卫（成员=角色全局一份）：仍有非 removed 实例行（按名关联）时
- * 拒删——删掉角色行会让在队成员的人设悬空，先从团队移除；实例行全 removed
- * 的休眠班底行不挡删除（悬空班底行由 loadMembers 防御性跳过）。
+ * v7 班底守卫（R6）：任何 team_members 班底行仍引用该角色（role_id 命中，
+ * 含 removed 行——班底是「成员=角色」的花名册，离职行也占位）时拒删，
+ * 先从各团队移除成员（removeMember 删班底行）再删角色；task_members 副本
+ * 行不挡删除（副本随任务走，任务删除时级联清理）。
  */
 export async function removeRosterMember(stateRoot: string, name: string): Promise<void> {
   const trimmed = name.trim();
@@ -365,13 +334,15 @@ export async function removeRosterMember(stateRoot: string, name: string): Promi
     throw new Error(`「${trimmed}」为系统保留成员，不可删除`);
   }
   withTeamTx(stateRoot, undefined, (tx) => {
-    const active = tx.db
-      .prepare('SELECT COUNT(*) AS n FROM task_members WHERE name = ? AND status <> ?')
-      .get(trimmed, 'removed') as { n: number };
-    if (active.n > 0) {
-      throw new Error(`角色「${trimmed}」仍在团队中担任成员，先从团队移除再删除`);
-    }
     const roleId = rolesRowByName(tx.db, trimmed)?.role_id;
+    if (roleId !== undefined) {
+      const rostered = tx.db
+        .prepare('SELECT COUNT(*) AS n FROM team_members WHERE role_id = ?')
+        .get(roleId) as { n: number };
+      if (rostered.n > 0) {
+        throw new Error(`角色「${trimmed}」仍在团队班底中，先从团队移除再删除`);
+      }
+    }
     const info = tx.db.prepare('DELETE FROM roles WHERE role_name = ?').run(trimmed);
     if (Number(info.changes) === 0) throw new Error(`成员「${trimmed}」不存在`);
     // v4 副本列清空：角色行已删，引用它的班底行镜像置 NULL（悬空行口径，

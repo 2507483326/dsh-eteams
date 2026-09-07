@@ -8,6 +8,7 @@
  */
 import type { DvaModel } from 'dva-core';
 import type { ActivityState, PendingRouteEntry, RoutePatch, RouteTriple } from '../../lib/monitor';
+import { employeeIdNumberOf } from '../../lib/monitor';
 
 /** 空快照：形状对齐迁移前 monitor.ts 的 EMPTY，store 初始态即此形状。 */
 const EMPTY: ActivityState = {
@@ -20,7 +21,7 @@ const EMPTY: ActivityState = {
 };
 
 const routeKey = (teamId: string, target: RoutePatch['target']): string =>
-  target.kind === 'captain' ? `${teamId}|captain` : `${teamId}|member|${target.name}`;
+  target.kind === 'captain' ? `${teamId}|captain` : `${teamId}|member|${target.employeeId}`;
 
 const sameRoute = (a: RouteTriple, b: RouteTriple): boolean =>
   a.model === b.model && (a.reasoningEffort ?? null) === (b.reasoningEffort ?? null);
@@ -40,7 +41,8 @@ const readRoute = (
       reasoningEffort: team.captain.reasoningEffort ?? null,
     };
   }
-  const member = team.members.find((m) => m.name === target.name);
+  // 成员按工号定位（v7）：快照里工号是显示串（'ET-0007'），解析回数字比对。
+  const member = team.members.find((m) => employeeIdNumberOf(m.employeeId) === target.employeeId);
   if (member === undefined) return null;
   return { model: member.model, reasoningEffort: member.reasoningEffort };
 };
@@ -63,11 +65,11 @@ const writeRoute = (
     };
     return { ...snapshot, teams };
   }
-  if (!team.members.some((m) => m.name === target.name)) return null;
+  if (!team.members.some((m) => employeeIdNumberOf(m.employeeId) === target.employeeId)) return null;
   teams[at] = {
     ...team,
     members: team.members.map((m) =>
-      m.name === target.name
+      employeeIdNumberOf(m.employeeId) === target.employeeId
         ? { ...m, model: route.model, reasoningEffort: route.reasoningEffort }
         : m,
     ),

@@ -56,6 +56,7 @@ import { Avatar } from '../avatar/avatar';
 import { cn } from '../../lib/cn';
 import type { TaskSlotInput } from '../../lib/api';
 import type { CaptainView, MemberView, TeamSnapshot, TaskView } from '../../lib/monitor';
+import { employeeIdNumberOf } from '../../lib/monitor';
 import {
   canRemoveStation,
   chainAfterAppendMany,
@@ -89,13 +90,36 @@ export interface SubtaskDragItem {
   editable: boolean;
 }
 
-/** 拖拽 item 载荷：只有成员名——放置目标按 drop 时刻的最新快照重算新链。 */
+/**
+ * 成员行的链站点引用（v7 R3）：工号数字串；旧成员（无工号）退名字——与
+ * host 侧「同名按号找人」同口径，同名成员必须按工号入链才不会互串。
+ */
+function memberRefOf(m: MemberView): string {
+  const id = employeeIdNumberOf(m.employeeId);
+  return id !== null ? String(id) : m.name;
+}
+
+/**
+ * 站点/assignee 引用 → 成员行（v7 反查）：工号数字串按工号找；旧名字串按名
+ * 找（legacy 站点）。找不到 = 悬空（成员已移出或快照不同步）。
+ */
+function memberByRef(members: readonly MemberView[], ref: string): MemberView | undefined {
+  const trimmed = ref.trim();
+  const numeric = Number.parseInt(trimmed, 10);
+  if (Number.isFinite(numeric) && String(numeric) === trimmed) {
+    return members.find((m) => employeeIdNumberOf(m.employeeId) === numeric);
+  }
+  return members.find((m) => m.name === trimmed);
+}
+
+/** 拖拽 item 载荷：只有成员引用（工号数字串/旧名字）——放置目标按 drop 时刻
+ * 的最新快照重算新链。 */
 interface MemberDragItem {
   member: string;
 }
 
-/** 站点 chip 拖拽载荷（六轮 DA19 调序）：源站下标 + 成员名（成员名仅用于
- * 拖拽预览/调试，调序计算只认下标——drop 时刻以最新快照重算）。 */
+/** 站点 chip 拖拽载荷（六轮 DA19 调序）：源站下标 + 成员引用（仅用于拖拽
+ * 预览/调试，调序计算只认下标——drop 时刻以最新快照重算）。 */
 interface StationDragItem {
   index: number;
   member: string;
@@ -148,27 +172,27 @@ function stationMetricsOf(box: HTMLElement): { mids: number[]; lefts: number[]; 
   return { mids, lefts, endLeft };
 }
 
-/** 成员 chip 的拖拽源 hook：deps 携带成员名（空 deps 会冻结 spec——见文件头）。 */
-function useMemberDrag(memberName: string) {
+/** 成员 chip 的拖拽源 hook：deps 携带成员引用（空 deps 会冻结 spec——见文件头）。 */
+function useMemberDrag(memberRef: string) {
   return useDrag<MemberDragItem, unknown, { isDragging: boolean }>(
     () => ({
       type: MEMBER_DRAG_TYPE,
-      item: { member: memberName },
+      item: { member: memberRef },
       collect: (monitor) => ({ isDragging: monitor.isDragging() }),
     }),
-    [memberName],
+    [memberRef],
   );
 }
 
-/** 站点 chip 的拖拽源 hook（六轮 DA19 调序源）：deps 携带下标与成员名。 */
-function useStationDrag(index: number, memberName: string) {
+/** 站点 chip 的拖拽源 hook（六轮 DA19 调序源）：deps 携带下标与成员引用。 */
+function useStationDrag(index: number, memberRef: string) {
   return useDrag<StationDragItem, unknown, { isDragging: boolean }>(
     () => ({
       type: STATION_DRAG_TYPE,
-      item: { index, member: memberName },
+      item: { index, member: memberRef },
       collect: (monitor) => ({ isDragging: monitor.isDragging() }),
     }),
-    [index, memberName],
+    [index, memberRef],
   );
 }
 
@@ -242,7 +266,7 @@ const STRIP_BADGE_CLASS = `inline-flex items-center rounded-[3px] border border-
  * 渲染复用 Avatar，状态点 memberTone 五桶——staged 态由状态点表达；五轮
  * DA18：原「未启动」小字改工号数字徽章 STRIP_BADGE_CLASS）。 */
 function MemberDragChip({ member }: { member: MemberView }): ReactNode {
-  const [{ isDragging }, dragRef] = useMemberDrag(member.name);
+  const [{ isDragging }, dragRef] = useMemberDrag(memberRefOf(member));
   const badge = employeeBadgeOf(member.employeeId);
   return (
     <div
@@ -290,7 +314,7 @@ export function TeamMemberStrip({ team }: { team: TeamSnapshot }): ReactNode {
         <span className="text-xs font-semibold text-muted-foreground">团队成员</span>
         {!team.leaderRemoved && <CaptainChip captain={team.captain} />}
         {team.members.map((m) => (
-          <MemberDragChip key={m.name} member={m} />
+          <MemberDragChip key={memberRefOf(m)} member={m} />
         ))}
       </div>
     </div>
@@ -363,12 +387,12 @@ export function TaskAssignDropBox({
   // 容器级去重微反馈（三十五轮 DA48：成员 drop 全落容器，flash 也只落容器——
   // chip 侧闪现已撤，chip 悬停环只剩调序目标高亮）。
   const [flash, flashOnce] = useFlash200();
-  // 「＋」多选追加面板（六轮 DA19）：picked=勾选中的成员名（按勾选顺序追
-  // 加为站点）；openPicker 清空上轮勾选。
+  // 「＋」多选追加面板（六轮 DA19）：picked=勾选中的成员引用（工号数字串/
+  // 旧名字，按勾选顺序追加为站点）；openPicker 清空上轮勾选。
   const [pickerOpen, setPickerOpen] = useState(false);
   const [picked, setPicked] = useState<string[]>([]);
-  const togglePicked = (name: string): void => {
-    setPicked((cur) => (cur.includes(name) ? cur.filter((m) => m !== name) : [...cur, name]));
+  const togglePicked = (ref: string): void => {
+    setPicked((cur) => (cur.includes(ref) ? cur.filter((m) => m !== ref) : [...cur, ref]));
   };
   const confirmPick = (): void => {
     const chain = chainAfterAppendMany(task, picked);
@@ -453,8 +477,11 @@ export function TaskAssignDropBox({
   if (!editable) {
     const stationMember = readonlyStationMember(task);
     if (stationMember === null) return null;
-    const stationAvatar = members.find((m) => m.name === stationMember);
-    const dangling = !members.some((m) => m.name === stationMember);
+    // v7 反查：assignee 是名字，链站点引用是工号数字串（或旧名字串）——
+    // memberByRef 双口径解析；显示名优先快照行名字。
+    const stationAvatar = memberByRef(members, stationMember);
+    const display = stationAvatar?.name ?? stationMember;
+    const dangling = stationAvatar === undefined;
     // 五轮 DA18：工号撤出版面、随悬空标折叠进悬浮提示。
     const detail = [stationAvatar?.employeeId, dangling ? '已移出' : null]
       .filter(Boolean)
@@ -462,15 +489,15 @@ export function TaskAssignDropBox({
     return (
       <div
         className={BOX_READONLY_CLASS}
-        title={detail ? `${stationMember}（${detail}）` : stationMember}
+        title={detail ? `${display}（${detail}）` : display}
       >
         <Avatar
-          name={stationMember}
+          name={display}
           seed={stationAvatar?.avatar?.seed}
           salt={stationAvatar?.avatar?.salt}
           size={26}
         />
-        <span>{stationMember}</span>
+        <span>{display}</span>
         {dangling && <span className={BOX_DANGLING_CLASS}>已移出</span>}
       </div>
     );
@@ -622,29 +649,32 @@ function StationPicker({
   onConfirm,
 }: {
   members: readonly MemberView[];
+  /** 链中成员的站点引用（工号数字串/旧名字串）——互斥按引用比对。 */
   chainMembers: readonly string[];
   picked: readonly string[];
   busy: boolean;
-  onToggle: (name: string) => void;
+  onToggle: (ref: string) => void;
   onConfirm: () => void;
 }): ReactNode {
-  // 二十二轮 DA35：链中成员从可选列表滤除（不渲染，不只是禁用）。
-  const selectable = members.filter((m) => !chainMembers.includes(m.name));
+  // 二十二轮 DA35：链中成员从可选列表滤除（不渲染，不只是禁用）。v7 R3：
+  // 互斥按站点引用（工号数字串）比对，不再按名——同名第二人也能入链。
+  const selectable = members.filter((m) => !chainMembers.includes(memberRefOf(m)));
   return (
     <PopoverContent align="start" className="w-64 p-2">
       <div className="px-1 text-xs font-semibold text-muted-foreground">选择成员</div>
       <div className="mt-1.5 max-h-56 space-y-0.5 overflow-y-auto">
         {selectable.map((m) => {
-          const checked = picked.includes(m.name);
+          const ref = memberRefOf(m);
+          const checked = picked.includes(ref);
           return (
             <button
-              key={m.name}
+              key={ref}
               type="button"
               className={cn(
                 'flex w-full cursor-pointer items-center gap-1.5 rounded-[4px] px-1.5 py-1 text-left text-xs leading-none transition-colors',
                 'hover:bg-[color:var(--eteams-pill-bg)]',
               )}
-              onClick={() => onToggle(m.name)}
+              onClick={() => onToggle(ref)}
             >
               <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={20} />
               <span className="font-medium">{m.name}</span>
@@ -706,6 +736,7 @@ function StationChip({
 }: {
   task: TaskView;
   index: number;
+  /** 站点引用（工号数字串/旧名字串，快照原样）——显示名经 memberByRef 反查。 */
   member: string;
   members: readonly MemberView[];
   eligible: boolean;
@@ -732,8 +763,11 @@ function StationChip({
     }),
     [task, index, eligible, onAssign],
   );
-  const record = members.find((m) => m.name === member);
-  const dangling = !members.some((m) => m.name === member);
+  // v7 反查：站点 member 是工号数字串（或旧名字串）——memberByRef 双口径
+  // 解析；显示名优先快照行名字（悬空时原样显示引用）。
+  const record = memberByRef(members, member);
+  const display = record?.name ?? member;
+  const dangling = record === undefined;
   // 五轮 DA18：工号不占版面，折叠进悬浮提示（悬空标同段；两者皆无则不带括注）。
   const detail = [record?.employeeId, dangling ? '已移出' : null].filter(Boolean).join('，');
   return (
@@ -744,11 +778,11 @@ function StationChip({
       }}
       data-station-index={index}
       style={isDragging ? { opacity: 0.5 } : undefined}
-      title={`站点 ${index + 1}：${member}${detail ? `（${detail}）` : ''} · 拖到另一 chip=调序；点击打开修改弹窗`}
+      title={`站点 ${index + 1}：${display}${detail ? `（${detail}）` : ''} · 拖到另一 chip=调序；点击打开修改弹窗`}
       className={cn(BOX_CHIP_CLASS, isOver && CHIP_RING_CLASS, isOver && BOX_OVER_SHADOW_CLASS)}
     >
-      <Avatar name={member} seed={record?.avatar?.seed} salt={record?.avatar?.salt} size={26} />
-      <span>{member}</span>
+      <Avatar name={display} seed={record?.avatar?.seed} salt={record?.avatar?.salt} size={26} />
+      <span>{display}</span>
       {dangling && <span className={BOX_DANGLING_CLASS}>已移出</span>}
       {removable && (
         <button

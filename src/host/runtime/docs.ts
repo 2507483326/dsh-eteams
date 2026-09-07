@@ -10,7 +10,8 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { sanitizeKey, stationProgress, taskSlug } from '../model/taskMachine.js';
 import type { MemberRecord, ModelRouteSnapshot, TaskRecord, TeamState } from '../model/types.js';
-import { renderContract } from '../prompts/handoff/mails.js';
+import { renderContract, stationLabel } from '../prompts/handoff/mails.js';
+import { formatEmployeeId } from './roster.js';
 import { leaderRowOf, memberStatusOf } from './notifier.js';
 
 /** 团队工作目录基准段（相对工作区；任务 work_dir 在它之下分配）。 */
@@ -57,19 +58,14 @@ export function renderTeamReadme(team: TeamState): string {
     '',
     '## 成员',
   ];
-  // 成员列表按实例行聚合（docs/35 §5#12）：名字去重、状态取聚合口径，
-  // 角色/路线读班底模板行；领队行单独不重复列。
-  const names: string[] = [];
-  for (const row of team.taskMembers) {
-    if (row.status === 'removed') continue;
-    if (row.name === leader?.name && row.mainTaskId === null) continue;
-    if (!names.includes(row.name)) names.push(row.name);
-  }
-  if (names.length === 0) lines.push('（暂无成员）');
-  for (const name of names) {
-    const template = team.members.find((m) => m.name === name);
+  // 成员列表按班底行（v7：班底是成员全集中营，领队也是一行；工号挂班底
+  // 行——「同名按号找人」，README 即按 ET-xxxx 展示）。状态按工号聚合到
+  // 该成员全部任务副本行。
+  if (team.members.length === 0) lines.push('（暂无成员）');
+  for (const m of team.members) {
+    const badge = m.employeeId !== undefined ? ` · ${formatEmployeeId(m.employeeId)}` : '';
     lines.push(
-      `- **${name}**（${template?.role ?? '成员'}）· ${memberStatusOf(team, name)} · 路线 ${routeLabel(template)}`,
+      `- **${m.name}**（${m.role}）${badge} · ${memberStatusOf(team, m.employeeId ?? m.name)} · 路线 ${routeLabel(m)}`,
     );
   }
   lines.push('', '## 任务');
@@ -109,7 +105,7 @@ export function renderTaskContract(team: TeamState, task: TaskRecord): string {
     `- 状态：${task.status}${task.assignee ? ` · 当前执行：${task.assignee}` : ''}`,
     `- 依赖：${task.dependencies.length > 0 ? task.dependencies.join('、') : '无'}`,
     station !== undefined
-      ? `- 执行链（D11）：${task.chain.map((s, i) => `${i + 1}. ${s.member}`).join(' → ')} · 进度 ${station.done}/${station.total}`
+      ? `- 执行链（D11）：${task.chain.map((s, i) => `${i + 1}. ${stationLabel(s.member)}`).join(' → ')} · 进度 ${station.done}/${station.total}`
       : '- 执行链：单站点（无链）',
     '',
     '## 合同',
@@ -119,7 +115,7 @@ export function renderTaskContract(team: TeamState, task: TaskRecord): string {
     lines.push('', '## 站点简报');
     for (const [i, s] of task.chain.entries()) {
       const mark = i <= task.chainCursor ? '✅' : i === task.chainCursor + 1 ? '▶️' : '⬜';
-      lines.push(`${mark} ${i + 1}. **${s.member}**：${s.stageBrief}`);
+      lines.push(`${mark} ${i + 1}. **${stationLabel(s.member)}**：${s.stageBrief}`);
     }
   }
   if (task.parentId === null) {

@@ -25,9 +25,13 @@ const POLL_MS = 1000;
 /** Probe cadence while no team has been discovered yet. */
 const PROBE_MS = 5000;
 
-/** One chain station as rendered by the panel. */
+/** One chain station as rendered by the panel. v7：`member` 是站点原始引用
+ * （工号数字串/旧名字串，拼链 POST 回写用它），`memberLabel` 是显示标识
+ * （`T{mainTaskId}-ET{xxxx}（名字）`，旧名字站点原样）；旧运行时快照缺省
+ * memberLabel——回落 member（原显示口径）。 */
 export interface StationView {
   member: string;
+  memberLabel?: string;
   stageBrief: string;
   stationStatus: 'done' | 'current' | 'pending';
 }
@@ -184,11 +188,21 @@ export interface RouteTriple {
 }
 
 /** 乐观路线补丁：定位一队（领队或成员）的一条路线并整体替换（对话
- * choose() 的本地即时性）。 */
+ * choose() 的本地即时性）。v7：成员目标按工号定位（同名成员各归各）。 */
 export interface RoutePatch {
   teamId: string;
-  target: { kind: 'member'; name: string } | { kind: 'captain' };
+  target: { kind: 'member'; employeeId: number } | { kind: 'captain' };
   route: RouteTriple;
+}
+
+/**
+ * 成员工号显示串（'ET-0002'）→ 定位用数字（v7 R3：成员作用域路由与乐观
+ * 补丁按号定位，同名成员各归各）。null = 无号（旧快照/异常行，不可定位）。
+ */
+export function employeeIdNumberOf(employeeId: string | null): number | null {
+  if (employeeId === null || !employeeId.startsWith('ET-')) return null;
+  const n = Number.parseInt(employeeId.slice(3), 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 /** pending 覆盖层的一条记录（带定位信息，set 到达时可重新解析目标）。 */

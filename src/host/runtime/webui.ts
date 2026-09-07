@@ -22,7 +22,7 @@ import type {
   TaskStatus,
   TeamState,
 } from '../model/types.js';
-import { readEventsSync, readMailboxSync } from '../state/events.js';
+import { memberBoxKey, readEventsSync, readMailboxSync } from '../state/events.js';
 import { boardOverview } from '../state/queries.js';
 import { listTeamIds, readTeamSync } from '../state/store.js';
 import { joinPath, stateRootFor, type RuntimeContext, type RuntimeEnv } from './base.js';
@@ -35,6 +35,7 @@ import {
   LEADER_NAME,
   readRoster,
   removeRosterMember,
+  taskMemberBadge,
   upsertRosterMember,
 } from './roster.js';
 import {
@@ -94,9 +95,13 @@ interface WebServerLike {
 
 // ---------- snapshot builders (pure over disk state) ----------
 
-/** One chain station as rendered by the panel. */
+/** One chain station as rendered by the panel. v7：`member` 是站点原始引用
+ * （工号数字串或旧名字串——客户端拼链 POST 回写的是它），`memberLabel` 才是
+ * 显示标识：工号站点渲染 `T{mainTaskId}-ET{xxxx}（名字）`，旧名字站点原样
+ * （legacy）。 */
 export interface StationView {
   member: string;
+  memberLabel: string;
   stageBrief: string;
   stationStatus: 'done' | 'current' | 'pending';
 }
@@ -118,15 +123,57 @@ function stationStatusOf(
   return 'pending';
 }
 
+/**
+ * 任务成员显示标识（v7 对外口径 `T{mainTaskId}-ET{xxxx}` + 名字）：工号 ref
+ * 先查该任务的副本行取名，缺了退班底行；旧链站点（名字串）原样显示
+ * （legacy 兼容，渲染层不标注也无法标注）。
+ */
+function taskMemberLabel(team: TeamState, mainTaskId: number, ref: string | number): string {
+  const trimmed = typeof ref === 'string' ? ref.trim() : '';
+  const numeric = typeof ref === 'number' ? ref : Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(numeric) || (typeof ref === 'string' && String(numeric) !== trimmed)) {
+    // 非数字串 = 旧名字站点，原样。
+    return typeof ref === 'string' ? ref : formatEmployeeId(ref);
+  }
+  const name =
+    team.taskMembers.find((r) => r.mainTaskId === mainTaskId && r.employeeId === numeric)?.name ??
+    team.members.find((m) => m.employeeId === numeric)?.name;
+  const badge = taskMemberBadge(mainTaskId, numeric);
+  return name !== undefined ? `${badge}（${name}）` : badge;
+}
+
+/**
+ * 按引用定位班底成员（R4 成员作用域路由口径）：路由段收工号（数字串）；
+ * 旧客户端/手工调用传名字串则回退按名——「同名按号找人，名字只作显示」
+ * 的服务端兜底。
+ */
+function rosterMemberByRef(team: TeamState, ref: string): MemberRecord | undefined {
+  const trimmed = ref.trim();
+  const numeric = Number.parseInt(trimmed, 10);
+  if (Number.isFinite(numeric) && String(numeric) === trimmed) {
+    return team.members.find((m) => m.employeeId === numeric);
+  }
+  return team.members.find((m) => m.name === trimmed);
+}
+
 /** Per-member view row (docs/12.2; avatar/persona editors land in M6/M5).
  * 人设经 role_id 装自 roles 角色行（v3 成员=角色，成员详情与角色详情同源），
- * 状态与会话锚点按名聚合实例行（§5#12：同一人每条大任务一行实例行，行数
- * 不当人数）。 */
+ * 状态与会话锚点按工号聚合副本行（v7：同名成员各聚合各的）。 */
 function memberView(team: TeamState, m: MemberRecord) {
-  const currentTask = team.tasks.find(
-    (t) => t.assignee === m.name && ACTIVE_STATUSES.includes(t.status),
+  // 当前任务按该成员副本行的最近 attempt 归属（v7 副本并行，assignee 名字
+  // 只作显示——同名成员不能互相当成「当前任务」）。
+  const rowIds = new Set(
+    team.taskMembers
+      .filter((r) => m.employeeId !== undefined && r.employeeId === m.employeeId)
+      .map((r) => r.id),
   );
-  const row = latestInstanceRow(team, m.name);
+  const currentTask = team.tasks.find((t) => {
+    if (!ACTIVE_STATUSES.includes(t.status)) return false;
+    const last = t.attempts.at(-1);
+    if (last === undefined) return t.assignee === m.name;
+    return last.taskMemberId !== undefined ? rowIds.has(last.taskMemberId) : last.member === m.name;
+  });
+  const row = latestInstanceRow(team, m.employeeId ?? m.name);
   return {
     name: m.name,
     /** 工号 (docs/21)：格式化显示串（ET-0001）；null for legacy members. */
@@ -141,7 +188,7 @@ function memberView(team: TeamState, m: MemberRecord) {
     skills: m.persona.skills,
     rules: m.persona.rules,
     executionPrompt: m.persona.executionPrompt,
-    status: memberStatusOf(team, m.name),
+    status: memberStatusOf(team, m.employeeId ?? m.name),
     model: m.modelRoute.model,
     reasoningEffort: m.modelRoute.reasoningEffort ?? null,
     currentTaskId: currentTask?.id ?? null,
@@ -185,7 +232,10 @@ function taskView(t: TaskRecord, team: TeamState, groupOutcomes?: Map<number, st
     assignee: t.assignee ?? null,
     dependencies: t.dependencies,
     chain: t.chain.map((s, i): StationView => ({
-      member: s.member,
+      // 站点 ref 原样下发（工号数字串/旧名字串——客户端拼链要原样 POST 回写），
+      // 显示标识单列 memberLabel。
+      member: typeof s.member === 'number' ? String(s.member) : s.member,
+      memberLabel: taskMemberLabel(team, t.parentId ?? t.id, s.member),
       stageBrief: s.stageBrief,
       stationStatus: stationStatus(i),
     })),
@@ -219,12 +269,14 @@ export function teamSnapshot(
   // 路径时所有工作区共用一个根；相对路径保持 per-workspace）。
   const stateRoot = stateRootFor(config, workspacePath);
   // The captain (项目牧羊人) is rendered as the leader card on the 团队 page;
-  // it is not a roster member, so it travels with the snapshot instead. Its
-  // 工号 comes from the roster leader entry (backfilled on first /roster
-  // read); 'ET-0001' covers workspaces whose roster was never listed yet.
+  // it is not a roster member, so it travels with the snapshot instead. v7：
+  // 领队工号 = 班底领队行自增主键（表自增，建队即入班底领号），异常缺行
+  // 按 1 号兜底。
   const captainPersona = composeCaptainPersona(stateRoot);
   const rosterLeader = readRoster(stateRoot).find((m) => m.name === LEADER_NAME);
   const leader = leaderRowOf(team);
+  const leaderBadge =
+    team.members.find((m) => m.name === LEADER_NAME)?.employeeId ?? leader?.employeeId ?? 1;
   // 组收口产出（docs/26）：task.completed 事件 payload.via='subtasks.completed'
   // 的聚合文本按 taskId 收敛，同任务多次收口取最新一条（Map 覆盖写）。
   const events = readEventsSync(stateRoot, team.id);
@@ -254,8 +306,8 @@ export function teamSnapshot(
     })(),
     captain: {
       name: '项目牧羊人',
-      // 工号格式化显示串（ET-0001；roster 未读时按 1 号兜底）。
-      employeeId: formatEmployeeId(rosterLeader?.employeeId ?? 1),
+      // 工号格式化显示串：班底领队行（v7）。
+      employeeId: formatEmployeeId(leaderBadge),
       role: captainPersona.role,
       duty: captainPersona.duty,
       style: captainPersona.style,
@@ -269,10 +321,15 @@ export function teamSnapshot(
       model: leader?.model ?? '',
       reasoningEffort: leader?.reasoningEffort ?? null,
     },
-    // 成员 = 班底模板行（实例行全部 removed 的成员不再展示，docs/35 §5#12）。
+    // 成员 = 班底行（v7）。领队也是班底一行，但领队卡单独走 captain 段，
+    // 成员列表跳过它避免重复出卡；副本行全部 removed 的成员不再展示
+    // （docs/35 §5#12 口径改按工号聚合——同名成员各判各的）。
     members: team.members
       .filter((m) => {
-        const rows = team.taskMembers.filter((r) => r.name === m.name);
+        if (m.name === LEADER_NAME) return false;
+        const rows = team.taskMembers.filter(
+          (r) => m.employeeId !== undefined && r.employeeId === m.employeeId,
+        );
         return rows.length === 0 || rows.some((r) => r.status !== 'removed');
       })
       .map((m) => memberView(team, m)),
@@ -823,9 +880,6 @@ export function installWebSurface(
                     : entry?.personaMd !== undefined
                       ? { personaMd: entry.personaMd }
                       : {}),
-                  ...(str(body.employeeId, '') !== ''
-                    ? { employeeId: str(body.employeeId) }
-                    : {}),
                   ...(entry?.avatar !== undefined ? { avatar: entry.avatar } : {}),
                   via: 'panel',
                 });
@@ -864,7 +918,8 @@ export function installWebSurface(
               sendJson(res, 200, { ok: true, removed: segments[1] });
               return;
             }
-            // POST /team/<id>/member/<name>/remove — move a member out of a team.
+            // POST /team/<id>/member/<ref>/remove — move a member out of a team.
+            // <ref> 收工号（R4 成员作用域路由按号定位；名字串旧口径回退）。
             if (
               req.method === 'POST' &&
               segments[0] === 'team' &&
@@ -878,23 +933,29 @@ export function installWebSurface(
                 return;
               }
               const { team, workspacePath } = located;
+              const member = rosterMemberByRef(team, segments[3]!);
+              if (member === undefined) {
+                sendError(res, 404, `成员 ${segments[3]} 不存在`);
+                return;
+              }
               try {
                 await removeMember(
                   envFor(ctx, config, workspacePath),
                   captainAgentOf(team),
-                  segments[3]!,
+                  member.name,
                   team.id,
+                  member.employeeId,
                 );
               } catch (e) {
                 sendError(res, 400, e instanceof Error ? e.message : String(e));
                 return;
               }
-              sendJson(res, 200, { ok: true, removed: segments[3] });
+              sendJson(res, 200, { ok: true, removed: member.name });
               return;
             }
-            // POST /team/<id>/member/<name>/model - set the member's model
+            // POST /team/<id>/member/<ref>/model - set the member's model
             // route (user iteration 2026-09: model select on the member
-            // card). Empty body resets to inherited.
+            // card). Empty body resets to inherited. <ref> 按工号定位（R4）。
             if (
               req.method === 'POST' &&
               segments[0] === 'team' &&
@@ -909,10 +970,16 @@ export function installWebSurface(
                 return;
               }
               const { team, workspacePath } = located;
+              const member = rosterMemberByRef(team, segments[3]!);
+              if (member === undefined) {
+                sendError(res, 404, `成员 ${segments[3]} 不存在`);
+                return;
+              }
               try {
                 await setMemberModel(envFor(ctx, config, workspacePath), captainAgentOf(team), {
                   teamId: team.id,
-                  name: decodeURIComponent(segments[3]!),
+                  name: member.name,
+                  ...(member.employeeId !== undefined ? { employeeId: member.employeeId } : {}),
                   ...(str(body.model, '') !== '' ? { model: str(body.model) } : {}),
                   ...(str(body.reasoningEffort, '') !== ''
                     ? { reasoningEffort: str(body.reasoningEffort) }
@@ -925,9 +992,10 @@ export function installWebSurface(
               sendJson(res, 200, { ok: true });
               return;
             }
-            // POST /team/<id>/member/<name>/persona - save the member's own
+            // POST /team/<id>/member/<ref>/persona - save the member's own
             // handbook copy (用户迭代 2026-09 四: member detail is separate
             // from the role detail; only the member record is written).
+            // <ref> 按工号定位（R4）。
             if (
               req.method === 'POST' &&
               segments[0] === 'team' &&
@@ -947,10 +1015,16 @@ export function installWebSurface(
                 return;
               }
               const { team, workspacePath } = located;
+              const member = rosterMemberByRef(team, segments[3]!);
+              if (member === undefined) {
+                sendError(res, 404, `成员 ${segments[3]} 不存在`);
+                return;
+              }
               try {
                 await updateMember(envFor(ctx, config, workspacePath), captainAgentOf(team), {
                   teamId: team.id,
-                  name: decodeURIComponent(segments[3]!),
+                  name: member.name,
+                  ...(member.employeeId !== undefined ? { employeeId: member.employeeId } : {}),
                   personaMd,
                 });
               } catch (e) {
@@ -960,9 +1034,10 @@ export function installWebSurface(
               sendJson(res, 200, { ok: true });
               return;
             }
-            // POST /team/<id>/member/<name>/sync-roster - push the member's
+            // POST /team/<id>/member/<ref>/sync-roster - push the member's
             // handbook copy back to its roster role (用户迭代 2026-09 四:
             // 同步到该角色; creates the roster entry for copy members).
+            // <ref> 按工号定位（R4）。
             if (
               req.method === 'POST' &&
               segments[0] === 'team' &&
@@ -977,10 +1052,16 @@ export function installWebSurface(
                 return;
               }
               const { team, workspacePath } = located;
+              const member = rosterMemberByRef(team, segments[3]!);
+              if (member === undefined) {
+                sendError(res, 404, `成员 ${segments[3]} 不存在`);
+                return;
+              }
               try {
                 await syncMemberToRoster(envFor(ctx, config, workspacePath), captainAgentOf(team), {
                   teamId: team.id,
-                  name: decodeURIComponent(segments[3]!),
+                  name: member.name,
+                  ...(member.employeeId !== undefined ? { employeeId: member.employeeId } : {}),
                   ...(str(body.personaMd, '') !== '' ? { personaMd: str(body.personaMd) } : {}),
                 });
               } catch (e) {
@@ -1785,16 +1866,14 @@ export function installWebSurface(
                 return;
               }
               if (segments[2] === 'member' && segments[4] === 'dialog') {
-                const name = segments[3]!;
-                const known =
-                  team.members.some((m) => m.name === name) ||
-                  team.taskMembers.some((r) => r.name === name && r.status !== 'removed');
-                if (!known) {
-                  sendError(res, 404, `成员 ${name} 不存在`);
+                // R4：对话框按工号定位成员（名字串旧口径回退）。
+                const member = rosterMemberByRef(team, segments[3]!);
+                if (member === undefined) {
+                  sendError(res, 404, `成员 ${segments[3]} 不存在`);
                   return;
                 }
                 const after = Number(url.searchParams.get('after') ?? '0') || 0;
-                sendJson(res, 200, memberDialog(root, team, name, after));
+                sendJson(res, 200, memberDialog(root, team, member, after));
                 return;
               }
               // GET /team/<id>/usage/calendar?year=<y> — 每日 Token 消耗日历
@@ -1969,17 +2048,24 @@ function readAvatarPair(value: unknown): { seed: number; salt: number } | undefi
 }
 
 /** Member dialog timeline (D15 read-only): mailbox rows + member events merged.
- * 成员是模板行（docs/35 §3#5）：状态按实例行聚合（memberStatusOf），当前
- * 任务按 assignee 查活跃五态；聚合不按实例行行数当人数（§5#12）。 */
+ * v7：邮箱按工号分箱（box_key = String(工号)，同名成员各收各箱）；进度按
+ * 该成员副本行的 attempt 归属（attempt.task_member_id，旧行退按名）。 */
 function memberDialog(
   root: string,
   team: TeamState,
-  memberName: string,
+  member: MemberRecord,
   after: number,
 ): Record<string, unknown> {
+  // 分箱键与写端 memberBoxKey 同口径：无号（异常/旧数据）退名字箱。
+  const box = member.employeeId !== undefined ? memberBoxKey(member.employeeId) : member.name;
+  const rowIds = new Set(
+    team.taskMembers
+      .filter((r) => member.employeeId !== undefined && r.employeeId === member.employeeId)
+      .map((r) => r.id),
+  );
   type Item = { at: number; kind: string; text: string; taskId?: number; from?: string };
   const items: Item[] = [];
-  for (const m of readMailboxSync(root, team.id, memberName)) {
+  for (const m of readMailboxSync(root, team.id, box)) {
     if (m.seq <= after) continue;
     items.push({
       at: m.at,
@@ -1991,7 +2077,11 @@ function memberDialog(
   }
   for (const task of team.tasks) {
     for (const attempt of task.attempts) {
-      if (attempt.member !== memberName) continue;
+      const mine =
+        attempt.taskMemberId !== undefined
+          ? rowIds.has(attempt.taskMemberId)
+          : attempt.member === member.name;
+      if (!mine) continue;
       for (const note of attempt.progress) {
         if (note.at <= after) continue;
         items.push({
@@ -1999,17 +2089,22 @@ function memberDialog(
           kind: 'progress',
           text: note.text,
           taskId: task.id,
-          from: memberName,
+          from: member.name,
         });
       }
     }
   }
   items.sort((a, b) => a.at - b.at);
-  const currentTask = team.tasks.find(
-    (t) => t.assignee === memberName && ACTIVE_STATUSES.includes(t.status),
-  );
+  const currentTask = team.tasks.find((t) => {
+    if (!ACTIVE_STATUSES.includes(t.status)) return false;
+    const last = t.attempts.at(-1);
+    if (last === undefined) return t.assignee === member.name;
+    return last.taskMemberId !== undefined
+      ? rowIds.has(last.taskMemberId)
+      : last.member === member.name;
+  });
   return {
-    memberStatus: memberStatusOf(team, memberName),
+    memberStatus: memberStatusOf(team, member.employeeId ?? member.name),
     currentTaskId: currentTask?.id ?? null,
     items,
     serverTime: Date.now(),

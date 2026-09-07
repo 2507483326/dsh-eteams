@@ -20,10 +20,14 @@ export type TaskStatus =
   | 'failed'
   | 'cancelled';
 
-/** One execution-chain station: planned member plus stage brief (docs/06.7). */
+/**
+ * One execution-chain station: planned member plus stage brief (docs/06.7).
+ * v7：站点写**工号**（执行链按工号接力，允许同名成员）；迁移解析不到班底行
+ * 的旧站点保留成员名字符串（legacy），渲染时标注并按名兜底。
+ */
 export interface ChainStation {
-  /** Planned member display name (may be added to the roster later). */
-  member: string;
+  /** 站点成员工号（数字 = v7 工号站点；字符串 = legacy 名字站点）。 */
+  member: number | string;
   /** What this stage contributes to the task (rendered into contract.md). */
   stageBrief: string;
 }
@@ -48,6 +52,12 @@ export interface AttemptRecord {
   taskId: number;
   kind: AttemptKind;
   member: string;
+  /**
+   * 执行副本行 id（attempts.task_member_id，v7）：尝试归属按副本行 id 判定
+   * （claim 握手安全边界——同名成员不串 attempt）；undefined = 旧数据未回填，
+   * 判定退按名兜底。
+   */
+  taskMemberId?: number;
   status: AttemptStatus;
   /** Issued by claim; required by progress/complete/fail afterwards. */
   token: string;
@@ -102,21 +112,21 @@ export interface AvatarRecord {
 }
 
 /**
- * One team member template (docs/35 §3#9：班底 = 纯模板，一人一行，无状态
- * 无会话锚点；执行实例在 TaskMemberRecord)。v3（成员=角色合并）起班底行落在
- * team_members 表，人设/工号/头像经 role_id 解析自 roles 角色行（成员=角色，
- * 全局一份）——成员详情与角色详情同源。`employeeId` 是库里的工号整数（显示
- * 补零为 `ET-0001`，roster.formatEmployeeId）。
+ * One team member template (docs/35 §3#9：班底 = 工牌发放处，一人一行；人设
+ * 手册经 role_id 解析自 roles 角色行（成员=角色，全局一份）。v7：工号就是
+ * 班底行的自增主键（表自增，team_members.team_member_id）——全机器唯一、
+ * AUTOINCREMENT 只增不复用，删除作废；显示补零为 `ET-0007`
+ * （roster.formatEmployeeId）。
  */
 export interface MemberRecord {
-  /** team_members.team_member_id（自增主键；内存新建行 0 落库发号）。 */
+  /** team_members.team_member_id（自增主键 = 工号；内存新建行 0 落库发号）。 */
   memberId: number;
-  /** roles.role_id（松引用；人设/工号/头像都在角色行上，写端保证行存在）。 */
+  /** roles.role_id（松引用；人设/头像在角色行上，写端保证行存在）。 */
   roleId: number | null;
   name: string;
   /**
-   * 工号 (docs/21)：roles.employee_id 的整数工号，插入角色行时取 roles 表
-   * 最大工号 +1，同人同号。undefined = 尚未发号（旧数据补齐前）。
+   * 工号（v7 表自增）：恒等于 memberId（读端由主键派生）。保留字段名是为了
+   * 邮箱分箱/展示链路与副本行共用同一语义。
    */
   employeeId?: number;
   /** 角色标签 = persona.role（persona_md 的「角色：」行；成员名=角色名）。 */
@@ -131,6 +141,8 @@ export interface MemberRecord {
  * One task-member execution instance (docs/27 task_members 表；docs/35
  * §5#12：实例行按大任务粒度建——同一人每条大任务一行、各绑独立子会话；
  * 领队也是一行（name=项目牧羊人、mainTaskId 为空的团队级主持行）。
+ * v7：副本行在建任务/加成员时从班底整行复制（工号抄班底行自增主键），
+ * 行生命周期跟随所属大任务（删任务→副本级联删）。
  */
 export interface TaskMemberRecord {
   /** task_members.task_member_id 自增主键；内存新建行为 0，落库时发号。 */
@@ -141,7 +153,7 @@ export interface TaskMemberRecord {
   /** 当前执行任务 id（链推进/改派时更新）。 */
   nowTaskId: number | null;
   name: string;
-  /** 工号副本（引用 roles.employee_id，松引用）。 */
+  /** 工号（v7 表自增：建任务/加成员时抄自班底行 team_member_id；主持行同步班底领队行）。 */
   employeeId: number | null;
   /** 本行自己的子代理会话 id（v6：成员行=成员子会话，领队行=领队子代理会话）；未启动时是空串。 */
   sessionId: string;
@@ -282,7 +294,7 @@ export interface TeamState {
   updatedAt: number;
   /** 执行实例行（含领队主持行；docs/35 §5#12 按大任务粒度建）。 */
   taskMembers: TaskMemberRecord[];
-  /** 班底模板行（team_members ⨝ roles 装回；人设/工号/头像在角色行上）。 */
+  /** 班底行（team_members；v7 工牌发放处——工号在班底行上，人设经 roles 装回）。 */
   members: MemberRecord[];
   /** 任务树（task 表按 task_id 升序装回；attempts 拆表装回）。 */
   tasks: TaskRecord[];

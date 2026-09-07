@@ -61,10 +61,12 @@ export interface SessionIdentity {
  * setup hook 在每次 Activation（含 cold resume）登记（members.ts 先例：重启
  * 后重登记）。parentSessionId = 成员的真实直接父（领队主会话 id）——19.18
  * 访谈投递按它冷恢复，模块级 Map 跨 dispose 存活所以闲置成员对话框也查得到。
+ * employeeId 是 v7 成员身份键（同名成员按号区分）；null = legacy 无号行。
  */
 export interface MemberSessionRecord {
   readonly teamId: string;
   readonly memberName: string;
+  readonly employeeId: number | null;
   readonly parentSessionId: string;
 }
 
@@ -73,7 +75,12 @@ const memberSessions = new Map<string, MemberSessionRecord>();
 /** Register one member child session (setup hook 调用，docs/28.7)。 */
 export function registerMemberSession(
   childId: string,
-  identity: { teamId: string; memberName: string; parentSessionId: string },
+  identity: {
+    teamId: string;
+    memberName: string;
+    employeeId?: number | null;
+    parentSessionId: string;
+  },
 ): void {
   if (
     childId === '' ||
@@ -82,7 +89,12 @@ export function registerMemberSession(
     identity.parentSessionId === ''
   )
     return;
-  memberSessions.set(childId, { ...identity });
+  memberSessions.set(childId, {
+    teamId: identity.teamId,
+    memberName: identity.memberName,
+    employeeId: identity.employeeId ?? null,
+    parentSessionId: identity.parentSessionId,
+  });
 }
 
 /** 查登记（19.18 访谈投递判定 presence 命中的成员会话用）；不在册返回 undefined。 */

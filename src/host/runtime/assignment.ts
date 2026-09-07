@@ -30,6 +30,8 @@ import {
   hasUpcomingStation,
   nextChainStation,
   refreshDependencyStatus,
+  stationKeyOf,
+  stationPointsTo,
   taskSlug,
   unsatisfiedDependencies,
   wouldCycle,
@@ -48,7 +50,8 @@ import { ETeamsError, generateToken, memberActor, stateRootOf, type RuntimeEnv }
 import {
   findInstanceRow,
   latestInstanceRow,
-  leaderRowOf,
+  memberBoxOf,
+  memberRefId,
   notifyCaptainInTx,
   queueNoticeInTx,
   readBox,
@@ -59,7 +62,7 @@ import {
   type Wake,
 } from './notifier.js';
 import { renderTeamDocs, taskDirAbs, teamWorkDirRel } from './docs.js';
-import { sendAssignmentInTx, spawnMember } from './members.js';
+import { drainMembers, interruptMember, sendAssignmentInTx, spawnMember } from './members.js';
 import { readBuildPresence } from './roleBuilder.js';
 import {
   cancelledNotice,
@@ -178,7 +181,8 @@ export async function createTask(
     contractMd?: string;
     idempotencyNote?: string;
     dependencies?: number[];
-    chain?: { member: string; stageBrief: string }[];
+    /** v7 站点成员 = 工号（数字）；旧链站点名字串兼容透传。 */
+    chain?: { member: number | string; stageBrief: string }[];
     /** v6 主会话快照显式源（面板路由透传 body.sessionId；导入传旧值）。 */
     mainSessionId?: string;
   },
@@ -187,7 +191,11 @@ export async function createTask(
   if (!subject || subject.trim() === '') throw new ETeamsError('任务主题不能为空');
   const out = await withTeam(env, who.teamId, (team, _root, tx) => {
     const deps = params.dependencies ?? [];
-    const chain = params.chain ?? [];
+    // 站点 ref 先归一（工号数字串 → 数字）：校验与入库用同一套 ref。
+    const chain = (params.chain ?? []).map((s) => ({
+      member: stationRefOf(s.member),
+      stageBrief: s.stageBrief,
+    }));
     for (const station of chain) {
       if (station.stageBrief.trim() === '')
         throw new ETeamsError(`站点「${station.member}」的 stageBrief 不能为空`);
@@ -216,11 +224,12 @@ export async function createTask(
       if (!team.tasks.some((t) => t.id === dep))
         throw new ETeamsError(`依赖任务 ${dep} 不存在`, '先创建被依赖任务，或检查任务 id');
     }
+    // v7 链站点成员 = 工号（数字）：必须在班底；名字串（旧口径）退按名校验。
     for (const station of chain) {
-      if (!team.members.some((m) => m.name === station.member)) {
+      if (!chainMemberInRoster(team, station.member)) {
         throw new ETeamsError(
-          `执行链成员「${station.member}」不在团队中`,
-          '先 eteams_add_member，或修正成员名',
+          `执行链成员「${String(station.member)}」不在团队中`,
+          '先 eteams_add_member，或修正成员工号',
         );
       }
     }
@@ -250,6 +259,32 @@ export async function createTask(
       updatedAt: tx.now,
     };
     team.tasks.push(task);
+    // 任务副本（v7 决策 5）：建大任务即把全员班底（含领队）整行抄进本任务
+    // ——副本行工号抄班底、staged 待首派起会话；后续加成员再补铺。小任务
+    // 挂在大任务下，副本锚定大任务粒度、已在建大任务时铺过，不重复抄。
+    if (task.parentId === null) {
+      for (const m of team.members) {
+        team.taskMembers.push({
+          id: 0,
+          teamId: team.id,
+          mainTaskId: task.id,
+          nowTaskId: null,
+          name: m.name,
+          employeeId: m.employeeId ?? null,
+          sessionId: '',
+          status: 'staged',
+          ...(m.persona.personaMd !== undefined && m.persona.personaMd !== ''
+            ? { personaMd: m.persona.personaMd }
+            : {}),
+          ...(m.modelRoute.model !== '' ? { model: m.modelRoute.model } : {}),
+          ...(m.modelRoute.reasoningEffort !== undefined && m.modelRoute.reasoningEffort !== ''
+            ? { reasoningEffort: m.modelRoute.reasoningEffort }
+            : {}),
+          avatar: m.avatar,
+          createdAt: tx.now,
+        });
+      }
+    }
     // work_dir 归任务（docs/35 §3#8）：建任务即分配，撞名 -N 后缀。
     task.workDir = ensureTaskWorkDir(env, team, task);
     emit(tx, team.id, who.actor, 'task.created', {
@@ -280,7 +315,8 @@ export async function updateTask(
     contractMd?: string;
     idempotencyNote?: string;
     dependencies?: number[];
-    chain?: { member: string; stageBrief: string }[];
+    /** v7 站点成员 = 工号（数字）；旧链站点名字串兼容透传。 */
+    chain?: { member: number | string; stageBrief: string }[];
   },
 ): Promise<TaskRecord> {
   const out = await withTeam(env, who.teamId, (team, _root, tx) => {
@@ -300,11 +336,17 @@ export async function updateTask(
         throw new ETeamsError('依赖构成循环');
     }
     if (params.chain !== undefined) {
-      for (const station of params.chain) {
-        if (!team.members.some((m) => m.name === station.member)) {
-          throw new ETeamsError(`执行链成员「${station.member}」不在团队中`);
+      // 站点 ref 先归一（工号数字串 → 数字）再校验/入库——与 createTask 同口径。
+      const chain = params.chain.map((s) => ({
+        member: stationRefOf(s.member),
+        stageBrief: s.stageBrief,
+      }));
+      for (const station of chain) {
+        if (!chainMemberInRoster(team, station.member)) {
+          throw new ETeamsError(`执行链成员「${String(station.member)}」不在团队中`);
         }
       }
+      params.chain = chain;
     }
     const oldDir = task.workDir;
     if (params.dependencies !== undefined) task.dependencies = params.dependencies;
@@ -408,6 +450,17 @@ export async function deleteTask(env: RuntimeEnv, who: OpActor, taskId: number):
         if (row.status === 'working') row.status = 'ready';
       }
     }
+    // 副本行级联删（v7 决策 5）：副本行生命周期跟随所属大任务；有子会话的
+    // 行提交后先打断进行中的回合、再 drain 驻留（removeMember 同口径，会话
+    // 记录随父会话回收）。
+    const drained: string[] = [];
+    const interrupted: TaskMemberRecord[] = [];
+    team.taskMembers = team.taskMembers.filter((row) => {
+      if (row.mainTaskId === null || !doomedIds.has(row.mainTaskId)) return true;
+      interrupted.push(row);
+      if (row.sessionId !== '') drained.push(row.sessionId);
+      return false;
+    });
     const dir = taskDirAbs(env.workspace, team, task);
     team.tasks = team.tasks.filter((t) => !doomedIds.has(t.id));
     emit(tx, team.id, who.actor, 'task.deleted', {
@@ -415,6 +468,7 @@ export async function deleteTask(env: RuntimeEnv, who: OpActor, taskId: number):
       payload: {
         subject: task.subject,
         ...(doomed.length > 1 ? { cascade: doomed.map((t) => t.id) } : {}),
+        ...(drained.length > 0 ? { drainedReplicas: drained.length } : {}),
       },
     });
     if (existsSync(dir)) {
@@ -424,9 +478,19 @@ export async function deleteTask(env: RuntimeEnv, who: OpActor, taskId: number):
         env.ctx.logger.warn(`eteams: 任务文件夹删除失败（不阻塞状态）：${String(error)}`);
       }
     }
-    return team;
+    return { team, drained, interrupted };
   });
-  renderTeamDocs(env.workspace, out, (msg) => env.ctx.logger.warn(msg));
+  renderTeamDocs(env.workspace, out.team, (msg) => env.ctx.logger.warn(msg));
+  // 提交后：先打断被删副本行进行中的回合，再回收驻留 Activation（锚点不在
+  // 线则跳过——尽力而为）。
+  if (out.drained.length > 0) {
+    const anchorId = teamMainSessionOf(out.team) || readBuildPresence(stateRootOf(env))?.sessionId || '';
+    const captainAgent = anchorId !== '' ? env.ctx.agents.get(anchorId) : undefined;
+    if (captainAgent !== undefined) {
+      for (const row of out.interrupted) interruptMember(env, row, captainAgent);
+      await drainMembers(env, captainAgent, out.drained);
+    }
+  }
 }
 
 /** Actor wrapper passed by the tool layer. */
@@ -503,7 +567,13 @@ async function dispatchCore(
 export async function assignTask(
   env: RuntimeEnv,
   who: OpActor,
-  params: { taskId: number; member: string; deviationNote?: string; handoff?: string },
+  params: {
+    taskId: number;
+    /** v7 成员引用 = 工号（数字）；旧成员名兼容。 */
+    member: number | string;
+    deviationNote?: string;
+    handoff?: string;
+  },
 ): Promise<{ team: TeamState; task: TaskRecord; attempt: AttemptRecord }> {
   return dispatchCore(
     env,
@@ -636,7 +706,8 @@ async function prepareAssignment(
   captain: Agent | undefined,
   params: {
     taskId: number;
-    member: string;
+    /** v7 成员引用 = 工号（数字）；旧成员名兼容。 */
+    member: number | string;
     deviationNote?: string;
     kind?: AttemptKind;
     forReassign?: boolean;
@@ -664,17 +735,17 @@ async function prepareAssignment(
     }
   }
   const row = resolveAssigneeRow(team, task, params.member);
-  // 占用判定（实例行语义）：改派回原执行者时本任务自己的占用不算忙。
-  assertNotBusy(team, row.name, params.forReassign === true ? task.id : undefined);
+  // 占用判定（v7 副本行语义）：改派回原执行者时本任务自己的占用不算忙。
+  assertNotBusy(row, params.forReassign === true ? task.id : undefined);
   const planned = nextChainStation(task);
   if (
     isStation &&
     planned !== undefined &&
-    planned.member !== params.member &&
+    !stationPointsTo(planned, row) &&
     (params.deviationNote ?? '').trim() === ''
   ) {
     throw new ETeamsError(
-      `任务 ${task.id} 执行链下一站是「${planned.member}」，指派给「${params.member}」需要 deviation_note`,
+      `任务 ${task.id} 执行链下一站是「${stationKeyOf(planned)}」，指派给「${row.name}」（ET-${String(row.employeeId ?? 0).padStart(4, '0')}）需要 deviation_note`,
       '偏离执行链必须留痕（D11）：说明改派原因，或改派链上成员',
     );
   }
@@ -692,24 +763,35 @@ async function prepareAssignment(
 }
 
 /**
- * 派发对象实例行（docs/35 §5#12 任务级操作按任务的大任务根选行）：先锚定
- * 行、退团队级行；都没有则按班底模板补一行 staged（旧数据兼容），模板也
- * 没有才报「不在团队中」。
+ * 派发对象副本行（v7）：成员引用 = 工号（数字）优先、名字串退按名（旧链
+ * 站点兼容）；先锚定本大任务的副本行、退未锚定 legacy 行；都没有则按班底
+ * 行补一行 staged（legacy 宽容——v7 建任务/加成员已全员铺副本），模板也没
+ * 有才报「不在团队中」。
  */
-function resolveAssigneeRow(team: TeamState, task: TaskRecord, name: string): TaskMemberRecord {
+function resolveAssigneeRow(
+  team: TeamState,
+  task: TaskRecord,
+  ref: number | string,
+): TaskMemberRecord {
   const root = rootTaskIdOf(task);
-  const found = findInstanceRow(team, name, root);
+  const found = findInstanceRow(team, ref, root);
   if (found !== undefined) return found;
-  const template = team.members.find((m) => m.name === name);
+  const key = memberRefId(ref);
+  const template = team.members.find((m) =>
+    key.employeeId !== undefined ? m.employeeId === key.employeeId : m.name === key.name,
+  );
   if (template === undefined) {
-    throw new ETeamsError(`执行链成员「${name}」不在团队中`, '先 eteams_add_member，或修正成员名');
+    throw new ETeamsError(
+      `执行链成员「${String(ref)}」不在团队中`,
+      '先 eteams_add_member，或修正成员工号',
+    );
   }
   const row: TaskMemberRecord = {
-    id: 0, // 落库时按 task_members 自增号发号（writeTeamInTx 回填）
+    id: 0, // 发号尝试前在 applyAssignment 预占自增号（attempt.task_member_id 安全边界）
     teamId: team.id,
     mainTaskId: root,
     nowTaskId: task.id,
-    name,
+    name: template.name,
     employeeId: template.employeeId ?? null,
     sessionId: '',
     status: 'staged',
@@ -719,31 +801,39 @@ function resolveAssigneeRow(team: TeamState, task: TaskRecord, name: string): Ta
   return row;
 }
 
-/** 占用判定（实例行语义，docs/35 §5#12）：该成员还有其他 working 实例行
- *  或未完结尝试即拒绝；exceptTaskId 用于改派回原执行者。 */
-function assertNotBusy(team: TeamState, name: string, exceptTaskId?: number): void {
-  const busyRow = team.taskMembers.find(
-    (r) =>
-      r.name === name &&
-      r.status === 'working' &&
-      (exceptTaskId === undefined || r.nowTaskId !== exceptTaskId),
+/** v7 链站点成员在册判定：工号（数字）对班底行；名字串（旧口径）退按名。 */
+function chainMemberInRoster(team: TeamState, ref: string | number): boolean {
+  const key = memberRefId(ref);
+  return team.members.some((m) =>
+    key.employeeId !== undefined ? m.employeeId === key.employeeId : m.name === key.name,
   );
-  const busyTask =
-    busyRow !== undefined
-      ? team.tasks.find(
-          (t) =>
-            t.id !== exceptTaskId &&
-            t.assignee === name &&
-            t.status !== 'completed' &&
-            liveAttemptOf(t) !== undefined,
-        )
-      : undefined;
-  if (busyRow === undefined && busyTask === undefined) return;
+}
+
+/**
+ * 站点 ref 入库归一（v7）：工号数字串（'7'）转数字站点，名字串原样保留
+ * （legacy）。工具面与面板都以字符串进参——入任务记录前归一，链站点的
+ * 存储真相统一为「数字 = 工号」，stationPointsTo 的严格数字比对才成立。
+ */
+function stationRefOf(member: number | string): number | string {
+  if (typeof member === 'number') return member;
+  const trimmed = member.trim();
+  const numeric = Number.parseInt(trimmed, 10);
+  if (trimmed !== '' && Number.isFinite(numeric) && String(numeric) === trimmed) return numeric;
+  return trimmed;
+}
+
+/**
+ * 占用判定（v7 副本行语义，设计三#9）：副本行各自独立并行——同一班底成员
+ * 在多个任务各持会话互不占用（v6 队级「同一时刻只干一件」取消，跨任务/
+ * 跨副本判定整段撤掉）。只拦本副本行自己还绑着进行中任务时的重复派发：
+ * 一行只有一个子会话，再派会把进行中的接力顶掉。exceptTaskId 用于改派回
+ * 本任务（本任务自己的在办不算占用）。
+ */
+function assertNotBusy(row: TaskMemberRecord, exceptTaskId?: number): void {
+  if (row.status !== 'working' || row.nowTaskId === exceptTaskId) return;
   throw new ETeamsError(
-    `成员「${name}」正在执行 ${
-      busyTask !== undefined ? `任务 ${busyTask.id} ${busyTask.subject}` : '其他任务'
-    }`,
-    '完成即续派：同一成员同一时刻只持有一个活动任务',
+    `成员「${row.name}」的该副本行正在执行任务 ${row.nowTaskId ?? '（会话进行中）'}`,
+    '等当前任务完成/失败让位后再派，或用 eteams_reassign_task 改派',
   );
 }
 
@@ -807,9 +897,14 @@ function applyAssignment(
   wakes: Wake[],
 ): { task: TaskRecord; attempt: AttemptRecord } {
   const { task, row, isStation } = plan;
+  // 内存新建行（id = 0，resolveAssigneeRow 兜底补建的行）：发号尝试前先按
+  // task_members 自增号预占——attempt.task_member_id 是 claim/占用判定的
+  // 安全边界（设计三#9），不能等快照写库回填（那时 attempt 已经落库）。
+  if (row.id === 0) row.id = nextAutoincrementId(tx.db, 'task_members');
   const attempt = makeAttempt(tx, task, {
     kind: plan.kind,
     member: row.name,
+    taskMemberId: row.id,
     stationIndex: isStation ? task.chainCursor + 1 : 0,
   });
   applyTransition(task, 'wait', tx.now);
@@ -821,6 +916,7 @@ function applyAssignment(
     attemptId: attempt.id,
     payload: {
       member: row.name,
+      ...(row.employeeId !== null ? { employeeId: row.employeeId } : {}),
       kind: attempt.kind,
       station: attempt.stationIndex,
       ...(plan.deviation !== undefined ? { deviation: plan.deviation } : {}),
@@ -875,7 +971,7 @@ export async function advanceTask(
 export async function reassignTask(
   env: RuntimeEnv,
   who: OpActor,
-  params: { taskId: number; member?: string; deviationNote?: string },
+  params: { taskId: number; member?: number | string; deviationNote?: string },
 ): Promise<{ team: TeamState; task: TaskRecord; attempt: AttemptRecord }> {
   return dispatchCore(
     env,
@@ -1023,16 +1119,25 @@ export async function resumeTask(
     }
     if (task.status !== 'paused')
       throw new ETeamsError(`任务 ${task.id} 处于 ${task.status}，无法恢复`);
-    // 挂起时执行者已释放（assignee 清空）：按最近一次尝试的成员恢复。
+    // 挂起时执行者已释放（assignee 清空）：按最近一次尝试的副本行恢复
+    // （v7 行号 → 工号精确到人；legacy 退按名）。
     const last = task.attempts[task.attempts.length - 1];
-    const memberName = task.assignee ?? last?.member ?? thrower('挂起任务缺少执行成员记录');
-    const row = resolveAssigneeRow(team, task, memberName);
+    let resumeRef: number | string | undefined;
+    if (last?.taskMemberId !== undefined) {
+      const found = team.taskMembers.find((r) => r.id === last.taskMemberId);
+      if (found !== undefined) resumeRef = found.employeeId ?? found.name;
+    }
+    if (resumeRef === undefined) {
+      resumeRef = task.assignee ?? last?.member ?? thrower('挂起任务缺少执行成员记录');
+    }
+    const row = resolveAssigneeRow(team, task, resumeRef);
     await ensureSpawned(env, team, row, task, await captainFor(env, team, task));
     const wakes: Wake[] = [];
     const attempt = withTeamTx(root, team.id, (tx) => {
       const fresh = makeAttempt(tx, task, {
         kind: 'reassign',
         member: row.name,
+        ...(row.id > 0 ? { taskMemberId: row.id } : {}),
         stationIndex: task.chain.length > 0 ? task.chainCursor + 1 : 0,
       });
       applyTransition(task, 'wait', tx.now);
@@ -1102,11 +1207,12 @@ export async function cancelTask(
   return out.task;
 }
 
-/** Member claims the assigned attempt → token handshake (docs/06.3). */
+/** Member claims the assigned attempt → token handshake (docs/06.3).
+ * v7：调用者 = 精确副本行（工牌 + 任务作用域），归属按行 id 判定。 */
 export async function claimTask(
   env: RuntimeEnv,
   team: TeamState,
-  member: { name: string },
+  member: TaskMemberRecord,
   taskId: number,
 ): Promise<{ attempt: AttemptRecord; token: string; task: TaskRecord; inboxPreview: string[] }> {
   const out = await withTeam(env, team.id, (fresh, _root, tx) => {
@@ -1117,8 +1223,11 @@ export async function claimTask(
         '用 eteams_task_board 查看你的任务',
       );
     }
+    // 待接取尝试按副本行 id 精确匹配（同名成员各是各的 attempt）。
     const attempt = task.attempts.find(
-      (a) => a.status === 'pending_accept' && a.member === member.name,
+      (a) =>
+        a.status === 'pending_accept' &&
+        (a.taskMemberId !== undefined ? a.taskMemberId === member.id : a.member === member.name),
     );
     if (attempt === undefined) {
       throw new ETeamsError(
@@ -1126,20 +1235,21 @@ export async function claimTask(
         'attempt 可能已被吊销；等待领队重新指派',
       );
     }
-    const row = requireMember(fresh, member.name);
+    requireMember(fresh, member.employeeId ?? member.name);
     const token = generateToken();
     attempt.status = 'running';
     attempt.token = token;
     attempt.claimedAt = tx.now;
     applyTransition(task, 'start', tx.now);
-    row.status = 'working';
-    row.nowTaskId = task.id;
-    emit(tx, fresh.id, memberActor(row), 'attempt.claimed', {
+    member.status = 'working';
+    member.nowTaskId = task.id;
+    emit(tx, fresh.id, memberActor(member), 'attempt.claimed', {
       taskId: task.id,
       attemptId: attempt.id,
     });
-    const box = readBoxQuiet(env, fresh.id, member.name);
-    const inboxPreview = box.slice(-5).map((m) => `[${m.kind}] ${m.content.slice(0, 160)}`);
+    const box = memberBoxOf(member);
+    const inbox = readBoxQuiet(env, fresh.id, box.box);
+    const inboxPreview = inbox.slice(-5).map((m) => `[${m.kind}] ${m.content.slice(0, 160)}`);
     return { team: fresh, attempt, token, task, inboxPreview };
   });
   renderTeamDocs(env.workspace, out.team, (msg) => env.ctx.logger.warn(msg));
@@ -1150,7 +1260,7 @@ export async function claimTask(
 export async function declineTask(
   env: RuntimeEnv,
   team: TeamState,
-  member: { name: string },
+  member: TaskMemberRecord,
   taskId: number,
   reason: string,
 ): Promise<TaskRecord> {
@@ -1158,7 +1268,9 @@ export async function declineTask(
     const task = requireTask(fresh, taskId);
     if (task.assignee !== member.name) throw new ETeamsError(`任务 ${task.id} 未指派给你`);
     const attempt = task.attempts.find(
-      (a) => a.status === 'pending_accept' && a.member === member.name,
+      (a) =>
+        a.status === 'pending_accept' &&
+        (a.taskMemberId !== undefined ? a.taskMemberId === member.id : a.member === member.name),
     );
     if (attempt === undefined) {
       throw new ETeamsError(
@@ -1170,8 +1282,7 @@ export async function declineTask(
     attempt.endedAt = tx.now;
     applyTransition(task, 'ready', tx.now);
     freeMember(fresh, task);
-    const row = requireMember(fresh, member.name);
-    emit(tx, fresh.id, memberActor(row), 'attempt.declined', {
+    emit(tx, fresh.id, memberActor(member), 'attempt.declined', {
       taskId: task.id,
       attemptId: attempt.id,
       payload: { reason },
@@ -1193,16 +1304,16 @@ export async function declineTask(
 export async function appendProgress(
   env: RuntimeEnv,
   team: TeamState,
-  member: { name: string },
+  member: TaskMemberRecord,
   params: { taskId: number; attemptId: number; token: string; text: string },
 ): Promise<void> {
   return withTeam(env, team.id, (fresh, _root, tx) => {
-    const { task, attempt } = requireLiveAttempt(fresh, member.name, params);
+    const { task, attempt } = requireLiveAttempt(fresh, member, params);
     const text = params.text.trim();
     if (text === '') throw new ETeamsError('进度内容不能为空');
     const clipped = text.length > 200 ? `${text.slice(0, 197)}…` : text;
     attempt.progress.push({ at: tx.now, text: clipped });
-    emit(tx, fresh.id, memberActor(requireMember(fresh, member.name)), 'attempt.progress', {
+    emit(tx, fresh.id, memberActor(member), 'attempt.progress', {
       taskId: task.id,
       attemptId: attempt.id,
       payload: { text: clipped },
@@ -1217,7 +1328,7 @@ export async function appendProgress(
 export async function completeTask(
   env: RuntimeEnv,
   team: TeamState,
-  member: { name: string },
+  member: TaskMemberRecord,
   params: {
     taskId: number;
     attemptId: number;
@@ -1227,14 +1338,13 @@ export async function completeTask(
   },
 ): Promise<{ task: TaskRecord; done: boolean }> {
   const out = await withTeam(env, team.id, (fresh, _root, tx) => {
-    const { task, attempt } = requireLiveAttempt(fresh, member.name, params);
+    const { task, attempt } = requireLiveAttempt(fresh, member, params);
     const output = params.output.trim();
     if (output === '')
       throw new ETeamsError('完成产出说明不能为空', 'output 写清做了什么、改了哪些文件、如何验证');
     attempt.status = 'succeeded';
     attempt.endedAt = tx.now;
     attempt.result = { output, changedPaths: params.changedPaths };
-    const row = requireMember(fresh, member.name);
     freeMember(fresh, task);
     const isStation = task.chain.length > 0;
     const wakes: Wake[] = [];
@@ -1243,7 +1353,7 @@ export async function completeTask(
       task.chainCursor += 1; // station at old cursor+1 is now complete
       const next = nextChainStation(task)!;
       applyTransition(task, 'ready', tx.now);
-      emit(tx, fresh.id, memberActor(row), 'task.stage_completed', {
+      emit(tx, fresh.id, memberActor(member), 'task.stage_completed', {
         taskId: task.id,
         attemptId: attempt.id,
         payload: { station: task.chainCursor, next: next.member },
@@ -1265,7 +1375,7 @@ export async function completeTask(
           { taskId: task.id, attemptId: attempt.id },
         ),
       );
-      return { team: fresh, task, done: false, wakes, actor: memberActor(row) };
+      return { team: fresh, task, done: false, wakes, actor: memberActor(member) };
     }
     // Final station or chainless: task completed (docs/35 §5#10：产出不落列，
     // 反查 attempts 最新成功行)。
@@ -1274,14 +1384,14 @@ export async function completeTask(
     if (isStation) task.chainCursor = task.chain.length - 1;
     applyTransition(task, 'completed', tx.now);
     task.completedAt = tx.now;
-    emit(tx, fresh.id, memberActor(row), 'task.completed', {
+    emit(tx, fresh.id, memberActor(member), 'task.completed', {
       taskId: task.id,
       attemptId: attempt.id,
       payload: { output, changedPaths: params.changedPaths, isStation, final: final || !isStation },
     });
-    refreshDependentsInTx(tx, fresh, memberActor(row), task.id);
+    refreshDependentsInTx(tx, fresh, memberActor(member), task.id);
     // docs/26：组任务收口——末个小任务完成且全组 completed 时自动落组状态。
-    completeGroupIfDoneInTx(tx, fresh, memberActor(row), task);
+    completeGroupIfDoneInTx(tx, fresh, memberActor(member), task);
     wakes.push(
       notifyCaptainInTx(
         tx,
@@ -1297,7 +1407,7 @@ export async function completeTask(
         { taskId: task.id, attemptId: attempt.id },
       ),
     );
-    return { team: fresh, task, done: true, wakes, actor: memberActor(row) };
+    return { team: fresh, task, done: true, wakes, actor: memberActor(member) };
   });
   renderTeamDocs(env.workspace, out.team, (msg) => env.ctx.logger.warn(msg));
   // 二十七轮 DA40 链式执行（用户「整体开始，所有小任务链式执行」）：小任务
@@ -1327,16 +1437,15 @@ export async function completeTask(
 export async function failTask(
   env: RuntimeEnv,
   team: TeamState,
-  member: { name: string },
+  member: TaskMemberRecord,
   params: { taskId: number; attemptId: number; token: string; error: string },
 ): Promise<{ task: TaskRecord; retried: boolean; retryCount: number; maxRetries: number }> {
   const out = await withTeam(env, team.id, (fresh, _root, tx) => {
-    const { task, attempt } = requireLiveAttempt(fresh, member.name, params);
+    const { task, attempt } = requireLiveAttempt(fresh, member, params);
     const wakes: Wake[] = [];
     attempt.status = 'failed';
     attempt.endedAt = tx.now;
     attempt.error = params.error.trim();
-    const row = requireMember(fresh, member.name);
     freeMember(fresh, task);
     task.retryCount += 1;
     // 重试上限读全局配置（docs/35 §3#3：maxRetries 不再随队）。
@@ -1345,20 +1454,21 @@ export async function failTask(
       // 立即同成员重试（docs/35 §5#8）：单次落 wait（已派待接取）。
       const retry = makeAttempt(tx, task, {
         kind: 'retry',
-        member: row.name,
+        member: member.name,
+        ...(member.id > 0 ? { taskMemberId: member.id } : {}),
         stationIndex: task.chain.length > 0 ? task.chainCursor + 1 : 0,
       });
       applyTransition(task, 'wait', tx.now);
-      task.assignee = row.name;
-      row.status = 'working';
-      row.nowTaskId = task.id;
-      emit(tx, fresh.id, memberActor(row), 'task.retrying', {
+      task.assignee = member.name;
+      member.status = 'working';
+      member.nowTaskId = task.id;
+      emit(tx, fresh.id, memberActor(member), 'task.retrying', {
         taskId: task.id,
         attemptId: attempt.id,
         payload: { retryCount: task.retryCount, maxRetries },
       });
       wakes.push(
-        sendAssignmentInTx(env, tx, fresh, row, task, retry.id, {
+        sendAssignmentInTx(env, tx, fresh, member, task, retry.id, {
           ...(nextChainStation(task) !== undefined
             ? { stageBrief: nextChainStation(task)!.stageBrief }
             : {}),
@@ -1379,17 +1489,17 @@ export async function failTask(
       createdAt: tx.now,
     };
     fresh.pendingDecisions.push(decision);
-    emit(tx, fresh.id, memberActor(row), 'task.wait_decision', {
+    emit(tx, fresh.id, memberActor(member), 'task.wait_decision', {
       taskId: task.id,
       attemptId: attempt.id,
       payload: { decisionId: decision.id, retryCount: task.retryCount },
     });
-    emit(tx, fresh.id, memberActor(row), 'decision.requested', {
+    emit(tx, fresh.id, memberActor(member), 'decision.requested', {
       taskId: task.id,
       attemptId: attempt.id,
       payload: { decisionId: decision.id },
     });
-    refreshDependentsInTx(tx, fresh, memberActor(row), task.id);
+    refreshDependentsInTx(tx, fresh, memberActor(member), task.id);
     wakes.push(
       notifyCaptainInTx(
         tx,
@@ -1440,17 +1550,19 @@ function requireTask(team: TeamState, taskId: number): TaskRecord {
   return task;
 }
 
-/** 事务内发号一次执行尝试（attempts.attempt_id 全库自增，docs/27）。 */
+/** 事务内发号一次执行尝试（attempts.attempt_id 全库自增，docs/27）。
+ * taskMemberId 是 v7 归属键（精确到副本行；undefined = legacy 按名退判）。 */
 function makeAttempt(
   tx: TeamTx,
   task: TaskRecord,
-  spec: { kind: AttemptKind; member: string; stationIndex: number },
+  spec: { kind: AttemptKind; member: string; stationIndex: number; taskMemberId?: number },
 ): AttemptRecord {
   const attempt: AttemptRecord = {
     id: nextAutoincrementId(tx.db, 'attempts'),
     taskId: task.id,
     kind: spec.kind,
     member: spec.member,
+    ...(spec.taskMemberId !== undefined ? { taskMemberId: spec.taskMemberId } : {}),
     status: 'pending_accept',
     token: '',
     stationIndex: spec.stationIndex,
@@ -1461,18 +1573,24 @@ function makeAttempt(
   return attempt;
 }
 
-/** Token-guarded live attempt resolution (docs/06.4 revocation semantics). */
+/** Token-guarded live attempt resolution (docs/06.4 revocation semantics).
+ * v7：归属按副本行 id 精确判定（同名不串 attempt）；legacy 无号退按名。 */
 function requireLiveAttempt(
   team: TeamState,
-  memberName: string,
+  row: TaskMemberRecord,
   params: { taskId: number; attemptId: number; token: string },
 ): { task: TaskRecord; attempt: AttemptRecord } {
   const task = requireTask(team, params.taskId);
-  if (task.assignee !== memberName) {
+  if (task.assignee !== row.name) {
     throw new ETeamsError(`任务 ${task.id} 未指派给你`, '只操作自己被指派的任务');
   }
   const attempt = task.attempts.find((a) => a.id === params.attemptId);
-  if (attempt === undefined || attempt.member !== memberName) {
+  const mine =
+    attempt !== undefined &&
+    (attempt.taskMemberId !== undefined
+      ? attempt.taskMemberId === row.id
+      : attempt.member === row.name);
+  if (attempt === undefined || !mine) {
     throw new ETeamsError(
       `attempt ${params.attemptId} 不属于任务 ${task.id} 的当前执行`,
       'attempt 已吊销或不存在；重新查看 eteams_task_board',
@@ -1512,13 +1630,17 @@ function revokeCurrentAttempt(
   });
 }
 
-/** 释放执行者：任务松绑 + 实例行回 ready（now_task_id 清空）。 */
+/**
+ * 释放执行者：任务松绑 + 副本行回 ready（now_task_id 清空）。v7 行定位按
+ * 最近一次尝试的 task_member_id（精确副本行，同名不串）；无号 legacy 退
+ * nowTaskId+working 扫描。
+ */
 function freeMember(team: TeamState, task: TaskRecord): void {
   if (task.assignee === undefined) return;
+  const lastId = task.attempts[task.attempts.length - 1]?.taskMemberId;
   const row =
-    team.taskMembers.find(
-      (r) => r.name === task.assignee && r.status !== 'removed' && r.nowTaskId === task.id,
-    ) ?? team.taskMembers.find((r) => r.name === task.assignee && r.status === 'working');
+    (lastId !== undefined ? team.taskMembers.find((r) => r.id === lastId) : undefined) ??
+    team.taskMembers.find((r) => r.nowTaskId === task.id && r.status === 'working');
   if (row !== undefined) {
     row.status = 'ready';
     row.nowTaskId = null;
@@ -1588,7 +1710,8 @@ export function taskOutcome(task: TaskRecord): string | undefined {
   return undefined;
 }
 
-/** 挂起通知（事务内入箱；提交后唤醒，成员不在线则下轮轮询可见）。 */
+/** 挂起通知（事务内入箱；提交后唤醒，成员不在线则下轮轮询可见）。
+ * v7：箱键 = 工号十进制串（同名不串箱），展示名仍是成员名。 */
 function notifyMemberSuspendedInTx(
   env: RuntimeEnv,
   tx: TeamTx,
@@ -1598,13 +1721,14 @@ function notifyMemberSuspendedInTx(
   note?: string,
 ): Wake {
   if (name === undefined) return noWake;
-  const text = suspendedNotice(task, note);
-  queueNoticeInTx(tx, team.id, name, text, { taskId: task.id });
   const row = latestInstanceRow(team, name) ?? requireMember(team, name);
+  const box = memberBoxOf(row);
+  const text = suspendedNotice(task, note);
+  queueNoticeInTx(tx, team.id, box.box, text, { taskId: task.id }, row.name);
   return () => wakeMember(env, team, row, text);
 }
 
-/** 取消通知（事务内入箱；提交后唤醒）。 */
+/** 取消通知（事务内入箱；提交后唤醒）。v7 分箱同上。 */
 function notifyMemberCancelledInTx(
   env: RuntimeEnv,
   tx: TeamTx,
@@ -1614,9 +1738,10 @@ function notifyMemberCancelledInTx(
   reason?: string,
 ): Wake {
   if (name === undefined) return noWake;
-  const text = cancelledNotice(task, reason);
-  queueNoticeInTx(tx, team.id, name, text, { taskId: task.id });
   const row = latestInstanceRow(team, name) ?? requireMember(team, name);
+  const box = memberBoxOf(row);
+  const text = cancelledNotice(task, reason);
+  queueNoticeInTx(tx, team.id, box.box, text, { taskId: task.id }, row.name);
   return () => wakeMember(env, team, row, text);
 }
 

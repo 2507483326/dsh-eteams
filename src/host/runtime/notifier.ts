@@ -7,7 +7,7 @@
  *
  * @module dsh-eteams/runtime/notifier
  */
-import { appendMail, insertMailInTx, readMailboxSync } from '../state/events.js';
+import { appendMail, insertMailInTx, memberBoxKey, readMailboxSync } from '../state/events.js';
 import { LEADER_NAME } from '../state/db.js';
 import type { TeamTx } from '../state/store.js';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
@@ -62,11 +62,107 @@ export function deliverMailInTx(
 // --------------------------------------------------------------------------
 // 实例行选行（docs/35 §5#12 + docs/36 建议 4）：领队锚点行 = name=领队名 且
 // mainTaskId 为空；任务级操作按任务的大任务锚定；跨任务操作选最近活跃行。
+// v7：成员定位一律按工号（同名成员各是一套副本行），名字串退按名（旧链
+// 站点/旧数据兼容）。
 // --------------------------------------------------------------------------
 
 /** 领队行（领队锚点，docs/36 建议 3 统一判据）。 */
 export function leaderRowOf(team: TeamState): TaskMemberRecord | undefined {
   return team.taskMembers.find((r) => r.name === LEADER_NAME && r.mainTaskId === null);
+}
+
+/**
+ * 成员引用 → 定位键（v7）：纯十进制数字串/数字 = 工号；其余 = 成员名
+ * （旧链站点名字串兼容，展示原样）。
+ */
+export function memberRefId(ref: string | number): { employeeId?: number; name?: string } {
+  if (typeof ref === 'number') return { employeeId: ref };
+  const trimmed = ref.trim();
+  const numeric = Number.parseInt(trimmed, 10);
+  if (Number.isFinite(numeric) && numeric > 0 && String(numeric) === trimmed) {
+    return { employeeId: numeric };
+  }
+  return { name: trimmed };
+}
+
+/** 两行是否同一成员（v7）：工号优先，缺号退按名（legacy 宽容）。 */
+export function sameMemberOf(
+  a: Pick<TaskMemberRecord, 'employeeId' | 'name'>,
+  b: Pick<TaskMemberRecord, 'employeeId' | 'name'>,
+): boolean {
+  if (a.employeeId !== null && b.employeeId !== null) return a.employeeId === b.employeeId;
+  return a.name === b.name;
+}
+
+/** 成员引用按定位键过滤出的非 removed 副本行（含领队主持行）。 */
+function rowsByRef(team: TeamState, ref: string | number): TaskMemberRecord[] {
+  const key = memberRefId(ref);
+  return team.taskMembers.filter((r) =>
+    key.employeeId !== undefined
+      ? r.employeeId === key.employeeId && r.status !== 'removed'
+      : r.name === key.name && r.status !== 'removed',
+  );
+}
+
+/**
+ * 任务级实例行定位：先找锚定在本任务大任务上的行；没有锚定行时退回未锚
+ * 定的团队级行（legacy staged 行，main_task_id 为空）；两皆无 = 未入职。
+ */
+export function findInstanceRow(
+  team: TeamState,
+  ref: string | number,
+  mainTaskId: number,
+): TaskMemberRecord | undefined {
+  const rows = rowsByRef(team, ref);
+  return rows.find((r) => r.mainTaskId === mainTaskId) ?? rows.find((r) => r.mainTaskId === null);
+}
+
+/**
+ * 跨任务选行（§5#12）：非 removed、已起会话（session_id 非空）的最近活跃
+ * 行。TaskMemberRecord 内存不带 update_time（docs/27 库列），以 createdAt/id
+ * 最大行近似「最近活跃」。
+ */
+export function latestInstanceRow(
+  team: TeamState,
+  ref: string | number,
+): TaskMemberRecord | undefined {
+  const rows = rowsByRef(team, ref)
+    .filter((r) => r.sessionId !== '')
+    .sort((a, b) => b.createdAt - a.createdAt || b.id - a.id);
+  return rows[0];
+}
+
+/** 在册判定：该成员（工号/名）名下存在非 removed 实例行（领队行同样算在册）。 */
+export function requireMember(team: TeamState, ref: string | number): TaskMemberRecord {
+  const rows = rowsByRef(team, ref);
+  if (rows.length === 0) {
+    throw new ETeamsError(`成员「${String(ref)}」不存在`, '用 eteams_team_status 查看在册成员');
+  }
+  return rows[rows.length - 1]!;
+}
+
+/**
+ * 成员聚合状态（团队视图/看板口径）：任一实例行 working 即 working，其次
+ * paused；没有实例行 = staged（只有班底行、未铺任务副本）。
+ */
+export function memberStatusOf(team: TeamState, ref: string | number): MemberStatus {
+  const rows = rowsByRef(team, ref);
+  if (rows.length === 0) return 'staged';
+  if (rows.some((r) => r.status === 'working')) return 'working';
+  if (rows.some((r) => r.status === 'paused')) return 'paused';
+  return rows[0]!.status;
+}
+
+// --------------------------------------------------------------------------
+// 邮箱分箱（v7）：成员箱 = 工号十进制串（(team_id, employee_id) 定箱，同名
+// 不串箱）；领队箱 = 'captain'；legacy 无号行退按名分箱（仅显示兜底）。
+// --------------------------------------------------------------------------
+
+/** 成员行的收件箱（v7）：工号箱 + 落库 employee_id；无号退按名。 */
+export function memberBoxOf(row: TaskMemberRecord): { box: string; employeeId?: number } {
+  return row.employeeId !== null
+    ? { box: memberBoxKey(row.employeeId), employeeId: row.employeeId }
+    : { box: row.name };
 }
 
 /**
@@ -82,53 +178,6 @@ export function teamMainSessionOf(team: TeamState): string {
 /** 任务所属大任务 id（独立无链任务 = 自身 id；§5#12 实例行锚定粒度）。 */
 export function rootTaskIdOf(task: Pick<TaskRecord, 'id' | 'parentId'>): number {
   return task.parentId ?? task.id;
-}
-
-/**
- * 任务级实例行定位：先找锚定在本任务大任务上的行；没有锚定行时退回未锚
- * 定的团队级行（addMember 建的 staged 行，main_task_id 为空）；两皆无 =
- * 未入职。
- */
-export function findInstanceRow(
-  team: TeamState,
-  name: string,
-  mainTaskId: number,
-): TaskMemberRecord | undefined {
-  const rows = team.taskMembers.filter((r) => r.name === name && r.status !== 'removed');
-  return rows.find((r) => r.mainTaskId === mainTaskId) ?? rows.find((r) => r.mainTaskId === null);
-}
-
-/**
- * 跨任务选行（§5#12）：非 removed、已起会话（session_id 非空）的最
- * 近活跃行。TaskMemberRecord 内存不带 update_time（docs/27 库列），以
- * createdAt/id 最大行近似「最近活跃」。
- */
-export function latestInstanceRow(team: TeamState, name: string): TaskMemberRecord | undefined {
-  const rows = team.taskMembers
-    .filter((r) => r.name === name && r.status !== 'removed' && r.sessionId !== '')
-    .sort((a, b) => b.createdAt - a.createdAt || b.id - a.id);
-  return rows[0];
-}
-
-/** 在册判定：该成员名下存在非 removed 实例行（领队行同样算在册）。 */
-export function requireMember(team: TeamState, name: string): TaskMemberRecord {
-  const rows = team.taskMembers.filter((r) => r.name === name && r.status !== 'removed');
-  if (rows.length === 0) {
-    throw new ETeamsError(`成员「${name}」不存在`, '用 eteams_team_status 查看在册成员');
-  }
-  return rows[rows.length - 1]!;
-}
-
-/**
- * 成员聚合状态（团队视图/看板口径）：任一实例行 working 即 working，其次
- * paused；没有实例行 = staged（只有班底模板行）。
- */
-export function memberStatusOf(team: TeamState, name: string): MemberStatus {
-  const rows = team.taskMembers.filter((r) => r.name === name && r.status !== 'removed');
-  if (rows.length === 0) return 'staged';
-  if (rows.some((r) => r.status === 'working')) return 'working';
-  if (rows.some((r) => r.status === 'paused')) return 'paused';
-  return rows[0]!.status;
 }
 
 // --------------------------------------------------------------------------
@@ -228,19 +277,21 @@ export function notifyCaptainInTx(
   return () => Promise.resolve(wakeCaptain(env, team, content));
 }
 
-/** 事务内入队一封通知邮件（无唤醒；提交后由派发/唤醒路径补投）。 */
+/** 事务内入队一封通知邮件（无唤醒；提交后由派发/唤醒路径补投）。displayName
+ * 是收件展示名（v7 箱键是工号串，展示仍用成员名）。 */
 export function queueNoticeInTx(
   tx: TeamTx,
   teamId: number,
   box: string,
   content: string,
   refs: { taskId?: number } = {},
+  displayName?: string,
 ): void {
   insertMailInTx(
     tx,
     teamId,
     box,
-    makeMail(PLUGIN_ACTOR, { kind: 'member', name: box }, 'notice', content, refs),
+    makeMail(PLUGIN_ACTOR, { kind: 'member', name: displayName ?? box }, 'notice', content, refs),
   );
 }
 
@@ -251,12 +302,13 @@ export async function queueNotice(
   box: string,
   content: string,
   refs: { taskId?: number } = {},
+  displayName?: string,
 ): Promise<void> {
   await appendMail(
     stateRootOf(env),
     teamId,
     box,
-    makeMail(PLUGIN_ACTOR, { kind: 'member', name: box }, 'notice', content, refs),
+    makeMail(PLUGIN_ACTOR, { kind: 'member', name: displayName ?? box }, 'notice', content, refs),
   );
 }
 

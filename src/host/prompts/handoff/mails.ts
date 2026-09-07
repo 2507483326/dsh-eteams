@@ -23,6 +23,16 @@ export function renderContract(task: TaskRecord): string {
   return lines.join('\n');
 }
 
+/** v7 站点/成员引用显示：工号（数字/数字串）→ ET-xxxx；名字串原样（旧链
+ * 站点兼容——解析不到的旧行保留名字展示）。 */
+export function stationLabel(ref: string | number): string {
+  if (typeof ref === 'number') return `ET-${String(Math.max(0, ref)).padStart(4, '0')}`;
+  const numeric = Number.parseInt(ref.trim(), 10);
+  return Number.isFinite(numeric) && numeric > 0 && String(numeric) === ref.trim()
+    ? `ET-${String(numeric).padStart(4, '0')}`
+    : ref;
+}
+
 /** Assignment / stage-handoff mail body (docs/07.3.1 模板；attempt_id 整数号). */
 export function assignmentMail(
   task: TaskRecord,
@@ -66,7 +76,7 @@ export function reportCompletedMail(
     isFinalStation: boolean;
     output: string;
     changedPaths?: string[];
-    nextStation?: string;
+    nextStation?: string | number;
     nextStageBrief?: string;
   },
 ): string {
@@ -79,9 +89,11 @@ export function reportCompletedMail(
   ];
   if (opts.isFinalStation) {
     lines.push('任务已全部完成。空闲成员可接新任务，建议你当轮续派（完成即续派）。');
-  } else if (opts.nextStation) {
+  } else if (opts.nextStation !== undefined) {
     lines.push(
-      `下一站：${opts.nextStation}${opts.nextStageBrief ? ` — ${opts.nextStageBrief}` : ''}。请用 eteams_advance_task 推进（完成即续派）。`,
+      `下一站：${stationLabel(opts.nextStation)}${
+        opts.nextStageBrief ? ` — ${opts.nextStageBrief}` : ''
+      }。请用 eteams_advance_task 推进（完成即续派）。`,
     );
   }
   lines.push(`（attempt ${opts.attemptId}）`);

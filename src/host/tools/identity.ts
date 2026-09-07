@@ -30,7 +30,7 @@ export interface CaptainCaller {
   actor: Actor;
 }
 
-/** Member caller: one execution instance (task_members row) of one team. */
+/** Member caller: one exact task replica row (taskMemberId + employeeId) of one team. */
 export interface MemberCaller {
   kind: 'member';
   team: TeamState;
@@ -73,7 +73,8 @@ export function envForAgent(
 /**
  * Resolve the calling agent into a team identity. Members are matched by
  * their durable child session id (`task_members.session_id === agent.id`，
- * 实例行执行会话即身份凭证).
+ * 副本行执行会话即身份凭证；v7 按工号/行 id 精确到任务副本行，R1 离职截断
+ * 见成员分支注释).
  *
  * 绑定优先（docs/26 用户迭代 2026-09-03）：输入栏「团队」弹层的显式选择
  * 是用户最近的意图——凡绑定了团队的会话，按该团队的领队身份行动，团队
@@ -110,10 +111,15 @@ export async function resolveCaller(env: RuntimeEnv, agent: Agent): Promise<Call
   if (asLeaderChild) {
     return { kind: 'captain', team: asLeaderChild, actor: captainActor(asLeaderChild) };
   }
-  // 成员身份走实例行（session_id 即成员子会话 id）。
+  // 成员身份走副本行（session_id 即成员子会话 id）。R1 离职截断：工牌
+  // （班底行）已删的副本行不再解析出成员身份——其存活子会话的工面就地失效
+  // （工具层按 caller 缺失拒绝），防止离职成员继续 claim/读箱。
   for (const team of teams) {
     const row = team.taskMembers.find(
-      (r) => r.sessionId === sessionId && r.status !== 'removed',
+      (r) =>
+        r.sessionId === sessionId &&
+        r.status !== 'removed' &&
+        (r.employeeId === null || team.members.some((m) => m.employeeId === r.employeeId)),
     );
     if (row) return { kind: 'member', team, member: row, actor: memberActor(row) };
   }

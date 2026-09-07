@@ -1,11 +1,14 @@
 -- =====================================================================
--- ETeams SQLite schema v6（db_schema_version = 6；v3 成员=角色合并：member
+-- ETeams SQLite schema v7（db_schema_version = 7；v3 成员=角色合并：member
 -- 表精简改名成 roles 角色库表（去 team_id/role_id/model/reasoning_effort，
 -- 新增 profile），班底另起 team_members 表，旧 roles 标签登记表删除；
 -- v4 班底行补 role_name/persona_md/profile 角色信息副本列；v5 任务行补主
 -- 会话快照列（session_id）；v6 会话列归位：task.session_id 改名
 -- main_session_id，task_members 两列会话合并成 session_id（本行自己的子
--- 代理会话），team 行不存会话；v2/v3/v4/v5 旧库经 getDb 迁移回填）
+-- 代理会话）；v7 工号挪到班底（表自增）：工号 = team_members 行的自增主键
+-- （AUTOINCREMENT 只增不复用），班底/团队表不加新列；roles.employee_id 弃用
+-- ——列保留不读写；mail_messages 补 employee_id 分箱列、attempts 补
+-- task_member_id 副本行列（v2/v3/v4/v5/v6/v7 旧库经 getDb 迁移回填）
 -- 主键 = 每张表自己的编号列，统一 INTEGER 自增（schema_meta 例外：key 即主键）
 -- 时间列一律 *_time 结尾（Unix 毫秒）；每张表末尾 created_time / update_time
 -- 枚举 = TEXT（合法值写在列注释里）；JSON = TEXT 存 JSON 字符串
@@ -42,12 +45,14 @@ CREATE INDEX IF NOT EXISTS idx_team_update_time ON team (update_time DESC);
 -- ---------------------------------------------------------------------
 -- 2. roles —— 角色库（原 member 公共模板行并成角色表；成员=角色，全局一份）
 --    代码里的预置角色首次启动写入；角色构建师确认的新角色、面板/工具加
---    成员时的新名字也写进来。人设/工号/头像都挂在角色行上。
+--    成员时的新名字也写进来。人设/头像挂在角色行上；工号 v7 起挪到
+--    team_members 班底行（表自增主键即工号）——本表 employee_id 列弃用：
+--    列保留、全链路不再读写（DROP 是单向门，旧版 lib 打新库会 no such column）。
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS roles (
   role_id        INTEGER PRIMARY KEY AUTOINCREMENT,  -- 角色 ID，自增（team_members.role_id 引用它）
   role_name      TEXT NOT NULL,                -- 角色名（成员名=角色名；全库唯一，写入代码查重）
-  employee_id    INTEGER,                      -- 工号：插入角色行时取 roles 表最大工号 +1，同人同号；显示补零 1 → 0001
+  employee_id    INTEGER,                      -- 【v7 弃用】工号已挪到 team_members（表自增主键即工号）；列保留不读写，旧库回滚兼容
   persona_md     TEXT,                         -- 完整角色手册（Markdown 全文；duty/style/skills 等结构字段写入时烘进手册）
   profile        TEXT,                         -- 一句话简介（列表卡片/详情头展示；独立成列，不再烘进 persona_md）
   avatar         TEXT,                         -- 头像
@@ -57,14 +62,16 @@ CREATE TABLE IF NOT EXISTS roles (
 
 -- ---------------------------------------------------------------------
 -- 3. team_members —— 班底（团队 × 角色：一行一个在队成员 + 该队派发路线；
---    工号/头像经 role_id 松引用解析自 roles；role_name/persona_md/profile
---    是随角色行同步刷新的副本列（v4，真相在 roles）；执行实例（状态/会话/
---    当前任务）在 task_members）
+--    v7 起是工牌发放处：工号 = 本表自增主键（AUTOINCREMENT 只增不复用，
+--    全机器唯一），允许同名同角色多行，人员身份键 = 工号；人设/头像经
+--    role_id 松引用解析自 roles；role_name/persona_md/profile 是随角色行
+--    同步刷新的副本列（v4，真相在 roles）；执行实例（状态/会话/当前任务）
+--    在 task_members）
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS team_members (
-  team_member_id   INTEGER PRIMARY KEY AUTOINCREMENT,  -- 自增主键（内存新建行 0 落库发号）
+  team_member_id   INTEGER PRIMARY KEY AUTOINCREMENT,  -- 自增主键 = 工号（v7 表自增；显示补零 1 → 0001；内存新建行 0 落库发号）
   team_id          INTEGER NOT NULL,    -- 属于哪个团队（team.team_id）
-  role_id          INTEGER,             -- 角色 ID（roles.role_id，松引用；人设/工号/头像都在角色行上）
+  role_id          INTEGER,             -- 角色 ID（roles.role_id，松引用；人设/头像在角色行上）
   role_name        TEXT,                -- 角色名副本（写入时随 roles.role_name 同步刷新；悬空行 NULL；直查/展示用）
   persona_md       TEXT,                -- 角色手册副本（写入时随 roles.persona_md 同步刷新；真相在 roles）
   profile          TEXT,                -- 一句话简介副本（写入时随 roles.profile 同步刷新；真相在 roles）
@@ -86,7 +93,7 @@ CREATE TABLE IF NOT EXISTS task (
   subject           TEXT NOT NULL,       -- 标题（非空）
   description       TEXT,                -- 正文
   depend_tasks      TEXT NOT NULL DEFAULT '[]',  -- 依赖前置任务 ID 列表（JSON 数组；环检测由写入代码做）
-  member_chain_list TEXT NOT NULL DEFAULT '[]',  -- 执行人员序列列表（JSON 数组）
+  member_chain_list TEXT NOT NULL DEFAULT '[]',  -- 执行链站点列表（JSON 数组：[{member, stageBrief}]；v7 站点 member 写工号数字，迁移解析不到班底行的旧站点保留名字字符串并在渲染时标注 legacy）
   chain_cursor      INTEGER NOT NULL DEFAULT -1, -- -1=没开始；k=第 k 站完成；末站完成→completed
   status            TEXT NOT NULL DEFAULT 'draft',
                     -- draft / ready / wait / start / paused /
@@ -112,17 +119,19 @@ CREATE INDEX IF NOT EXISTS idx_task_current ON task (team_id, current_member) WH
 CREATE INDEX IF NOT EXISTS idx_task_update  ON task (team_id, update_time DESC);
 
 -- ---------------------------------------------------------------------
--- 5. task_members —— 任务成员（执行实例：有状态、有会话锚点；人设/工号/
---    头像的模板本体在 roles，班底路线在 team_members）
---    领队也是一行：name='项目牧羊人'、main_task_id 为空（团队级主持行）。
+-- 5. task_members —— 任务成员副本（有状态、有会话锚点；v7：建任务/加成员
+--    时从班底整行复制，工号抄班底行自增主键，行生命周期跟随
+--    所属大任务——删任务→副本级联删）
+--    领队也是一行：name='项目牧羊人'、main_task_id 为空（团队级主持行，
+--    不是工牌——领队子会话的锚 + has_leader 载体）。
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS task_members (
   task_member_id   INTEGER PRIMARY KEY AUTOINCREMENT,  -- 自增主键
   team_id          INTEGER NOT NULL,    -- 属于哪个团队（team.team_id，写入代码维护；领队行也带，删除/统计/领队行定位都按它过滤）
   main_task_id     INTEGER,             -- 实例行所属大任务 ID（task.task_id；独立无链任务=自身 id）；NULL=团队级行（领队主持行）
   now_task_id      INTEGER,             -- 当前执行任务 ID（task.task_id）
-  name             TEXT NOT NULL,       -- 成员名（与 roles.role_name 同名，写入代码查重）
-  employee_id      INTEGER,             -- 工号副本（引用 roles.employee_id，松引用）
+  name             TEXT NOT NULL,       -- 成员名（显示用；允许同名，身份判定按工号/行 id）
+  employee_id      INTEGER,             -- 工号（v7 表自增：建任务/加成员时抄自班底行 team_member_id；主持行同步班底领队行）
   session_id       TEXT NOT NULL DEFAULT '',  -- 本行自己的子代理会话 ID（v6：成员行=成员子会话，领队行=领队子代理会话）；还没启动时是空串
   status           TEXT NOT NULL DEFAULT 'staged',
                    -- 成员状态：staged / ready / working / paused / removed
@@ -145,7 +154,8 @@ CREATE TABLE IF NOT EXISTS attempts (
   team_id       INTEGER NOT NULL,     -- 属于哪个团队（team.team_id）
   task_id       INTEGER NOT NULL,     -- 属于哪个任务（task.task_id）
   kind          TEXT NOT NULL,        -- initial=首发 / stage=链站点 / retry=重试 / reassign=换人
-  member        TEXT NOT NULL,        -- 执行成员名（松引用，与链站点同键）
+  member        TEXT NOT NULL,        -- 执行成员名（显示保留；归属判定按 task_member_id 副本行，v7）
+  task_member_id INTEGER,             -- 执行副本行 id（v7：task_members.task_member_id——claim/汇报按它定行，同名成员不串 attempt；旧数据 NULL 时判定退按名兜底）
   status        TEXT NOT NULL DEFAULT 'pending_accept',
                 -- pending_accept / running / paused / succeeded / failed / revoked
   token         TEXT NOT NULL DEFAULT '',  -- 一次性凭证：接活时校验，换人/重试/接管即作废
@@ -194,7 +204,8 @@ CREATE TABLE IF NOT EXISTS mail_messages (
   mail_message_id          INTEGER PRIMARY KEY AUTOINCREMENT,  -- 邮件序号，自增（全库递增；箱内顺序按它排）
   team_id      INTEGER NOT NULL,     -- 属于哪个团队（team.team_id）
   message_id   TEXT NOT NULL,        -- 消息幂等键（接收方按它去重；同箱不重由写入代码保证）
-  box_key      TEXT NOT NULL,        -- 收件箱：收件成员名；领队='captain'
+  box_key      TEXT NOT NULL,        -- 收件箱键（v7：成员=工号十进制串、领队='captain'；旧库行=收件成员名，仅显示兜底）
+  employee_id  INTEGER,              -- 收件成员工号（v7 分箱真相：(team_id, employee_id) 定箱，同名不串箱；领队箱与解析不到的旧行 NULL）
   from_kind    TEXT NOT NULL,        -- 发件人类型：captain / member / user / plugin / system
   from_name    TEXT,                 -- 发件人名；plugin/system 可空
   to_kind      TEXT NOT NULL,        -- 收件人类型（同上五值）

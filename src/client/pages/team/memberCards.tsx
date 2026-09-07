@@ -149,14 +149,15 @@ export function MemberCard({
   catalog: ModelCatalogState;
   /** Subagent activity (docs/20.4 P4): 'running' | 'inactive' | undefined. */
   activity?: string;
-  onRemove?: (name: string) => void;
+  // v7 R3：数据回调携带整行（定位键 = 行内工号，同名成员各归各）。
+  onRemove?: (member: MemberView) => void;
   /** 模型选择（右侧二级菜单）：行 id=`provider/model`，'inherit' = 会话默认。 */
-  onModelChange?: (memberName: string, model: string) => void;
+  onModelChange?: (member: MemberView, model: string) => void;
   /** 推理等级改写（菜单内「推理等级」子面板；null = 提供方默认）。 */
-  onEffortChange?: (memberName: string, effort: string | null) => void;
+  onEffortChange?: (member: MemberView, effort: string | null) => void;
   /** 该成员的模型路由保存中（菜单短暂禁用防连点）。 */
   modelSaving?: boolean;
-  /** 点卡片（头像/名字区）进成员详情页。 */
+  /** 点卡片（头像/名字区）进成员详情页（路由按名，纯导航不带数据语义）。 */
   onOpenDetail?: (name: string) => void;
 }): ReactNode {
   const openDetail = (): void => {
@@ -210,17 +211,13 @@ export function MemberCard({
             inheritLabel="会话默认"
             fallback={MODEL_OPTIONS}
             disabled={modelSaving}
-            onModelPick={(v) => onModelChange !== undefined && onModelChange(m.name, v)}
-            onEffortPick={(effort) =>
-              onEffortChange !== undefined && onEffortChange(m.name, effort)
-            }
+            onModelPick={(v) => onModelChange !== undefined && onModelChange(m, v)}
+            onEffortPick={(effort) => onEffortChange !== undefined && onEffortChange(m, effort)}
             title="选择成员运行的模型（「会话默认」= 设置里的会话默认模型；运行中的成员下次启动时生效）"
           />
         )}
         {/* 移出团队（M7-4 收口 components/deleteButton，destructive 默认档）。 */}
-        {onRemove !== undefined && (
-          <DeleteButton label="移出团队" onClick={() => onRemove(m.name)} />
-        )}
+        {onRemove !== undefined && <DeleteButton label="移出团队" onClick={() => onRemove(m)} />}
       </div>
     </div>
   );

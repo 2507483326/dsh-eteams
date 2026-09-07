@@ -109,7 +109,8 @@ function memberRow(teamId: number, childSessionId: string): TaskMemberRecord {
     mainTaskId: null,
     nowTaskId: null,
     name: '甲',
-    employeeId: null,
+    // v7：实例行也带工号（按工号定位聚合）——与班底 '甲' 的 employeeId 对齐。
+    employeeId: 1,
     sessionId: childSessionId,
     roleId: null,
     status: 'ready',
@@ -123,9 +124,36 @@ function seedTeam(opts: { memberChild?: string; leaderChild?: string } = {}): Te
   const name = '演示团队';
   let teamId = 0;
   withTeamTx(root, undefined, (tx) => {
-    teamId = insertTeamRow(tx, name, true, 1);
+    teamId = insertTeamRow(tx, name, true, tx.now);
   });
   const taskMembers: TaskMemberRecord[] = [leaderRow(teamId, opts.leaderChild ?? '')];
+  // v7：成员有工牌才有身份——拉人即落班底行（工牌发放处），实例行（工牌 1）
+  // 靠它过 resolveCaller 的 R1 离职截断。
+  const members =
+    opts.memberChild !== undefined
+      ? [
+          {
+            // v7 表自增：工号 = 班底行主键（employeeId 恒等于 memberId）。
+            memberId: 1,
+            roleId: null,
+            name: '甲',
+            employeeId: 1,
+            role: '前端',
+            persona: {
+              frameworkVersion: 1,
+              role: '前端',
+              duty: '',
+              style: '',
+              skills: '',
+              rules: [],
+              executionPrompt: '',
+            },
+            modelRoute: { model: '' },
+            avatar: { seed: 1, salt: 1 },
+            createdAt: 1,
+          },
+        ]
+      : [];
   if (opts.memberChild !== undefined) taskMembers.push(memberRow(teamId, opts.memberChild));
   const state: TeamState = {
     id: teamId,
@@ -134,7 +162,7 @@ function seedTeam(opts: { memberChild?: string; leaderChild?: string } = {}): Te
     createdAt: 1,
     updatedAt: 1,
     taskMembers,
-    members: [],
+    members,
     tasks: [
       {
         id: 1,
@@ -345,9 +373,9 @@ describe('teamView 团队现状精简 (用户迭代 2026-09-03)', () => {
       ...seeded,
       members: [
         {
-          // member 表 member_id 与预置公共模板行（项目牧羊人/角色构建师）
-          // 共用一个主键空间——测试行用高位号避开。
-          memberId: 900,
+          // v7 表自增：工号 = 班底行主键（employeeId 恒等于 memberId）——
+          // 实例行按工号聚合，fixture 三处（memberId/employeeId/实例行）对齐。
+          memberId: 1,
           name: '甲',
           employeeId: 1,
           role: '前端',

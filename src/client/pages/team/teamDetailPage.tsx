@@ -23,8 +23,10 @@ import {
 } from '../../lib/api';
 import {
   applyRoutePatch,
+  employeeIdNumberOf,
   refreshActivitySoon,
   revertRoutePatch,
+  type MemberView,
   type RoutePatch,
   type RouteTriple,
   type TeamSnapshot,
@@ -175,29 +177,32 @@ export function TeamDetailPage({
     };
   };
 
-  const changeModel = (memberName: string, value: string): void => {
+  // v7 R3：数据回调携带整行，定位键 = 行内工号（同名成员各归各）。
+  const changeModel = (member: MemberView, value: string): void => {
     if (detailTeam === null) return;
-    const member = detailTeam.members.find((m) => m.name === memberName);
-    if (member === undefined) return;
+    const employeeId = employeeIdNumberOf(member.employeeId);
+    if (employeeId === null) return;
+    const member2 = detailTeam.members.find((m) => m.employeeId === member.employeeId);
+    if (member2 === undefined) return;
     const previous: RouteTriple = {
-      model: member.model,
-      reasoningEffort: member.reasoningEffort,
+      model: member2.model,
+      reasoningEffort: member2.reasoningEffort,
     };
     const body = routeBody(value, previous);
     if (body === null) return;
     setDetailError(null);
-    setModelSavingName(memberName);
+    setModelSavingName(member.name);
     // 选择即变（对话 choose() 同款本地即时性）：先打乐观补丁——触发器文案/
     // 勾选/推理等级入口不等 POST + 1s 轮询；pending 覆盖层防在途旧快照闪回，
     // POST 成功立即快照确认，失败回滚 + 就地报错。
     const patch: RoutePatch = {
       teamId: detailTeam.teamId,
-      target: { kind: 'member', name: memberName },
+      target: { kind: 'member', employeeId },
       route: { model: body.model ?? '', reasoningEffort: body.reasoningEffort ?? null },
     };
     applyRoutePatch(patch);
     // inherit = 跟随（host 空 body = 重置）；其余按会话模型目录（与对话一致）。
-    void setMemberModel(detailTeam.teamId, memberName, body)
+    void setMemberModel(detailTeam.teamId, employeeId, body)
       .then(() => refreshActivitySoon())
       .catch((e) => {
         revertRoutePatch(patch, previous);
@@ -210,27 +215,29 @@ export function TeamDetailPage({
   // 成员生效——整条路线重发（host 每次整路由写入）。effort 为 null = 提供方
   // 默认（对话 chooseEffort 的 provider-default 项同款）：重发时省略
   // reasoningEffort，host 即无强度 override。跟随中（model 空串）不可单独改。
-  const changeMemberEffort = (memberName: string, effort: string | null): void => {
+  const changeMemberEffort = (member: MemberView, effort: string | null): void => {
     if (detailTeam === null) return;
-    const member = detailTeam.members.find((m) => m.name === memberName);
-    if (member === undefined || member.model === '') {
+    const employeeId = employeeIdNumberOf(member.employeeId);
+    if (employeeId === null) return;
+    const member2 = detailTeam.members.find((m) => m.employeeId === member.employeeId);
+    if (member2 === undefined || member2.model === '') {
       return;
     }
     setDetailError(null);
-    setModelSavingName(memberName);
+    setModelSavingName(member.name);
     const previous: RouteTriple = {
-      model: member.model,
-      reasoningEffort: member.reasoningEffort,
+      model: member2.model,
+      reasoningEffort: member2.reasoningEffort,
     };
     // 同 changeModel：乐观补丁即时生效，POST 确认/回滚。
     const patch: RoutePatch = {
       teamId: detailTeam.teamId,
-      target: { kind: 'member', name: memberName },
+      target: { kind: 'member', employeeId },
       route: { ...previous, reasoningEffort: effort },
     };
     applyRoutePatch(patch);
-    void setMemberModel(detailTeam.teamId, memberName, {
-      model: member.model,
+    void setMemberModel(detailTeam.teamId, employeeId, {
+      model: member2.model,
       ...(effort !== null && effort !== '' ? { reasoningEffort: effort } : {}),
     })
       .then(() => refreshActivitySoon())
@@ -241,10 +248,12 @@ export function TeamDetailPage({
       .finally(() => setModelSavingName(null));
   };
 
-  const removeMember = (memberName: string): void => {
+  const removeMember = (member: MemberView): void => {
     if (detailTeam === null) return;
+    const employeeId = employeeIdNumberOf(member.employeeId);
+    if (employeeId === null) return;
     setDetailError(null);
-    void removeTeamMember(detailTeam.teamId, memberName).catch((e) =>
+    void removeTeamMember(detailTeam.teamId, employeeId).catch((e) =>
       setDetailError(errorMessageOf(e)),
     );
   };

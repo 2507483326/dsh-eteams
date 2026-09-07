@@ -498,14 +498,15 @@ describe('panel write routes (M5 first slice)', () => {
       fromRoster: true,
     });
     expect(added.code).toBe(200);
-    expect(readTeam(teamId).members).toHaveLength(1);
+    // v7：领队也入班底（建队即发 ET-0001）——加一人后班底 = 领队 + Dave。
+    expect(readTeam(teamId).members.map((m) => m.name)).toEqual(['项目牧羊人', 'Dave']);
 
     const removed = await h.post(`/eteams-api/team/${teamId}/member/Dave/remove`, {});
     expect(removed.code).toBe(200);
     const fresh = readTeam(teamId);
-    expect(
-      fresh.taskMembers.filter((r) => r.name === 'Dave').every((r) => r.status === 'removed'),
-    ).toBe(true);
+    // v7 删除 = 班底行硬删（号作废不回收）；本测试未建任务 ⇒ 无副本行遗留。
+    expect(fresh.members.find((m) => m.name === 'Dave')).toBeUndefined();
+    expect(fresh.taskMembers.filter((r) => r.name === 'Dave')).toHaveLength(0);
     const snap = teamSnapshot(fresh, workspace, config);
     expect((snap.members as { name: string }[]).find((m) => m.name === 'Dave')).toBeUndefined();
   });
@@ -538,11 +539,13 @@ describe('panel write routes (M5 first slice)', () => {
     expect(addedBody.member.name).toBe('Bob');
     expect(typeof addedBody.member.employeeId).toBe('number');
     const fresh = readTeam(body.teamId);
-    expect(fresh.members[0]!.persona.skills).toBe('实现与测试');
-    expect(fresh.members[0]!.persona.executionPrompt).toBe('你是 Bob。');
-    // taskMembers[0] 是领队行（建队即 ready）；Bob 的实例行 = staged 未锚定。
-    expect(fresh.taskMembers.find((r) => r.name === 'Bob')!.status).toBe('staged');
+    // v7：领队也占班底一行（members[0] = 领队）——按名找 Bob 的班底行。
+    expect(fresh.members.find((m) => m.name === 'Bob')!.persona.skills).toBe('实现与测试');
+    expect(fresh.members.find((m) => m.name === 'Bob')!.persona.executionPrompt).toBe('你是 Bob。');
+    // v7 决策 5：副本行建任务即有——无任务时不产团队级实例行。
+    expect(fresh.taskMembers.filter((r) => r.name === 'Bob')).toHaveLength(0);
     const snap = teamSnapshot(fresh, workspace, config);
+    // 快照成员列表跳过领队卡 → [0] 就是 Bob（无实例行按 staged 展示）。
     expect((snap.members as { name: string; status: string }[])[0]!.status).toBe('staged');
   });
 
@@ -561,7 +564,7 @@ describe('panel write routes (M5 first slice)', () => {
     // 头像种子按名字稳定（hashName）；salt 独立随机——名册条目落库后头像
     // 读不回来（roster.ts avatarToJson 双重 JSON.stringify，遗留问题），
     // 收编时按名重新生成，种子不变。
-    expect(fresh.members[0]!.avatar?.seed).toBe(stored.avatar!.seed);
+    expect(fresh.members.find((m) => m.name === 'Cara')!.avatar?.seed).toBe(stored.avatar!.seed);
 
     const snap = teamSnapshot(fresh, workspace, config);
     const member = (snap.members as { name: string; avatar: { seed: number } }[]).find(
@@ -601,60 +604,52 @@ describe('panel write routes (M5 first slice)', () => {
 
   // ---------- employee id 工号 (docs/21) ----------
 
-  it('allocates sequential integer ids on roster upsert and keeps them on update', async () => {
+  it('strips 工号 from roster upserts（v7 工牌挪到班底）', async () => {
     const h = await installFake();
     const first = await h.post('/eteams-api/roster', { name: 'Alice', role: 'researcher' });
     const second = await h.post('/eteams-api/roster', { name: 'Bob', role: 'engineer' });
-    const a1 = json<{ member: { employeeId?: number } }>(first.body).member.employeeId;
-    const b1 = json<{ member: { employeeId?: number } }>(second.body).member.employeeId;
-    expect(typeof a1).toBe('number');
-    expect(b1).toBe(a1! + 1);
-    // 更新保留原号。
+    // v7：角色卡不再带号（roles.employee_id 弃用不读写）——roster 读写端
+    // 剥离工号，发号统一收口到入队（team_members 班底行自增主键）。
+    for (const r of [first, second]) {
+      expect(json<{ member: { employeeId?: number } }>(r.body).member.employeeId).toBeUndefined();
+    }
+    // 更新（同人改角色）走通即可。
     const updated = await h.post('/eteams-api/roster', { name: 'Alice', role: 'writer' });
-    expect(json<{ member: { employeeId?: number } }>(updated.body).member.employeeId).toBe(a1);
-    // GET /roster 补齐全部成员工号且唯一。
+    expect(updated.code).toBe(200);
     const seeded = await h.get('/eteams-api/roster');
     const parsed = json<{ members: { name: string; employeeId?: number }[] }>(seeded.body);
-    const ids = parsed.members.map((m) => m.employeeId);
-    for (const id of ids) expect(typeof id).toBe('number');
-    expect(new Set(ids).size).toBe(ids.length);
-    // 计数器继续走：下一次 upsert 不复用任何已发号。
-    const third = await h.post('/eteams-api/roster', { name: 'Cara', role: 'tester' });
-    const c1 = json<{ member: { employeeId?: number } }>(third.body).member.employeeId;
-    expect(ids).not.toContain(c1);
+    for (const m of parsed.members) expect(m.employeeId).toBeUndefined();
   });
 
-  it('adopts the roster 工号 when pulling a member into a team', async () => {
+  it('issues a team-scoped 工号 when pulling a roster member into a team（v7 发号在班底）', async () => {
     const h = await installFake();
     const saved = await h.post('/eteams-api/roster', { name: 'Bob', role: 'engineer' });
-    const rosterId = json<{ member: { employeeId?: number } }>(saved.body).member.employeeId;
-    expect(typeof rosterId).toBe('number');
-    const created = await h.post('/eteams-api/team', { name: '共号团队', sessionId: 'sess-panel' });
+    expect(saved.code).toBe(200);
+    const created = await h.post('/eteams-api/team', { name: '发号团队', sessionId: 'sess-panel' });
     const teamId = json<{ teamId: number }>(created.body).teamId;
     const added = await h.post(`/eteams-api/team/${teamId}/member`, {
       name: 'Bob',
       fromRoster: true,
     });
     expect(added.code).toBe(200);
-    expect(readTeam(teamId).members[0]!.employeeId).toBe(rosterId);
+    // 表自增（v7）：领队建队即入班底领号 1（ET-0001），首名成员 = 2——号不再来自名册。
+    expect(readTeam(teamId).members.find((m) => m.name === 'Bob')!.employeeId).toBe(2);
   });
 
-  it('allocates a fresh non-colliding 工号 for direct adds without a roster entry', async () => {
+  it('issues a fresh non-colliding 工号 for direct adds without a roster entry（v7）', async () => {
     const h = await installFake();
     const created = await h.post('/eteams-api/team', { name: '直加团队', sessionId: 'sess-panel' });
     const teamId = json<{ teamId: number }>(created.body).teamId;
     const added = await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Ghost' });
     expect(added.code).toBe(200);
-    const directId = readTeam(teamId).members[0]!.employeeId;
-    expect(typeof directId).toBe('number');
-    // 后续 roster upsert 取下一个号，不与团队直加撞号（v3：加成员即入库，
-    // 直加成员同样出现在角色库里）。
+    // 表自增现发：领队班底行（号 1）之后 Ghost = 2。
+    expect(readTeam(teamId).members.find((m) => m.name === 'Ghost')!.employeeId).toBe(2);
+    // 加成员即入库（v3 口径延续）：直加成员落角色库，但角色行不带号（v7）。
     await h.post('/eteams-api/roster', { name: 'Later', role: 'tester' });
     const seeded = await h.get('/eteams-api/roster');
     const parsed = json<{ members: { name: string; employeeId?: number }[] }>(seeded.body);
-    const ids = parsed.members.map((m) => m.employeeId);
-    expect(ids).toContain(directId);
-    expect(new Set(ids).size).toBe(ids.length);
+    expect(parsed.members.find((m) => m.name === 'Later')).toBeDefined();
+    for (const m of parsed.members) expect(m.employeeId).toBeUndefined();
   });
 
   it('projects 工号 through the team snapshot (members and captain)', async () => {
@@ -677,13 +672,14 @@ describe('panel write routes (M5 first slice)', () => {
     expect(captain.employeeId).toMatch(/^ET-\d{4}$/);
   });
 
-  it('accepts an explicit 工号 and a sourceName copy (same role twice)', async () => {
+  it('ignores a legacy explicit 工号 in member adds and copies a roster role via sourceName (same role twice)', async () => {
     const h = await installFake();
     await h.post('/eteams-api/roster', { name: '文档织娘', role: '文档工程师' });
     const created = await h.post('/eteams-api/team', { name: '同角多人', sessionId: 'sess-panel' });
     const teamId = json<{ teamId: number }>(created.body).teamId;
 
-    // 第一份：显式工号（纯数字串）压过名册号。
+    // 第一份：旧客户端可能仍带 employeeId 字段——表自增口径不支持指定号，
+    // 宿主忽略该字段、按班底主键现发（领队 1 之后 = 2），不落 9001。
     const first = await h.post(`/eteams-api/team/${teamId}/member`, {
       name: '文档织娘',
       fromRoster: true,
@@ -691,12 +687,12 @@ describe('panel write routes (M5 first slice)', () => {
     });
     expect(first.code).toBe(200);
     const m1 = readTeam(teamId).members.find((m) => m.name === '文档织娘')!;
-    expect(m1.employeeId).toBe(9001);
+    expect(m1.employeeId).toBe(2);
     const snap = teamSnapshot(readTeam(teamId), workspace, config);
     expect(
       (snap.members as { name: string; employeeId: string }[]).find((m) => m.name === '文档织娘')!
         .employeeId,
-    ).toBe('ET-9001');
+    ).toBe('ET-0002');
 
     // 第二份：sourceName 指向名册条目，角色默认随拷；工号由宿主续发。
     const second = await h.post(`/eteams-api/team/${teamId}/member`, {
@@ -707,28 +703,35 @@ describe('panel write routes (M5 first slice)', () => {
     expect(second.code).toBe(200);
     const m2 = readTeam(teamId).members.find((m) => m.name === '文档织娘-2')!;
     expect(m2.role).toBe('文档工程师');
-    expect(m2.employeeId).not.toBe(9001);
+    expect(m2.employeeId).not.toBe(2);
   });
 
-  it('sets and resets a member model route via POST /team/:id/member/:name/model', async () => {
+  it('sets and resets a member model route via POST /team/:id/member/:ref/model', async () => {
     const h = await installFake();
     await h.post('/eteams-api/roster', { name: 'Nova', role: 'engineer' });
     const created = await h.post('/eteams-api/team', { name: '模型团队', sessionId: 'sess-panel' });
     const teamId = json<{ teamId: number }>(created.body).teamId;
-    await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Nova', fromRoster: true });
+    const added = await h.post(`/eteams-api/team/${teamId}/member`, {
+      name: 'Nova',
+      fromRoster: true,
+    });
+    expect(added.code).toBe(200);
+    // v7 R4：成员作用域路由按工号定位（<ref> = 数字工号；名字串 legacy 回退）。
+    const novaId = json<{ member: { employeeId: number } }>(added.body).member.employeeId;
+    expect(typeof novaId).toBe('number');
 
-    const set = await h.post(`/eteams-api/team/${teamId}/member/Nova/model`, {
+    const set = await h.post(`/eteams-api/team/${teamId}/member/${novaId}/model`, {
       model: 'deepseek-reasoner',
       reasoningEffort: 'high',
     });
     expect(set.code).toBe(200);
-    const overridden = readTeam(teamId).members[0]!.modelRoute;
+    const overridden = readTeam(teamId).members.find((m) => m.name === 'Nova')!.modelRoute;
     expect(overridden).toMatchObject({ model: 'deepseek-reasoner', reasoningEffort: 'high' });
 
     // 空 body = 跟随领队 — 路线清回空（派发时解析）。
-    const reset = await h.post(`/eteams-api/team/${teamId}/member/Nova/model`, {});
+    const reset = await h.post(`/eteams-api/team/${teamId}/member/${novaId}/model`, {});
     expect(reset.code).toBe(200);
-    const inherited = readTeam(teamId).members[0]!.modelRoute;
+    const inherited = readTeam(teamId).members.find((m) => m.name === 'Nova')!.modelRoute;
     expect(inherited.model).toBe('');
     expect(inherited.reasoningEffort).toBeUndefined();
     const snap = teamSnapshot(readTeam(teamId), workspace, config);
@@ -798,8 +801,13 @@ describe('panel write routes (M5 first slice)', () => {
     expect(dropOne.code, dropOne.body).toBe(200);
     const late = await h.post(`/eteams-api/team/${teamId}/member`, { name: '成员-10' });
     expect(late.code, late.body).toBe(200);
-    // 领队行 + 8 个在册成员行（成员-9 移出、成员-10 补位）。
-    expect(readTeam(teamId).taskMembers.filter((r) => r.status !== 'removed')).toHaveLength(10);
+    // v7 上限口径：按班底行数计（领队班底行占 1 名额）——领队 + 9 在册成员
+    // （成员-9 硬删、成员-10 补位）；无任务时不产团队级实例行（仅领队主持行）。
+    const fresh = readTeam(teamId);
+    expect(fresh.members).toHaveLength(10);
+    expect(fresh.members.find((m) => m.name === '成员-9')).toBeUndefined();
+    expect(fresh.members.find((m) => m.name === '成员-10')).toBeDefined();
+    expect(fresh.taskMembers).toHaveLength(1);
   });
 
   it('deletes a team via POST /team/:id/delete and guards active tasks', async () => {
@@ -978,7 +986,10 @@ describe('panel write routes (M5 first slice)', () => {
       personaMd: '# Eve 自定义手册',
     });
     expect(saved.code).toBe(200);
-    expect(readTeam(teamId).members[0]!.persona.personaMd).toBe('# Eve 自定义手册');
+    // v7：领队也占班底一行——按名找 Eve 的班底行断言手册副本。
+    expect(readTeam(teamId).members.find((m) => m.name === 'Eve')!.persona.personaMd).toBe(
+      '# Eve 自定义手册',
+    );
 
     const empty = await h.post(`/eteams-api/team/${teamId}/member/Eve/persona`, {
       personaMd: '  ',
@@ -1915,18 +1926,22 @@ describe('GET /board 跨团队聚合 (docs/35 §6 Q1/Q3/Q4/Q5/Q9)', () => {
     expect(a.decisions[0]!.taskId).toBe(subF);
     expect(a.decisions[0]!.retryCount).toBe(1);
     expect(a.decisions[0]!.error).toBe('上游接口超时');
-    // Q5 按名去重：Alice/Bob 各两条实例行（跨大任务）但各一行成员行；
-    // 领队行带 isLeader 标记。
+    // Q5 按工号聚合：Alice/Bob 各一行成员行；领队行带 isLeader 标记。
     const names = a.members.map((m) => m.name);
     expect(names.filter((n) => n === 'Alice')).toHaveLength(1);
     expect(names.filter((n) => n === 'Bob')).toHaveLength(1);
-    expect(
-      readTeam(teamA).taskMembers.filter((r) => r.name === 'Alice' && r.status !== 'removed'),
-    ).toHaveLength(2);
-    // activeTasks 按任务占用计（current_member 落在活跃五态）：subA 挂起与
-    // subF 失败进决策都释放了执行者（freeMember 清 current_member）——
-    // Alice 名下无占位任务，Bob 的 subD 还在 wait。
-    expect(a.members.find((m) => m.name === 'Alice')!.activeTasks).toBe(0);
+    // v7 决策 5：建任务即全员铺副本——Alice 在甲队全部 4 支大任务（三张
+    // 任务单 + 独立小任务）各一行副本，工号同源不混。
+    const aliceRows = readTeam(teamA).taskMembers.filter(
+      (r) => r.name === 'Alice' && r.status !== 'removed',
+    );
+    expect(aliceRows).toHaveLength(4);
+    // 表自增（v7）：工号 = 班底行全局自增主键——甲领队 1、乙领队 2、Alice 3。
+    expect(new Set(aliceRows.map((r) => r.employeeId))).toEqual(new Set([3]));
+    // activeTasks 按在办尝试归属副本行计（活跃五态任务上的 attempt 记录）：
+    // subA 挂起（paused）与 subF 失败进决策（wait_decision）虽已释放执行行，
+    // 尝试记录仍在案——Alice 计 2；Bob 的 subD 还在 wait，计 1。
+    expect(a.members.find((m) => m.name === 'Alice')!.activeTasks).toBe(2);
     expect(a.members.find((m) => m.name === 'Alice')!.status).toBe('ready');
     expect(a.members.find((m) => m.name === 'Bob')!.activeTasks).toBe(1);
     expect(a.members.find((m) => m.name === 'Bob')!.status).toBe('working');

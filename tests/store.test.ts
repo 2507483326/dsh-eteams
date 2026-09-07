@@ -221,8 +221,8 @@ describe('team snapshots', () => {
     let first = 0;
     let second = 0;
     withTeamTx(root, undefined, (tx) => {
-      first = insertTeamRow(tx, '演示', true, tx.now);
-      second = insertTeamRow(tx, '演示', true, tx.now);
+      first = insertTeamRow(tx, '演示', true, 0, tx.now);
+      second = insertTeamRow(tx, '演示', true, 0, tx.now);
     });
     expect(first).toBeGreaterThan(0);
     expect(second).toBe(first + 1);
@@ -460,7 +460,9 @@ describe('v2→v3 member/roles consolidation migration', () => {
       expect(tableNames).not.toContain('member_legacy');
       expect(tableNames).not.toContain('roles_legacy');
 
-      // roles：公共行工号/手册/头像原样，简介从 `- 简介：` 行提取成列。
+      // roles：公共行手册/头像原样，简介从 `- 简介：` 行提取成列。v7 起
+      // roles.employee_id 列保留但弃用（运行时不再读写）——迁移仍落值只是
+      // 旧数据留档，真相已挪到 team_members 行自增主键（表自增即工号）。
       const zhang = db.prepare('SELECT * FROM roles WHERE role_name = ?').get('张工程师') as {
         role_id: number;
         employee_id: number | null;
@@ -477,13 +479,24 @@ describe('v2→v3 member/roles consolidation migration', () => {
         role_id: number;
       };
       expect(label.role_id).not.toBe(zhang.role_id);
-      // 班底行自建角色行：工号/手册带上。
+      // 班底行自建角色行：手册带上；工号列弃用但旧值留档（不再当种子）。
       const li = db.prepare('SELECT * FROM roles WHERE role_name = ?').get('李新员') as {
         employee_id: number | null;
         persona_md: string | null;
       };
       expect(li.employee_id).toBe(8);
       expect(li.persona_md).toContain('李新员');
+
+      // v7 表自增真相：班底行主键 = 工号——旧 member 行的 member_id 原号随行
+      // 搬进 team_members（10/11），不再有独立工号列。
+      const tmNumbers = db
+        .prepare(
+          'SELECT role_name, team_member_id FROM team_members ORDER BY team_member_id',
+        )
+        .all() as Array<{ role_name: string | null; team_member_id: number }>;
+      expect(tmNumbers).toHaveLength(2);
+      expect(tmNumbers[0]).toEqual({ role_name: '张工程师', team_member_id: 10 });
+      expect(tmNumbers[1]).toEqual({ role_name: '李新员', team_member_id: 11 });
 
       // team_members：班底行搬表，role_id 按名解析，路线列跟着走；v4 副本列
       //（role_name/persona_md/profile）从 roles 回填到位。
@@ -738,6 +751,177 @@ describe('v4→v5→v6 task/member session column migration', () => {
           main_session_id: string | null;
         }).main_session_id,
       ).toBe('cap-old');
+      closeDb(legacyRoot);
+    } finally {
+      cleanupTempWorkspace(legacyRoot);
+    }
+  });
+});
+
+describe('v6→v7 工牌迁移（工号=班底自增主键：副本重键/邮件分箱/链站点）', () => {
+  it('re-keys replicas, mail and chains to team_member_id, backfills leader roster row and container replicas on connect', () => {
+    // v6 → v7 的形状差只有 2 列（mail_messages.employee_id /
+    // attempts.task_member_id）——先用当前 DDL 建全新库，再 DROP 这 2 列并把
+    // 版本号降回 6，重开连接即走 v7 迁移。team / roles / team_members 三表
+    // 形状 v6 与 v7 一致（表自增不加列；roles.employee_id 弃用列保留）。
+    const legacyRoot = mkdtempSync(join(tmpdir(), 'eteams-mig-v7-'));
+    try {
+      mkdirSync(dbDirOf(legacyRoot), { recursive: true });
+      getDb(legacyRoot); // 建 v7 全新库
+      closeDb(legacyRoot);
+      const legacy = new DatabaseSync(dbFileOf(legacyRoot));
+      legacy.exec('ALTER TABLE mail_messages DROP COLUMN employee_id');
+      legacy.exec('ALTER TABLE attempts DROP COLUMN task_member_id');
+      legacy
+        .prepare("UPDATE schema_meta SET value = '6' WHERE key = 'db_schema_version'")
+        .run();
+      legacy.exec('PRAGMA user_version = 6');
+
+      // 团队 1 + 角色行（v6：工号在 roles 上——v7 起弃用，值不再被读）。
+      legacy
+        .prepare(
+          'INSERT INTO team (team_id, team_name, has_leader, created_time, update_time) ' +
+            "VALUES (1, '迁移队', 1, 10, 11)",
+        )
+        .run();
+      const insRole = legacy.prepare(
+        'INSERT INTO roles (role_id, role_name, employee_id, persona_md, created_time, update_time) ' +
+          'VALUES (?, ?, ?, ?, 10, 11)',
+      );
+      insRole.run(1, '张三', 5, '# 人设 · 张三');
+      insRole.run(2, '李四', 9, '# 人设 · 李四');
+      insRole.run(3, '项目牧羊人', null, '# 人设 · 领队');
+      // 班底（v6/v7 同形状）：张三同角色两行——表自增口径下行主键即工号，
+      // 同名行天然各拿各号，无需去重。
+      const insTm = legacy.prepare(
+        'INSERT INTO team_members (team_member_id, team_id, role_id, role_name, created_time, update_time) ' +
+          'VALUES (?, 1, ?, ?, 10, 11)',
+      );
+      insTm.run(1, 1, '张三');
+      insTm.run(2, 2, '李四');
+      insTm.run(3, 1, '张三');
+      // task_members（v6）：领队主持行 + 团队级 staged 行（v7 删）+ 任务锚定行
+      // （工号来自 roles 全局序列 → 迁移按名 join 班底重键到主键号）。
+      const insRow = legacy.prepare(
+        'INSERT INTO task_members (task_member_id, team_id, main_task_id, name, employee_id, session_id, status, created_time, update_time) ' +
+          'VALUES (?, 1, ?, ?, ?, ?, ?, 10, 11)',
+      );
+      insRow.run(10, null, '项目牧羊人', null, '', 'ready');
+      insRow.run(11, null, '张三', null, '', 'staged');
+      insRow.run(12, 10, '张三', null, '', 'staged');
+      // 存量大任务 + 名字站点执行链（幽灵不在班底 → legacy 保留）。
+      legacy
+        .prepare(
+          'INSERT INTO task (task_id, team_id, subject, member_chain_list, status, created_time, update_time) ' +
+            "VALUES (10, 1, '存量任务', ?, 'ready', 10, 11)",
+        )
+        .run(
+          JSON.stringify([
+            { member: '张三', stageBrief: '先做' },
+            { member: '幽灵', stageBrief: '后做' },
+          ]),
+        );
+      // 邮件：张三箱（换工号箱）/ 幽灵箱（解析不到，保留名字兜底）/ 领队箱（不动）。
+      const insMail = legacy.prepare(
+        'INSERT INTO mail_messages (team_id, message_id, box_key, from_kind, to_kind, kind, content, created_time, update_time) ' +
+          "VALUES (1, ?, ?, 'captain', 'member', 'assignment', '正文', 10, 11)",
+      );
+      insMail.run('m1', '张三');
+      insMail.run('m2', '幽灵');
+      insMail.run('m3', 'captain');
+      // 尝试：按 (task, 成员名) join 副本行回填 task_member_id。
+      const insAttempt = legacy.prepare(
+        'INSERT INTO attempts (team_id, task_id, kind, member, status, token, created_time, update_time) ' +
+          "VALUES (1, 10, 'initial', ?, 'succeeded', ?, 10, 11)",
+      );
+      insAttempt.run('张三', 'tok-a');
+      insAttempt.run('李四', 'tok-b');
+      legacy.close();
+
+      const db = getDb(legacyRoot);
+
+      // 步骤 3（M1）：领队班底行补建——班底主键续编到 4（v6 领队不入班底）。
+      const roster = db
+        .prepare('SELECT team_member_id, role_name FROM team_members ORDER BY team_member_id')
+        .all() as Array<{ team_member_id: number; role_name: string }>;
+      expect(roster).toEqual([
+        { team_member_id: 1, role_name: '张三' },
+        { team_member_id: 2, role_name: '李四' },
+        { team_member_id: 3, role_name: '张三' },
+        { team_member_id: 4, role_name: '项目牧羊人' },
+      ]);
+
+      // 步骤 2/4/5：团队级 staged 行删除；容器任务按班底全员补副本（李四 +
+      // 领队补建，张三已有锚定行跳过）；锚定行/主持行工号重键到班底主键号。
+      const rows = db
+        .prepare(
+          'SELECT task_member_id, main_task_id, name, employee_id, status FROM task_members ORDER BY task_member_id',
+        )
+        .all() as Array<{
+        task_member_id: number;
+        main_task_id: number | null;
+        name: string;
+        employee_id: number | null;
+        status: string;
+      }>;
+      expect(rows).toHaveLength(4); // 主持行 + 张三锚定副本 + 李四/领队补建副本
+      expect(rows[0]).toMatchObject({
+        task_member_id: 10,
+        name: '项目牧羊人',
+        main_task_id: null,
+        employee_id: 4,
+      });
+      expect(rows[1]).toMatchObject({
+        task_member_id: 12,
+        name: '张三',
+        main_task_id: 10,
+        employee_id: 1,
+      });
+      expect(rows[2]).toMatchObject({ name: '李四', main_task_id: 10, employee_id: 2, status: 'staged' });
+      expect(rows[3]).toMatchObject({
+        name: '项目牧羊人',
+        main_task_id: 10,
+        employee_id: 4,
+        status: 'staged',
+      });
+      const rowIdOf = (name: string) =>
+        rows.find((r) => r.name === name && r.main_task_id === 10)!.task_member_id;
+
+      // 步骤 7：邮件按号换箱（张三首行 = 主键 1）；解析不到的名字箱与领队箱原样。
+      const mails = db
+        .prepare('SELECT message_id, box_key, employee_id FROM mail_messages ORDER BY mail_message_id')
+        .all() as Array<{ message_id: string; box_key: string; employee_id: number | null }>;
+      expect(mails[0]).toEqual({ message_id: 'm1', box_key: '1', employee_id: 1 });
+      expect(mails[1]).toEqual({ message_id: 'm2', box_key: '幽灵', employee_id: null });
+      expect(mails[2]).toEqual({ message_id: 'm3', box_key: 'captain', employee_id: null });
+
+      // 步骤 8：尝试按 (task, 名) join 副本行回填 task_member_id。
+      const attempts = db
+        .prepare('SELECT member, task_member_id FROM attempts ORDER BY attempt_id')
+        .all() as Array<{ member: string; task_member_id: number | null }>;
+      expect(attempts[0]).toEqual({ member: '张三', task_member_id: 12 });
+      expect(attempts[1]).toEqual({ member: '李四', task_member_id: rowIdOf('李四') });
+
+      // 步骤 9：链站点名字 → 工号（班底主键）；解析不到的站点保留名字（legacy）。
+      const chain = JSON.parse(
+        (db.prepare('SELECT member_chain_list FROM task WHERE task_id = 10').get() as {
+          member_chain_list: string;
+        }).member_chain_list,
+      ) as Array<{ member: number | string }>;
+      expect(chain[0]!.member).toBe(1);
+      expect(chain[1]!.member).toBe('幽灵');
+
+      // 幂等：重开连接不再动任何行（形状检测全命中 → v7 迁移跳过）。
+      closeDb(legacyRoot);
+      const again = getDb(legacyRoot);
+      expect(
+        (again.prepare('SELECT box_key FROM mail_messages WHERE message_id = \'m1\'').get() as {
+          box_key: string;
+        }).box_key,
+      ).toBe('1');
+      expect(
+        (again.prepare('SELECT COUNT(*) AS n FROM task_members').get() as { n: number }).n,
+      ).toBe(4);
       closeDb(legacyRoot);
     } finally {
       cleanupTempWorkspace(legacyRoot);

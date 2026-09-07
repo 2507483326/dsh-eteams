@@ -55,8 +55,10 @@ export function TaskStations({ task }: { task: TaskView }): ReactNode {
       {task.chain.map((s, i) => (
         <span key={i} className="mr-1.5 text-xs leading-5 text-muted-foreground">
           {/* 字形（M7-6 收口 components/stepGlyph：三态调色随组件，未知态
-          回落 pending 档——原查表口径一致）。 */}
-          <StepGlyph state={s.stationStatus} className="font-semibold" /> {s.member}
+          回落 pending 档——原查表口径一致）。v7：站点显示名走 memberLabel
+          （工号站点 = T{n}-ET{xxxx}（名字）），旧快照缺省回落 member。 */}
+          <StepGlyph state={s.stationStatus} className="font-semibold" />{' '}
+          {s.memberLabel ?? s.member}
           {i < task.chain.length - 1 ? ' →' : ''}
         </span>
       ))}

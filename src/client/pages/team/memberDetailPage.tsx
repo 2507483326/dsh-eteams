@@ -18,7 +18,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import Plus from 'lucide-react/dist/esm/icons/plus.mjs';
 import { createTeamViaPanel, syncMemberToRoster, updateMemberPersona } from '../../lib/api';
-import { refreshActivitySoon, type TeamSnapshot } from '../../lib/monitor';
+import { employeeIdNumberOf, refreshActivitySoon, type TeamSnapshot } from '../../lib/monitor';
 import { cn } from '../../lib/cn';
 import { runWithBusy } from '../../lib/errors';
 import { MdEditor } from '../../features/mdEditor/mdEditor';
@@ -94,11 +94,17 @@ export function MemberDetailPage({
 
   // kind 并入路由：:name 命中成员行 = 成员详情；命中领队名 = 领队详情（手册
   // 只读）；两者皆不中 = 原成员不在团队里的 not-found 窗口（可能刚被移出）。
+  // v7：成员数据的保存/同步按工号定位（employeeId 解析自行内显示串；导航
+  // 仍按名——路由参数不动）。
   const memberRow =
     team === null || name === undefined ? undefined : team.members.find((m) => m.name === name);
-  const target: { kind: 'captain' } | { kind: 'member'; name: string } | null =
+  const memberEmployeeId = memberRow !== undefined ? employeeIdNumberOf(memberRow.employeeId) : null;
+  const target:
+    | { kind: 'captain' }
+    | { kind: 'member'; name: string; employeeId: number | null }
+    | null =
     memberRow !== undefined && name !== undefined
-      ? { kind: 'member', name }
+      ? { kind: 'member', name, employeeId: memberEmployeeId }
       : team !== null && name !== undefined && team.captain.name === name
         ? { kind: 'captain' }
         : null;
@@ -258,9 +264,14 @@ export function MemberDetailPage({
       setError('手册内容为空');
       return;
     }
+    // v7 R3：按工号定位保存；无号（异常旧行）不可保存——host 路由找不到人。
+    if (target.employeeId === null) {
+      setError('该成员没有工号，无法保存');
+      return;
+    }
     await runWithBusy(
       async () => {
-        await updateMemberPersona(team.teamId, target.name, text);
+        await updateMemberPersona(team.teamId, target.employeeId!, text);
         setDraft(null);
         // 保存反馈迁 shadcn toast()（docs/43 十九轮；原就地瞬时行 2.5s 撤除）。
         toast({ title: '✓ 已保存到成员详情' });
@@ -279,9 +290,14 @@ export function MemberDetailPage({
       setError('成员手册为空，先编辑保存');
       return;
     }
+    // v7 R3：按工号定位同步；无号（异常旧行）不可同步。
+    if (target.employeeId === null) {
+      setError('该成员没有工号，无法同步');
+      return;
+    }
     await runWithBusy(
       async () => {
-        await syncMemberToRoster(team.teamId, target.name, text);
+        await syncMemberToRoster(team.teamId, target.employeeId!, text);
         if (draft !== null) setDraft(null); // 编辑中的草稿已一并落库
         // 同步反馈迁 shadcn toast()（docs/43 十九轮；原就地瞬时行 2.5s 撤除）。
         toast({ title: `✓ 已同步到角色「${view.name}」` });

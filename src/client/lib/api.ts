@@ -13,7 +13,8 @@ const API_BASE = '/eteams-api';
 /** One reusable member definition in the workspace roster (D16, v3 角色库). */
 export interface RosterMember {
   name: string;
-  /** 工号 (docs/21): host 发整数工号（显示补零走 host 快照的格式化串）。 */
+  /** 【v7 弃用】角色库不再存工号（host 剥离该字段）——工号在班底
+   * team_members.employee_id，随团队快照下发。 */
   employeeId?: number;
   role: string;
   /** 一句话简介（列表卡片/详情头展示；空/缺省=不展示）。 */
@@ -103,11 +104,11 @@ export async function createTeamViaPanel(
 /**
  * Add a member to a team, adopting a roster entry. `sourceName` copies a
  * roster role under a different name（同一角色可重复加入，名册默认值照抄）；
- * `employeeId` 显式指定工号（缺省沿用角色库同号，再缺省由 host 分配）。
+ * 工号由 host 自动发（v7 表自增：班底行自增主键即工号，不支持指定号）。
  */
 export async function addTeamMember(
   teamId: string,
-  payload: { name: string; sourceName?: string; employeeId?: string },
+  payload: { name: string; sourceName?: string },
 ): Promise<void> {
   await requestJson(`${API_BASE}/team/${encodeURIComponent(teamId)}/member`, {
     method: 'POST',
@@ -118,9 +119,6 @@ export async function addTeamMember(
       ...(payload.sourceName !== undefined && payload.sourceName !== payload.name
         ? { sourceName: payload.sourceName }
         : {}),
-      ...(payload.employeeId !== undefined && payload.employeeId.trim() !== ''
-        ? { employeeId: payload.employeeId.trim() }
-        : {}),
     }),
   });
 }
@@ -129,15 +127,16 @@ export async function addTeamMember(
  * Set one member's model route（成员卡右侧模型选择）：model 为空 = 重置为
  * 会话默认（settings agent-default-model，用户迭代 2026-09-04）。运行中的
  * 成员在下次启动时生效（staged 成员启动即生效）。docs/35 §3#5：body 只收
- * {model, reasoningEffort}，provider 由 host 按配置解析。
+ * {model, reasoningEffort}，provider 由 host 按配置解析。v7 R3：成员作用域
+ * 路由按工号定位（同名成员各归各）。
  */
 export async function setMemberModel(
   teamId: string,
-  name: string,
+  employeeId: number,
   model: { model?: string; reasoningEffort?: string },
 ): Promise<void> {
   await requestJson(
-    `${API_BASE}/team/${encodeURIComponent(teamId)}/member/${encodeURIComponent(name)}/model`,
+    `${API_BASE}/team/${encodeURIComponent(teamId)}/member/${encodeURIComponent(String(employeeId))}/model`,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -165,14 +164,15 @@ export async function setLeaderModel(
 /**
  * Save one member's own handbook copy（成员详情独立于角色详情，用户迭代
  * 2026-09 四）：只写成员记录，角色库不受影响。运行中的成员下次启动时生效。
+ * v7 R3：按工号定位成员。
  */
 export async function updateMemberPersona(
   teamId: string,
-  name: string,
+  employeeId: number,
   personaMd: string,
 ): Promise<void> {
   await requestJson(
-    `${API_BASE}/team/${encodeURIComponent(teamId)}/member/${encodeURIComponent(name)}/persona`,
+    `${API_BASE}/team/${encodeURIComponent(teamId)}/member/${encodeURIComponent(String(employeeId))}/persona`,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -184,15 +184,15 @@ export async function updateMemberPersona(
 /**
  * 把成员当前的手册副本同步回角色库同名角色（用户迭代 2026-09 四「同步到该
  * 角色」）：同名角色只覆盖手册；成员无角色库条目（-2 副本等）时按成员记录
- * 新建。
+ * 新建。v7 R3：按工号定位成员。
  */
 export async function syncMemberToRoster(
   teamId: string,
-  name: string,
+  employeeId: number,
   personaMd: string,
 ): Promise<void> {
   await requestJson(
-    `${API_BASE}/team/${encodeURIComponent(teamId)}/member/${encodeURIComponent(name)}/sync-roster`,
+    `${API_BASE}/team/${encodeURIComponent(teamId)}/member/${encodeURIComponent(String(employeeId))}/sync-roster`,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -222,10 +222,11 @@ export async function deleteRosterMember(name: string): Promise<void> {
   });
 }
 
-/** Move a team member out of a team (领队不属于团队成员记录，无需删除). */
-export async function removeTeamMember(teamId: string, name: string): Promise<void> {
+/** Move a team member out of a team. v7 R3：按工号定位（同名成员各归各）；
+ * 删除即工牌作废（号不回收），任务副本行保留。 */
+export async function removeTeamMember(teamId: string, employeeId: number): Promise<void> {
   await requestJson(
-    `${API_BASE}/team/${encodeURIComponent(teamId)}/member/${encodeURIComponent(name)}/remove`,
+    `${API_BASE}/team/${encodeURIComponent(teamId)}/member/${encodeURIComponent(String(employeeId))}/remove`,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -305,7 +306,8 @@ export async function clearSessionTeam(sessionId: string): Promise<void> {
 
 // ---------- conversation task workflow (docs/26 面板审阅/批准) ----------
 
-/** One member slot (execution-chain station) as edited on the panel. */
+/** One member slot (execution-chain station) as edited on the panel.
+ * v7：站点写工号（数字串，如 "7" = ET-0007）——同名成员靠号区分。 */
 export interface TaskSlotInput {
   member: string;
   stageBrief: string;

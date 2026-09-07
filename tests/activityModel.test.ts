@@ -93,7 +93,9 @@ const MEMBER_NEW: RouteTriple = {
 };
 const PATCH_MEMBER: RoutePatch = {
   teamId: 'team-1',
-  target: { kind: 'member', name: '成员甲' },
+  // v7 R3：成员目标按工号定位（快照行 employeeId='ET-0002' → 数字 2）——
+  // 同名成员各归各。
+  target: { kind: 'member', employeeId: 2 },
   route: MEMBER_NEW,
 };
 const CAPTAIN_NEW: RouteTriple = { model: 'gpt-test', reasoningEffort: null };
@@ -155,9 +157,9 @@ describe('activity reducers（乐观路线补丁，用户迭代 2026-09）', () 
     expect(member?.provider).toBe(MEMBER_NEW.provider);
     expect(member?.model).toBe(MEMBER_NEW.model);
     expect(member?.reasoningEffort).toBe(MEMBER_NEW.reasoningEffort);
-    expect(result?.pendingRoutes?.['team-1|member|成员甲']).toEqual({
+    expect(result?.pendingRoutes?.['team-1|member|2']).toEqual({
       teamId: 'team-1',
-      target: { kind: 'member', name: '成员甲' },
+      target: { kind: 'member', employeeId: 2 },
       route: MEMBER_NEW,
     });
     // 不可变写：沿途浅拷贝，其余子树原引用保留。
@@ -194,7 +196,7 @@ describe('activity reducers（乐观路线补丁，用户迭代 2026-09）', () 
     expect(activityModel.reducers?.patchRoute?.(state, ghostTeam)).toBe(state);
     const ghostMember = action('activity/patchRoute', {
       ...PATCH_MEMBER,
-      target: { kind: 'member', name: '不存在' },
+      target: { kind: 'member', employeeId: 999 },
     });
     expect(activityModel.reducers?.patchRoute?.(state, ghostMember)).toBe(state);
     const malformed = action('activity/patchRoute', null);
@@ -211,9 +213,9 @@ describe('activity reducers（乐观路线补丁，用户迭代 2026-09）', () 
     const stale = snapshotWithMemberRoute(MEMBER_OLD);
     const settled = activityModel.reducers?.set?.(patched!, action('activity/set', stale));
     expect(settled?.teams[0]?.members[0]?.model).toBe(MEMBER_NEW.model);
-    expect(settled?.pendingRoutes?.['team-1|member|成员甲']).toEqual({
+    expect(settled?.pendingRoutes?.['team-1|member|2']).toEqual({
       teamId: 'team-1',
-      target: { kind: 'member', name: '成员甲' },
+      target: { kind: 'member', employeeId: 2 },
       route: MEMBER_NEW,
     });
   });

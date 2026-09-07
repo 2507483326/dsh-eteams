@@ -18,7 +18,7 @@ import { createMemberTools } from '../src/host/tools/memberTools';
 import { setLeaderModel, setMemberModel } from '../src/host/runtime/teamOps';
 import { joinPath, type RuntimeEnv } from '../src/host/runtime/base';
 import { readTeamSync } from '../src/host/state/store';
-import { readEventsSync } from '../src/host/state/events';
+import { readEventsSync, readMailboxSync } from '../src/host/state/events';
 import type { TeamState } from '../src/host/model/types';
 import { cleanupTempWorkspace } from './support/tmpWorkspace';
 
@@ -150,6 +150,14 @@ function memberAgent(childId: string): FakeAgent {
   return agent;
 }
 
+/** v7 spawn label = `eteams-member:<teamId>:<主任务id>:<工号>`——按工号后缀
+ * 定位子代理（队内工号唯一，同名成员也各归各）。 */
+function childByEmployee(employeeId: number) {
+  const child = runtime.children.find((c) => c.label.endsWith(`:${employeeId}`));
+  if (!child) throw new Error(`未找到工号 ${employeeId} 的成员子代理`);
+  return child;
+}
+
 async function mem<T>(agent: FakeAgent, name: string, args: Record<string, unknown>): Promise<T> {
   return (await memberTool(name).execute(
     args as never,
@@ -196,20 +204,32 @@ describe('lifecycle (offline full flow)', () => {
     const teamId = created.teamId;
     expect(Number.isInteger(teamId) && teamId > 0).toBe(true);
 
-    // 2. 拉人（班底模板 + staged 实例行；工号全库自增）
+    // 2. 拉人（班底模板 + staged 实例行；v7 工号 = 班底行自增主键（表自增，
+    // 全局只增不复用）——领队 ET-0001，第一名成员 ET-0002，按入班底顺序续编）
     const alice = await cap<{ ok: true; member: string; teamId: number; employeeId: number }>(
       'eteams_add_member',
       { name: 'Alice', role: 'researcher', teamId },
     );
-    const bob = await cap<{ ok: true }>('eteams_add_member', {
+    const bob = await cap<{ ok: true; employeeId: number }>('eteams_add_member', {
       name: 'Bob',
       role: 'engineer',
       teamId,
     });
-    await cap<{ ok: true }>('eteams_add_member', { name: 'Carol', role: 'engineer', teamId });
+    const carol = await cap<{ ok: true; employeeId: number }>('eteams_add_member', {
+      name: 'Carol',
+      role: 'engineer',
+      teamId,
+    });
     expect(alice.member).toBe('Alice');
-    expect(Number.isInteger(alice.employeeId) && alice.employeeId > 0).toBe(true);
-    expect(bob.ok).toBe(true);
+    // 表自增（v7）：建队先发领队班底行（主键 1 = ET-0001），成员号紧随其后。
+    expect(alice.employeeId).toBe(2);
+    expect(bob.employeeId).toBe(3);
+    expect(carol.employeeId).toBe(4);
+    // 链/占用全按工号（v7）：站点与指派都引用工号数字串（工具层字符串，
+    // 宿主解析数字=工号），不再按名找人。
+    const aliceId = String(alice.employeeId);
+    const bobId = String(bob.employeeId);
+    const carolId = String(carol.employeeId);
 
     // 3. 对话任务入口：任务单容器（docs/26）→ 专属文件夹立即分配
     const submitted = await cap<{ ok: true; taskId: number; status: string; folder: string }>(
@@ -234,8 +254,8 @@ describe('lifecycle (offline full flow)', () => {
         '\n',
       ),
       chain: [
-        { member: 'Alice', stageBrief: '产出选型结论与接口约定' },
-        { member: 'Bob', stageBrief: '按约定实现导出模块与单测' },
+        { member: aliceId, stageBrief: '产出选型结论与接口约定' },
+        { member: bobId, stageBrief: '按约定实现导出模块与单测' },
       ],
     });
     expect(task.status).toBe('ready');
@@ -259,25 +279,38 @@ describe('lifecycle (offline full flow)', () => {
     expect(existsSync(join(workspace, sub.workDir!, 'contract.md'))).toBe(true);
     expect(existsSync(join(workspace, sub.workDir!, 'notes.md'))).toBe(true);
 
+    // v7 决策 5：建大任务即按班底全员铺副本（含领队）；领队班底行 ET-0001
+    //（表自增：建队即入班底领首号）。
+    const leaderTemplate = teamAfterCreate.members.find((m) => m.name === '项目牧羊人')!;
+    expect(leaderTemplate.employeeId).toBe(1);
+    const replicaIdsOf = (rootId: number) =>
+      teamAfterCreate.taskMembers
+        .filter((r) => r.mainTaskId === rootId)
+        .map((r) => r.employeeId)
+        .sort((a, b) => a - b);
+    expect(replicaIdsOf(groupId)).toEqual([1, 2, 3, 4]);
+    expect(replicaIdsOf(doc.taskId)).toEqual([1, 2, 3, 4]);
+
     // 5. 领队工具面 / 成员工具面互斥（审批环节已下线：无 approve 工具）
     expect(captainTools.some((t) => t.name === 'eteams_approve_plan')).toBe(false);
     expect(captainTools.some((t) => t.name === 'eteams_claim_task')).toBe(false);
     expect(memberTools.some((t) => t.name === 'eteams_assign_task')).toBe(false);
 
     // 6. 依赖未完成 → 拒绝指派依赖任务（校验在起会话之前，无副作用）
-    await expect(cap('eteams_assign_task', { taskId: doc.taskId, member: 'Bob' })).rejects.toThrow(
+    await expect(cap('eteams_assign_task', { taskId: doc.taskId, member: bobId })).rejects.toThrow(
       /依赖未完成/,
     );
 
     // 7. 指派链任务首站 → Alice
     const assigned = await cap<{ ok: true; taskId: number; member: string; attemptId: number }>(
       'eteams_assign_task',
-      { taskId: subId, member: 'Alice' },
+      { taskId: subId, member: aliceId },
     );
     expect(assigned.member).toBe('Alice');
     expect(Number.isInteger(assigned.attemptId) && assigned.attemptId > 0).toBe(true);
-    // 指派信已投递（邮箱 + followup 唤醒），链任务首站信头含「执行链」
-    const aliceChild = runtime.children.find((c) => c.label.endsWith(':Alice'))!;
+    // 指派信已投递（邮箱 + followup 唤醒），链任务首站信头含「执行链」。
+    // v7 spawn label = eteams-member:<teamId>:<主任务id>:<工号>——按工号定位子代理。
+    const aliceChild = childByEmployee(alice.employeeId);
     expect(
       runtime.deliveries.some((d) => d.childId === aliceChild.childId && d.text.includes('执行链')),
     ).toBe(true);
@@ -323,18 +356,18 @@ describe('lifecycle (offline full flow)', () => {
     expect(midTask.status).toBe('ready');
     expect(midTask.chainCursor).toBe(0);
     // 领队通知落领队邮箱且领队会话被唤醒（notifyCaptainInTx 返回的 Wake
-    // 收进 wakes 并 runWakes）。
+    // 收进 wakes 并 runWakes）。续派信下一站按工号渲染（stationLabel）。
     const midBox = await cap<{ ok: true; messages: { content: string }[] }>('eteams_mailbox', {});
     expect(midBox.messages.at(-1)!.content).toContain('下一站');
-    expect(midBox.messages.at(-1)!.content).toContain('Bob');
+    expect(midBox.messages.at(-1)!.content).toContain(`ET-${String(bobId).padStart(4, '0')}`);
 
     // 10. 偏离链：改派 Carol 必须 deviationNote（D11），留痕后放行
-    await expect(cap('eteams_assign_task', { taskId: subId, member: 'Carol' })).rejects.toThrow(
+    await expect(cap('eteams_assign_task', { taskId: subId, member: carolId })).rejects.toThrow(
       /deviation_note|偏离/,
     );
     await cap<{ ok: true }>('eteams_assign_task', {
       taskId: subId,
-      member: 'Carol',
+      member: carolId,
       deviationNote: 'Bob 临时不可用',
     });
     team = readTeam(teamId);
@@ -342,7 +375,7 @@ describe('lifecycle (offline full flow)', () => {
 
     // Carol claim + 末站完成 → completed；chainCursor 不再推进（docs/35 §5#10
     // 观察项：显示层按完成态满进度口径承接，runtime 列保持现状）
-    const carolChild = runtime.children.find((c) => c.label.endsWith(':Carol'))!;
+    const carolChild = childByEmployee(carol.employeeId);
     const carolAgent = memberAgent(carolChild.childId);
     const carolClaim = await mem<{ token: string; attemptId: number }>(
       carolAgent,
@@ -380,13 +413,13 @@ describe('lifecycle (offline full flow)', () => {
     );
     const docAssign = await cap<{ ok: true; member: string }>('eteams_assign_task', {
       taskId: doc.taskId,
-      member: 'Bob',
+      member: bobId,
     });
     expect(docAssign.ok).toBe(true);
 
     // 12. 失败重试链：Bob fail ×4（maxRetries=3）→ 第 4 次进 wait_decision
     // （重试指派为 pending_accept，成员需重新 claim 才能再次上报）
-    const docAgent = memberAgent(runtime.children.find((c) => c.label.endsWith(':Bob'))!.childId);
+    const docAgent = memberAgent(childByEmployee(bob.employeeId).childId);
     const failOnce = async (expectRetried: boolean) => {
       const claim = await mem<{ token: string; attemptId: number }>(docAgent, 'eteams_claim_task', {
         taskId: doc.taskId,
@@ -452,7 +485,7 @@ describe('lifecycle (offline full flow)', () => {
     expect(deviated?.payload?.deviation).toBe('Bob 临时不可用');
 
     // 14. 非法转换被拒绝：completed 任务不能再 assign
-    await expect(cap('eteams_assign_task', { taskId: subId, member: 'Alice' })).rejects.toThrow(
+    await expect(cap('eteams_assign_task', { taskId: subId, member: aliceId })).rejects.toThrow(
       /只能指派 ready|处于 completed/,
     );
 
@@ -465,13 +498,22 @@ describe('lifecycle (offline full flow)', () => {
     const created = await cap<{ teamId: number }>('eteams_create_team', { name: '拒绝测试' });
     const teamId = created.teamId;
     await cap('eteams_add_member', { name: 'Alice', role: 'engineer', teamId });
-    await cap('eteams_add_member', { name: 'Bob', role: 'engineer', teamId });
+    const alice = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: 'Alice',
+      role: 'engineer',
+      teamId,
+    });
+    const bob = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: 'Bob',
+      role: 'engineer',
+      teamId,
+    });
     const t1 = await cap<{ taskId: number }>('eteams_create_task', { subject: '普通任务' });
     const t2 = await cap<{ taskId: number }>('eteams_create_task', { subject: '旁路任务' });
     // Bob 先领一个自己的任务（首派起会话），才有成员身份可发起 claim。
-    await cap('eteams_assign_task', { taskId: t2.taskId, member: 'Bob' });
-    await cap('eteams_assign_task', { taskId: t1.taskId, member: 'Alice' });
-    const bobChild = runtime.children.find((c) => c.label.endsWith(':Bob'))!;
+    await cap('eteams_assign_task', { taskId: t2.taskId, member: String(bob.employeeId) });
+    await cap('eteams_assign_task', { taskId: t1.taskId, member: String(alice.employeeId) });
+    const bobChild = childByEmployee(bob.employeeId);
     const bobAgent = memberAgent(bobChild.childId);
     await expect(mem(bobAgent, 'eteams_claim_task', { taskId: t1.taskId })).rejects.toThrow(
       /未指派给你/,
@@ -483,8 +525,18 @@ describe('member spawn route resolution (per-member model, docs/35 §3#5)', () =
   it('spawns members without agentOptions when no session default service is mounted', async () => {
     const created = await cap<{ teamId: number }>('eteams_create_team', { name: '路线团队' });
     const teamId = created.teamId;
-    await cap('eteams_add_member', { name: 'Follower', role: 'engineer', teamId });
-    await cap('eteams_add_member', { name: 'Overrider', role: 'engineer', teamId });
+    const follower = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: 'Follower',
+      role: 'engineer',
+      teamId,
+    });
+    const overrider = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: 'Overrider',
+      role: 'engineer',
+      teamId,
+    });
+    const followerId = follower.employeeId;
+    const overriderId = overrider.employeeId;
 
     // Overrider pins its own model; Follower keeps 会话默认（用户迭代
     // 2026-09-04：model 空串 = settings agent-default-model 即时快照）——
@@ -498,25 +550,29 @@ describe('member spawn route resolution (per-member model, docs/35 §3#5)', () =
     });
 
     const t1 = await cap<{ taskId: number }>('eteams_create_task', { subject: '默认任务' });
-    await cap('eteams_assign_task', { taskId: t1.taskId, member: 'Follower' });
-    const follower = runtime.children.find((c) => c.label.endsWith(':Follower'))!;
-    expect(follower.request.agentOptions).toBeUndefined();
+    await cap('eteams_assign_task', { taskId: t1.taskId, member: String(followerId) });
+    const followerChild = childByEmployee(followerId);
+    expect(followerChild.request.agentOptions).toBeUndefined();
 
     const t2 = await cap<{ taskId: number }>('eteams_create_task', { subject: '覆盖任务' });
-    await cap('eteams_assign_task', { taskId: t2.taskId, member: 'Overrider' });
-    const overrider = runtime.children.find((c) => c.label.endsWith(':Overrider'))!;
-    expect(overrider.request.agentOptions).toMatchObject({
+    await cap('eteams_assign_task', { taskId: t2.taskId, member: String(overriderId) });
+    const overriderChild = childByEmployee(overriderId);
+    expect(overriderChild.request.agentOptions).toMatchObject({
       provider: 'spawn',
       model: 'deepseek-chat',
     });
 
     // 清空路线（不传 model）回会话默认；服务未挂的 ctx 里派发不带 agentOptions。
     await setMemberModel(runtimeEnvFor(), captain as never, { teamId, name: 'Overrider' });
-    await cap('eteams_add_member', { name: 'Latecomer', role: 'engineer', teamId });
+    const latecomer = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: 'Latecomer',
+      role: 'engineer',
+      teamId,
+    });
     const t3 = await cap<{ taskId: number }>('eteams_create_task', { subject: '后补任务' });
-    await cap('eteams_assign_task', { taskId: t3.taskId, member: 'Latecomer' });
-    const latecomer = runtime.children.find((c) => c.label.endsWith(':Latecomer'))!;
-    expect(latecomer.request.agentOptions).toBeUndefined();
+    await cap('eteams_assign_task', { taskId: t3.taskId, member: String(latecomer.employeeId) });
+    const latecomerChild = childByEmployee(latecomer.employeeId);
+    expect(latecomerChild.request.agentOptions).toBeUndefined();
   });
 
   it('pins empty-route members to the host session-default model (会话默认)', async () => {
@@ -531,11 +587,15 @@ describe('member spawn route resolution (per-member model, docs/35 §3#5)', () =
     };
     const created = await cap<{ teamId: number }>('eteams_create_team', { name: '默认团队' });
     const teamId = created.teamId;
-    await cap('eteams_add_member', { name: 'Defaults', role: 'engineer', teamId });
+    const defaults = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: 'Defaults',
+      role: 'engineer',
+      teamId,
+    });
     const t1 = await cap<{ taskId: number }>('eteams_create_task', { subject: '默认任务' });
-    await cap('eteams_assign_task', { taskId: t1.taskId, member: 'Defaults' });
-    const defaults = runtime.children.find((c) => c.label.endsWith(':Defaults'))!;
-    expect(defaults.request.agentOptions).toEqual({
+    await cap('eteams_assign_task', { taskId: t1.taskId, member: String(defaults.employeeId) });
+    const defaultsChild = childByEmployee(defaults.employeeId);
+    expect(defaultsChild.request.agentOptions).toEqual({
       provider: 'ollama',
       model: 'glm-5.3-flash:cloud',
       reasoningEffort: 'low',
@@ -558,6 +618,158 @@ describe('member spawn route resolution (per-member model, docs/35 §3#5)', () =
     const after = readTeam(teamId).taskMembers.find((r) => r.mainTaskId === null)!;
     expect(after.model ?? '').toBe('');
     expect(after.reasoningEffort).toBeUndefined();
+  });
+});
+
+describe('v7 同名成员按工号各归各', () => {
+  it('spawns distinct labels/templates per employee id and keeps mailboxes apart', async () => {
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '同名团队' });
+    const teamId = created.teamId;
+    const first = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: '张三',
+      role: 'engineer',
+      teamId,
+    });
+    const second = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: '张三',
+      role: 'engineer',
+      teamId,
+    });
+    // 同名成员各拿各号（表自增续编）。
+    expect(first.employeeId).toBe(2);
+    expect(second.employeeId).toBe(3);
+
+    // 模板各归各：只给第二份设派发路线——按工号定位班底行，不错拿首份的。
+    await setMemberModel(runtimeEnvFor(), captain as never, {
+      teamId,
+      name: '张三',
+      employeeId: second.employeeId,
+      model: 'deepseek-chat',
+    });
+
+    const t1 = await cap<{ taskId: number }>('eteams_create_task', { subject: '任务一' });
+    const t2 = await cap<{ taskId: number }>('eteams_create_task', { subject: '任务二' });
+    await cap('eteams_assign_task', { taskId: t1.taskId, member: String(first.employeeId) });
+    await cap('eteams_assign_task', { taskId: t2.taskId, member: String(second.employeeId) });
+
+    // spawn label = eteams-member:<teamId>:<主任务id>:<工号>——同名各是一行。
+    const firstChild = childByEmployee(first.employeeId);
+    const secondChild = childByEmployee(second.employeeId);
+    expect(firstChild.childId).not.toBe(secondChild.childId);
+    expect(firstChild.label).toBe(`eteams-member:${teamId}:${t1.taskId}:${first.employeeId}`);
+    expect(secondChild.label).toBe(`eteams-member:${teamId}:${t2.taskId}:${second.employeeId}`);
+    // 模板路线：首份空路线（无 agentOptions），第二份带上自己的覆盖。
+    expect(firstChild.request.agentOptions).toBeUndefined();
+    expect(secondChild.request.agentOptions).toMatchObject({ model: 'deepseek-chat' });
+
+    // 邮箱按 (team, 工号) 分箱：各只收到自己的指派信，同名不串箱。
+    const firstBox = readMailboxSync(root, teamId, String(first.employeeId));
+    expect(firstBox.some((m) => m.content.includes('任务一'))).toBe(true);
+    expect(firstBox.some((m) => m.content.includes('任务二'))).toBe(false);
+    const secondBox = readMailboxSync(root, teamId, String(second.employeeId));
+    expect(secondBox.some((m) => m.content.includes('任务二'))).toBe(true);
+    expect(secondBox.some((m) => m.content.includes('任务一'))).toBe(false);
+  });
+
+  it('keeps claim attempts apart between same-name members（归属按副本行 id）', async () => {
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '同名接单' });
+    const teamId = created.teamId;
+    const first = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: '张三',
+      role: 'engineer',
+      teamId,
+    });
+    const second = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: '张三',
+      role: 'engineer',
+      teamId,
+    });
+    const t1 = await cap<{ taskId: number }>('eteams_create_task', { subject: '首份的单' });
+    const t2 = await cap<{ taskId: number }>('eteams_create_task', { subject: '次份的单' });
+    // 两人各领一单 → 各有会话。
+    await cap('eteams_assign_task', { taskId: t1.taskId, member: String(first.employeeId) });
+    await cap('eteams_assign_task', { taskId: t2.taskId, member: String(second.employeeId) });
+    const firstAgent = memberAgent(childByEmployee(first.employeeId).childId);
+    const secondAgent = memberAgent(childByEmployee(second.employeeId).childId);
+
+    // 同名第二人 claim 首份的任务：名字对得上（assignee 同名），但 attempt
+    // 归属按副本行 id 精确匹配 → 「没有待接取的指派」，不越权接走。
+    await expect(
+      mem(secondAgent, 'eteams_claim_task', { taskId: t1.taskId }) as Promise<unknown>,
+    ).rejects.toThrow(/没有待接取的指派/);
+    // 首份本人 claim 正常拿 token。
+    const claimed = await mem<{ token: string }>(firstAgent, 'eteams_claim_task', {
+      taskId: t1.taskId,
+    });
+    expect(claimed.token).toMatch(/^[0-9a-f]{24}$/);
+  });
+});
+
+describe('v7 删除成员（工牌作废 + 会话工面截断 + 发号不回退）', () => {
+  it('voids the badge: live child loses the member tool face and the sequence never reissues', async () => {
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '离职团队' });
+    const teamId = created.teamId;
+    const dave = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: 'Dave',
+      role: 'engineer',
+      teamId,
+    });
+    const t1 = await cap<{ taskId: number }>('eteams_create_task', { subject: '在办任务' });
+    await cap('eteams_assign_task', { taskId: t1.taskId, member: String(dave.employeeId) });
+    const daveChild = childByEmployee(dave.employeeId);
+    const daveAgent = memberAgent(daveChild.childId);
+    // 在册时工面正常（看板可读）。
+    await mem(daveAgent, 'eteams_task_board', {});
+
+    // 移出：班底行硬删（号作废）；任务回池；副本行不动（会话锚保留冷恢复价值）。
+    await cap<{ ok: true }>('eteams_remove_member', { name: 'Dave', teamId });
+    const fresh = readTeam(teamId);
+    expect(fresh.members.find((m) => m.name === 'Dave')).toBeUndefined();
+    expect(fresh.tasks.find((t) => t.id === t1.taskId)!.status).toBe('ready');
+
+    // R1 离职截断：工牌已不在班底 → 存活子会话解析不出成员身份，工面就地失效。
+    await expect(mem(daveAgent, 'eteams_task_board', {}) as Promise<unknown>).rejects.toThrow(
+      /不在任何 eteams 团队中/,
+    );
+
+    // 发号不回退：新成员拿到计数器下一个号（3），不复用 Dave 的 2。
+    const later = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: 'Later',
+      role: 'engineer',
+      teamId,
+    });
+    expect(later.employeeId).toBe(3);
+  });
+});
+
+describe('v7 删任务级联删副本 + drain', () => {
+  it('cascades replica rows with the root task and drains resident children', async () => {
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '删任务团队' });
+    const teamId = created.teamId;
+    await cap('eteams_add_member', { name: 'Dave', role: 'engineer', teamId });
+    const made = await cap<{ taskId: number }>('eteams_create_task', { subject: '待删任务' });
+    const rootId = made.taskId;
+    // 建任务即全员铺副本（含领队）。
+    expect(readTeam(teamId).taskMembers.filter((r) => r.mainTaskId === rootId)).toHaveLength(2);
+
+    // 首派起会话（副本行拿到 session 锚），婉拒回池——pending_accept 的
+    // attempt 婉拒即 revoked，行保留会话供 drain 验证。
+    await cap('eteams_assign_task', { taskId: rootId, member: '2' });
+    const daveAgent = memberAgent(childByEmployee(2).childId);
+    await mem(daveAgent, 'eteams_decline_task', {
+      taskId: rootId,
+      reason: '先不动',
+    });
+
+    // 删除：副本行级联删（有会话的行 drain 驻留），任务行一并移除。
+    await cap<{ ok: true }>('eteams_delete_task', { taskId: rootId });
+    const fresh = readTeam(teamId);
+    expect(fresh.tasks.find((t) => t.id === rootId)).toBeUndefined();
+    expect(fresh.taskMembers.filter((r) => r.mainTaskId === rootId)).toHaveLength(0);
+    // task.deleted 事件带 drain 留痕（副本行数量）。
+    const events = readEventsSync(root, teamId);
+    const deleted = events.find((e) => e.type === 'task.deleted');
+    expect(deleted?.payload?.drainedReplicas).toBe(1);
   });
 });
 

@@ -37,8 +37,9 @@ import {
   type TeamKey,
   type TeamTx,
 } from '../state/store.js';
-import { hashName, LEADER_NAME, nextAutoincrementId, nextEmployeeId, personaFromMd, personaToMd } from '../state/db.js';
+import { hashName, LEADER_NAME, nextAutoincrementId, personaFromMd, personaToMd } from '../state/db.js';
 import { insertEventInTx, insertMailInTx } from '../state/events.js';
+import { defaultCaptainPersona } from '../prompts/personas/captain.js';
 import { applyTransition, sanitizeKey, taskSlug } from '../model/taskMachine.js';
 import { ETeamsError, captainActor, memberActor, stateRootOf, type RuntimeEnv } from './base.js';
 import { clearSessionTeam, getSessionTeamId } from './sessionTeam.js';
@@ -50,6 +51,7 @@ import {
   leaderRowOf,
   latestInstanceRow,
   makeMail,
+  memberBoxOf,
   memberStatusOf,
   notifyCaptain,
   readBox,
@@ -118,23 +120,39 @@ export async function createTeam(
     const now = Date.now();
     let teamId: number | undefined;
     withTeamTx(root, undefined, (tx) => {
+      // 领队入班底（v7 决策 2）：建队即领工牌——工号就是班底行的自增主键
+      // （表自增，新库首行即 1）；主持行（会话锚点）工号同步。
       teamId = insertTeamRow(tx, name, true, now);
+      const template = tx.db
+        .prepare('SELECT persona_md FROM roles WHERE role_name = ? LIMIT 1')
+        .get(LEADER_NAME) as { persona_md: string | null } | undefined;
+      const leaderPersona = template?.persona_md
+        ? personaFromMd(template.persona_md, LEADER_NAME, LEADER_NAME)
+        : defaultCaptainPersona();
+      const leaderRoleId = ensureRolesRowInTx(tx, LEADER_NAME, leaderPersona);
+      const leaderMemberId = nextAutoincrementId(tx.db, 'team_members');
+      tx.db
+        .prepare(
+          'INSERT INTO team_members (team_member_id, team_id, role_id, created_time, update_time) ' +
+            'VALUES (?, ?, ?, ?, ?)',
+        )
+        .run(leaderMemberId, teamId, leaderRoleId, now, now);
       // 领队行（docs/35 §5#12）：团队级主持行只记自己的子代理会话（v6 领队
       // 行 session_id = 领队子代理，未派发时空串）；主会话快照归 task 行。
-      // 工号与手册沿角色库行（项目牧羊人预设，import.ts 播种）。
-      const template = tx.db
-        .prepare('SELECT employee_id, persona_md FROM roles WHERE role_name = ? LIMIT 1')
-        .get(LEADER_NAME) as { employee_id: number | null; persona_md: string | null } | undefined;
+      // 工号 = 班底领队行刚发的自增主键，手册沿角色库行（项目牧羊人
+      // 预设，import.ts 播种）。
       const row: TaskMemberRecord = {
         id: 0,
         teamId,
         mainTaskId: null,
         nowTaskId: null,
         name: LEADER_NAME,
-        employeeId: template?.employee_id ?? null,
+        employeeId: leaderMemberId,
         sessionId: '',
         status: 'ready',
-        ...(template?.persona_md ? { personaMd: template.persona_md } : {}),
+        ...(leaderPersona.personaMd !== undefined && leaderPersona.personaMd !== ''
+          ? { personaMd: leaderPersona.personaMd }
+          : {}),
         createdAt: now,
       };
       insertTaskMemberRow(tx, row);
@@ -198,7 +216,11 @@ export function ensureTaskWorkDir(env: RuntimeEnv, team: TeamState, task: TaskRe
   return workDir;
 }
 
-/** Add one member（班底模板行 + staged 实例行；不立即起会话，docs/35 §5#12）. */
+/**
+ * Add one member（v7：一行新班底 + 全任务副本行；不立即起会话）——班底行是
+ * 工牌发放处（工号 = 行自增主键，表自增），人设仍挂角色库（成员=角色），
+ * 任务副本行建成员即全员铺开（含已完结大任务）。
+ */
 export async function addMember(
   env: RuntimeEnv,
   captain: Agent,
@@ -218,11 +240,6 @@ export async function addMember(
     reasoningEffort?: string;
     /** Pre-generated avatar (docs/14); generated from the name when absent. */
     avatar?: { seed: number; salt: number };
-    /**
-     * 工号 (docs/21). 显式 > 角色库同名角色行 > 事务内新分配（分配一次；
-     * 角色行缺号时回填，同人同号）。
-     */
-    employeeId?: string;
     /** Origin marker for events (tool / panel). */
     via?: string;
   },
@@ -243,26 +260,14 @@ export async function addMember(
     if (name === LEADER_NAME) {
       throw new ETeamsError('领队由建队自动入册，不能作为成员添加');
     }
-    // 查重按实例行（docs/35 §5#12）：存在非 removed 实例行即已入职。
-    if (teamNow.taskMembers.some((r) => r.name === name && r.status !== 'removed')) {
-      throw new ETeamsError(`成员「${name}」已在团队中`);
-    }
-    // 团队上限（用户迭代 2026-09 六：领队也算成员）——按非 removed 实例行
-    // 去重名计数（同一人多条大任务行只算一人），领队行占 1 个名额。
-    const activeNames = new Set(
-      teamNow.taskMembers
-        .filter((r) => r.status !== 'removed' && r.name !== LEADER_NAME)
-        .map((r) => r.name),
-    );
-    const leaderTaken = 1; // 领队在册（removed 已在上方拒绝）——占 1 个名额
-    if (activeNames.size + leaderTaken >= env.config.maxMembers) {
+    // 团队上限（v7 按班底行数计，领队班底行占 1 个名额）：加一人 = 班底 +1。
+    if (teamNow.members.length + 1 > env.config.maxMembers) {
       throw new ETeamsError(
         `团队人数已达上限（${env.config.maxMembers}，含领队）`,
         '先 eteams_remove_member 再添加，或调整配置 maxMembers',
       );
     }
     const now = tx.now;
-    const employeeIdParam = Number.parseInt(params.employeeId ?? '', 10);
     // 角色行（v3 成员=角色，全局一份）：同名行已存在 → 人设以角色行为准
     // （显式 role 参数只在角色行缺失时生效，面板本就传角色库同名条目的
     // role）；缺行 → 按本次参数现烘 persona，随后 ensureRolesRowInTx 入库
@@ -278,73 +283,50 @@ export async function addMember(
             ...(params.rules !== undefined ? { rules: params.rules } : {}),
             ...(params.personaMd !== undefined ? { personaMd: params.personaMd } : {}),
           });
-    // 班底行：同名班底复用（不重开）；否则新建（team_member_id 事务内发号，
-    // writeTeamInTx 按显式 id 重插）。
-    let member: MemberRecord | undefined = teamNow.members.find((m) => m.name === name);
-    if (member === undefined) {
-      const created: MemberRecord = {
-        memberId: nextAutoincrementId(tx.db, 'team_members'),
-        roleId: null, // ensureRolesRowInTx 后回填
-        name,
-        employeeId: undefined,
-        role: persona.role,
-        persona,
-        modelRoute: routeFromParams(params.model, params.reasoningEffort),
-        avatar: params.avatar ?? { seed: hashName(name), salt: Math.floor(Math.random() * 1000) },
-        createdAt: now,
-      };
-      teamNow.members.push(created);
-      member = created;
-    } else {
-      // 成员详情与角色详情同源（v3）：班底行的 persona/role 刷新自角色行。
-      member.persona = persona;
-      member.role = persona.role;
-      if (rolesRow !== undefined) member.roleId = rolesRow.role_id;
-    }
-    // 工号（docs/21）：显式 > 角色行 > 事务内新分配（分配一次；角色行缺号
-    // 时经 ensureRolesRowInTx 回填，同人同号）。显式工号是对角色行工号的
-    // 重定义（v3 工号只挂角色行）：同名角色行已有号也被压过，全局生效。
-    const explicitEmployeeId =
-      Number.isFinite(employeeIdParam) && employeeIdParam > 0 ? employeeIdParam : undefined;
-    let employeeId = explicitEmployeeId ?? rolesRow?.employee_id ?? undefined;
-    if (employeeId === undefined) employeeId = nextEmployeeId(tx.db);
-    member.roleId = ensureRolesRowInTx(tx, name, persona, {
-      ...(member.avatar !== undefined ? { avatar: member.avatar } : {}),
-      employeeId,
-    });
-    member.employeeId = employeeId;
-    if (
-      explicitEmployeeId !== undefined &&
-      rolesRow !== undefined &&
-      rolesRow.employee_id !== explicitEmployeeId
-    ) {
-      tx.db
-        .prepare('UPDATE roles SET employee_id = ?, update_time = ? WHERE role_id = ?')
-        .run(explicitEmployeeId, tx.now, member.roleId);
-    }
-    const route = member.modelRoute;
-    // 执行实例行：staged（未起会话），团队级未锚定（main_task_id 为空），
-    // 首派时才锚定到大任务并起子会话（assignment.ts 首派按链起人）。
-    const row: TaskMemberRecord = {
-      id: 0,
-      teamId: teamNow.id,
-      mainTaskId: null,
-      nowTaskId: null,
+    // 班底行（v7 工牌发放处）：每次添加都是一行新班底——同名成员各拿各的号
+    // （人设共享同一角色行），旧版「同名班底复用」分支已废。工号 = 行的
+    // 自增主键（表自增，AUTOINCREMENT 只增不复用），显式选号不再支持。
+    const memberId = nextAutoincrementId(tx.db, 'team_members');
+    const member: MemberRecord = {
+      memberId,
+      roleId: null, // ensureRolesRowInTx 后回填
       name,
-      employeeId: member.employeeId ?? null,
-      sessionId: '',
-      status: 'staged',
-      ...(member.persona.personaMd !== undefined && member.persona.personaMd !== ''
-        ? { personaMd: member.persona.personaMd }
-        : {}),
-      ...(route.model !== '' ? { model: route.model } : {}),
-      ...(route.reasoningEffort !== undefined && route.reasoningEffort !== ''
-        ? { reasoningEffort: route.reasoningEffort }
-        : {}),
-      avatar: member.avatar,
+      employeeId: memberId,
+      role: persona.role,
+      persona,
+      modelRoute: routeFromParams(params.model, params.reasoningEffort),
+      avatar: params.avatar ?? { seed: hashName(name), salt: Math.floor(Math.random() * 1000) },
       createdAt: now,
     };
-    teamNow.taskMembers.push(row);
+    teamNow.members.push(member);
+    member.roleId = ensureRolesRowInTx(tx, name, persona, {
+      ...(member.avatar !== undefined ? { avatar: member.avatar } : {}),
+    });
+    const route = member.modelRoute;
+    // 任务副本（v7 决策 5）：新成员即把班底抄进所有现存大任务（含已完结）
+    // ——副本行工号抄班底、staged 待首派起会话；任务级操作按 (工号, 大任务)
+    // 定位副本行。
+    for (const parent of teamNow.tasks.filter((t) => t.parentId === null)) {
+      teamNow.taskMembers.push({
+        id: 0,
+        teamId: teamNow.id,
+        mainTaskId: parent.id,
+        nowTaskId: null,
+        name,
+        employeeId: memberId,
+        sessionId: '',
+        status: 'staged',
+        ...(member.persona.personaMd !== undefined && member.persona.personaMd !== ''
+          ? { personaMd: member.persona.personaMd }
+          : {}),
+        ...(route.model !== '' ? { model: route.model } : {}),
+        ...(route.reasoningEffort !== undefined && route.reasoningEffort !== ''
+          ? { reasoningEffort: route.reasoningEffort }
+          : {}),
+        avatar: member.avatar,
+        createdAt: now,
+      });
+    }
     insertEventInTx(tx, teamNow.id, {
       seq: 0,
       at: now,
@@ -354,6 +336,7 @@ export async function addMember(
         name,
         role: member.role,
         memberId: member.memberId,
+        employeeId: memberId,
         ...(params.via !== undefined ? { via: params.via } : {}),
       },
     });
@@ -376,20 +359,25 @@ function routeFromParams(
   };
 }
 
-/** 同名班底模板行（team.members）；缺省报「成员不存在」。 */
-function requireMemberTemplate(team: TeamState, name: string): MemberRecord {
-  const member = team.members.find((m) => m.name === name);
+/** 班底行定位（v7）：工号优先（同名成员各是一行），无号退按名（旧数据）。 */
+function requireMemberTemplate(team: TeamState, name: string, employeeId?: number): MemberRecord {
+  const member =
+    employeeId !== undefined
+      ? team.members.find((m) => m.employeeId === employeeId)
+      : team.members.find((m) => m.name === name);
   if (!member) throw new ETeamsError(`成员「${name}」不存在`, '用 eteams_team_status 查看在册成员');
   return member;
 }
 
-/** Update a member's persona fields (docs/11.2；写班底模板行). */
+/** Update a member's persona fields (docs/11.2；写班底行 + 角色行手册). */
 export async function updateMember(
   env: RuntimeEnv,
   captain: Agent,
   params: {
     teamId?: TeamKey;
     name: string;
+    /** v7 同名成员按工号精确定位（缺省按名——旧口径兼容）。 */
+    employeeId?: number;
     role?: string;
     duty?: string;
     style?: string;
@@ -404,7 +392,7 @@ export async function updateMember(
       ? await requireTeamById(env, captain, params.teamId)
       : await requireCaptainTeam(env, captain);
   const fresh = await withTeam(env, team.id, (teamNow, _root, tx) => {
-    const member = requireMemberTemplate(teamNow, params.name);
+    const member = requireMemberTemplate(teamNow, params.name, params.employeeId);
     // 角色定义全局一份（v3 成员=角色）：成员详情改动即改角色行手册，全局
     // 生效——role 变化也烘进手册（persona.role 即 MemberRecord.role 的来源）。
     if (params.role !== undefined) member.persona.role = params.role.trim() || member.persona.role;
@@ -423,23 +411,14 @@ export async function updateMember(
       .run(personaToMd(member.persona, member.name), tx.now, member.name);
     // v4 副本列刷新：角色行刚改写，班底行镜像随之同步（全局生效的落库面）。
     syncTeamMemberRoleMirrorInTx(tx, { roleId: rolesRowByName(tx.db, member.name)?.role_id });
-    // 模板手册变化同步到该成员未锚定的 staged 实例行（执行时的人设副本）。
-    const row = teamNow.taskMembers.find(
-      (r) => r.name === params.name && r.status === 'staged' && r.mainTaskId === null,
-    );
-    if (
-      row !== undefined &&
-      member.persona.personaMd !== undefined &&
-      member.persona.personaMd !== ''
-    ) {
-      row.personaMd = member.persona.personaMd;
-    }
+    // v7：任务副本行的人设副本在建任务/派发时定版，不再随写同步（班底行是
+    // 真相，设计稿 #14 删 staged 同步段）。
     insertEventInTx(tx, teamNow.id, {
       seq: 0,
       at: tx.now,
       actor: captainActor(teamNow),
       type: 'member.updated',
-      payload: { name: params.name },
+      payload: { name: member.name },
     });
     return teamNow;
   });
@@ -452,8 +431,8 @@ export async function updateMember(
  * select on the member card). Empty model resets to 会话默认（用户迭代
  * 2026-09-04：settings agent-default-model，spawn 侧 sessionDefaultRouteOf）；
  * 有值即 override——provider 不再入档（docs/35 §3#5），派发起会话时按
- * config.memberProvider 解析。写班底模板行，同时同步到该成员 staged 实例行；
- * 已起会话的成员在下次起会话生效。
+ * config.memberProvider 解析。写班底行；副本行在建任务/派发时定版，不再
+ * 随写同步（v7 #14）；已起会话的成员在下次起会话生效。
  */
 export async function setMemberModel(
   env: RuntimeEnv,
@@ -461,6 +440,8 @@ export async function setMemberModel(
   params: {
     teamId?: TeamKey;
     name: string;
+    /** v7 同名成员按工号精确定位（缺省按名——旧口径兼容）。 */
+    employeeId?: number;
     provider?: string;
     model?: string;
     reasoningEffort?: string;
@@ -471,25 +452,14 @@ export async function setMemberModel(
       ? await requireTeamById(env, captain, params.teamId)
       : await requireCaptainTeam(env, captain);
   const fresh = await withTeam(env, team.id, (teamNow, _root, tx) => {
-    const member = requireMemberTemplate(teamNow, params.name);
+    const member = requireMemberTemplate(teamNow, params.name, params.employeeId);
     member.modelRoute = routeFromParams(params.model, params.reasoningEffort);
-    const row = teamNow.taskMembers.find(
-      (r) => r.name === params.name && r.status === 'staged' && r.mainTaskId === null,
-    );
-    if (row !== undefined) {
-      row.model = member.modelRoute.model;
-      if (member.modelRoute.reasoningEffort !== undefined) {
-        row.reasoningEffort = member.modelRoute.reasoningEffort;
-      } else {
-        delete row.reasoningEffort;
-      }
-    }
     insertEventInTx(tx, teamNow.id, {
       seq: 0,
       at: tx.now,
       actor: captainActor(teamNow),
       type: 'member.updated',
-      payload: { name: params.name, route: member.modelRoute },
+      payload: { name: member.name, route: member.modelRoute },
     });
     return teamNow;
   });
@@ -555,6 +525,8 @@ export async function syncMemberToRoster(
   params: {
     teamId?: TeamKey;
     name: string;
+    /** v7 同名成员按工号精确定位（缺省按名——旧口径兼容）。 */
+    employeeId?: number;
     /** Sync payload; defaults to the member's own saved handbook copy. */
     personaMd?: string;
   },
@@ -566,7 +538,7 @@ export async function syncMemberToRoster(
   const root = stateRootOf(env);
   let text: string | undefined;
   const fresh = await withTeam(env, team.id, (teamNow, _root, tx) => {
-    const member = requireMemberTemplate(teamNow, params.name);
+    const member = requireMemberTemplate(teamNow, params.name, params.employeeId);
     const value = (params.personaMd ?? member.persona.personaMd ?? '').trim();
     if (value === '') {
       throw new ETeamsError('成员手册为空，先在成员详情里编辑保存');
@@ -610,10 +582,10 @@ export async function syncMemberToRoster(
 
 /**
  * Move the leader (Project Shepherd) out of / back into the team's member
- * roster (user iteration 2026-09: the leader is deletable)。docs/35 §5#12
- * 之后领队状态落在领队行 status（removed↔ready）+ team.has_leader；领队
- * 会话本身不动。restore 时行已删除则重建（v6 领队行只记自己的子代理会话，
- * 重建时 session_id 留空——主会话锚点归任务行快照）。
+ * roster (user iteration 2026-09: the leader is deletable)。v7：移除同时
+ * 硬删班底领队行（工牌作废），主持行只保留会话锚点职责（removed 枚举值
+ * 仅剩主持行使用）；加回 = 续新号重开班底行并同步主持行工号（R7，不回收
+ * 旧号）。领队会话本身不动。
  */
 export async function setLeaderRemoved(
   env: RuntimeEnv,
@@ -626,42 +598,70 @@ export async function setLeaderRemoved(
       : await requireCaptainTeam(env, captain);
   const fresh = await withTeam(env, team.id, (teamNow, _root, tx) => {
     let leader = leaderRowOf(teamNow);
-    if (leader === undefined) {
-      // 领队行缺失（异常路径/旧数据）：重建；session_id 留空（领队子代理
-      // 未派发），主会话锚点由任务行快照/心跳派生。
-      leader = {
-        id: 0,
-        teamId: teamNow.id,
-        mainTaskId: null,
-        nowTaskId: null,
-        name: LEADER_NAME,
-        employeeId: null,
-        sessionId: '',
-        status: params.removed ? 'removed' : 'ready',
-        createdAt: tx.now,
-      };
-      teamNow.taskMembers.push(leader);
-    }
     if (params.removed) {
-      if (leader.status === 'removed') return teamNow;
+      if (leader === undefined || leader.status === 'removed') return teamNow;
       leader.status = 'removed';
       teamNow.hasLeader = false;
+      // 班底领队行硬删（v7 R7）：号作废不回收；重加领队走下方加回分支续新号。
+      teamNow.members = teamNow.members.filter((m) => m.name !== LEADER_NAME);
     } else {
-      // 加回领队同样占团队名额（用户迭代 2026-09 六：领队也算成员）：满员
-      // 时拒绝加回，先移出一名成员。
-      const activeNames = new Set(
-        teamNow.taskMembers
-          .filter((r) => r.status !== 'removed' && r.name !== LEADER_NAME)
-          .map((r) => r.name),
-      );
-      if (activeNames.size + 1 > env.config.maxMembers) {
+      const rosterRow = teamNow.members.find((m) => m.name === LEADER_NAME);
+      // 已就位且班底在册：幂等 no-op（重复「加回」不改任何状态）。
+      if (leader !== undefined && leader.status !== 'removed' && rosterRow !== undefined) {
+        return teamNow;
+      }
+      // 加回领队同样占团队名额（v7 按班底行数计）：只在需要新开班底行时可能触顶。
+      if (rosterRow === undefined && teamNow.members.length + 1 > env.config.maxMembers) {
         throw new ETeamsError(
           `团队人数已达上限（${env.config.maxMembers}，含领队）`,
           '先 eteams_remove_member 再加回领队，或调整配置 maxMembers',
         );
       }
-      if (leader.status !== 'removed') return teamNow;
-      leader.status = 'ready';
+      // 班底领队行：缺则重建（重加 = 续自增号新工牌），在册则沿用原号。
+      let number: number;
+      if (rosterRow === undefined) {
+        const memberId = nextAutoincrementId(tx.db, 'team_members');
+        number = memberId; // 工号 = 新班底行自增主键（表自增续编，不回收）
+        const rolesRow = rolesRowByName(tx.db, LEADER_NAME);
+        const persona =
+          rolesRow !== undefined
+            ? personaFromMd(rolesRow.persona_md ?? '', LEADER_NAME, LEADER_NAME)
+            : defaultCaptainPersona();
+        teamNow.members.push({
+          memberId,
+          roleId: ensureRolesRowInTx(tx, LEADER_NAME, persona),
+          name: LEADER_NAME,
+          employeeId: number,
+          role: persona.role,
+          persona,
+          modelRoute: { model: '', reasoningEffort: undefined },
+          avatar: { seed: hashName(LEADER_NAME), salt: 7 },
+          createdAt: tx.now,
+        });
+      } else {
+        number = rosterRow.memberId; // 工号即主键（表自增）
+        rosterRow.employeeId = number;
+      }
+      if (leader === undefined) {
+        // 主持行缺失重建：session_id 留空（领队子代理未派发），主会话锚点
+        // 由任务行快照/心跳派生；工号从班底领队行同步（不新发号）。
+        leader = {
+          id: 0,
+          teamId: teamNow.id,
+          mainTaskId: null,
+          nowTaskId: null,
+          name: LEADER_NAME,
+          employeeId: number,
+          sessionId: '',
+          status: 'ready',
+          createdAt: tx.now,
+        };
+        teamNow.taskMembers.push(leader);
+      } else {
+        // 主持行工号从班底领队行同步（R7：不新发号）。
+        leader.employeeId = number;
+        leader.status = 'ready';
+      }
       teamNow.hasLeader = true;
     }
     insertEventInTx(tx, teamNow.id, {
@@ -678,15 +678,17 @@ export async function setLeaderRemoved(
 }
 
 /**
- * Remove a member（docs/35 §5#12 实例行语义）：该成员全部实例行置 removed、
- * 在办尝试吊销、任务回就绪池；提交后 interrupt/drain 其子会话。领队走
- * setLeaderRemoved 的移除语义（行 status + has_leader）。
+ * Remove a member（v7 决策 6）：硬删班底行（工牌作废不回收）；任务副本行
+ * 不动（保留历史），在办尝试按副本行 id 精确吊销、任务回就绪池的流程保留；
+ * 提交后 interrupt/drain 其子会话（工面由 identity 按「工号不在班底」截断）。
+ * 领队走 setLeaderRemoved 的移除语义。
  */
 export async function removeMember(
   env: RuntimeEnv,
   captain: Agent,
   name: string,
   teamId?: TeamKey,
+  employeeId?: number,
 ): Promise<TeamState> {
   const team =
     teamId !== undefined
@@ -695,17 +697,32 @@ export async function removeMember(
   if (name === LEADER_NAME) {
     return setLeaderRemoved(env, captain, { teamId: team.id, removed: true });
   }
+  let removedEmployeeId: number | undefined;
   const fresh = await withTeam(env, team.id, (teamNow, _root, tx) => {
-    const rows = teamNow.taskMembers.filter((r) => r.name === name && r.status !== 'removed');
-    if (rows.length === 0) {
+    // v7 定位：工号优先（同名成员各是一行班底），无号退按名（旧口径兼容）。
+    const member =
+      employeeId !== undefined
+        ? teamNow.members.find((m) => m.employeeId === employeeId)
+        : teamNow.members.find((m) => m.name === name);
+    if (member === undefined) {
       throw new ETeamsError(`成员「${name}」不存在`, '用 eteams_team_status 查看在册成员');
     }
+    removedEmployeeId = member.employeeId;
     const now = tx.now;
+    // 该成员的任务副本行 id 集：在办尝试按行 id 精确吊销——同名成员不串。
+    const replicaIds = new Set(
+      teamNow.taskMembers.filter((r) => r.employeeId === member.employeeId).map((r) => r.id),
+    );
     // 在办尝试吊销（docs/06.4）：pending_accept/running → revoked；任务
-    // 回就绪池（wait/start → ready，10 态边）。
+    // 回就绪池（wait/start → ready，10 态边）。旧尝试无 task_member_id 时
+    // 退按名匹配（legacy 宽容）。
     for (const task of teamNow.tasks) {
       const attempt = task.attempts.find(
-        (a) => a.member === name && (a.status === 'pending_accept' || a.status === 'running'),
+        (a) =>
+          (a.status === 'pending_accept' || a.status === 'running') &&
+          (a.taskMemberId !== undefined
+            ? replicaIds.has(a.taskMemberId)
+            : a.member === member.name),
       );
       if (attempt === undefined) continue;
       attempt.status = 'revoked';
@@ -721,25 +738,30 @@ export async function removeMember(
         type: 'task.unassigned',
         taskId: task.id,
         attemptId: attempt.id,
-        payload: { reason: 'member.removed', member: name },
+        payload: { reason: 'member.removed', member: member.name },
       });
     }
-    for (const row of rows) row.status = 'removed';
+    // 硬删班底行（v7）：工牌作废不回收（自增主键只增不复用）；任务副本行
+    // 不动。
+    teamNow.members = teamNow.members.filter((m) => m !== member);
     insertEventInTx(tx, teamNow.id, {
       seq: 0,
       at: now,
       actor: captainActor(teamNow),
       type: 'member.removed',
-      payload: { name },
+      payload: {
+        name: member.name,
+        ...(member.employeeId !== undefined ? { employeeId: member.employeeId } : {}),
+      },
     });
     return teamNow;
   });
-  // 提交后：中断并回收该成员全部子会话（回收驻留 Activation，docs/20.4 P2）。
-  // 锚点按 v6 派生（任务行快照 + 心跳兜底）；都不在线退回调用的 captain。
+  // 提交后：中断并回收该成员全部副本行子会话（回收驻留 Activation，docs/20.4
+  // P2）。锚点按 v6 派生（任务行快照 + 心跳兜底）；都不在线退回调用的 captain。
   const anchorId = teamMainSessionOf(fresh) || readBuildPresence(stateRootOf(env))?.sessionId || '';
   const captainAgent = (anchorId !== '' ? env.ctx.agents.get(anchorId) : undefined) ?? captain;
   for (const row of fresh.taskMembers) {
-    if (row.name !== name || row.sessionId === '') continue;
+    if (row.employeeId !== removedEmployeeId || row.sessionId === '') continue;
     interruptMember(env, row, captainAgent);
     await drainMembers(env, captainAgent, [row.sessionId]);
   }
@@ -814,17 +836,35 @@ export async function sendMessage(
         }
       }
     } else {
-      requireMember(fresh, to);
+      // v7 收件人按工号定位（同名不串箱）：to 允许工号十进制串（面板路由），
+      // 也兼容旧成员名（无同名冲突时按名解析）。工牌已删的工号按「不存在」
+      // 拒收——删除成员后副本行仍按留档保留，按号直查会命中死行，这里以
+      // 班底行为准（工牌在册才收），邮件不落旧箱，防新人继承旧号后串箱。
+      const numeric = Number.parseInt(to.trim(), 10);
+      const isNumericRef =
+        Number.isFinite(numeric) && numeric > 0 && String(numeric) === to.trim();
+      if (isNumericRef && !fresh.members.some((m) => m.employeeId === numeric)) {
+        throw new ETeamsError(
+          `收件人 ET${String(numeric).padStart(4, '0')} 不在本队班底（已离职或不存在）`,
+          '用 eteams_team_status 查看在册成员工号',
+        );
+      }
+      const byId = isNumericRef
+        ? fresh.taskMembers.find((r) => r.employeeId === numeric && r.status !== 'removed')
+        : undefined;
+      const member = byId ?? requireMember(fresh, to);
+      const box = memberBoxOf(member);
       insertMailInTx(
         tx,
         fresh.id,
-        to,
-        makeMail(from, { kind: 'member', name: to }, 'notice', content, refs),
+        box.box,
+        makeMail(from, { kind: 'member', name: member.name }, 'notice', content, refs),
+        box.employeeId,
       );
-      const row = latestInstanceRow(fresh, to);
-      if (row !== undefined) {
+      const wakeRow = latestInstanceRow(fresh, member.employeeId ?? member.name);
+      if (wakeRow !== undefined) {
         wakes.push(() =>
-          wakeMember(env, fresh, row, `[来自 ${from.name ?? from.kind}] ${content}`),
+          wakeMember(env, fresh, wakeRow, `[来自 ${from.name ?? from.kind}] ${content}`),
         );
       }
     }
@@ -849,16 +889,16 @@ export function teamView(env: RuntimeEnv, team: TeamState): Record<string, JsonV
     name: team.name,
     hasLeader: team.hasLeader,
     members: team.members
-      .filter((m) => m.name !== LEADER_NAME)
+      // v7 领队也是一行班底（普通成员）：不再过滤，工牌/角色/聚合状态照常透出。
       // 团队现状精简（用户迭代 2026-09-03「团队现状太繁杂了」）：成员只带
-      // 工号/角色/聚合状态；状态取实例行聚合口径（docs/35 §5#12），currentTask
+      // 工号/角色/聚合状态；状态取副本行聚合口径（docs/35 §5#12），currentTask
       // 可从 tasks 的 assignee+status 读出，模型路线属于派发细节。name 保留：
-      // eteams_* 工具按成员名指派，没有名字工号无法落地。
+      // eteams_* 工具按工号/成员名指派，没有名字工号无法落地。
       .map((m): JsonValue => ({
         name: m.name,
         employeeId: m.employeeId ?? null,
         role: m.role,
-        status: memberStatusOf(team, m.name),
+        status: memberStatusOf(team, m.employeeId ?? m.name),
       })),
     tasks: team.tasks.map((t): JsonValue => ({
       id: t.id,

@@ -158,9 +158,15 @@ export async function recordEvent(
 }
 
 // --------------------------------------------------------------------------
-// 邮箱（mail_messages 表，按 box_key 分箱；box_key = 收件成员名，领队
-// = 'captain'；message_id 幂等键，接收方按它去重）。
+// 邮箱（mail_messages 表，按 box_key 分箱；v7：成员箱 = 工号十进制串——
+// (team_id, employee_id) 定箱，同名成员不串箱；领队箱 = 'captain'；
+// message_id 幂等键，接收方按它去重）。
 // --------------------------------------------------------------------------
+
+/** 成员收件箱箱键（v7：工号十进制串；迁移解析不到的旧名字箱仅显示兜底）。 */
+export function memberBoxKey(employeeId: number): string {
+  return String(employeeId);
+}
 
 /** 事务内同步插入一封邮件（同 recordEvent 的随动写入口）。 */
 export function insertMailInTx(
@@ -168,19 +174,21 @@ export function insertMailInTx(
   teamId: number,
   box: string,
   message: MailMessage,
+  employeeId?: number | null,
 ): number {
   const assigned = message.seq > 0 ? message.seq : null;
   const info = tx.db
     .prepare(
-      'INSERT INTO mail_messages (mail_message_id, team_id, message_id, box_key, from_kind, ' +
+      'INSERT INTO mail_messages (mail_message_id, team_id, message_id, box_key, employee_id, from_kind, ' +
         'from_name, to_kind, to_name, kind, task_id, attempt_id, content, read_time, ' +
-        'created_time, update_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'created_time, update_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     )
     .run(
       assigned,
       teamId,
       message.id,
       box,
+      employeeId ?? null,
       message.from.kind,
       message.from.name ?? null,
       message.to.kind,
@@ -248,10 +256,11 @@ export async function appendMail(
   teamId: TeamKey,
   box: string,
   message: MailMessage,
+  employeeId?: number | null,
 ): Promise<void> {
   withTeamTx(stateRoot, undefined, (tx) => {
     const id = resolveTeamId(tx.db, teamId);
     if (id === undefined) throw new Error(`appendMail：找不到团队 ${String(teamId)}`);
-    insertMailInTx(tx, id, box, message);
+    insertMailInTx(tx, id, box, message, employeeId);
   });
 }

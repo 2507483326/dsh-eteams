@@ -8,14 +8,14 @@
  * - Q3 大任务进度（idx_task_parent：每条大任务 N 个小任务 / 完成 M）；
  * - Q4 看板按状态分列（idx_task_status：五列 wait/start/paused/
  *   wait_decision/wait_user；ready 就绪待派单列一栏，不进五列）；
- * - Q5 成员待派统计（idx_task_members_team，带 tm.team_id 过滤；同一人
- *   每条大任务一行实例行——聚合按名去重，行数不当人数，docs/35 §5#12）；
+ * - Q5 成员待派统计（idx_task_members_team，带 tm.team_id 过滤；v7 副本行
+ *   建任务即全员在——聚合按工号成组，行数不当人数）；
  * - Q9 待决策横幅（idx_decisions_open，status='open'）。
  *
  * @module dsh-eteams/state/queries
  */
 import type { DatabaseSync } from 'node:sqlite';
-import { getDb, LEADER_NAME } from './db.js';
+import { getDb } from './db.js';
 import { ensureWorkspaceReady } from './import.js';
 
 /** 看板五列（Q4；ready 单列待派，不入本列）。 */
@@ -54,14 +54,16 @@ export interface BoardGroupProgress {
   total: number;
 }
 
-/** 一行成员待派（Q5 按名聚合后的口径）。 */
+/** 一行成员待派（Q5 按工号聚合后的口径）。 */
 export interface BoardMemberRow {
   name: string;
+  /** 班底工号（v7 身份键；孤儿副本行 NULL——按名兜底成组）。 */
+  employeeId: number | null;
   /** 聚合成员状态（任一实例行 working 即 working，其次 paused）。 */
   status: string;
   /** 该成员当前承担的活跃任务数（wait/start/paused/wait_decision/wait_user）。 */
   activeTasks: number;
-  /** 是否领队行（项目牧羊人）。 */
+  /** 是否领队（主持行判据：组内含 main_task_id 为空的团队级主持行）。 */
   isLeader: boolean;
 }
 
@@ -190,40 +192,56 @@ export function boardTeam(db: DatabaseSync, teamId: number): BoardTeamSummary {
     subject: p.subject,
     ...groupProgress(db, teamId, Number(p.task_id)),
   }));
-  // Q5（带 tm.team_id 过滤）：一行 = 一个实例行（同一人每条大任务一行）——
-  // 按名去重聚合：状态取「working 优先，其次 paused，再次首行」。活跃任务数
-  // 与行解耦（行数不当人数，docs/35 §5#12）：按 current_member 一次分组计数，
-  // 去重行直接查表——若把按名子查询随行累加，多行成员会被行数放大。
+  // Q5（带 tm.team_id 过滤）：v7 副本行建任务即全员在、且允许同名成员——
+  // 按工号成组（孤儿副本无号按名兜底）：状态取「working 优先，其次 paused，
+  // 再次首行」；活跃任务数与行解耦：按副本行 id 归属（attempts.task_member_id）
+  // 对活跃状态任务一次分组计数，成组行直接查表——若按名字统计，同名成员会
+  // 互相放大。领队判定按主持行判据（组内含 main_task_id 为空的行）。
   const memberRows = db
     .prepare(
-      'SELECT tm.name, tm.status FROM task_members tm ' +
-        'WHERE tm.team_id = ?1 AND tm.status <> ?2 ORDER BY tm.name',
+      'SELECT tm.task_member_id AS rid, tm.employee_id AS eid, tm.name, tm.status, tm.main_task_id AS anchor ' +
+        'FROM task_members tm ' +
+        'WHERE tm.team_id = ?1 AND tm.status <> ?2 ORDER BY tm.task_member_id',
     )
-    .all(teamId, 'removed') as Array<{ name: string; status: string }>;
-  const activeByName = new Map<string, number>();
+    .all(teamId, 'removed') as Array<{
+    rid: number;
+    eid: number | null;
+    name: string;
+    status: string;
+    anchor: number | null;
+  }>;
+  const activeByRow = new Map<number, number>();
   for (const row of db
     .prepare(
-      "SELECT current_member AS name, COUNT(*) AS active_tasks FROM task " +
-        "WHERE team_id = ?1 AND current_member IS NOT NULL " +
-        "AND status IN ('wait','start','paused','wait_decision','wait_user') GROUP BY current_member",
+      "SELECT a.task_member_id AS rid, COUNT(DISTINCT a.task_id) AS active_tasks FROM attempts a " +
+        "JOIN task t ON t.task_id = a.task_id " +
+        "WHERE a.team_id = ?1 AND a.task_member_id IS NOT NULL " +
+        "AND t.status IN ('wait','start','paused','wait_decision','wait_user') " +
+        'GROUP BY a.task_member_id',
     )
-    .all(teamId) as Array<{ name: string; active_tasks: number }>) {
-    activeByName.set(String(row.name), Number(row.active_tasks) || 0);
+    .all(teamId) as Array<{ rid: number; active_tasks: number }>) {
+    activeByRow.set(Number(row.rid), Number(row.active_tasks) || 0);
   }
   const members: BoardMemberRow[] = [];
+  const groupKeyOf = (eid: number | null, name: string): string =>
+    eid !== null ? `et:${eid}` : `name:${name}`;
   for (const row of memberRows) {
-    const existing = members.find((m) => m.name === row.name);
+    const key = groupKeyOf(row.eid === null ? null : Number(row.eid), row.name);
+    const existing = members.find((m) => groupKeyOf(m.employeeId, m.name) === key);
     if (existing === undefined) {
       members.push({
         name: row.name,
+        ...(row.eid !== null ? { employeeId: Number(row.eid) } : { employeeId: null }),
         status: row.status,
-        activeTasks: activeByName.get(row.name) ?? 0,
-        isLeader: row.name === LEADER_NAME,
+        activeTasks: activeByRow.get(Number(row.rid)) ?? 0,
+        isLeader: row.anchor === null,
       });
     } else {
       if (row.status === 'working' && existing.status !== 'working') existing.status = 'working';
       else if (row.status === 'paused' && existing.status !== 'working' && existing.status !== 'paused')
         existing.status = 'paused';
+      if (row.anchor === null) existing.isLeader = true;
+      existing.activeTasks += activeByRow.get(Number(row.rid)) ?? 0;
     }
   }
   // Q9：开放决策横幅。

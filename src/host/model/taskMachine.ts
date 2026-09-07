@@ -6,7 +6,7 @@
  *
  * @module dsh-eteams/model/taskMachine
  */
-import type { ChainStation, TaskRecord, TaskStatus } from './types.js';
+import type { ChainStation, TaskMemberRecord, TaskRecord, TaskStatus } from './types.js';
 
 /** Thrown for any illegal status move; carries an actionable hint. */
 export class TransitionError extends Error {
@@ -152,6 +152,27 @@ export function refreshDependencyStatus(
 /** The next planned chain station, or undefined at/past the end (docs/06.7). */
 export function nextChainStation(task: TaskRecord): ChainStation | undefined {
   return task.chain[task.chainCursor + 1];
+}
+
+/**
+ * 链站点是否指向该副本行（v7 按工号找人）：数字工号站点与副本行工号比对；
+ * 迁移解析不到班底行的 legacy 名字站点按名兜底（同名多行时无法区分，仅旧
+ * 数据兜底用）。
+ */
+export function stationPointsTo(
+  station: ChainStation,
+  row: Pick<TaskMemberRecord, 'employeeId' | 'name'>,
+): boolean {
+  if (typeof station.member === 'number') return station.member === row.employeeId;
+  return station.member === row.name;
+}
+
+/**
+ * 站点键的规范化文本（视图/比较层统一用）：工号站点转十进制串、legacy 名字
+ * 站点原样——同一站点在宿主视图与客户端两侧用同一键比较。
+ */
+export function stationKeyOf(station: ChainStation): string {
+  return String(station.member);
 }
 
 /** Whether the task has a planned chain with an upcoming station. */

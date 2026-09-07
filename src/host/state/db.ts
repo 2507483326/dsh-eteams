@@ -22,8 +22,15 @@ import { fallbackExecutionPrompt, PERSONA_FRAMEWORK_VERSION } from '../prompts/p
  * v4（班底行角色信息副本）：team_members 补 role_name/persona_md/profile
  * 副本列，真相在 roles，写入路径同步刷新（旧库 getDb ALTER + 回填）。
  * v5（任务行主会话快照）：task 补 session_id 列，建任务时盖章领队行锚定的
- * 主会话 ID（快照，落库后不变；旧库 getDb ALTER + 从领队行回填）。 */
-export const DB_SCHEMA_VERSION = 6;
+ * 主会话 ID（快照，落库后不变；旧库 getDb ALTER + 从领队行回填）。
+ * v6（会话列归位）：主会话快照只在 task 行；task_members 只记本行自己的
+ * 子代理会话。
+ * v7（工号挪到班底，表自增）：工号 = team_members 行的自增主键
+ * （AUTOINCREMENT 只增不复用；roles.employee_id 弃用——列保留不读写，DROP
+ * 是单向门会炸旧版 lib 回滚）；mail_messages 补 employee_id 分箱列；attempts
+ * 补 task_member_id 副本行列；存量队补建领队班底行、存量容器任务按班底全员
+ * 补建副本行，副本/邮箱/链站按名 join 重键（旧库 getDb 迁移回填）。 */
+export const DB_SCHEMA_VERSION = 7;
 
 /**
  * 领队保留名（docs/27）：task_members 领队行 `name` 固定值，领队行查找
@@ -104,6 +111,7 @@ export function getDb(stateRoot: string): DatabaseSync {
   migrateTeamMemberRoleColumnsV4(db);
   migrateTaskSessionIdV5(db);
   migrateTaskSessionColumnsV6(db);
+  migrateMemberBadgeV7(db);
   connections.set(stateRoot, db);
   return db;
 }
@@ -285,6 +293,9 @@ function migrateMemberRolesV3(db: DatabaseSync): void {
             row.update_time,
           ).lastInsertRowid,
         );
+      // v7 表自增：team_members 无 employee_id 列（工号 = 行自增主键）——旧
+      // member 行的号不再搬进班底（roles.employee_id 弃用列已留档）；存量
+      // 副本/邮箱/链站点的换号重键由 migrateMemberBadgeV7 按名 join 完成。
       insertTeamMember.run(
         row.member_id,
         row.team_id,
@@ -432,6 +443,187 @@ function migrateTaskSessionColumnsV6(db: DatabaseSync): void {
   }
 }
 
+/**
+ * v7 迁移（工号挪到班底，表自增口径）：工号 = team_members 行的自增主键
+ * （AUTOINCREMENT 只增不复用），班底/团队表不需要任何新列；迁移只做补列与
+ * 数据重键——mail_messages 补 employee_id 分箱列、attempts 补 task_member_id
+ * 副本行列；存量队补建领队班底行（v6 领队不入班底）；现存容器任务按班底
+ * 全员补建副本行（终审 B3——副本行只锚定大任务，小任务共享容器的副本行，
+ * 不为它们补建）；副本行/邮箱/执行链按名 join 班底行重键到新号（解析不到
+ * 的保留旧值/名字，渲染端标 legacy）。
+ * 单事务：中途抛错整体回滚；重入按形状检测跳过（幂等）。
+ */
+function migrateMemberBadgeV7(db: DatabaseSync): void {
+  const columnsOf = (table: string): string[] =>
+    (
+      db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+    ).map((c) => c.name);
+  if (columnsOf('team_members').length === 0) return; // 表不存在：不会发生（防御）
+  const mailColumns = columnsOf('mail_messages');
+  const addMailEmployeeId = mailColumns.length > 0 && !mailColumns.includes('employee_id');
+  const attemptColumns = columnsOf('attempts');
+  const addAttemptRowId = attemptColumns.length > 0 && !attemptColumns.includes('task_member_id');
+  // 全新库（DDL 已是 v7 形状）或已迁移库：无事可做
+  if (!addMailEmployeeId && !addAttemptRowId) return;
+  const now = Date.now();
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    // 步骤 1：补列（形状检测，缺哪列补哪列）
+    if (addMailEmployeeId) {
+      db.exec('ALTER TABLE mail_messages ADD COLUMN employee_id INTEGER;');
+    }
+    if (addAttemptRowId) {
+      db.exec('ALTER TABLE attempts ADD COLUMN task_member_id INTEGER;');
+    }
+
+    // 步骤 2：团队级 staged 实例行删除（v7 副本只随任务建，`removed` 枚举
+    // 此后仅剩主持行使用）
+    db.exec(`DELETE FROM task_members WHERE main_task_id IS NULL AND name != '${LEADER_NAME}'`);
+
+    // 步骤 3（验收 M1）：存量队领队班底行补建——v6 领队不入班底，v7 领队也
+    // 是普通成员（建队即入拿号）。工号 = 新班底行的自增主键（表自增续编），
+    // 主持行同步此号（R7 口径：主持行不是工牌）。主持行整行不存在的队跳过
+    // （领队已删干净，加回时走 setLeaderRemoved 的续号路径自会补齐）。角色
+    // 行被删的队同样跳过——读端按 roles join 解析名字，无角色行的班底行不可
+    // 见（写端 ensureRolesRowInTx 自愈）。须在步骤 4 之前：副本补建按班底
+    // 全员（含领队）铺。
+    const leaderRole = db
+      .prepare('SELECT role_id FROM roles WHERE role_name = ?')
+      .get(LEADER_NAME) as { role_id: number } | undefined;
+    if (leaderRole !== undefined) {
+      const anchors = db
+        .prepare(
+          'SELECT task_member_id, team_id FROM task_members WHERE main_task_id IS NULL AND name = ?',
+        )
+        .all(LEADER_NAME) as Array<{ task_member_id: number; team_id: number }>;
+      const hasLeaderRoster = db.prepare(
+        'SELECT 1 FROM team_members WHERE team_id = ? AND role_name = ?',
+      );
+      const insertLeaderRoster = db.prepare(
+        'INSERT INTO team_members (team_id, role_id, role_name, created_time, update_time) ' +
+          'VALUES (?, ?, ?, ?, ?)',
+      );
+      const syncAnchor = db.prepare(
+        'UPDATE task_members SET employee_id = ? WHERE task_member_id = ?',
+      );
+      const seenTeams = new Set<number>();
+      for (const anchor of anchors) {
+        const teamId = Number(anchor.team_id);
+        if (seenTeams.has(teamId) || hasLeaderRoster.get(teamId, LEADER_NAME) !== undefined) {
+          continue;
+        }
+        seenTeams.add(teamId);
+        const info = insertLeaderRoster.run(teamId, leaderRole.role_id, LEADER_NAME, now, now);
+        // 工号即主键：主持行同步班底行刚领到的自增号
+        syncAnchor.run(Number(info.lastInsertRowid), Number(anchor.task_member_id));
+      }
+    }
+
+    // 步骤 4（终审 B3）：每个现存容器任务按班底全员补建副本行——工号抄班底
+    // 行自增主键、status=staged、session_id 空；该成员该任务已有行（含
+    // removed 锚定行）保持原状跳过。小任务不补：副本行只锚定大任务，小任务
+    // 共享容器的副本行（findInstanceRow 按根任务定位）。
+    db.prepare(
+      "INSERT INTO task_members (team_id, main_task_id, now_task_id, name, employee_id, " +
+        "session_id, status, created_time, update_time) " +
+        'SELECT tm.team_id, t.task_id, NULL, tm.role_name, tm.team_member_id, ?, ?, ?, ? ' +
+        'FROM task t JOIN team_members tm ON tm.team_id = t.team_id ' +
+        'WHERE t.parent_id IS NULL AND tm.role_name IS NOT NULL ' +
+        'AND NOT EXISTS (SELECT 1 FROM task_members x WHERE x.team_id = tm.team_id ' +
+        'AND x.main_task_id = t.task_id AND x.name = tm.role_name)',
+    ).run('', 'staged', now, now);
+
+    // 步骤 5：任务锚定副本行按名 join 本队班底行重键工号（v6 号来自 roles
+    // 全局序列，v7 工号 = 班底主键）——join 不到的孤儿保留旧号（EXISTS 守卫
+    // 防把它刷成 NULL）；领队主持行已在步骤 3 同步。
+    db.exec(
+      'UPDATE task_members SET employee_id = ' +
+        '(SELECT tm.team_member_id FROM team_members tm ' +
+        'WHERE tm.team_id = task_members.team_id AND tm.role_name = task_members.name) ' +
+      'WHERE main_task_id IS NOT NULL AND EXISTS (' +
+        'SELECT 1 FROM team_members tm WHERE tm.team_id = task_members.team_id ' +
+        'AND tm.role_name = task_members.name)',
+    );
+
+    if (addMailEmployeeId) {
+      // 步骤 6：旧邮件按收件成员名 join 班底行重键分箱工号，并把箱键改写成
+      // 工号串（v7 按 (team_id, employee_id) 定箱——可解析的旧行换新箱，旧
+      // 任务邮件按号送达）；解析不到的旧行保留名字分箱（仅显示兜底）
+      db.exec(
+        'UPDATE mail_messages SET ' +
+          'employee_id = (SELECT tm.team_member_id FROM team_members tm ' +
+          'WHERE tm.team_id = mail_messages.team_id AND tm.role_name = mail_messages.box_key), ' +
+          "box_key = CAST((SELECT tm.team_member_id FROM team_members tm WHERE tm.team_id = mail_messages.team_id AND tm.role_name = mail_messages.box_key) AS TEXT) " +
+          "WHERE box_key != 'captain' AND EXISTS (" +
+          'SELECT 1 FROM team_members tm WHERE tm.team_id = mail_messages.team_id ' +
+          'AND tm.role_name = mail_messages.box_key)',
+      );
+    }
+
+    if (addAttemptRowId) {
+      // 步骤 7：存量尝试按 task_id + 成员名 join 副本行回填（副本行挂根任务
+      // ——task 的根 = parent_id ?? task_id）；解析不到保留 NULL，判定退按名
+      db.exec(
+        'UPDATE attempts SET task_member_id = ' +
+          '(SELECT x.task_member_id FROM task_members x ' +
+          'WHERE x.team_id = attempts.team_id AND x.name = attempts.member ' +
+          'AND x.main_task_id = ' +
+          '(SELECT COALESCE(t.parent_id, t.task_id) FROM task t WHERE t.task_id = attempts.task_id)) ' +
+          'WHERE task_member_id IS NULL',
+      );
+    }
+
+    // 步骤 8：执行链名字站点改工号站点（按本队班底按名解析；解析不到的
+    // 站点保留名字，渲染时标注 legacy）
+    const rosterByName = new Map<number, Map<string, number>>();
+    for (const row of db
+      .prepare(
+        'SELECT team_id, role_name, team_member_id FROM team_members ' +
+          'WHERE role_name IS NOT NULL ORDER BY team_member_id',
+      )
+      .all() as Array<{ team_id: number; role_name: string; team_member_id: number }>) {
+      const byName = rosterByName.get(Number(row.team_id)) ?? new Map<string, number>();
+      // v7 允许同名多行：首行（team_member_id 序）优先——legacy 名字站点
+      // 只能解析到唯一命中，后续同名行不覆盖。
+      if (!byName.has(row.role_name)) byName.set(row.role_name, Number(row.team_member_id));
+      rosterByName.set(Number(row.team_id), byName);
+    }
+    const taskRows = db
+      .prepare('SELECT task_id, team_id, member_chain_list FROM task')
+      .all() as Array<{ task_id: number; team_id: number; member_chain_list: string }>;
+    const writeChain = db.prepare('UPDATE task SET member_chain_list = ? WHERE task_id = ?');
+    for (const row of taskRows) {
+      let changed = false;
+      try {
+        const parsed = JSON.parse(row.member_chain_list) as unknown;
+        if (!Array.isArray(parsed)) continue;
+        const byName = rosterByName.get(Number(row.team_id));
+        const stations = parsed.map((station) => {
+          if (station === null || typeof station !== 'object') return station;
+          const record = station as { member?: unknown };
+          if (typeof record.member !== 'string') return station;
+          const resolved = byName?.get(record.member);
+          if (resolved === undefined) return station;
+          changed = true;
+          return { ...record, member: resolved };
+        });
+        if (changed) writeChain.run(JSON.stringify(stations), Number(row.task_id));
+      } catch {
+        continue; // 坏 JSON 由读端兜底（按无链处理），迁移不碰
+      }
+    }
+
+    db.exec('COMMIT');
+  } catch (error) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      // 事务已自动回滚：清理动作本身失败不必掩盖原异常
+    }
+    throw error;
+  }
+}
+
 /** 关闭并丢弃该状态根的缓存连接（测试收尾 / 状态根失效时用）。 */
 export function closeDb(stateRoot: string): void {
   const db = connections.get(stateRoot);
@@ -458,13 +650,16 @@ function loadSchemaSql(): string {
 
 // === SCHEMA_SQL BEGIN（由 schema.sql 生成，逐字一致） ===
 const SCHEMA_SQL = `-- =====================================================================
--- ETeams SQLite schema v6（db_schema_version = 6；v3 成员=角色合并：member
+-- ETeams SQLite schema v7（db_schema_version = 7；v3 成员=角色合并：member
 -- 表精简改名成 roles 角色库表（去 team_id/role_id/model/reasoning_effort，
 -- 新增 profile），班底另起 team_members 表，旧 roles 标签登记表删除；
 -- v4 班底行补 role_name/persona_md/profile 角色信息副本列；v5 任务行补主
 -- 会话快照列（session_id）；v6 会话列归位：task.session_id 改名
 -- main_session_id，task_members 两列会话合并成 session_id（本行自己的子
--- 代理会话），team 行不存会话；v2/v3/v4/v5 旧库经 getDb 迁移回填）
+-- 代理会话）；v7 工号挪到班底（表自增）：工号 = team_members 行的自增主键
+-- （AUTOINCREMENT 只增不复用），班底/团队表不加新列；roles.employee_id 弃用
+-- ——列保留不读写；mail_messages 补 employee_id 分箱列、attempts 补
+-- task_member_id 副本行列（v2/v3/v4/v5/v6/v7 旧库经 getDb 迁移回填）
 -- 主键 = 每张表自己的编号列，统一 INTEGER 自增（schema_meta 例外：key 即主键）
 -- 时间列一律 *_time 结尾（Unix 毫秒）；每张表末尾 created_time / update_time
 -- 枚举 = TEXT（合法值写在列注释里）；JSON = TEXT 存 JSON 字符串
@@ -501,12 +696,14 @@ CREATE INDEX IF NOT EXISTS idx_team_update_time ON team (update_time DESC);
 -- ---------------------------------------------------------------------
 -- 2. roles —— 角色库（原 member 公共模板行并成角色表；成员=角色，全局一份）
 --    代码里的预置角色首次启动写入；角色构建师确认的新角色、面板/工具加
---    成员时的新名字也写进来。人设/工号/头像都挂在角色行上。
+--    成员时的新名字也写进来。人设/头像挂在角色行上；工号 v7 起挪到
+--    team_members 班底行（表自增主键即工号）——本表 employee_id 列弃用：
+--    列保留、全链路不再读写（DROP 是单向门，旧版 lib 打新库会 no such column）。
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS roles (
   role_id        INTEGER PRIMARY KEY AUTOINCREMENT,  -- 角色 ID，自增（team_members.role_id 引用它）
   role_name      TEXT NOT NULL,                -- 角色名（成员名=角色名；全库唯一，写入代码查重）
-  employee_id    INTEGER,                      -- 工号：插入角色行时取 roles 表最大工号 +1，同人同号；显示补零 1 → 0001
+  employee_id    INTEGER,                      -- 【v7 弃用】工号已挪到 team_members（表自增主键即工号）；列保留不读写，旧库回滚兼容
   persona_md     TEXT,                         -- 完整角色手册（Markdown 全文；duty/style/skills 等结构字段写入时烘进手册）
   profile        TEXT,                         -- 一句话简介（列表卡片/详情头展示；独立成列，不再烘进 persona_md）
   avatar         TEXT,                         -- 头像
@@ -516,14 +713,16 @@ CREATE TABLE IF NOT EXISTS roles (
 
 -- ---------------------------------------------------------------------
 -- 3. team_members —— 班底（团队 × 角色：一行一个在队成员 + 该队派发路线；
---    工号/头像经 role_id 松引用解析自 roles；role_name/persona_md/profile
---    是随角色行同步刷新的副本列（v4，真相在 roles）；执行实例（状态/会话/
---    当前任务）在 task_members）
+--    v7 起是工牌发放处：工号 = 本表自增主键（AUTOINCREMENT 只增不复用，
+--    全机器唯一），允许同名同角色多行，人员身份键 = 工号；人设/头像经
+--    role_id 松引用解析自 roles；role_name/persona_md/profile 是随角色行
+--    同步刷新的副本列（v4，真相在 roles）；执行实例（状态/会话/当前任务）
+--    在 task_members）
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS team_members (
-  team_member_id   INTEGER PRIMARY KEY AUTOINCREMENT,  -- 自增主键（内存新建行 0 落库发号）
+  team_member_id   INTEGER PRIMARY KEY AUTOINCREMENT,  -- 自增主键 = 工号（v7 表自增；显示补零 1 → 0001；内存新建行 0 落库发号）
   team_id          INTEGER NOT NULL,    -- 属于哪个团队（team.team_id）
-  role_id          INTEGER,             -- 角色 ID（roles.role_id，松引用；人设/工号/头像都在角色行上）
+  role_id          INTEGER,             -- 角色 ID（roles.role_id，松引用；人设/头像在角色行上）
   role_name        TEXT,                -- 角色名副本（写入时随 roles.role_name 同步刷新；悬空行 NULL；直查/展示用）
   persona_md       TEXT,                -- 角色手册副本（写入时随 roles.persona_md 同步刷新；真相在 roles）
   profile          TEXT,                -- 一句话简介副本（写入时随 roles.profile 同步刷新；真相在 roles）
@@ -545,7 +744,7 @@ CREATE TABLE IF NOT EXISTS task (
   subject           TEXT NOT NULL,       -- 标题（非空）
   description       TEXT,                -- 正文
   depend_tasks      TEXT NOT NULL DEFAULT '[]',  -- 依赖前置任务 ID 列表（JSON 数组；环检测由写入代码做）
-  member_chain_list TEXT NOT NULL DEFAULT '[]',  -- 执行人员序列列表（JSON 数组）
+  member_chain_list TEXT NOT NULL DEFAULT '[]',  -- 执行链站点列表（JSON 数组：[{member, stageBrief}]；v7 站点 member 写工号数字，迁移解析不到班底行的旧站点保留名字字符串并在渲染时标注 legacy）
   chain_cursor      INTEGER NOT NULL DEFAULT -1, -- -1=没开始；k=第 k 站完成；末站完成→completed
   status            TEXT NOT NULL DEFAULT 'draft',
                     -- draft / ready / wait / start / paused /
@@ -571,17 +770,19 @@ CREATE INDEX IF NOT EXISTS idx_task_current ON task (team_id, current_member) WH
 CREATE INDEX IF NOT EXISTS idx_task_update  ON task (team_id, update_time DESC);
 
 -- ---------------------------------------------------------------------
--- 5. task_members —— 任务成员（执行实例：有状态、有会话锚点；人设/工号/
---    头像的模板本体在 roles，班底路线在 team_members）
---    领队也是一行：name='项目牧羊人'、main_task_id 为空（团队级主持行）。
+-- 5. task_members —— 任务成员副本（有状态、有会话锚点；v7：建任务/加成员
+--    时从班底整行复制，工号抄班底行自增主键，行生命周期跟随
+--    所属大任务——删任务→副本级联删）
+--    领队也是一行：name='项目牧羊人'、main_task_id 为空（团队级主持行，
+--    不是工牌——领队子会话的锚 + has_leader 载体）。
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS task_members (
   task_member_id   INTEGER PRIMARY KEY AUTOINCREMENT,  -- 自增主键
   team_id          INTEGER NOT NULL,    -- 属于哪个团队（team.team_id，写入代码维护；领队行也带，删除/统计/领队行定位都按它过滤）
   main_task_id     INTEGER,             -- 实例行所属大任务 ID（task.task_id；独立无链任务=自身 id）；NULL=团队级行（领队主持行）
   now_task_id      INTEGER,             -- 当前执行任务 ID（task.task_id）
-  name             TEXT NOT NULL,       -- 成员名（与 roles.role_name 同名，写入代码查重）
-  employee_id      INTEGER,             -- 工号副本（引用 roles.employee_id，松引用）
+  name             TEXT NOT NULL,       -- 成员名（显示用；允许同名，身份判定按工号/行 id）
+  employee_id      INTEGER,             -- 工号（v7 表自增：建任务/加成员时抄自班底行 team_member_id；主持行同步班底领队行）
   session_id       TEXT NOT NULL DEFAULT '',  -- 本行自己的子代理会话 ID（v6：成员行=成员子会话，领队行=领队子代理会话）；还没启动时是空串
   status           TEXT NOT NULL DEFAULT 'staged',
                    -- 成员状态：staged / ready / working / paused / removed
@@ -604,7 +805,8 @@ CREATE TABLE IF NOT EXISTS attempts (
   team_id       INTEGER NOT NULL,     -- 属于哪个团队（team.team_id）
   task_id       INTEGER NOT NULL,     -- 属于哪个任务（task.task_id）
   kind          TEXT NOT NULL,        -- initial=首发 / stage=链站点 / retry=重试 / reassign=换人
-  member        TEXT NOT NULL,        -- 执行成员名（松引用，与链站点同键）
+  member        TEXT NOT NULL,        -- 执行成员名（显示保留；归属判定按 task_member_id 副本行，v7）
+  task_member_id INTEGER,             -- 执行副本行 id（v7：task_members.task_member_id——claim/汇报按它定行，同名成员不串 attempt；旧数据 NULL 时判定退按名兜底）
   status        TEXT NOT NULL DEFAULT 'pending_accept',
                 -- pending_accept / running / paused / succeeded / failed / revoked
   token         TEXT NOT NULL DEFAULT '',  -- 一次性凭证：接活时校验，换人/重试/接管即作废
@@ -653,7 +855,8 @@ CREATE TABLE IF NOT EXISTS mail_messages (
   mail_message_id          INTEGER PRIMARY KEY AUTOINCREMENT,  -- 邮件序号，自增（全库递增；箱内顺序按它排）
   team_id      INTEGER NOT NULL,     -- 属于哪个团队（team.team_id）
   message_id   TEXT NOT NULL,        -- 消息幂等键（接收方按它去重；同箱不重由写入代码保证）
-  box_key      TEXT NOT NULL,        -- 收件箱：收件成员名；领队='captain'
+  box_key      TEXT NOT NULL,        -- 收件箱键（v7：成员=工号十进制串、领队='captain'；旧库行=收件成员名，仅显示兜底）
+  employee_id  INTEGER,              -- 收件成员工号（v7 分箱真相：(team_id, employee_id) 定箱，同名不串箱；领队箱与解析不到的旧行 NULL）
   from_kind    TEXT NOT NULL,        -- 发件人类型：captain / member / user / plugin / system
   from_name    TEXT,                 -- 发件人名；plugin/system 可空
   to_kind      TEXT NOT NULL,        -- 收件人类型（同上五值）
@@ -798,14 +1001,6 @@ export function nextAutoincrementId(db: DatabaseSync, table: string): number {
   } catch {
     return 1; // sqlite_sequence 尚未创建：该表还没有任何自增插入
   }
-}
-
-/** 下一工号 = roles 表最大 employee_id + 1（docs/27；成员=角色，同人同号）。 */
-export function nextEmployeeId(db: DatabaseSync): number {
-  const row = db
-    .prepare('SELECT COALESCE(MAX(employee_id), 0) AS max FROM roles')
-    .get() as { max: number | null };
-  return (row.max ?? 0) + 1;
 }
 
 /** Stable avatar seed from a name（旧 roster.hashName 同式，头像种子）。 */

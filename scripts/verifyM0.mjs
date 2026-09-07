@@ -66,7 +66,9 @@ const patch = exists('cordis.patch.yml') ? read('cordis.patch.yml') : '';
 ok('- insert block present', /^- insert:\s*$/m.test(patch));
 ok('id: eteams', /id: eteams\s*$/m.test(patch));
 ok("name: 'dsh-eteams'", /name:\s*'dsh-eteams'/.test(patch));
-ok('stateDir: .eteams', /stateDir:\s*\.eteams/.test(patch));
+// stateDir 自 2026-09-04 起支持全局单库绝对路径（cordis.patch.yml 实配
+// C:/Users/epat/.eteams），这里只校验键存在且非空，不再钉死相对值。
+ok('stateDir configured', /stateDir:\s*\S+/.test(patch));
 
 console.log('package.json manifest');
 const pkg = JSON.parse(read('package.json'));

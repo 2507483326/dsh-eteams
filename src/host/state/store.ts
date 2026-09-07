@@ -28,7 +28,6 @@ import {
   avatarFromJson,
   avatarToJson,
   getDb,
-  nextEmployeeId,
   personaFromMd,
   personaToMd,
   routeFromColumns,
@@ -144,7 +143,6 @@ export function withTeamTx<T>(
 export interface RolesRow {
   role_id: number;
   role_name: string;
-  employee_id: number | null;
   persona_md: string | null;
   profile: string | null;
   avatar: string | null;
@@ -153,52 +151,31 @@ export interface RolesRow {
 /** roles 表按角色名取一行（缺行返回 undefined；读端助手）。 */
 export function rolesRowByName(db: DatabaseSync, name: string): RolesRow | undefined {
   return db
-    .prepare(
-      'SELECT role_id, role_name, employee_id, persona_md, profile, avatar FROM roles WHERE role_name = ?',
-    )
+    .prepare('SELECT role_id, role_name, persona_md, profile, avatar FROM roles WHERE role_name = ?')
     .get(name) as RolesRow | undefined;
 }
 
 /**
  * 按角色名确保 roles 行存在（松引用的写端保证，docs/27 v3：成员=角色，
  * 全局一份——加成员即入库、快照重写时自愈补齐缺失角色行）。同名行已存在
- * 直接返回其 role_id（人设/工号/头像以角色行为准，不覆盖）；缺行时插入：
- * persona 烘手册、profile 入列、avatar 转存，工号用显式值或新发号。
+ * 直接返回其 role_id（人设/头像以角色行为准，不覆盖）；缺行时插入：persona
+ * 烘手册、profile 入列、avatar 转存。v7：工号不在角色行上（挪到班底行
+ * team_members.employee_id）——roles.employee_id 弃用列恒置 NULL。
  */
 export function ensureRolesRowInTx(
   tx: TeamTx,
   name: string,
   persona: PersonaRecord,
-  opts?: { avatar?: AvatarRecord; employeeId?: number | null },
+  opts?: { avatar?: AvatarRecord },
 ): number {
   const existing = rolesRowByName(tx.db, name);
-  if (existing !== undefined) {
-    // 缺号自愈（docs/21 同人同号）：已有角色行无工号而本次带来工号时回填。
-    if (
-      existing.employee_id === null &&
-      typeof opts?.employeeId === 'number' &&
-      opts.employeeId > 0
-    ) {
-      tx.db
-        .prepare('UPDATE roles SET employee_id = ?, update_time = ? WHERE role_id = ?')
-        .run(opts.employeeId, tx.now, existing.role_id);
-    }
-    return existing.role_id;
-  }
+  if (existing !== undefined) return existing.role_id;
   const info = tx.db
     .prepare(
-      'INSERT INTO roles (role_name, employee_id, persona_md, profile, avatar, created_time, update_time) ' +
-        'VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO roles (role_name, persona_md, profile, avatar, created_time, update_time) ' +
+        'VALUES (?, ?, ?, ?, ?, ?)',
     )
-    .run(
-      name,
-      opts?.employeeId ?? nextEmployeeId(tx.db),
-      personaToMd(persona, name),
-      persona.profile ?? null,
-      avatarToJson(opts?.avatar),
-      tx.now,
-      tx.now,
-    );
+    .run(name, personaToMd(persona, name), persona.profile ?? null, avatarToJson(opts?.avatar), tx.now, tx.now);
   return Number(info.lastInsertRowid);
 }
 
@@ -238,11 +215,11 @@ export function syncTeamMemberRoleMirrorInTx(
 
 /**
  * 新建团队行（docs/35 §5#2）：在调用方事务内 INSERT，返回自增 team_id；
- * 领队 task_members 行由调用方（teamOps.createTeam，波次 2）紧接着写。
+ * 领队班底行与主持行由调用方（teamOps.createTeam）紧接着写。
  */
 export function insertTeamRow(tx: TeamTx, name: string, hasLeader: boolean, now: number): number {
   const info = tx.db
-    .prepare(
+  .prepare(
       'INSERT INTO team (team_name, has_leader, created_time, update_time) VALUES (?, ?, ?, ?)',
     )
     .run(name, hasLeader ? 1 : 0, now, now);
@@ -304,16 +281,22 @@ interface TeamRow {
 function selectTeamRow(db: DatabaseSync, key: TeamKey): TeamRow | undefined {
   if (typeof key === 'number') {
     return db
-      .prepare('SELECT team_id, team_name, has_leader, created_time, update_time FROM team WHERE team_id = ?')
+      .prepare(
+        'SELECT team_id, team_name, has_leader, created_time, update_time FROM team WHERE team_id = ?',
+      )
       .get(key) as TeamRow | undefined;
   }
   const byName = db
-    .prepare('SELECT team_id, team_name, has_leader, created_time, update_time FROM team WHERE team_name = ?')
+    .prepare(
+      'SELECT team_id, team_name, has_leader, created_time, update_time FROM team WHERE team_name = ?',
+    )
     .get(key) as TeamRow | undefined;
   if (byName !== undefined) return byName;
   if (/^\d+$/.test(key)) {
     return db
-      .prepare('SELECT team_id, team_name, has_leader, created_time, update_time FROM team WHERE team_id = ?')
+      .prepare(
+        'SELECT team_id, team_name, has_leader, created_time, update_time FROM team WHERE team_id = ?',
+      )
       .get(Number(key)) as TeamRow | undefined;
   }
   return undefined;
@@ -324,12 +307,12 @@ export function resolveTeamId(db: DatabaseSync, key: TeamKey): number | undefine
   return selectTeamRow(db, key)?.team_id;
 }
 
-/** 班底模板行（team_members ⨝ roles；TeamState.members 只装 team_id = 本队的行）。 */
+/** 班底行（team_members ⨝ roles；TeamState.members 只装 team_id = 本队的行）。 */
 function loadMembers(db: DatabaseSync, teamId: number): MemberRecord[] {
   const rows = db
     .prepare(
       'SELECT tm.team_member_id, tm.role_id, tm.model, tm.reasoning_effort, tm.created_time, ' +
-        'r.role_name, r.employee_id, r.persona_md, r.profile, r.avatar ' +
+        'r.role_name, r.persona_md, r.profile, r.avatar ' +
         'FROM team_members tm LEFT JOIN roles r ON r.role_id = tm.role_id ' +
         'WHERE tm.team_id = ? ORDER BY tm.team_member_id',
     )
@@ -340,7 +323,6 @@ function loadMembers(db: DatabaseSync, teamId: number): MemberRecord[] {
     reasoning_effort: string | null;
     created_time: number;
     role_name: string | null;
-    employee_id: number | null;
     persona_md: string | null;
     profile: string | null;
     avatar: string | null;
@@ -354,7 +336,8 @@ function loadMembers(db: DatabaseSync, teamId: number): MemberRecord[] {
       memberId: row.team_member_id,
       roleId: row.role_id,
       name: row.role_name,
-      ...(row.employee_id !== null ? { employeeId: row.employee_id } : {}),
+      // 工号 = 班底行自增主键（v7 表自增）：读端由 team_member_id 派生
+      employeeId: row.team_member_id,
       role: persona.role,
       // profile 独立成列（v3）：列值优先，旧库烘进手册的 `- 简介：` 行兜底。
       persona:
@@ -412,7 +395,7 @@ function loadTaskMembers(db: DatabaseSync, teamId: number): TaskMemberRecord[] {
 function loadAttempts(db: DatabaseSync, teamId: number): Map<number, AttemptRecord[]> {
   const rows = db
     .prepare(
-      'SELECT attempt_id, task_id, kind, member, status, token, station_index, progress, ' +
+      'SELECT attempt_id, task_id, kind, member, task_member_id, status, token, station_index, progress, ' +
         'result_output, result_changed_paths, error, claimed_time, ended_time, created_time ' +
         'FROM attempts WHERE team_id = ? ORDER BY attempt_id',
     )
@@ -421,6 +404,7 @@ function loadAttempts(db: DatabaseSync, teamId: number): Map<number, AttemptReco
     task_id: number;
     kind: AttemptRecord['kind'];
     member: string;
+    task_member_id: number | null;
     status: AttemptRecord['status'];
     token: string;
     station_index: number;
@@ -455,6 +439,8 @@ function loadAttempts(db: DatabaseSync, teamId: number): Map<number, AttemptReco
       taskId: row.task_id,
       kind: row.kind,
       member: row.member,
+      // 执行副本行 id（v7）：归属判定按行 id；旧数据 NULL 退按名
+      ...(row.task_member_id !== null ? { taskMemberId: row.task_member_id } : {}),
       status: row.status,
       token: row.token,
       stationIndex: row.station_index,
@@ -631,10 +617,11 @@ export function writeTeamInTx(tx: TeamTx, state: TeamState): void {
     'INSERT INTO team (team_id, team_name, has_leader, created_time, update_time) VALUES (?, ?, ?, ?, ?)',
   ).run(teamId, state.name, state.hasLeader ? 1 : 0, state.createdAt, now);
 
-  // 班底模板：只重写本队行（team_members）；人设/工号/头像在 roles 角色行
-  // 上（成员=角色，全局一份），不经快照重写——写端只保证 team_members 行
-  // 落库且 role_id 松引用可解析（同名角色行缺失时自愈补建）；role_name/
-  // persona_md/profile 副本列（v4）落库后按 roles 统一刷新。
+  // 班底行（工牌发放处）：只重写本队行（team_members）；工号 = 行的自增主键
+  // （v7 表自增，无独立工号列）；人设/头像在 roles 角色行上（成员=角色，
+  // 全局一份），不经快照重写——写端只保证 team_members 行落库且 role_id
+  // 松引用可解析（同名角色行缺失时自愈补建）；role_name/persona_md/profile
+  // 副本列（v4）落库后按 roles 统一刷新。
   db.prepare('DELETE FROM team_members WHERE team_id = ?').run(teamId);
   const insMember = db.prepare(
     'INSERT INTO team_members (team_member_id, team_id, role_id, model, reasoning_effort, ' +
@@ -644,10 +631,18 @@ export function writeTeamInTx(tx: TeamTx, state: TeamState): void {
     const route = routeToColumns(m.modelRoute);
     const roleId = ensureRolesRowInTx(tx, m.name, m.persona, {
       ...(m.avatar !== undefined ? { avatar: m.avatar } : {}),
-      employeeId: m.employeeId ?? null,
     });
     m.roleId = roleId; // 内存同步：角色行重建/改名后内存引用随之对齐
-    insMember.run(m.memberId, teamId, roleId, route.model, route.effort, m.createdAt, now);
+    m.employeeId = m.memberId; // 工号即主键（表自增）：写端同步派生值
+    insMember.run(
+      m.memberId,
+      teamId,
+      roleId,
+      route.model,
+      route.effort,
+      m.createdAt,
+      now,
+    );
   }
   syncTeamMemberRoleMirrorInTx(tx, { teamId });
 
@@ -693,9 +688,9 @@ export function writeTeamInTx(tx: TeamTx, state: TeamState): void {
   // attempts：任务执行的审计链，随任务一起整存整取。
   db.prepare('DELETE FROM attempts WHERE team_id = ?').run(teamId);
   const insAttempt = db.prepare(
-    'INSERT INTO attempts (attempt_id, team_id, task_id, kind, member, status, token, ' +
+    'INSERT INTO attempts (attempt_id, team_id, task_id, kind, member, task_member_id, status, token, ' +
       'station_index, progress, result_output, result_changed_paths, error, claimed_time, ' +
-      'ended_time, created_time, update_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'ended_time, created_time, update_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   );
   for (const t of state.tasks) {
     for (const a of t.attempts) {
@@ -705,6 +700,7 @@ export function writeTeamInTx(tx: TeamTx, state: TeamState): void {
         t.id,
         a.kind,
         a.member,
+        a.taskMemberId ?? null,
         a.status,
         a.token,
         a.stationIndex,

@@ -9,8 +9,10 @@
  * 换算细则（docs/36 建议 6）：t1/a1/d1 文本号按映射换整数号（正文不换）；
  * events/inbox 的 per-team seq 丢弃换全库号；inbox 文件名 → box_key、
  * MailMessage.id 原样保留为 message_id；存量任务目录按字面路径进
- * task.work_dir（旧目录不迁移）；archive/ 目录跳过；工号 `ET-0001` → 整数；
- * employee-seq.json 不导入（新号 = roles 表最大工号 +1）。
+ * task.work_dir（旧目录不迁移）；archive/ 目录跳过；工号 `ET-0001` → 整数
+ * （v7 表自增：按名重键——班底行落库拿到新自增号后，副本/邮箱/链站点按
+ * 名字 join 换到新号）；
+ * employee-seq.json 不导入。
  *
  * @module dsh-eteams/state/import
  */
@@ -33,7 +35,6 @@ import {
   avatarToJson,
   hashName,
   LEADER_NAME,
-  nextEmployeeId,
   personaToMd,
   readSchemaVersion,
   writeSchemaVersion,
@@ -196,14 +197,6 @@ interface LegacyRosterMember {
 // 旧值换算助手。
 // --------------------------------------------------------------------------
 
-/** `ET-0001` → 1（裸数字也认）；无法解析返回 undefined。 */
-function parseEmployeeId(raw: string | undefined): number | undefined {
-  if (raw === undefined || raw.trim() === '') return undefined;
-  const match = /^ET-?(\d+)$/i.exec(raw.trim()) ?? /^(\d+)$/.exec(raw.trim());
-  const n = match !== null ? Number(match[1]) : NaN;
-  return Number.isInteger(n) && n > 0 ? n : undefined;
-}
-
 /** `t12` / `a3` / `d7` → 整数；非标准号返回 undefined（按序补号兜底）。 */
 function parseLegacyId(raw: string | undefined, prefix: string): number | undefined {
   if (raw === undefined) return undefined;
@@ -320,21 +313,20 @@ export function presetMemberSeeds(): PresetMemberSeed[] {
 
 /**
  * 首次建库/导入事务的收尾种子（幂等）：领队/预置角色的 roles 角色行
- * （缺则建，已有同名行不覆盖——成员=角色，全局一份）。工号 = roles 表
- * 最大工号 +1；一句话简介入 profile 列（v3）。
+ * （缺则建，已有同名行不覆盖——成员=角色，全局一份）。v7：角色行不带工号
+ * （工牌发放在各队班底行上）；一句话简介入 profile 列（v3）。
  */
 export function seedPresetRows(tx: TeamTx, now: number): void {
   const { db } = tx;
   const selectRole = db.prepare('SELECT role_id FROM roles WHERE role_name = ?');
   const insertRole = db.prepare(
-    'INSERT INTO roles (role_name, employee_id, persona_md, profile, avatar, created_time, update_time) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO roles (role_name, persona_md, profile, avatar, created_time, update_time) ' +
+      'VALUES (?, ?, ?, ?, ?, ?)',
   );
   for (const seed of presetMemberSeeds()) {
     if (selectRole.get(seed.name) !== undefined) continue;
     insertRole.run(
       seed.name,
-      nextEmployeeId(db),
       personaToMd(seed.persona, seed.name),
       seed.persona.profile ?? null,
       avatarToJson(seed.avatar),
@@ -417,14 +409,14 @@ function importRosterFile(db: DatabaseSync, stateRoot: string, now: number): Leg
     const name = m.name.trim();
     const role = (m.role ?? name).trim() || name;
     const persona = personaFromFields(m, name, role);
-    // 同名角色行已存在则跳过（幂等；不覆盖已有角色定义）
+    // 同名角色行已存在则跳过（幂等；不覆盖已有角色定义）。
+    // v7：角色行不带工号——旧 roster 工号只随返回值留给班底发号参考。
     if (rolesRowByName(db, name) !== undefined) continue;
     db.prepare(
-      'INSERT INTO roles (role_name, employee_id, persona_md, profile, avatar, created_time, update_time) ' +
-        'VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO roles (role_name, persona_md, profile, avatar, created_time, update_time) ' +
+        'VALUES (?, ?, ?, ?, ?, ?)',
     ).run(
       name,
-      parseEmployeeId(m.employeeId) ?? nextEmployeeId(db),
       personaToMd(persona, name),
       persona.profile ?? null,
       avatarToJson(m.avatar ?? { seed: hashName(name), salt: 0 }),
@@ -656,41 +648,54 @@ function importLegacyTeam(
   const maps = buildIdMaps(tasks, decisions);
   const tx: TeamTx = { db, now };
 
-  // ---- 班底行（team_members；领队不进班底——它是领队实例行）----
+  // ---- 班底行（v7：工牌发放处——领队也是一行；工号 = 行的自增主键
+  // （表自增），旧号不保留——副本/邮箱/链站在本导入内按新号重键）----
   const insertTeamMember = db.prepare(
     'INSERT INTO team_members (team_id, role_id, model, reasoning_effort, created_time, update_time) ' +
       'VALUES (?, ?, ?, ?, ?, ?)',
   );
-  const employeeByMember = new Map<string, number | null>();
+  const employeeByMember = new Map<string, number>();
   for (const m of old.members ?? []) {
-    if (m.name === LEADER_NAME) continue; // 领队行见下：不入班底
     const name = m.name;
     const role = (m.role ?? name).trim() || name;
     const persona = personaFromFields(m.persona ?? {}, name, role);
-    // 班底同名复用公共模板的工号（docs/35 §3#9：不重发号）
-    const fromRoster = roster.find((r) => r.name === name);
-    const employeeId =
-      parseEmployeeId(m.employeeId) ??
-      (fromRoster !== undefined ? parseEmployeeId(fromRoster.employeeId) : undefined) ??
-      nextEmployeeId(db);
-    // 加成员即入库（v3）：同名角色行缺则从班底行自建（工号/手册/头像带上）；
-    // 已有同名行（roster.json 导入）以角色行为准，班底行只留派发路线。
+    // 同名角色行缺则从班底行自建（手册/头像带上）；已有同名行（roster.json
+    // 导入）以角色行为准，班底行只留派发路线。
     const roleId = ensureRolesRowInTx(tx, name, persona, {
       avatar: m.avatar ?? { seed: hashName(name), salt: 0 },
-      employeeId,
     });
     const route = legacyRouteColumns(m.modelRoute);
-    insertTeamMember.run(teamId, roleId, route.model, route.effort, m.createdAt ?? now, now);
-    employeeByMember.set(name, employeeId);
+    const info = insertTeamMember.run(
+      teamId,
+      roleId,
+      route.model,
+      route.effort,
+      m.createdAt ?? now,
+      now,
+    );
+    employeeByMember.set(name, Number(info.lastInsertRowid));
+  }
+  if (!employeeByMember.has(LEADER_NAME)) {
+    // 旧快照缺领队条目：班底领队行仍要建（主持行工号与它同步，终审 #2）
+    const leaderTemplate = roster.find((r) => r.name === LEADER_NAME);
+    const roleId = ensureRolesRowInTx(
+      tx,
+      LEADER_NAME,
+      personaFromFields(leaderTemplate ?? {}, LEADER_NAME, leaderTemplate?.role ?? LEADER_NAME),
+      { avatar: { seed: hashName(LEADER_NAME), salt: 7 } },
+    );
+    const info = insertTeamMember.run(teamId, roleId, null, null, old.createdAt ?? now, now);
+    employeeByMember.set(LEADER_NAME, Number(info.lastInsertRowid));
   }
   // v4 副本列刷新：本队班底行刚落库，镜像按角色行统一回填
   syncTeamMemberRoleMirrorInTx(tx, { teamId });
 
-  // ---- 领队实例行（docs/35 §5#2：captainSessionId/captainChildId 落这里）----
+  // ---- 领队实例行（docs/35 §5#2：captainSessionId/captainChildId 落这里；
+  // 工号同步班底领队行——它是主持行不是工牌）----
   const leaderTemplate = roster.find((r) => r.name === LEADER_NAME);
   const leaderRow = db
-    .prepare('SELECT employee_id, persona_md FROM roles WHERE role_name = ?')
-    .get(LEADER_NAME) as { employee_id: number | null; persona_md: string | null } | undefined;
+    .prepare('SELECT persona_md FROM roles WHERE role_name = ?')
+    .get(LEADER_NAME) as { persona_md: string | null } | undefined;
   const leaderPersona = personaFromFields(
     leaderTemplate ?? {},
     LEADER_NAME,
@@ -702,7 +707,7 @@ function importLegacyTeam(
     mainTaskId: null,
     nowTaskId: null,
     name: LEADER_NAME,
-    employeeId: leaderRow?.employee_id ?? null,
+    employeeId: employeeByMember.get(LEADER_NAME) ?? null,
     // v6 领队行 session_id = 领队子代理会话；主会话快照归任务行（下方盖章）。
     sessionId: old.captainChildId ?? '',
     status: hasLeader ? 'ready' : 'removed',
@@ -710,19 +715,21 @@ function importLegacyTeam(
     createdAt: old.createdAt ?? now,
   });
 
-  // ---- 成员实例行：有子会话的旧成员各建一行（无会话者只是模板）----
+  // ---- 成员实例行：有子会话且任务可锚定的旧成员各建一行（v7 不再产团队
+  // 级行——副本随任务补建，见下方任务循环之后）----
   for (const m of old.members ?? []) {
     if (m.name === LEADER_NAME) continue;
     const childSessionId = m.id ?? '';
     if (childSessionId === '') continue;
     const anchor = anchorTaskOf(tasks, m.name, maps);
+    if (anchor === undefined) continue; // 无任务可锚：只留班底行（工牌）
     const persona = personaFromFields(m.persona ?? {}, m.name, m.role ?? m.name);
     const route = legacyRouteColumns(m.modelRoute);
     const row: TaskMemberRecord = {
       id: 0,
       teamId,
-      mainTaskId: anchor?.rootId ?? null,
-      nowTaskId: anchor?.taskId ?? null,
+      mainTaskId: anchor.rootId,
+      nowTaskId: anchor.taskId,
       name: m.name,
       employeeId: employeeByMember.get(m.name) ?? null,
       sessionId: childSessionId,
@@ -770,7 +777,14 @@ function importLegacyTeam(
           .map((d) => maps.task.get(d))
           .filter((n): n is number => n !== undefined),
       ),
-      JSON.stringify(t.chain ?? []),
+      // 执行链站点（v7）：名字站点换工号站点（按本队班底解析；解析不到的
+      // 保留名字，渲染端标 legacy 兜底）
+      JSON.stringify(
+        (t.chain ?? []).map((s) => {
+          const resolved = employeeByMember.get(s.member);
+          return resolved !== undefined ? { ...s, member: resolved } : s;
+        }),
+      ),
       t.chainCursor ?? -1,
       mapLegacyStatus(t.status, 'draft'),
       t.assignee ?? null,
@@ -819,6 +833,31 @@ function importLegacyTeam(
     }
   }
 
+  // ---- 任务副本补建（v7：建任务即班底全员复制——含领队；工号抄班底行的
+  // 自增主键（表自增），status=staged、session_id 空；上方导入的旧锚定行
+  // 保持原状态原会话不动。只补容器任务：副本行只锚定大任务，小任务共享
+  // 容器的副本行）----
+  db.prepare(
+    'INSERT INTO task_members (team_id, main_task_id, now_task_id, name, employee_id, ' +
+      'session_id, status, created_time, update_time) ' +
+      'SELECT tm.team_id, t.task_id, NULL, tm.role_name, tm.team_member_id, ?, ?, ?, ? ' +
+      'FROM task t JOIN team_members tm ON tm.team_id = t.team_id ' +
+      'WHERE t.parent_id IS NULL AND tm.role_name IS NOT NULL ' +
+      'AND NOT EXISTS (SELECT 1 FROM task_members x WHERE x.team_id = tm.team_id ' +
+      'AND x.main_task_id = t.task_id AND x.name = tm.role_name)',
+  ).run('', 'staged', now, now);
+
+  // ---- 尝试归属回填（v7：attempts.task_member_id 按成员名 + 根任务 join
+  // 副本行；解析不到保留 NULL，判定退按名兜底）----
+  db.prepare(
+    'UPDATE attempts SET task_member_id = ' +
+      '(SELECT x.task_member_id FROM task_members x ' +
+      'WHERE x.team_id = attempts.team_id AND x.name = attempts.member ' +
+      'AND x.main_task_id = ' +
+      '(SELECT COALESCE(t.parent_id, t.task_id) FROM task t WHERE t.task_id = attempts.task_id)) ' +
+      'WHERE team_id = ? AND task_member_id IS NULL',
+  ).run(teamId);
+
   // ---- 升级决策（旧 pendingDecisions 即 open 行）----
   const insertDecision = db.prepare(
     'INSERT INTO decisions (decision_id, team_id, task_id, attempt_id, error, retry_count, ' +
@@ -864,12 +903,16 @@ function importLegacyTeam(
     }
   }
 
-  // ---- 邮箱（文件名 → box_key；message_id 原样；seq 丢弃换全库号）----
+  // ---- 邮箱（文件名 → box_key；v7：成员箱按工号串重钉、employee_id 落列
+  // ——旧名字箱解析不到的保留名字仅显示兜底；message_id 原样；seq 丢弃换
+  // 全库号）----
   const inboxDir = join(stateRoot, dirName, 'inbox');
   if (existsSync(inboxDir)) {
     for (const fileName of readdirSync(inboxDir)) {
       if (!fileName.endsWith('.jsonl')) continue;
-      const boxKey = fileName.slice(0, -'.jsonl'.length);
+      const legacyBox = fileName.slice(0, -'.jsonl'.length);
+      const boxEmployeeId = legacyBox === 'captain' ? null : (employeeByMember.get(legacyBox) ?? null);
+      const box = boxEmployeeId !== null ? String(boxEmployeeId) : legacyBox;
       for (const m of parseJsonl<LegacyMail>(readFileSync(join(inboxDir, fileName), 'utf8'))) {
         if (typeof m.id !== 'string' || m.id === '') continue;
         const mail: MailMessage = {
@@ -877,14 +920,14 @@ function importLegacyTeam(
           seq: 0,
           at: m.at ?? now,
           from: m.from ?? { kind: 'system' },
-          to: m.to ?? { kind: 'member', name: boxKey },
+          to: m.to ?? { kind: 'member', name: legacyBox },
           kind: mapMailKind(m.kind),
           ...(m.taskId !== undefined ? { taskId: maps.task.get(m.taskId) } : {}),
           ...(m.attemptId !== undefined ? { attemptId: maps.attempt.get(m.attemptId) } : {}),
           content: m.content ?? '',
           ...(m.readAt !== undefined ? { readAt: m.readAt } : {}),
         };
-        insertMailInTx(tx, teamId, boxKey, mail);
+        insertMailInTx(tx, teamId, box, mail, boxEmployeeId);
       }
     }
   }

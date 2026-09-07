@@ -20,6 +20,7 @@ import {
 import { sendMessage, teamView } from '../runtime/teamOps.js';
 import { envForAgent, resolveCaller } from './identity.js';
 import { renderContract } from '../prompts/handoff/mails.js';
+import { stationPointsTo } from '../model/taskMachine.js';
 
 function text(value: string): ContentBlock[] {
   return [{ type: 'text', text: value }];
@@ -84,7 +85,7 @@ export function createMemberTools(
       const { attempt, token, task, inboxPreview } = await claimTask(
         env,
         caller.team,
-        { name: caller.member.name },
+        caller.member,
         args.taskId,
       );
       return {
@@ -113,7 +114,7 @@ export function createMemberTools(
     },
     execute: async (args, exec) => {
       const { env, caller } = await memberOf(exec);
-      await declineTask(env, caller.team, { name: caller.member.name }, args.taskId, args.reason);
+      await declineTask(env, caller.team, caller.member, args.taskId, args.reason);
       return { ok: true as const };
     },
   });
@@ -137,7 +138,7 @@ export function createMemberTools(
     },
     execute: async (args, exec) => {
       const { env, caller } = await memberOf(exec);
-      await appendProgress(env, caller.team, { name: caller.member.name }, { ...args });
+      await appendProgress(env, caller.team, caller.member, { ...args });
       return { ok: true as const };
     },
   });
@@ -170,12 +171,7 @@ export function createMemberTools(
     },
     execute: async (args, exec) => {
       const { env, caller } = await memberOf(exec);
-      const { done } = await completeTask(
-        env,
-        caller.team,
-        { name: caller.member.name },
-        { ...args },
-      );
+      const { done } = await completeTask(env, caller.team, caller.member, { ...args });
       return { ok: true as const, done };
     },
   });
@@ -210,12 +206,9 @@ export function createMemberTools(
     },
     execute: async (args, exec) => {
       const { env, caller } = await memberOf(exec);
-      const { retried, retryCount, maxRetries } = await failTask(
-        env,
-        caller.team,
-        { name: caller.member.name },
-        { ...args },
-      );
+      const { retried, retryCount, maxRetries } = await failTask(env, caller.team, caller.member, {
+        ...args,
+      });
       return { ok: true as const, retried, retryCount, maxRetries };
     },
   });
@@ -237,20 +230,23 @@ export function createMemberTools(
     },
     execute: async (_args, exec) => {
       const { caller } = await memberOf(exec);
-      const me = caller.member.name;
+      const me = caller.member;
+      // 我名下的任务：assignee 或执行链余下站点指向我的工号（v7 链站点写
+      // 工号；旧名字站点退按名比对）。
       const mine = caller.team.tasks.filter(
         (t) =>
-          t.assignee === me ||
-          t.chain.some((s, i) => i > t.chainCursor && s.member === me),
+          t.assignee === me.name ||
+          t.chain.some((s, i) => i > t.chainCursor && stationPointsTo(s, me)),
       );
-      // 角色/路线读班底模板行（docs/35 §3#5：member=纯模板，task_members=实例行）。
-      const template = caller.team.members.find((m) => m.name === me);
+      // 角色/路线读班底行（docs/35 §3#5：人设/路线在班底，task_members=副本行）。
+      const template = caller.team.members.find((m) => m.employeeId === me.employeeId);
       // 当前任务口径（docs/36 建议 2）：wait(已派待接取)/start(执行中)/paused
       // 三态之一；completed/failed 等终态任务不再是「当前任务」。
       const current = mine.find((t) => ['wait', 'start', 'paused'].includes(t.status));
       const view = {
-        member: me,
-        role: template?.role ?? me,
+        member: me.name,
+        employeeId: me.employeeId,
+        role: template?.role ?? me.name,
         currentTask: current?.id ?? null,
         tasks: mine.map((t) => ({
           id: t.id,
@@ -264,7 +260,9 @@ export function createMemberTools(
                   // 按满进度口径显示（docs/35 §5#10 观察项）。
                   done: t.status === 'completed' ? t.chain.length : t.chainCursor + 1,
                   total: t.chain.length,
-                  mine: t.chain.findIndex((s, i) => i > t.chainCursor && s.member === me),
+                  mine: t.chain.findIndex(
+                    (s, i) => i > t.chainCursor && stationPointsTo(s, me),
+                  ),
                 }
               : null,
           contract: renderContract(t),
@@ -277,9 +275,9 @@ export function createMemberTools(
   const messageTool = defineTool({
     name: 'eteams_send_message',
     description:
-      '私信：to="captain" 发给领队（求助/决策/汇报），或 to=其他成员名。不直接打扰用户。',
+      '私信：to="captain" 发给领队（求助/决策/汇报），或 to=成员工号（面板「ET-xxxx」的数字，同名成员各收各箱）。不直接打扰用户。',
     parameters: {
-      to: strR('收件人（captain 或成员名）'),
+      to: strR('收件人（captain 或成员工号/成员名）'),
       content: strR('消息内容'),
       taskId: int('相关任务号（可选）'),
     },
@@ -296,7 +294,7 @@ export function createMemberTools(
     },
     execute: async (args, exec) => {
       const { env, caller } = await memberOf(exec);
-      if (args.to === caller.member.name) throw new ETeamsError('不能给自己发消息');
+      if (args.to.trim() === caller.member.name) throw new ETeamsError('不能给自己发消息');
       await sendMessage(env, caller.team, caller.actor, args.to, args.content, {
         taskId: args.taskId,
       });
