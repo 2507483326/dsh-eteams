@@ -10,11 +10,12 @@
  * @module dsh-eteams/client/avatarStack
  */
 import type { ReactNode } from 'react';
-import { Avatar } from '../features/avatar/avatar';
+import { Avatar, AVATAR_SHELL_CLASS } from '../features/avatar/avatar';
 
-/** +N 余量牌（teamPage 密度原值，cn 两段逐字并一段）：muted 圆牌白描边。 */
-const OVERFLOW_CLASS =
-  'inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold bg-muted text-muted-foreground ring-2 ring-[color:var(--background)]';
+/** +N 余量牌（用户迭代 2026-09-07 与带壳头像同款收口）：白底品牌描边壳
+ * （AVATAR_SHELL_CLASS）+ 内层 muted 圆面——h-7 w-7 外径 = 20px 脸 + 壳 8，
+ * 与 teamPage 叠放（size 20）同高。 */
+const OVERFLOW_CLASS = `inline-flex h-7 w-7 shrink-0 ${AVATAR_SHELL_CLASS}`;
 
 /** ================================== 主组件 ================================== */
 
@@ -55,7 +56,9 @@ export function AvatarStack<P extends { name: string; seed?: number; salt?: numb
       ))}
       {overflow && rest > 0 && (
         <span className={OVERFLOW_CLASS} title={`其余 ${rest} 人`}>
-          +{rest}
+          <span className="flex h-full w-full items-center justify-center rounded-full bg-muted text-[9px] font-semibold text-muted-foreground">
+            +{rest}
+          </span>
         </span>
       )}
     </>

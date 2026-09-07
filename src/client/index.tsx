@@ -8,7 +8,10 @@
  *    order 100) hosting the M4 activity panel (概览/成员/任务/动态 + 抽屉);
  * 2. the 团队 button — an entry at the right end of the composer tool row
  *    (`conversation.input.right`), opening the tabbed 团队/成员 popup whose
- *    team rows and 新增 shortcuts jump straight to the 团队 tab page;
+ *    team rows and 新增 shortcuts jump straight to the 团队 tab page; beside
+ *    it the 子会话模型徽章 (order 101) — a read-only badge rendering an eteams
+ *    subagent session's actual provider/model (用户迭代 2026-09-07；主会话
+ *    不渲染，模型座位照旧);
  * 3. the hero 团队 button — DOM-injected beside the 标准模式 preset chip on
  *    the not-started screen (no additive slot exists there), clicking into
  *    the 团队 tab page (full-screen 团队页 while the view ring is not
@@ -40,6 +43,7 @@ import { installModelCatalog } from './lib/modelCatalog';
 import { ensureEteamsStyles } from './lib/tailwind';
 import { enterTeamsPanel } from './pages/teamsPanel';
 import { TeamsButton } from './pages/teamsButton';
+import { SessionModelBadge } from './pages/sessionModelBadge';
 
 /** Client services required before apply runs. The runner gates every
  * `ctx.<service>` property read against this declaration — touching an
@@ -93,16 +97,29 @@ export function apply(ctx: Context): void {
   );
 
   guard('conversation.input.right', () =>
-    ctx.slots.inject('conversation.input.right', () =>
-      ctx.slots.register(
+    ctx.slots.inject('conversation.input.right', () => {
+      // 两个占位一次注入（iterable effect：事务性安装、逆序卸载）。
+      const unregisterButton = ctx.slots.register(
         {
           name: 'conversation.input.right',
           id: `${ETEAMS_VIEW_ID}-button`,
           order: 100,
         },
         TeamsButton,
-      ),
-    ),
+      );
+      // 子会话模型徽章（用户迭代 2026-09-07「子代理会话中显示实际的
+      // provider/model」）：order 101 排在团队按钮后；仅在 eteams 子代理
+      // 会话渲染（宿主 /session-route 判 subagent + 观测路线）。
+      const unregisterModelBadge = ctx.slots.register(
+        {
+          name: 'conversation.input.right',
+          id: `${ETEAMS_VIEW_ID}-model-badge`,
+          order: 101,
+        },
+        SessionModelBadge,
+      );
+      return [unregisterButton, unregisterModelBadge];
+    }),
   );
 
   guard('conversation.card', () => installCard(ctx));

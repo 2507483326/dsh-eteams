@@ -1,12 +1,13 @@
 /**
- * 任务展示态派生层（docs/27 §27.9#11 十态收敛）：底层 10 态状态机
- * （types.ts TaskStatus：draft/ready/wait/start/paused/wait_decision/
+ * 任务展示态派生层（docs/27 §27.9#11 十态收敛 + docs/panelTaskCommission
+ * 第 11 态 creating）：底层 11 态状态机
+ * （types.ts TaskStatus：creating/draft/ready/wait/start/paused/wait_decision/
  * wait_user/completed/failed/cancelled）是调度/重试/依赖阻断的运行依据，
  * 本模块提供三套展示词表与 tone——纯函数、读取时计算、不落盘、不写状态机。
  *
  * 同时是任务/成员两套展示 tone 与词表的共同家：
- * - `STATUS_LABELS`：任务 10 态精确词表（八轮 DA21 页面化后无直接渲染方，
- *   仅作十态键序的规范来源——STATUS_GROUPS 按其键序展开）。
+ * - `STATUS_LABELS`：任务 11 态精确词表（八轮 DA21 页面化后无直接渲染方，
+ *   仅作态键序的规范来源——STATUS_GROUPS 按其键序展开）。
  * - `ATTEMPT_STATUS_LABELS`：尝试（AttemptStatus 六态）词表——尝试行状态与
  *   任务态不同源，不复用任务词表。
  * - `MEMBER_STATUS_LABELS`：成员聚合状态词表（staged/ready/working/paused/
@@ -24,10 +25,13 @@
 /** Semantic tone — every status color flows through these five buckets. */
 export type Tone = 'info' | 'ok' | 'warn' | 'err' | 'muted';
 
-/** 任务 10 态精确词表（docs/27 §27.9#11；二十四轮 DA37 用户拍板「没有什么
- * 草稿状态、待指派状态，只有待开始状态」——draft/ready 两态展示文案合并为
- * 「待开始」，词表仅作键序规范来源）。 */
+/** 任务 11 态精确词表（docs/27 §27.9#11 + docs/panelTaskCommission 第 11 态
+ * creating；二十四轮 DA37 用户拍板「没有什么草稿状态、待指派状态，只有待
+ * 开始状态」——draft/ready 两态展示文案合并为「待开始」，词表仅作键序规范
+ * 来源；creating = 面板手动创建占位「创建中」，键序在最前——比待开始更早
+ * 的态）。 */
 export const STATUS_LABELS: Record<string, string> = {
+  creating: '创建中',
   draft: '待开始',
   ready: '待开始',
   wait: '待接取',
@@ -98,7 +102,8 @@ export interface DisplayStatus {
 }
 
 /**
- * 10 态 → 展示态映射表：draft→init；ready→created；wait/paused→waiting；
+ * 11 态 → 展示态映射表：creating→init（面板手动创建占位，尚未进入执行
+ * 语义，docs/panelTaskCommission）；draft→init；ready→created；wait/paused→waiting；
  * start→doing；completed→done；wait_decision/wait_user/failed→error；
  * cancelled→error 桶但文案「已取消」、中性灰（同桶异色——wait_decision/
  * wait_user 行内点色 warning 黄、failed 红、cancelled 灰）。
@@ -112,6 +117,7 @@ export interface DisplayStatus {
  * 并入重试计数。
  */
 const DISPLAY_STATUS_TABLE: Record<string, { key: DisplayStatusKey; label: string; tone: Tone }> = {
+  creating: { key: 'init', label: '创建中', tone: 'info' },
   draft: { key: 'init', label: '待开始', tone: 'info' },
   ready: { key: 'created', label: '待开始', tone: 'info' },
   wait: { key: 'waiting', label: '待接取', tone: 'warn' },
@@ -156,6 +162,16 @@ export function isStartable(status: string): boolean {
  */
 export function isTerminal(status: string): boolean {
   return status === 'completed' || status === 'cancelled';
+}
+
+/**
+ * 主任务（group）「开始」钮状态判据扩位（docs/panelTaskCommission）：
+ * 非终态且**非创建中**——创建中的容器（面板手动建任务占位）计划未定不可
+ * 开跑（宿主 startGroupTask 同闸），面板两侧按钮判据收拢于此，与宿主守卫
+ * 镜像。结构判据（kind === 'group'、小任务数 > 0）留在调用位。
+ */
+export function isGroupStartable(status: string): boolean {
+  return !isTerminal(status) && status !== 'creating';
 }
 
 /** 组卡汇总 chip（B.2 group 汇总规则）：一条可渲染的汇总（tone/icon/detail）。 */

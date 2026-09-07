@@ -171,3 +171,15 @@ declare module 'lucide-react/dist/esm/icons/more-horizontal.mjs' {
   >;
   export default MoreHorizontal;
 }
+
+// docs/panelTaskCommission 增补：任务卡「创建中」态的旋转 loader（任务列表
+// 卡 pill 旁 animate-spin）。同款深层导入纪律（一个图标只进一个模块）。
+declare module 'lucide-react/dist/esm/icons/loader-circle.mjs' {
+  import type { ForwardRefExoticComponent, RefAttributes } from 'react';
+  import type { LucideProps } from 'lucide-react';
+
+  const LoaderCircle: ForwardRefExoticComponent<
+    Omit<LucideProps, 'ref'> & RefAttributes<SVGSVGElement>
+  >;
+  export default LoaderCircle;
+}

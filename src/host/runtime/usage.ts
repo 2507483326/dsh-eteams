@@ -35,7 +35,7 @@ import {
 } from '../state/usageStore.js';
 import { findTeamByCaptain } from '../state/store.js';
 import { captainChildTeamOf } from './captainAgent.js';
-import { getSessionTeamId } from './sessionTeam.js';
+import { getSessionTeamId, getConsumedSessionTeamId } from './sessionTeam.js';
 import { stateRootFor, type RuntimeLogger } from './base.js';
 
 // ---------- 行模型（docs/40；类型本体在 state/usageStore，此处转出兼容） ----------
@@ -115,6 +115,17 @@ function rememberRoute(sessionId: string, provider: unknown, model: unknown): vo
   routeCache.set(sessionId, { provider, model });
 }
 
+/**
+ * 只读查询一个会话的观测路线（webui `/session-route` 透出给面板/子会话徽章用）。
+ * 观测口径：进程内存——宿主重启后该会话再次发出请求时由 firehose 重填；
+ * 从未发过请求的会话返回 undefined（「实际」只显示观测值，不显示猜测值）。
+ */
+export function sessionRouteOf(
+  sessionId: string,
+): { provider: string; model: string } | undefined {
+  return routeCache.get(sessionId);
+}
+
 // ---------- 会话身份解析（28.3.2 优先级表） ----------
 
 /**
@@ -159,8 +170,9 @@ async function resolveIdentity(sessionId: string, root: string): Promise<Session
       if (captainTeamId !== undefined) {
         identity = { teamId: captainTeamId, memberName: null, roleKind: 'captain' };
       } else {
-        // 4. 面板团队绑定（sessionTeam.ts 现成可查）
-        const bound = getSessionTeamId(sessionId);
+        // 4. 面板团队绑定（sessionTeam.ts 现成可查；一次性消费语义下绑定
+        //    已随 user/message 转本回合凭证——消费回合的用量仍归该队）。
+        const bound = getSessionTeamId(sessionId) ?? getConsumedSessionTeamId(sessionId);
         if (bound !== undefined) {
           identity = { teamId: bound, memberName: null, roleKind: 'conversation' };
         } else {
@@ -180,6 +192,15 @@ export function resetUsageMeterForTests(): void {
   memberSessions.clear();
   routeCache.clear();
   identityCache.clear();
+}
+
+/** Tests-only：直填路线缓存（webui session-route 用例的隔离装配）。 */
+export function seedSessionRouteForTests(
+  sessionId: string,
+  provider: string,
+  model: string,
+): void {
+  routeCache.set(sessionId, { provider, model });
 }
 
 // ---------- 串行追加队列（28.3.1 写入纪律） ----------

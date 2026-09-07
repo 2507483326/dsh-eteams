@@ -12,17 +12,24 @@
  * drawerTaskId 驱动的「返回任务页恢复详情」重挂口径一致，见 routes.tsx
  * initialEntries）。依赖 features/tasks（拖拽指派——TaskDndProvider 随页
  * 包裹，现状本就按分支分别包裹）与 shared、taskListCard、taskDialogs。
+ * 面板手动建任务（docs/panelTaskCommission）：头部行「＋ 添加任务」按钮 +
+ * addTaskDialog 弹窗（描述 + 选团队）——提交走宿主 commission 路由建
+ * 「创建中」容器交完善者；props 增 pool/sessionId/onSelectTeam（routes.tsx
+ * 透传，跨队提交后切选中团队即落该队任务页）。
  *
  * @module dsh-eteams/client/pages/tasks/tasksPage
  */
 import { useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { deleteTeamTask, openTaskFolder, startTeamTask } from '../../lib/api';
+import Plus from 'lucide-react/dist/esm/icons/plus.mjs';
+import { createTaskCommission, deleteTeamTask, openTaskFolder, startTeamTask } from '../../lib/api';
 import { cn } from '../../lib/cn';
 import { errorMessageOf, runWithBusy } from '../../lib/errors';
 import { refreshActivitySoon, type TaskView, type TeamSnapshot } from '../../lib/monitor';
+import { toast } from '../../hooks/useToast';
 import { TaskDndProvider } from '../../features/tasks/taskAssign';
 import { Card } from '../../components/ui/card';
+import { Button } from '../../components/ui/button';
 import {
   EMPTY_CLASS,
   LIST_COUNT_CLASS,
@@ -32,6 +39,7 @@ import {
 } from '../shared/styles';
 import { TaskListCard } from './taskListCard';
 import { TaskDialogs } from './taskDialogs';
+import { AddTaskDialog } from './addTaskDialog';
 
 /** ================================== 类型 ================================== */
 
@@ -39,6 +47,12 @@ import { TaskDialogs } from './taskDialogs';
 export interface TasksPageProps {
   /** 当前团队快照（任务列表取数上下文；routes.tsx 保留 team undefined 守卫）。 */
   team: TeamSnapshot;
+  /** 全部团队池（添加任务弹窗的团队选项——docs/panelTaskCommission §4.2）。 */
+  pool: TeamSnapshot[];
+  /** 当前宿主会话 id（整页覆盖层 undefined）——commission 路由按它找主会话锚。 */
+  sessionId: string | undefined;
+  /** 选中团队回写（ui/setSelectedTeam）：跨队提交后切选中团队，留在 /tasks。 */
+  onSelectTeam: (teamId: string) => void;
 }
 
 /** ================================== 主组件 ================================== */
@@ -51,9 +65,11 @@ export interface TasksPageProps {
  * 看到整个任务列表」；无编排 UI、无拖拽——卡槽/罗列条/改删按钮全迁详情页）。
  * 编辑/删除弹窗为组件内瞬态 useState（编辑弹窗入口在详情页，本页仅删除确
  * 认可达），删除成功后 refreshActivitySoon 回拉快照；folderError/startError
- * 瞬态错误行内就地显示（槽在 TaskListCard）。
+ * 瞬态错误行内就地显示（槽在 TaskListCard）。添加任务弹窗（docs/panelTask
+ * Commission）同为瞬态 useState：open/description/teamId/busy/error，头部行
+ * 按钮打开、跨队提交后 onSelectTeam 切选中团队。
  */
-export function TasksPage({ team }: TasksPageProps): ReactNode {
+export function TasksPage({ team, pool, sessionId, onSelectTeam }: TasksPageProps): ReactNode {
   const navigate = useNavigate();
   // 十二轮 DA25 文件夹打开瞬态（对齐 assignError 模式）：error 按卡定位行内
   // 展示（宿主 404/400/500 原样透出——文件夹缺失等）。
@@ -67,8 +83,55 @@ export function TasksPage({ team }: TasksPageProps): ReactNode {
   const [deleteTarget, setDeleteTarget] = useState<TaskView | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // 添加任务弹窗（docs/panelTaskCommission）：open/description/teamId/busy/
+  // error 瞬态组——teamId 默认当前团队（open 即回填，池变化不残留悬空 id）；
+  // busy/error 壳走 runWithBusy（失败弹窗内就地显示、不关弹窗）。
+  const [addOpen, setAddOpen] = useState(false);
+  const [addDesc, setAddDesc] = useState('');
+  const [addTeamId, setAddTeamId] = useState('');
+  const [addBusy, setAddBusy] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
 
   /* —— 事件处理 —— */
+
+  // 打开弹窗：描述清空、目标团队回填当前团队（每次打开重置，防上一次
+  // 草稿/悬空团队 id 残留——切换团队后重开即跟随新选中）。
+  const openAddDialog = (): void => {
+    setAddDesc('');
+    setAddTeamId(team.teamId);
+    setAddError(null);
+    setAddOpen(true);
+  };
+
+  // 提交手动建任务（docs/panelTaskCommission §4.2）：宿主建「创建中」容器
+  // 并交完善者（有领队 = 领队子代理；无领队 = 主会话唤醒）。成功关弹窗 +
+  // 回拉快照；跨队提交 onSelectTeam 切选中团队（不导航——留在 /tasks 落
+  // 该队任务页）。dispatched:false = 任务仍创建成功、完善者未送达（无锚/
+  // 绑定他队）——toast 提示原因，卡片保留创建中可删（逃生门）。失败吃 400
+  // 原文就地显示在弹窗内。
+  const submitAddTask = async (): Promise<void> => {
+    if (addBusy || addTeamId === '' || addDesc.trim() === '') return;
+    await runWithBusy(
+      async () => {
+        const result = await createTaskCommission(addTeamId, {
+          description: addDesc.trim(),
+          ...(sessionId !== undefined && sessionId !== '' ? { sessionId } : {}),
+        });
+        setAddOpen(false);
+        setAddDesc('');
+        if (!result.dispatched) {
+          toast({
+            title: '任务已创建，完善者未送达',
+            description: result.detail ?? '该团队暂无可托管完善的主会话锚点，任务保留为创建中，可删除后重试。',
+          });
+        }
+        if (addTeamId !== team.teamId) onSelectTeam(addTeamId);
+        refreshActivitySoon();
+      },
+      setAddBusy,
+      setAddError,
+    );
+  };
 
   // 二十四轮 DA37 面板开始任务（用户拍板「卡片加上开始按钮」）：派发给执行
   // 链下一站（host /task/<id>/start 复用 assignTask 派发核——起子会话 +
@@ -141,27 +204,45 @@ export function TasksPage({ team }: TasksPageProps): ReactNode {
   // 卡槽「修改」）都在详情页，editTarget 恒 null、编辑弹窗不渲染——编辑
   // 侧 props 以惰性值占位（瞬态 useState 不入 ui model；host 校验合同冻结
   // （领取后），错误就地显示）。三十一轮 DA44④：弹窗 JSX 抽 taskDialogs
-  // （TaskDialogs），状态/提交回调在此。
+  // （TaskDialogs），状态/提交回调在此。添加任务弹窗（docs/panelTask
+  // Commission）同挂此节点：描述 + 团队 Select，提交回调 submitAddTask。
   const dialogs = (
-    <TaskDialogs
-      editTarget={null}
-      editSubject=""
-      editDesc=""
-      editBusy={false}
-      editError={null}
-      onCloseEdit={() => undefined}
-      onSaveEdit={() => undefined}
-      onEditSubject={() => undefined}
-      onEditDesc={() => undefined}
-      deleteTarget={deleteTarget}
-      deleteBusy={deleteBusy}
-      deleteError={deleteError}
-      onDeleteConfirm={confirmDelete}
-      onDeleteDismiss={() => {
-        setDeleteTarget(null);
-        setDeleteError(null);
-      }}
-    />
+    <>
+      <TaskDialogs
+        editTarget={null}
+        editSubject=""
+        editDesc=""
+        editBusy={false}
+        editError={null}
+        onCloseEdit={() => undefined}
+        onSaveEdit={() => undefined}
+        onEditSubject={() => undefined}
+        onEditDesc={() => undefined}
+        deleteTarget={deleteTarget}
+        deleteBusy={deleteBusy}
+        deleteError={deleteError}
+        onDeleteConfirm={confirmDelete}
+        onDeleteDismiss={() => {
+          setDeleteTarget(null);
+          setDeleteError(null);
+        }}
+      />
+      <AddTaskDialog
+        open={addOpen}
+        description={addDesc}
+        teamId={addTeamId}
+        pool={pool}
+        busy={addBusy}
+        error={addError}
+        onDescription={setAddDesc}
+        onTeamId={setAddTeamId}
+        onClose={() => {
+          setAddOpen(false);
+          setAddError(null);
+        }}
+        onSubmit={() => void submitAddTask()}
+      />
+    </>
   );
 
   // docs/29 DA2：DndProvider 只包本页（消费面唯一，单实例单 Provider，随页
@@ -188,40 +269,46 @@ export function TasksPage({ team }: TasksPageProps): ReactNode {
         {(() => {
           // 平铺列表 = 全部顶层任务（主任务 + 顶层普通任务，快照序）。
           const mainTasks = team.tasks.filter((t) => t.parentId === null);
-          if (mainTasks.length === 0) {
-            return (
-              <div className={EMPTY_CLASS}>
-                还没有任务。在对话中把任务交给团队，或计划批准后任务会出现在这里。
-              </div>
-            );
-          }
+          // 面板手动建任务（docs/panelTaskCommission）：Card 与头部行常驻
+          // （空态也在卡内——「添加任务」钮常驻右上角，首任务从这进）；
+          // 空态文案补「点右上角添加任务」指路。
           return (
             <Card className={cn(PANEL_CARD_CLASS, 'pb-3')}>
               <div className="mb-2.5 flex items-center gap-2">
                 <h3 className={LIST_TITLE_CLASS}>任务</h3>
                 <span className={LIST_COUNT_CLASS}>{mainTasks.length} 个</span>
+                <Button type="button" size="sm" className="ml-auto" onClick={openAddDialog}>
+                  <Plus className="h-3.5 w-3.5" />
+                  添加任务
+                </Button>
               </div>
-              <div className={TASK_GRID_CLASS}>
-                {mainTasks.map((t) => (
-                  // 三十一轮 DA44④：列表卡身抽 taskListCard（TaskListCard）——
-                  // subs 统计/deletable 判据随迁卡内现算（task/allTasks 进 props）。
-                  <TaskListCard
-                    key={t.taskId}
-                    task={t}
-                    allTasks={team.tasks}
-                    folderBusy={folderBusy}
-                    folderError={folderError}
-                    startError={startError}
-                    startBusy={startBusy}
-                    // M3 拆页：原 setSelectedTaskId(t.taskId) 改导航——
-                    // drawerTaskId 由 routes.tsx 的 location sync 回写。
-                    onOpen={() => navigate(`/tasks/${t.taskId}`)}
-                    onOpenFolder={(taskId) => void openFolder(taskId)}
-                    onDelete={() => setDeleteTarget(t)}
-                    onStart={() => void submitStart(t.taskId)}
-                  />
-                ))}
-              </div>
+              {mainTasks.length === 0 ? (
+                <div className={EMPTY_CLASS}>
+                  还没有任务。在对话中把任务交给团队，或计划批准后任务会出现在这里；也可以点右上角「添加任务」手动创建。
+                </div>
+              ) : (
+                <div className={TASK_GRID_CLASS}>
+                  {mainTasks.map((t) => (
+                    // 三十一轮 DA44④：列表卡身抽 taskListCard（TaskListCard）——
+                    // subs 统计/deletable 判据随迁卡内现算（task/allTasks 进 props）。
+                    <TaskListCard
+                      key={t.taskId}
+                      task={t}
+                      allTasks={team.tasks}
+                      folderBusy={folderBusy}
+                      folderError={folderError}
+                      startError={startError}
+                      startBusy={startBusy}
+                      // M3 拆页：原 setSelectedTaskId(t.taskId) 改导航——
+                      // drawerTaskId 由 routes.tsx 的 location sync 回写。
+                      onOpen={() => navigate(`/tasks/${t.taskId}`)}
+                      onOpenFolder={(taskId) => void openFolder(taskId)}
+                      onDelete={() => setDeleteTarget(t)}
+                      onStart={() => void submitStart(t.taskId)}
+                    />
+                  ))}
+                </div>
+              )}
             </Card>
           );
         })()}

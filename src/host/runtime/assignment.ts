@@ -23,6 +23,7 @@ import type {
   MailMessage,
   TaskMemberRecord,
   TaskRecord,
+  TaskStatus,
   TeamState,
 } from '../model/types.js';
 import {
@@ -123,8 +124,10 @@ async function runWakes(wakes: Wake[]): Promise<void> {
  *    门控与恢复失败都落回 undefined（ensureSpawned 报错提示）。
  * 返回的可能是「非快照」的主会话锚点（②心跳锚点）——调用方（ensureSpawned）
  * 在用它起人前补章未登记的任务行快照；①③ 与快照同 ID，补章是 no-op。
+ * 面板手动建任务路径（docs/panelTaskCommission）同函数复用：完善者父锚
+ * （有领队→dispatchCaptainCore 的 parent）与无领队路径的唤醒目标都取它。
  */
-async function captainFor(
+export async function captainFor(
   env: RuntimeEnv,
   team: TeamState,
   task: TaskRecord,
@@ -185,6 +188,8 @@ export async function createTask(
     chain?: { member: number | string; stageBrief: string }[];
     /** v6 主会话快照显式源（面板路由透传 body.sessionId；导入传旧值）。 */
     mainSessionId?: string;
+    /** 初始状态覆盖（面板手动创建传 'creating' 占位，docs/panelTaskCommission；默认 'ready'）。 */
+    status?: TaskStatus;
   },
 ): Promise<TaskRecord> {
   const { subject } = params;
@@ -217,7 +222,7 @@ export async function createTask(
       parent = team.tasks.find((t) => t.id === params.parentTaskId);
       if (parent === undefined || parent.parentId !== null)
         throw new ETeamsError(`父任务 ${params.parentTaskId} 不存在或不是主任务（任务单）`);
-      if (!['draft', 'ready'].includes(parent.status))
+      if (!['creating', 'draft', 'ready'].includes(parent.status))
         throw new ETeamsError(`主任务 ${parent.id} 处于 ${parent.status}，不能再挂小任务`);
     }
     for (const dep of deps) {
@@ -249,7 +254,8 @@ export async function createTask(
       dependencies: deps,
       chain,
       chainCursor: -1,
-      status: 'ready',
+      // 面板手动创建路径传 'creating' 占位（完善收口后转 ready）；其余一律 ready。
+      status: params.status ?? 'ready',
       // v6 主会话快照：建任务调用方会话（工具路径 = envForAgent 注入的
       // env.sessionId；面板路由显式透传；导入传旧值），落库后不变。
       mainSessionId: params.mainSessionId ?? env.sessionId,
@@ -303,7 +309,8 @@ export async function createTask(
   return out.task;
 }
 
-/** Update an unclaimed task（draft/ready 可改，合同冻结后只读 — docs/06.4）。 */
+/** Update an unclaimed task（creating/draft/ready 可改，合同冻结后只读 — docs/06.4）。
+ * `creating`（面板手动创建占位）可改是完善收口的前提：完善者先回写主题/说明。 */
 export async function updateTask(
   env: RuntimeEnv,
   who: OpActor,
@@ -321,10 +328,10 @@ export async function updateTask(
 ): Promise<TaskRecord> {
   const out = await withTeam(env, who.teamId, (team, _root, tx) => {
     const task = requireTask(team, params.taskId);
-    if (!['draft', 'ready'].includes(task.status)) {
+    if (!['creating', 'draft', 'ready'].includes(task.status)) {
       throw new ETeamsError(
         `任务 ${task.id} 处于 ${task.status}，合同已冻结`,
-        '未开始（draft/ready）的任务才可修改；执行期变更先取消后重建',
+        '未开始（creating/draft/ready）的任务才可修改；执行期变更先取消后重建',
       );
     }
     if (params.dependencies !== undefined) {
@@ -363,6 +370,66 @@ export async function updateTask(
     });
     // 改主题会改目录名（work_dir 归任务，docs/35 §3#8）：重算目标路径并改名，
     // 随本次快照一并落库；小任务目录在父目录 sub/ 下。
+    renameTaskFolder(env, team, task, oldDir);
+    return { team, task };
+  });
+  renderTeamDocs(env.workspace, out.team, (msg) => env.ctx.logger.warn(msg));
+  return out.task;
+}
+
+/**
+ * 完善收口（docs/panelTaskCommission）：面板手动创建的「创建中」主任务容器
+ * 经领队/主会话完善后一次性落定——回写主题/说明/合同 + creating→ready 转移
+ * + 目录改名。必须独立成函数：updateTask 自己开事务无法与状态转移拼装在一
+ * 个事务里，工具层（captainTools）按分层纪律不手写转移。
+ */
+export async function finalizeCommissionTask(
+  env: RuntimeEnv,
+  who: OpActor,
+  taskId: number,
+  params: {
+    subject: string;
+    description?: string;
+    /** 合同 MD 全文（十六轮 DA29 单篇 MD 口径）。 */
+    contractMd?: string;
+    /** 问询留档（与 eteams_submit_task 的 questionnaire 同词表）。 */
+    questionnaire?: string[];
+  },
+): Promise<TaskRecord> {
+  const out = await withTeam(env, who.teamId, (team, _root, tx) => {
+    const task = requireTask(team, taskId);
+    if (task.parentId !== null) {
+      throw new ETeamsError(`任务 ${task.id} 不是主任务（任务单），不能作为提交目标`);
+    }
+    if (task.status !== 'creating') {
+      throw new ETeamsError(
+        `主任务 ${task.id} 处于 ${task.status}，无需重复提交`,
+        '拆解小任务请用 eteams_create_task（带 parentTaskId）',
+      );
+    }
+    const oldDir = task.workDir;
+    if (params.subject.trim() !== '') task.subject = params.subject.trim();
+    if (params.description !== undefined) task.description = params.description;
+    if (params.contractMd !== undefined) task.contractMd = params.contractMd;
+    task.updatedAt = tx.now;
+    applyTransition(task, 'ready', tx.now);
+    emit(tx, team.id, who.actor, 'task.updated', {
+      taskId: task.id,
+      payload: {
+        fields: [
+          'subject',
+          'description',
+          ...(params.contractMd !== undefined ? ['contractMd'] : []),
+        ],
+        via: 'commission.finalize',
+      },
+    });
+    if (params.questionnaire !== undefined && params.questionnaire.length > 0) {
+      emit(tx, team.id, who.actor, 'plan.questionnaire', {
+        taskId: task.id,
+        payload: { questions: params.questionnaire },
+      });
+    }
     renameTaskFolder(env, team, task, oldDir);
     return { team, task };
   });
@@ -416,9 +483,9 @@ function renameTaskFolder(
 export async function deleteTask(env: RuntimeEnv, who: OpActor, taskId: number): Promise<void> {
   const out = await withTeam(env, who.teamId, (team, _root, tx) => {
     const task = requireTask(team, taskId);
-    if (!['draft', 'ready'].includes(task.status))
+    if (!['creating', 'draft', 'ready'].includes(task.status))
       throw new ETeamsError(
-        `任务 ${task.id} 处于 ${task.status}，只能删除未开始（draft/ready）任务`,
+        `任务 ${task.id} 处于 ${task.status}，只能删除未开始（creating/draft/ready）任务`,
       );
     const doomed = [task, ...team.tasks.filter((t) => t.parentId === task.id)];
     for (const sub of doomed.slice(1)) {
@@ -655,6 +722,11 @@ export async function startGroupTask(
       `主任务 ${taskId} 已${group.status === 'completed' ? '完成' : '取消'}，无法整体开始`,
     );
   }
+  // 面板手动创建的容器还在「创建中」（完善者未收口）：计划未定不可开跑
+  // （docs/panelTaskCommission——与完善者「不自批开跑」红线同源）。
+  if (group.status === 'creating') {
+    throw new ETeamsError(`主任务 ${taskId} 创建中，等完善收口后再整体开始`);
+  }
   const result: GroupStartResult = { started: 0, skipped: [] };
   for (const sub of subExecutionOrder(team.tasks.filter((t) => t.parentId === group.id))) {
     // 三十六轮 DA49（用户「任务点击开始没有反应」）：draft 小任务同进发棒
@@ -732,6 +804,16 @@ async function prepareAssignment(
     const unsat = unsatisfiedDependencies(team.tasks, task);
     if (unsat.length > 0) {
       throw new ETeamsError(`任务 ${task.id} 的依赖未完成：${unsat.join('、')}`, '先推进依赖任务');
+    }
+    // 父容器还在「创建中」（面板手动创建占位，docs/panelTaskCommission）：
+    // 计划未定不派发——单任务路径与 eteams_assign_task 两条派发路径共此闸。
+    if (task.parentId !== null) {
+      const parent = team.tasks.find((t) => t.id === task.parentId);
+      if (parent?.status === 'creating') {
+        throw new ETeamsError(
+          `主任务 ${parent.id} 创建中，等完善收口后再派发小任务 ${task.id}`,
+        );
+      }
     }
   }
   const row = resolveAssigneeRow(team, task, params.member);
@@ -1683,6 +1765,9 @@ function completeGroupIfDoneInTx(
   if (subtask.parentId === null) return;
   const parent = team.tasks.find((t) => t.id === subtask.parentId);
   if (parent === undefined || parent.status === 'completed' || parent.parentId !== null) return;
+  // 容器还在「创建中」（面板手动创建占位）不自动收口：ready→completed 特例
+  // 边对 creating 不成立，硬收会抛非法转移（docs/panelTaskCommission）。
+  if (parent.status !== 'ready') return;
   const subs = team.tasks.filter((t) => t.parentId === parent.id);
   if (subs.length === 0 || !subs.every((t) => t.status === 'completed')) return;
   applyTransition(parent, 'completed', tx.now);

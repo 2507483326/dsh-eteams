@@ -33,6 +33,7 @@ import {
   suspendTask,
   resumeTask,
   cancelTask,
+  finalizeCommissionTask,
 } from '../runtime/assignment.js';
 import { listTeams, envForAgent, resolveCaller } from './identity.js';
 import { readBox } from '../runtime/notifier.js';
@@ -1055,8 +1056,9 @@ export function createCaptainTools(
   const submitTaskTool = defineTool({
     name: 'eteams_submit_task',
     description:
-      '对话任务入口（docs/26）：用户在对话中把一个任务交给团队时先调它——立即生成任务 ID（主任务/任务单容器）与专属任务文件夹，面板「任务」页立刻可见。提交后按工作流推进：先向用户问询明确目标（结论用 eteams_update_task 写回本主任务 description），再用 eteams_create_task（带 parentTaskId）把任务拆解成多个小任务（每个小任务 chain 站点即成员槽）。',
+      '对话任务入口（docs/26）：用户在对话中把一个任务交给团队时先调它——立即生成任务 ID（主任务/任务单容器）与专属任务文件夹，面板「任务」页立刻可见。提交后按工作流推进：先向用户问询明确目标（结论用 eteams_update_task 写回本主任务 description），再用 eteams_create_task（带 parentTaskId）把任务拆解成多个小任务（每个小任务 chain 站点即成员槽）。完善面板手动创建的任务（docs/panelTaskCommission）时不新建：传 taskId 指向「创建中」的主任务容器，本工具一次性回写主题/说明并把创建中转就绪。',
     parameters: {
+      taskId: int('收口目标主任务号（面板手动创建的「创建中」容器；不传 = 新建主任务容器）'),
       subject: strR('任务主题（一句话）'),
       description: str('当前对任务的理解/背景（问询后更新）'),
       questionnaire: strArr('计划向用户问询的问题（留档；答案更新进 description）'),
@@ -1078,16 +1080,30 @@ export function createCaptainTools(
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
       const caller = await resolveCaller(env, exec.agent!);
       if (caller.kind !== 'captain') throw new ETeamsError('只有领队可以提交对话任务');
-      const task = await createTask(
-        env,
-        { teamId: caller.team.id, actor: caller.actor },
-        { subject: args.subject, description: args.description, kind: 'group' },
-      );
-      if (args.questionnaire !== undefined && args.questionnaire.length > 0) {
-        await recordEvent(stateRootOf(env), caller.team.id, caller.actor, 'plan.questionnaire', {
-          taskId: task.id,
-          payload: { questions: args.questionnaire },
+      const who = { teamId: caller.team.id, actor: caller.actor };
+      let task: TaskRecord;
+      if (args.taskId !== undefined) {
+        // 完善收口（docs/panelTaskCommission）：面板「创建中」容器一次性
+        // 落定（回写 + creating→ready + 事件，单事务）。
+        task = await finalizeCommissionTask(env, who, args.taskId, {
+          subject: args.subject,
+          ...(args.description !== undefined ? { description: args.description } : {}),
+          ...(args.questionnaire !== undefined && args.questionnaire.length > 0
+            ? { questionnaire: args.questionnaire }
+            : {}),
         });
+      } else {
+        task = await createTask(
+          env,
+          who,
+          { subject: args.subject, description: args.description, kind: 'group' },
+        );
+        if (args.questionnaire !== undefined && args.questionnaire.length > 0) {
+          await recordEvent(stateRootOf(env), caller.team.id, caller.actor, 'plan.questionnaire', {
+            taskId: task.id,
+            payload: { questions: args.questionnaire },
+          });
+        }
       }
       const fresh = await readTeam(stateRootOf(env), caller.team.id);
       return {

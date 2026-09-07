@@ -7,8 +7,11 @@
  * @module dsh-eteams/model/types
  */
 
-/** Task lifecycle status (docs/27 §27.9.11: 10 态收敛，docs/35 §4 映射方案 A). */
+/** Task lifecycle status (docs/27 §27.9.11: 11 态收敛，docs/35 §4 映射方案 A).
+ * `creating` = 面板手动创建的主任务容器占位（docs/panelTaskCommission）：已
+ * 入册、待领队/主会话完善，完善收口转 ready。 */
 export type TaskStatus =
+  | 'creating'
   | 'draft'
   | 'ready'
   | 'wait'

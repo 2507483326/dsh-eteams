@@ -39,6 +39,16 @@ const AVATAR_CONTAINER_CLASS =
   'inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full border border-solid border-[color:var(--border)] font-semibold text-white';
 
 /**
+ * 白底品牌描边壳（用户迭代 2026-09-07「白底 + 描边加重」的收口常量）：
+ * 须包在 Avatar **外层**使用——Avatar 容器底色是内联样式（名字色相 / 头像
+ * 背景色），白底只有由外层壳承载才能透出。消费位：角色页描边环
+ * （components/avatarRing）、任务区头像（features/tasks/taskAssign）、
+ * 团队卡成员叠放（pages/team/teamPage + components/avatarStack 余量牌）。
+ */
+export const AVATAR_SHELL_CLASS =
+  'rounded-full border-2 border-solid border-business bg-white p-0.5';
+
+/**
  * The member avatar: seeded vue-color-avatar face when (seed, salt) are
  * supplied, else a stable initial-letter circle. Same pair always renders
  * the same face. 二十三轮 DA36：增 optional `className` 透传；三十二轮

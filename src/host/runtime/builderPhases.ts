@@ -256,8 +256,8 @@ export function wakeBuilderChild(args: {
 /**
  * Stop the continuable builder child（cancel → interrupt）：interrupt 只停
  * 当前回合（含停驻轮询——abort 即打断 eteams_build_wait）、durable 会话保留
- * （恢复经 followup 或冷恢复重建续聊）。确认路径不再代收（docs/19.17.1）：
- * 停驻中的子代理自己看到 confirmed 后静默收束，watchSettlement 自然释放。
+ * （恢复经 followup 或冷恢复重建续聊）。停驻只发生在等访谈答案期间——上报
+ * 待确认草稿后子代理已收束回合，确认路径无须任何子代理侧动作。
  * 目标缺失/竞态是可接受的 no-op，绝不抛错外溢。
  */
 export async function stopBuilderChild(args: {

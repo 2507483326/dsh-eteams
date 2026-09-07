@@ -2,7 +2,8 @@
  * deletableOf 单测（docs/44 M3）：任务列表卡「删除」按钮显隐判据（src/client/
  * pages/tasks/taskListCard.tsx）——镜像 host deleteTask 守卫
  * （src/host/runtime/assignment.ts）口径锁定：
- * ① 本身未领取（draft/ready 才可删）；
+ * ① 本身未领取（draft/ready/creating 才可删——creating 仅容器分支放宽，
+ * docs/panelTaskCommission：创建中的容器是手动建任务占位，删除 = 逃生门）；
  * ② 主任务级联删除要求全部小任务 draft/ready；
  * ③ 删除集（自身 + 小任务）不得被任何未入集任务依赖。
  * host 仍是最终裁决（webui DELETE 路由，拒绝原因就地显示）——本单测只锁
@@ -48,8 +49,8 @@ const byId = (tasks: TaskView[], id: number): TaskView => {
 };
 
 describe('deletableOf（镜像 host deleteTask 守卫口径）', () => {
-  it('① 本身未领取才可删：draft/ready ✓，已入执行/终态 ✗（十态逐格）', () => {
-    const deletableStates = ['draft', 'ready'];
+  it('① 本身未领取才可删：creating/draft/ready ✓（creating 仅容器分支放宽），已入执行/终态 ✗（十一态逐格）', () => {
+    const deletableStates = ['creating', 'draft', 'ready'];
     const undeletableStates = [
       'wait',
       'start',
@@ -75,6 +76,19 @@ describe('deletableOf（镜像 host deleteTask 守卫口径）', () => {
       taskOf({ taskId: 3, parentId: 1, status: 'ready' }),
     ];
     expect(deletableOf(byId(tasks, 1), tasks)).toBe(true);
+  });
+
+  it('② creating 容器：无小任务可删（逃生门）；小任务分支判据不放宽（docs/panelTaskCommission）', () => {
+    // 创建中容器自身（手动建任务占位、尚未拆解）——删除 = 逃生门。
+    const empty = [taskOf({ taskId: 1, kind: 'group', status: 'creating' })];
+    expect(deletableOf(byId(empty, 1), empty)).toBe(true);
+    // 小任务分支不放宽：creating 容器下已有执行中小任务 → 整组不可删。
+    const tasks = [
+      taskOf({ taskId: 1, kind: 'group', status: 'creating' }),
+      taskOf({ taskId: 2, parentId: 1, status: 'draft' }),
+      taskOf({ taskId: 3, parentId: 1, status: 'wait' }),
+    ];
+    expect(deletableOf(byId(tasks, 1), tasks)).toBe(false);
   });
 
   it('② 主任务级联：任一小任务已入执行 → 整组不可删', () => {

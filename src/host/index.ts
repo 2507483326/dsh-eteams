@@ -33,7 +33,7 @@ import { installUsageMeter } from './runtime/usage.js';
 import { installWebSurface, locateTeam } from './runtime/webui.js';
 import { stateRootFor } from './runtime/base.js';
 import { sessionPersonaSection, sessionIdOfScope } from './runtime/sessionPersona.js';
-import { sessionTeamSection } from './runtime/sessionTeam.js';
+import { sessionTeamSection, consumeSessionTeamBinding } from './runtime/sessionTeam.js';
 import { CAPTAIN_SECTION_SHORT } from './prompts/system/captain.js';
 import { composeCaptainPersona } from './prompts/personas/captain.js';
 import { personaDigest } from './prompts/personas/framework.js';
@@ -247,6 +247,25 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
     });
   } catch (error) {
     log.warn('eteams: session team context registration failed: %s', String(error));
+  }
+
+  // 3b3-2) 一次性消费（用户迭代 2026-09-07「发送后清空选择」）：user/message
+  // 到达即把绑定转为本回合凭证（sessionTeam.ts）——消费这条消息的 band 与
+  // 派发身份照常生效，下一条消息起回到普通对话。客户端在提交瞬间只清按钮
+  // 面不删宿主绑定（那条消息的 band/身份还得靠它，见 sessionTeam 模块头）。
+  // 失败不外抛（监听绝不影响会话，usage.ts 同纪律）。
+  try {
+    ctx.on('session/event', (session: { id?: unknown }, event: { type?: unknown }): void => {
+      try {
+        if (event?.type !== 'user/message') return;
+        consumeSessionTeamBinding(String(session?.id ?? ''));
+      } catch {
+        // 消费失败静默：绑定留在原地，下一条消息再消费。
+      }
+    });
+    log.info('eteams: session team one-shot consumer registered');
+  } catch (error) {
+    log.warn('eteams: session team consumer registration failed: %s', String(error));
   }
 
   // 3c) /eteam slash command (docs/19.4, D18): 命令平面统一注册口——/eteam

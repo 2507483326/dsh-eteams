@@ -1,5 +1,6 @@
 /**
- * Task state machine (docs/06.2；10 态收敛见 docs/27 §27.9.11 / docs/35 §4)
+ * Task state machine (docs/06.2；11 态收敛见 docs/27 §27.9.11 / docs/35 §4；
+ * 第 11 态 `creating` = 面板手动创建占位，docs/panelTaskCommission)
  * — pure functions, no I/O, no cordis.
  * Illegal transitions throw `TransitionError`; the tool layer converts them
  * into actionable Chinese error text.
@@ -19,13 +20,16 @@ export class TransitionError extends Error {
 }
 
 /**
- * Allowed outgoing edges per status (docs/27 §27.9.11：10 态收敛；docs/35 §4
+ * Allowed outgoing edges per status (docs/27 §27.9.11：11 态收敛；docs/35 §4
  * 映射方案 A)。旧 13 态的合并：assigned/retrying/blocked → wait，
  * in_progress → start，awaiting_decision → wait_decision，
  * needs_user → wait_user，suspended → paused。「阻塞」不再是独立状态——
  * 物化阻塞 = `wait + blockedFrom 非空`，恢复走 restoreBlocked()。
+ * `creating`（面板手动创建占位）：只有两条出边——完善收口转 ready、放弃转
+ * cancelled；不经转移进入（建任务直接以 creating 落库）。
  */
 const EDGES: Record<TaskStatus, readonly TaskStatus[]> = {
+  creating: ['ready', 'cancelled'],
   draft: ['ready', 'cancelled'],
   // ready → wait 双义：正常派发（无 blockedFrom）与依赖毒化物化（恢复目标
   // 记进 blockedFrom，见 refreshDependencyStatus）共用同一条边。

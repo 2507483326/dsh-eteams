@@ -16,6 +16,12 @@ import { resolveConfig, type ETeamsResolvedConfig } from '../src/host/config';
 import { createCaptainTools } from '../src/host/tools/captainTools';
 import { createMemberTools } from '../src/host/tools/memberTools';
 import { setLeaderModel, setMemberModel } from '../src/host/runtime/teamOps';
+import {
+  createTask,
+  finalizeCommissionTask,
+  startGroupTask,
+  type OpActor,
+} from '../src/host/runtime/assignment';
 import { joinPath, type RuntimeEnv } from '../src/host/runtime/base';
 import { readTeamSync } from '../src/host/state/store';
 import { readEventsSync, readMailboxSync } from '../src/host/state/events';
@@ -777,3 +783,128 @@ describe('v7 删任务级联删副本 + drain', () => {
 function runtimeEnvFor(): RuntimeEnv {
   return { ctx: runtime.ctx, config, workspace, signal: undefined };
 }
+
+describe('面板手动建任务（docs/panelTaskCommission）', () => {
+  /** 直连运行时的调用面（绕过工具层——宿主闸守卫在 runtime 层测）。 */
+  const who = (teamId: number): OpActor => ({ teamId, actor: { kind: 'user', name: '用户' } });
+
+  it('createTask status 覆盖：容器落 creating 占位，副本/文档树照常铺', async () => {
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '建任务团队' });
+    const env = runtimeEnvFor();
+    const task = await createTask(env, who(created.teamId), {
+      subject: '未命名任务',
+      description: '把 docs 迁到新结构',
+      kind: 'group',
+      status: 'creating',
+    });
+    expect(task.status).toBe('creating');
+    expect(task.parentId).toBeNull();
+    // 建大任务即全员铺副本（含领队）+ work_dir 即分配 + 文档树物化。
+    expect(readTeam(created.teamId).taskMembers.filter((r) => r.mainTaskId === task.id)).toHaveLength(
+      1,
+    );
+    expect(task.workDir).toMatch(/^teams\//);
+    expect(existsSync(join(workspace, task.workDir!, 'contract.md'))).toBe(true);
+    // task.created 事件带初始 status（审计可回溯「这个容器是创建中来的」）。
+    const events = readEventsSync(root, created.teamId);
+    const createdEvent = events.find((e) => e.type === 'task.created' && e.taskId === task.id);
+    expect(createdEvent?.payload?.status).toBe('creating');
+  });
+
+  it('startGroupTask 拒绝 creating 容器：计划未定不可开跑', async () => {
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '开跑团队' });
+    const env = runtimeEnvFor();
+    const group = await createTask(env, who(created.teamId), {
+      subject: '未命名任务',
+      kind: 'group',
+      status: 'creating',
+    });
+    // 整体开始的入口判据要求组内已有小任务（无子任务先撞「不是主任务」闸）
+    // ——完善期拆出小任务后再整体开始，仍被创建中闸拦下。
+    await createTask(env, who(created.teamId), {
+      subject: '完善期拆出的小任务',
+      parentTaskId: group.id,
+    });
+    await expect(startGroupTask(env, who(created.teamId), group.id)).rejects.toThrow(/创建中/);
+  });
+
+  it('assignTask 拒绝派发 creating 容器下的小任务（prepareAssignment 同闸，完善期不可偷跑）', async () => {
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '偷跑团队' });
+    const teamId = created.teamId;
+    await cap('eteams_add_member', { name: 'Dave', role: 'engineer', teamId });
+    const env = runtimeEnvFor();
+    const group = await createTask(env, who(teamId), {
+      subject: '未命名任务',
+      kind: 'group',
+      status: 'creating',
+    });
+    const sub = await createTask(env, who(teamId), {
+      subject: '完善期拆出的小任务',
+      parentTaskId: group.id,
+    });
+    expect(sub.status).toBe('ready');
+    // 派发被宿主闸拦：父容器创建中，等完善收口。
+    await expect(
+      cap('eteams_assign_task', { taskId: sub.id, member: '2' }),
+    ).rejects.toThrow(/创建中/);
+  });
+
+  it('finalizeCommissionTask：回写主题/说明 + creating→ready + 事件留痕 + 目录改名', async () => {
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '收口团队' });
+    const teamId = created.teamId;
+    const env = runtimeEnvFor();
+    const group = await createTask(env, who(teamId), {
+      subject: '未命名任务',
+      description: '原始一句话',
+      kind: 'group',
+      status: 'creating',
+    });
+    const oldDir = group.workDir!;
+    const done = await finalizeCommissionTask(env, who(teamId), group.id, {
+      subject: '迁移文档结构',
+      description: '完善后的任务说明',
+      contractMd: '## 验收标准\n1. 目录归位',
+      questionnaire: ['范围边界？'],
+    });
+    expect(done.status).toBe('ready');
+    expect(done.subject).toBe('迁移文档结构');
+    expect(done.description).toBe('完善后的任务说明');
+    // 改主题即目录改名（work_dir 归任务）：新目录存在、旧目录清空。
+    expect(done.workDir).not.toBe(oldDir);
+    expect(existsSync(join(workspace, done.workDir!, 'contract.md'))).toBe(true);
+    expect(existsSync(join(workspace, oldDir))).toBe(false);
+    // 事件：task.updated（via=commission.finalize）+ 问询留档 plan.questionnaire。
+    const events = readEventsSync(root, teamId);
+    const updated = events.find((e) => e.type === 'task.updated' && e.taskId === group.id);
+    expect(updated?.payload?.via).toBe('commission.finalize');
+    expect(updated?.payload?.fields).toContain('subject');
+    const questionnaire = events.find(
+      (e) => e.type === 'plan.questionnaire' && e.taskId === group.id,
+    );
+    expect(questionnaire?.payload?.questions).toEqual(['范围边界？']);
+  });
+
+  it('finalizeCommissionTask 非法目标拒绝：小任务不是提交目标、非 creating 不重复提交', async () => {
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '收口拒团队' });
+    const teamId = created.teamId;
+    const env = runtimeEnvFor();
+    const group = await createTask(env, who(teamId), {
+      subject: '未命名任务',
+      kind: 'group',
+      status: 'creating',
+    });
+    const sub = await createTask(env, who(teamId), {
+      subject: '完善期拆出的小任务',
+      parentTaskId: group.id,
+    });
+    // 小任务（parent_id 非空）不能作为收口目标——拆解用 create_task。
+    await expect(
+      finalizeCommissionTask(env, who(teamId), sub.id, { subject: 'x' }),
+    ).rejects.toThrow(/不是主任务/);
+    // 已收口（ready）的主任务不能重复提交。
+    await finalizeCommissionTask(env, who(teamId), group.id, { subject: '收口一次' });
+    await expect(
+      finalizeCommissionTask(env, who(teamId), group.id, { subject: '收口两次' }),
+    ).rejects.toThrow(/无需重复提交/);
+  });
+});

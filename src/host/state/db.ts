@@ -747,7 +747,7 @@ CREATE TABLE IF NOT EXISTS task (
   member_chain_list TEXT NOT NULL DEFAULT '[]',  -- 执行链站点列表（JSON 数组：[{member, stageBrief}]；v7 站点 member 写工号数字，迁移解析不到班底行的旧站点保留名字字符串并在渲染时标注 legacy）
   chain_cursor      INTEGER NOT NULL DEFAULT -1, -- -1=没开始；k=第 k 站完成；末站完成→completed
   status            TEXT NOT NULL DEFAULT 'draft',
-                    -- draft / ready / wait / start / paused /
+                    -- creating / draft / ready / wait / start / paused /
                     -- wait_decision / wait_user / completed / failed / cancelled
   current_member    TEXT,                -- 当前执行成员名（松引用：成员移除也不影响这列）
   current_member_id INTEGER,             -- 当前执行成员 ID（v2 的 member.member_id 口径随 v3 合并废弃；写入代码恒置 NULL，物理残留列）
@@ -756,7 +756,7 @@ CREATE TABLE IF NOT EXISTS task (
   status_note       TEXT,                -- 当前状态说明（挂起原因等也并在这列）
   contract_md       TEXT,                -- 任务合同全文（Markdown，十六轮 DA29：原 acceptance/in_scope/out_of_scope/deliverables 四数组列合并——验收标准/允许改动/禁止改动/交付物统一写在这篇 MD 里；旧库由 getDb 迁移 ALTER + 回填，旧四列物理残留不再读写）
   idempotency_note  TEXT,                -- 幂等说明（重跑安全的前提，派发提示词渲染）
-  blocked_from      TEXT,                -- 阻塞前的状态（10 态之一）；解除阻塞时还原到它，NULL=未阻塞
+  blocked_from      TEXT,                -- 阻塞前的状态（11 态之一）；解除阻塞时还原到它，NULL=未阻塞
   work_dir          TEXT,                -- 任务工作目录（相对工作区；建任务时分配，分配后固定——撞名 -N 后缀有状态，不可重推导）
   completed_time    INTEGER,             -- 完成时间
   created_time      INTEGER NOT NULL,    -- 创建时间

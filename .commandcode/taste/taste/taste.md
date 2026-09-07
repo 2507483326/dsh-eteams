@@ -1,0 +1,13 @@
+# Taste
+- 子代理完成任务（如上报待确认草稿）后应直接收束回合，不停驻/阻塞等待用户确认；收尾用一句话告知用户「请到面板确认」，确认动作由宿主直接处理，无须子代理在场。停驻（如 eteams_build_wait）仅用于等技术性落盘（如访谈答案写盘），不用于等用户动作。 Confidence: 0.9
+- 功能改动收尾前跑全套验证、全绿才宣布完成：vitest 全量测试、`tsc --noEmit` 分别跑 tsconfig.host.json 与 tsconfig.client.json、对改动文件跑 eslint。 Confidence: 0.8
+- 用户以中文交流，回复与总结应使用中文。 Confidence: 0.85
+- 开发环境是 Windows（C:\eTeam）：shell 命令避免 Unix 专用工具（如 tail、管道 grep），直接运行命令即可。 Confidence: 0.9
+- shell 受命令白名单限制：`ls`/`dir` 会被拦，工程外路径（如 C:\Users\epat\AppData 下的应用安装目录）查不了；目录/文件探查优先用 glob/grep/read_file 工具，确需 shell 时改用可用命令（如 find）。 Confidence: 0.7
+- pnpm/corepack 垫片在这台机器上不可用（corepack 报错）：直接调用 `node_modules\.bin\*.cmd`（vitest.cmd、tsc.cmd、eslint.cmd）运行工具链。 Confidence: 0.85
+- 注释沿用仓库中英混排惯例；行为变更在模块头/相关注释标注来源（日期 + 用户原话，如「用户迭代 2026-09-07『发送后清空选择』」），并在易错点（竞态、时序、lint 规则约束）写明设计原因。 Confidence: 0.7
+- 测试用 vitest，位于 tests/*.test.ts；describe/it 可用中文表达业务语义；行为变更同步补用例（含回退/撤销等边缘路径）。 Confidence: 0.65
+- 头像视觉语言已定型为「白底 + 品牌实色描边壳」（border-2 border-business bg-white p-0.5）：用户要求跨界面统一（角色页描边环、任务区各处头像、团队卡叠放与 +N 余量牌），点名某界面时会要求改全该界面所有头像位（「都改一下」），新增头像位默认沿用同款壳。 Confidence: 0.75
+- 重复的样式/行为字面值收口成共享常量供各消费位复用（如壳样式收口 features/avatar 的 AVATAR_SHELL_CLASS，avatarRing/taskAssign/teamPage/avatarStack 复用），不逐字复制。 Confidence: 0.6
+- 界面上要求显示的「实际」值以运行时观测为准（用户原话「实际的 provider/model」；数据源是 usage 旁路对 request 事件的观测缓存）：无观测（未发过请求/宿主重启）就不显示，不用配置别名或猜测值凑数；显示类增量做成非交互低调元素（muted 小字徽章），不干扰既有交互（主会话模型座位照旧）。 Confidence: 0.65
+- 弹窗/表单里的 textarea 不允许拖拽改大小（用户反馈 textarea 会被拖出弹窗）：加 `resize-none` 禁用 resize，不用 `rows` 而用固定 Tailwind 高度类（如 `h-28`），高度定得比原默认略高。 Confidence: 0.6

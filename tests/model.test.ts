@@ -35,7 +35,24 @@ function makeTask(overrides: Partial<TaskRecord> = {}): TaskRecord {
   };
 }
 
-describe('task state machine edges (10 态, docs/35 §4 映射方案 A)', () => {
+describe('task state machine edges (11 态, docs/35 §4 映射方案 A + docs/panelTaskCommission)', () => {
+  it('creating 收口与放弃：creating -> ready / cancelled 合法，不经转移进入', () => {
+    // 面板手动建任务容器：完善收口（finalizeCommissionTask）转 ready、
+    // 用户放弃转 cancelled——creating 只在创建时直接落状态，无入边。
+    const task = makeTask({ status: 'creating' });
+    applyTransition(task, 'ready', T0 + 1);
+    expect(task.status).toBe('ready');
+    const abandon = makeTask({ status: 'creating' });
+    applyTransition(abandon, 'cancelled', T0 + 1);
+    expect(abandon.status).toBe('cancelled');
+  });
+
+  it('creating 不直跳执行/等待语义态：start / wait 非法（计划未定不可开跑）', () => {
+    const task = makeTask({ status: 'creating' });
+    expect(() => applyTransition(task, 'start', T0 + 1)).toThrow(TransitionError);
+    expect(() => applyTransition(task, 'wait', T0 + 1)).toThrow(TransitionError);
+  });
+
   it('follows the happy staged path', () => {
     const task = makeTask({ status: 'draft' });
     applyTransition(task, 'ready', T0 + 1);

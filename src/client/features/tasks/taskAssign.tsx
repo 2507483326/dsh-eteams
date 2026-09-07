@@ -52,7 +52,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
-import { Avatar } from '../avatar/avatar';
+import { Avatar, AVATAR_SHELL_CLASS } from '../avatar/avatar';
 import { cn } from '../../lib/cn';
 import type { TaskSlotInput } from '../../lib/api';
 import type { CaptainView, MemberView, TeamSnapshot, TaskView } from '../../lib/monitor';
@@ -262,6 +262,28 @@ const CHIP_TAG_CLASS = 'text-[10px] font-normal text-muted-foreground';
  * 徽章面——中性 pill 底 + token 边 + 10px medium，区别于 chip 主题色。 */
 const STRIP_BADGE_CLASS = `inline-flex items-center rounded-[3px] border border-solid bg-[color:var(--eteams-pill-bg)] ${BORDER_TOKEN_CLASS} px-1 text-[10px] font-medium leading-none text-muted-foreground`;
 
+/** 任务区头像（用户迭代 2026-09-07：白底品牌描边壳，与角色页描边环同款
+ * ——壳收口 features/avatar 的 AVATAR_SHELL_CLASS；白底须由壳承载，Avatar
+ * 内联底色会盖住）。默认脸 24：24 + 壳 8 = 32 正好占满 chip 高；多选面板
+ * 行显式传 20（壳外径 28，行高随内容）。 */
+function ShellAvatar({
+  name,
+  seed,
+  salt,
+  size = 24,
+}: {
+  name: string;
+  seed?: number;
+  salt?: number;
+  size?: number;
+}): ReactNode {
+  return (
+    <span className={AVATAR_SHELL_CLASS}>
+      <Avatar name={name} seed={seed} salt={salt} size={size} />
+    </span>
+  );
+}
+
 /** 成员罗列条的可拖 chip（A.3.2：staged 可拖，源 chip 拖拽中半透明；头像
  * 渲染复用 Avatar，状态点 memberTone 五桶——staged 态由状态点表达；五轮
  * DA18：原「未启动」小字改工号数字徽章 STRIP_BADGE_CLASS）。 */
@@ -275,7 +297,7 @@ function MemberDragChip({ member }: { member: MemberView }): ReactNode {
       style={isDragging ? { opacity: 0.5 } : undefined}
       title="拖拽成员到下方的成员卡槽完成指派"
     >
-      <Avatar name={member.name} seed={member.avatar?.seed} salt={member.avatar?.salt} size={26} />
+      <ShellAvatar name={member.name} seed={member.avatar?.seed} salt={member.avatar?.salt} />
       <span>{member.name}</span>
       {badge && <span className={STRIP_BADGE_CLASS}>{badge}</span>}
       <span className={cn(DOT_BASE_CLASS, DOT_TONE_CLASS[memberTone(member.status)])} />
@@ -289,7 +311,7 @@ function MemberDragChip({ member }: { member: MemberView }): ReactNode {
 function CaptainChip({ captain }: { captain: CaptainView }): ReactNode {
   return (
     <div className={CAPTAIN_CHIP_CLASS} title="领队不接任务：负责拆解、指派与调度">
-      <Avatar name={captain.name} seed={captain.avatar.seed} salt={captain.avatar.salt} size={26} />
+      <ShellAvatar name={captain.name} seed={captain.avatar.seed} salt={captain.avatar.salt} />
       <span>{captain.name}</span>
       <span className={CHIP_TAG_CLASS}>领队</span>
     </div>
@@ -491,11 +513,10 @@ export function TaskAssignDropBox({
         className={BOX_READONLY_CLASS}
         title={detail ? `${display}（${detail}）` : display}
       >
-        <Avatar
+        <ShellAvatar
           name={display}
           seed={stationAvatar?.avatar?.seed}
           salt={stationAvatar?.avatar?.salt}
-          size={26}
         />
         <span>{display}</span>
         {dangling && <span className={BOX_DANGLING_CLASS}>已移出</span>}
@@ -676,7 +697,7 @@ function StationPicker({
               )}
               onClick={() => onToggle(ref)}
             >
-              <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={20} />
+              <ShellAvatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={20} />
               <span className="font-medium">{m.name}</span>
               <span className="text-[10px] font-normal text-muted-foreground">{m.role}</span>
               <span
@@ -781,7 +802,7 @@ function StationChip({
       title={`站点 ${index + 1}：${display}${detail ? `（${detail}）` : ''} · 拖到另一 chip=调序；点击打开修改弹窗`}
       className={cn(BOX_CHIP_CLASS, isOver && CHIP_RING_CLASS, isOver && BOX_OVER_SHADOW_CLASS)}
     >
-      <Avatar name={display} seed={record?.avatar?.seed} salt={record?.avatar?.salt} size={26} />
+      <ShellAvatar name={display} seed={record?.avatar?.seed} salt={record?.avatar?.salt} />
       <span>{display}</span>
       {dangling && <span className={BOX_DANGLING_CLASS}>已移出</span>}
       {removable && (

@@ -66,6 +66,31 @@ async function requestJson(url: string, init?: RequestInit): Promise<unknown> {
   return body;
 }
 
+/**
+ * One subagent session's observed model route + identity
+ * （用户迭代 2026-09-07「子代理会话中显示实际的 provider/model」）：
+ * `GET /session-route` 的响应视图。字段全 optional/null 防旧宿主快照——
+ * `route` 为 null = 尚未观测到该会话的请求（未发过/宿主刚重启）。
+ */
+export interface SessionRouteView {
+  subagent?: boolean;
+  kind?: 'member' | 'captain' | 'builder';
+  memberName?: string | null;
+  teamId?: string | null;
+  route?: { provider: string; model: string } | null;
+}
+
+/**
+ * 查询一个会话的观测路线与子代理身份（子会话徽章轮询用）。
+ * 404/网络失败由调用方决定兜底——徽章轮询失败静默不渲染。
+ */
+export async function fetchSessionRoute(sessionId: string): Promise<SessionRouteView> {
+  const body = await requestJson(
+    `${API_BASE}/session-route?sessionId=${encodeURIComponent(sessionId)}`,
+  );
+  return (body ?? {}) as SessionRouteView;
+}
+
 /** List the workspace roster (D16). */
 export async function fetchRoster(): Promise<RosterMember[]> {
   const body = (await requestJson(`${API_BASE}/roster`)) as { members?: unknown };
@@ -334,6 +359,35 @@ export async function createTeamTask(
     }),
   })) as { taskId?: unknown };
   return { taskId: typeof body.taskId === 'number' ? body.taskId : Number(body.taskId ?? 0) };
+}
+
+/**
+ * 面板手动创建主任务（docs/panelTaskCommission）：只交任务描述（+选团队），
+ * 宿主建「创建中」容器并交完善者（有领队 = 领队子代理；无领队 = 主会话）。
+ * `dispatched` 为假时 `detail` 带原因（任务仍创建成功，保留为创建中可删）。
+ */
+export async function createTaskCommission(
+  teamId: string,
+  payload: { description: string; sessionId?: string },
+): Promise<{ taskId: number; dispatched: boolean; detail?: string }> {
+  const body = (await requestJson(
+    `${API_BASE}/team/${encodeURIComponent(teamId)}/task/commission`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        description: payload.description,
+        ...(payload.sessionId !== undefined && payload.sessionId !== ''
+          ? { sessionId: payload.sessionId }
+          : {}),
+      }),
+    },
+  )) as { taskId?: unknown; dispatched?: unknown; detail?: unknown };
+  return {
+    taskId: typeof body.taskId === 'number' ? body.taskId : Number(body.taskId ?? 0),
+    dispatched: body.dispatched === true,
+    ...(typeof body.detail === 'string' && body.detail !== '' ? { detail: body.detail } : {}),
+  };
 }
 
 /** Update an unclaimed task (subject/description/成员槽/依赖 = 执行顺序, 七轮 DA20). */

@@ -19,7 +19,12 @@
  * that role — no draft text, nothing sent. For a team the host asserts the
  * 团队绑定 band (docs/26: conversation task workflow, led by the captain or
  * by the main window when the leader is removed). Selections persist per
- * session in localStorage and re-assert to the host on mount. Clicking the
+ * session in localStorage and re-assert to the host on mount. 一次性选择
+ * （用户迭代 2026-09-07「发送后清空选择」）：团队面在提交瞬间（输入状态机
+ * submitting 转变沿）就地清空——按钮回「团队」、localStorage 清除；宿主侧
+ * 绑定不在此处删除（那条消息的 band 与派发身份还要靠它），由宿主
+ * user/message 事件一次性消费（host runtime/sessionTeam）。角色面不随发送
+ * 清空。 Clicking the
  * button ALWAYS toggles this popup (opened on the tab matching the
  * selection) — panel navigation stays with the 新增 shortcuts. When the
  * slot's `inputActions` kit is unavailable the prefill degrades to clipboard
@@ -559,6 +564,26 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
   const [selectedTeam, setSelectedTeam] = useState<{ teamId: string; name: string } | null>(() =>
     loadSelectedTeam(sessionId),
   );
+  // 一次性团队选择（用户迭代 2026-09-07「发送后清空选择」）：输入状态机
+  // 进入 submitting（真实提交在途；InputZone owner props 的 point-in-time
+  // 快照随骨架重渲染到达）即清团队面——按钮回「团队」+ localStorage 清除，
+  // 不调 clearSessionTeam（那条消息的宿主 band/派发身份还要靠绑定，宿主
+  // user/message 事件一次性消费，host runtime/sessionTeam）。转变沿检测走
+  // 渲染期调整（React 官方对「prop 变化派生状态」的替代——effect 同步
+  // setState 被 react-hooks/set-state-in-effect 禁止）：lastPhase 记上一帧
+  // 相位，仅在 plain→submitting 转变沿清空——挂载即 submitting（首帧同值）
+  // 与回合中段重选（相位未变）都不误清。removeItem 幂等，重复执行无副作用。
+  // 角色面不受发送影响（用户只要求团队选择）。
+  const rawPhase = (props.input as { phase?: unknown } | undefined)?.phase;
+  const inputPhase = typeof rawPhase === 'string' ? rawPhase : null;
+  const [lastPhase, setLastPhase] = useState<string | null>(inputPhase);
+  if (inputPhase !== lastPhase) {
+    setLastPhase(inputPhase);
+    if (inputPhase === 'submitting' && selectedTeam !== null) {
+      setSelectedTeam(null);
+      forgetSelectedTeam(sessionId);
+    }
+  }
   // Host sync failure surface (角色接管): the POST is fire-and-forget for
   // latency, but its outcome lands here — a stale host (app not restarted
   // since the feature shipped) must be VISIBLE, not silently swallowed.

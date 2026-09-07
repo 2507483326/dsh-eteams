@@ -11,6 +11,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
+import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -22,7 +23,7 @@ import type {
   TaskStatus,
   TeamState,
 } from '../model/types.js';
-import { memberBoxKey, readEventsSync, readMailboxSync } from '../state/events.js';
+import { memberBoxKey, readEventsSync, readMailboxSync, recordEvent } from '../state/events.js';
 import { boardOverview } from '../state/queries.js';
 import { listTeamIds, readTeamSync } from '../state/store.js';
 import { joinPath, stateRootFor, type RuntimeContext, type RuntimeEnv } from './base.js';
@@ -47,10 +48,12 @@ import {
   setLeaderRemoved,
   setMemberModel,
   syncMemberToRoster,
+  teamView,
   updateMember,
 } from './teamOps.js';
 import {
   assignTask,
+  captainFor,
   createTask,
   deleteTask,
   startGroupTask,
@@ -70,8 +73,15 @@ import {
 } from './roleBuilder.js';
 import { stopBuilderChild, wakeBuilderChild } from './builderPhases.js';
 import { clearSessionPersona, setSessionPersona } from './sessionPersona.js';
-import { clearSessionTeam, setSessionTeam } from './sessionTeam.js';
-import { readUsageCalendar, readAppUsageCalendar } from './usage.js';
+import { clearSessionTeam, getSessionTeamId, setSessionTeam } from './sessionTeam.js';
+import { dispatchCaptainCore, captainChildTeamOf } from './captainAgent.js';
+import { captainCommissionPrompt } from '../prompts/steering/dispatch.js';
+import {
+  lookupMemberSession,
+  readUsageCalendar,
+  readAppUsageCalendar,
+  sessionRouteOf,
+} from './usage.js';
 import {
   findRosterMemberAcrossWorkspaces,
   locateTeamAcrossWorkspaces,
@@ -108,6 +118,28 @@ export interface StationView {
 
 /** 看板「进行中」五态（docs/27 §27.9#11 十态收敛；ready 是待派单列不算进行中）。 */
 const ACTIVE_STATUSES: TaskStatus[] = ['wait', 'start', 'paused', 'wait_decision', 'wait_user'];
+
+/** commission 主题截断长度（描述首行占位主题，完善者收口时回写真主题）。 */
+const COMMISSION_SUBJECT_MAX = 24;
+
+/**
+ * commission 派发段按团队串行（docs/panelTaskCommission）：建任务后的
+ * 「解析父锚 → 派发完善者」段是异步窗口，两次快速提交若无序会并发
+ * startContinuable 用同 label 重建领队子代理。按 teamKey 排队，失败不堵队。
+ */
+const commissionQueues = new Map<string, Promise<void>>();
+function withCommissionLock<T>(teamKey: string, run: () => Promise<T>): Promise<T> {
+  const tail = (commissionQueues.get(teamKey) ?? Promise.resolve()).catch(() => undefined);
+  const next = tail.then(run);
+  commissionQueues.set(
+    teamKey,
+    next.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return next;
+}
 
 /** Station status for chain index `i` given the task state. */
 function stationStatusOf(
@@ -296,7 +328,10 @@ export function teamSnapshot(
     // leaderModelRoute 已随审批重构与成员模型收敛砍掉——面板不再消费。
     // docs/26：任务单（group 容器）不计入进度——进度只反映真实小任务。
     progress: (() => {
-      const real = team.tasks.filter((t) => !team.tasks.some((x) => x.parentId === t.id));
+      // 创建中的容器（面板手动建任务占位）不计进度分母（docs/panelTaskCommission）。
+      const real = team.tasks.filter(
+        (t) => t.status !== 'creating' && !team.tasks.some((x) => x.parentId === t.id),
+      );
       return {
         completed: real.filter((t) => t.status === 'completed').length,
         total: real.length,
@@ -374,6 +409,11 @@ export function summarizeEvent(e: EventRecord): string {
       return '领队回到团队';
     case 'task.created':
       return `新建任务 ${task}`;
+    case 'task_commissioned':
+      // 面板手动建任务（docs/panelTaskCommission）：派发失败也如实展示。
+      return p.dispatched === true
+        ? `面板创建任务 ${task}，已交${p.hasLeader === true ? '领队' : '主会话'}完善`
+        : `面板创建任务 ${task}（创建中），完善者未送达：${String(p.reason ?? '')}`;
     case 'task.assigned':
       return `${task} 指派给 ${String(p.member ?? '')}`;
     case 'task.claimed':
@@ -1207,6 +1247,132 @@ export function installWebSurface(
               }
               return;
             }
+            // POST /team/<id>/task/commission — 面板手动创建主任务容器
+            // （docs/panelTaskCommission）：用户填任务描述（+选团队）→ 建
+            // 「创建中」容器（mainSessionId 记主会话快照）→ 交完善者完善：
+            // 有领队 = 持续领队子代理（captainFor 父锚 + dispatchCaptainCore
+            // ——与对话派发同一链路）；无领队 = 主会话直接完善（captainFor
+            // 唤醒，wakeCaptain 同款 followup；主会话经任务行快照判为
+            // captain，root 作用域领队工具可用）。完善者未送达不回滚——任务
+            // 留在创建中（可删除重试），detail 带原因。
+            if (
+              req.method === 'POST' &&
+              segments[0] === 'team' &&
+              segments.length === 4 &&
+              segments[2] === 'task' &&
+              segments[3] === 'commission'
+            ) {
+              const body = parseJsonObject(await readBody(req));
+              const description = str(body.description, '');
+              if (description === '') {
+                sendError(res, 400, 'description 不能为空');
+                return;
+              }
+              const located = locateTeam(ctx, config, segments[1]!);
+              if (!located) {
+                sendError(res, 404, `团队 ${segments[1]} 不存在`);
+                return;
+              }
+              const { team, workspacePath } = located;
+              const env = envFor(ctx, config, workspacePath);
+              // v6 主会话快照：客户端从活跃对话上报 sessionId——无领队路径
+              // 的唤醒目标与任务行快照都靠它（整页覆盖层无 sessionId 时退
+              // captainFor 的心跳/冷恢复梯度）。
+              const sessionId = typeof body.sessionId === 'string' ? body.sessionId : '';
+              // 绑定守卫：会话已绑定其他团队 → resolveCaller 绑定优先会错配
+              // caller.team，完善者调 eteams_* 必报「任务不存在」。提前变成
+              // 可诊断的明确失败（任务仍创建，留在创建中可删）。
+              const boundTeam = sessionId !== '' ? getSessionTeamId(sessionId) : undefined;
+              // 主题 = 描述首行截断占位（完善者收口时回写真主题；「创建中」
+              // 期间卡片可读）。
+              const firstLine =
+                description.split(/\r?\n/).find((line) => line.trim() !== '') ?? description;
+              const subject =
+                firstLine.trim().slice(0, COMMISSION_SUBJECT_MAX) || '未命名任务';
+              let task: TaskRecord;
+              try {
+                task = await createTask(
+                  env,
+                  { teamId: team.id, actor: { kind: 'user', name: '用户' } },
+                  {
+                    subject,
+                    description,
+                    kind: 'group',
+                    status: 'creating',
+                    ...(sessionId !== '' ? { mainSessionId: sessionId } : {}),
+                  },
+                );
+              } catch (e) {
+                sendError(res, 400, e instanceof Error ? e.message : String(e));
+                return;
+              }
+              // 派发段按团队串行；任何失败都只落 detail（任务已入册不回滚）。
+              const dispatchNote = await withCommissionLock(String(team.id), async () => {
+                if (boundTeam !== undefined && boundTeam !== String(team.id)) {
+                  return '该会话已绑定其他团队，完善指令无法投递（任务保留为创建中，可删除后重试）';
+                }
+                const anchor = await captainFor(env, team, task);
+                if (anchor === undefined) {
+                  return '未找到主会话锚点（会话不在线且无法冷恢复；在对应团队对话中绑定后重试）';
+                }
+                const prompt = captainCommissionPrompt(
+                  JSON.stringify(teamView(env, team), null, 1),
+                  task.id,
+                  task.subject,
+                  description,
+                );
+                if (team.hasLeader) {
+                  try {
+                    await dispatchCaptainCore(env, config, anchor, team, prompt);
+                    return '';
+                  } catch (e) {
+                    return `领队子代理派发失败：${e instanceof Error ? e.message : String(e)}`;
+                  }
+                }
+                try {
+                  anchor.followup(
+                    createUserMessage({
+                      content: [{ type: 'text', text: prompt }],
+                      source: { kind: 'plugin', plugin: 'dsh-eteams' },
+                    }),
+                  );
+                  return '';
+                } catch (e) {
+                  return `主会话唤醒失败：${e instanceof Error ? e.message : String(e)}`;
+                }
+              });
+              // 事件如实记派发结果（动态视图 summarizeEvent 消费）。
+              try {
+                await recordEvent(
+                  stateRootFor(config, workspacePath),
+                  team.id,
+                  { kind: 'user', name: '用户' },
+                  'task_commissioned',
+                  {
+                    taskId: task.id,
+                    payload: {
+                      hasLeader: team.hasLeader,
+                      dispatched: dispatchNote === '',
+                      ...(dispatchNote !== '' ? { reason: dispatchNote } : {}),
+                    },
+                  },
+                );
+              } catch (e) {
+                // 计量/事件绝不影响响应（失败只留日志）。
+                const logger = (ctx as unknown as { logger?: { warn?: (msg: string) => void } })
+                  .logger;
+                if (typeof logger?.warn === 'function') {
+                  logger.warn(`eteams: commission event failed: ${String(e)}`);
+                }
+              }
+              sendJson(res, 200, {
+                ok: true,
+                taskId: task.id,
+                dispatched: dispatchNote === '',
+                ...(dispatchNote !== '' ? { detail: dispatchNote } : {}),
+              });
+              return;
+            }
             // POST /team/<id>/task/<taskId>/update — 修改未领取小任务（主题/
             // 说明/成员槽）。二十八轮 DA41：补收 contractMd **raw 透传**（绕
             // 开 str() 的 trim——MD 正文首尾空白属内容，面板就地编辑把「说明 +
@@ -1476,9 +1642,8 @@ export function installWebSurface(
               try {
                 const root = rootForWrites(ctx, config);
                 const { session, memberName } = await confirmBuildSession(root, draft);
-                // 不再代收子代理（docs/19.17.1）：停驻中的子代理靠 eteams_build_wait
-                // 轮询在数秒内自行看到 confirmed 并静默收束回合（watchSettlement
-                // 自然释放激活）；宿主 drain 反而抢在它读盘前打断，少一拍变更。
+                // 不再代收子代理（docs/19.17.1）：子代理上报待确认草稿后已收束
+                // 回合，确认入库由宿主直接落库，无须唤醒或代收。
                 sendJson(res, 200, {
                   ok: true,
                   status: session.status,
@@ -1792,6 +1957,44 @@ export function installWebSurface(
                 serverTime: Date.now(),
                 days: calendar.days,
                 totals: calendar.totals,
+              });
+              return;
+            }
+            // GET /session-route?sessionId=<id> — 子代理会话的观测路线 + 身份
+            // （用户迭代 2026-09-07「子代理会话中显示实际的 provider/model」）：
+            // composer 模型座位对子代理会话有意不可用（ui-model-selection 按
+            // subagentAddress 门控），子会话徽章改查本路由。路线 = usage 旁路
+            // 观测值（request/header·context → routeCache，进程内存——重启后
+            // 该会话再发请求重填）；身份 = 成员/领队子代理登记表 + 当前构建
+            // 子会话 id。非 eteams 子代理（用户自己的对话）返回 subagent:false，
+            // 徽章不渲染、主会话模型座位照旧。
+            if (segments[0] === 'session-route' && segments.length === 1) {
+              const sessionId = (url.searchParams.get('sessionId') ?? '').trim();
+              if (sessionId === '') {
+                sendError(res, 400, 'sessionId 参数缺失');
+                return;
+              }
+              const member = lookupMemberSession(sessionId);
+              const captainTeam = captainChildTeamOf(sessionId);
+              const isBuilder = collectRoots(ctx, config).some(
+                (located) => readBuildSession(located.root)?.builderChildId === sessionId,
+              );
+              const kind = member !== undefined
+                ? 'member'
+                : captainTeam !== undefined
+                  ? 'captain'
+                  : isBuilder
+                    ? 'builder'
+                    : undefined;
+              sendJson(res, 200, {
+                subagent: kind !== undefined,
+                kind,
+                memberName: member?.memberName ?? null,
+                teamId: member?.teamId ?? captainTeam ?? null,
+                // 路线只对 eteams 子代理透出（非子代理即使碰巧有观测也回
+                // null——主会话的模型座位是显示的权威来源，徽章不掺和）。
+                route: kind !== undefined ? (sessionRouteOf(sessionId) ?? null) : null,
+                serverTime: Date.now(),
               });
               return;
             }

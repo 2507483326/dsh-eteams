@@ -9,11 +9,12 @@
 import type { ReactNode } from 'react';
 import { cn } from '../../lib/cn';
 import type { TaskView } from '../../lib/monitor';
-import { groupDisplayOf, isTerminal } from '../../features/tasks/taskDisplayStatus';
+import { groupDisplayOf, isGroupStartable } from '../../features/tasks/taskDisplayStatus';
 import { DeleteButton } from '../../components/deleteButton';
 import { Button } from '../../components/ui/button';
 import { BlockedPill, FormErrorNote, GroupSummaryChip, TaskStatusPill } from '../shared/components';
 import { LIST_COUNT_CLASS } from '../shared/styles';
+import LoaderCircle from 'lucide-react/dist/esm/icons/loader-circle.mjs';
 
 /** 列表页任务小卡（十一轮 DA24 与团队列表小卡同款三段式，十二轮 DA25 修订：
  * 头行（主题截断，**无 #id 前缀**）、信息**逐行分行**（进度行/汇总 chip 行/
@@ -27,13 +28,15 @@ import { LIST_COUNT_CLASS } from '../shared/styles';
 const TASK_CARD_CLASS = 'flex min-w-0 cursor-pointer flex-col gap-2 rounded-xl p-3.5';
 
 /** 列表卡删除按钮显隐判据（十二轮 DA25，用户拍板「仅可删除的卡显示」）——
- * 与 host deleteTask 守卫（assignment.ts）同口径：本身 draft/ready；主任务
+ * 与 host deleteTask 守卫（assignment.ts）同口径：本身 draft/ready/creating
+ * （docs/panelTaskCommission：creating 仅容器分支放宽——创建中的容器是
+ * 手动建任务占位、计划未定，删除 = 逃生门；小任务分支判据不动）；主任务
  * 级联删除要求全部小任务 draft/ready；删除集（自身 + 小任务）不得被任何
  * 未入集任务依赖。host 仍是最终裁决，弹窗内就地显示拒绝原因。
  * （M3：改具名导出供 tests/taskListCard.test.ts 锁定镜像口径——判定式
  * 一字未动。） */
 export function deletableOf(t: TaskView, tasks: readonly TaskView[]): boolean {
-  if (t.status !== 'draft' && t.status !== 'ready') return false;
+  if (t.status !== 'creating' && t.status !== 'draft' && t.status !== 'ready') return false;
   const doomedIds = new Set<number>([t.taskId]);
   for (const sub of tasks) {
     if (sub.parentId !== t.taskId) continue;
@@ -158,7 +161,15 @@ export function TaskListCard({
         className="mt-auto flex items-center justify-between gap-2 border-t border-solid pt-2"
         onClick={(e) => e.stopPropagation()}
       >
-        <TaskStatusPill status={task.status} retryCount={task.retryCount} />
+        {/* 状态 pill + 创建中 loading（docs/panelTaskCommission）：creating
+        卡在 pill 旁渲染 14px 旋转 loader（Tailwind animate-spin 自带动画）——
+        领队/主会话完善进行中的即时观感。 */}
+        <span className="flex items-center gap-1.5">
+          <TaskStatusPill status={task.status} retryCount={task.retryCount} />
+          {task.status === 'creating' && (
+            <LoaderCircle className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+          )}
+        </span>
         <div className="flex items-center gap-1.5">
           {/* 二十六轮 DA39：主任务卡「开始」按钮（用户拍板
             「主任务需要加开始按钮，没看到加在那里」——DA38
@@ -172,7 +183,10 @@ export function TaskListCard({
             二十八轮 DA41：渲染序改**组卡 [删除][开始]（开始
             最右）、顶层普通任务 [详情][删除] 逐位不变**——
             组卡整卡点击即进详情，「详情」钮对组卡是冗余件
-            （用户「主任务不需要详情按钮」），开始钮挪到最右。 */}
+            （用户「主任务不需要详情按钮」），开始钮挪到最右。
+            docs/panelTaskCommission：判据收拢 isGroupStartable——creating
+            容器（手动建任务占位）计划未定不渲染开始钮（与宿主 startGroup
+            Task 同闸镜像），终态照旧收。 */}
           {task.kind !== 'group' && (
             <Button type="button" variant="outline" size="sm" onClick={onOpen}>
               详情
@@ -180,7 +194,7 @@ export function TaskListCard({
           )}
           {/* 删除（M7-4 收口 components/deleteButton，destructive 默认档）。 */}
           {deletable && <DeleteButton label="删除" onClick={onDelete} />}
-          {task.kind === 'group' && !isTerminal(task.status) && subs.length > 0 && (
+          {task.kind === 'group' && isGroupStartable(task.status) && subs.length > 0 && (
             <Button type="button" size="sm" disabled={startBusy === task.taskId} onClick={onStart}>
               开始
             </Button>

@@ -17,6 +17,7 @@ import { refreshActivitySoon, type TeamSnapshot } from '../../lib/monitor';
 import { cn } from '../../lib/cn';
 import { errorMessageOf, runWithBusy } from '../../lib/errors';
 import { AvatarStack } from '../../components/avatarStack';
+import { AVATAR_SHELL_CLASS } from '../../features/avatar/avatar';
 import { ConfirmDeleteDialog } from '../../components/confirmDeleteDialog';
 import { DeleteButton } from '../../components/deleteButton';
 import { FormDialog, FormFooterActions } from '../../components/formDialog';
@@ -239,7 +240,9 @@ export function TeamPage({ sessionId, pool, team, onSelectTeam }: TeamPageProps)
                       {/* 成员略缩图（M7-7 收口 components/avatarStack）：领队 +
                       成员头像最多 3 个，超出 +N；小号头像负间距叠放，滑过整组
                       间距松开、滑过单个放大——动效由样式表
-                      .eteams-team-avatars 驱动，title 兜底全名。 */}
+                      .eteams-team-avatars 驱动，title 兜底全名。叠放壳改白底
+                      品牌描边（用户迭代 2026-09-07，同角色页描边环——原白
+                      ring 撤，壳收口 features/avatar AVATAR_SHELL_CLASS）。 */}
                       <AvatarStack
                         people={faces.map((m) => ({
                           name: m.name,
@@ -248,7 +251,7 @@ export function TeamPage({ sessionId, pool, team, onSelectTeam }: TeamPageProps)
                         }))}
                         size={20}
                         max={3}
-                        wrapperClass="inline-flex shrink-0 rounded-full ring-2 ring-[color:var(--background)]"
+                        wrapperClass={`inline-flex shrink-0 ${AVATAR_SHELL_CLASS}`}
                         overflow
                       />
                     </div>

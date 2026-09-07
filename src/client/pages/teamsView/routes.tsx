@@ -224,10 +224,21 @@ export function ETeamsViewRoutes(props: ETeamsRoutesProps): ReactNode {
       />
       {/* 任务域（M3 拆页）：/tasks 列表 + /tasks/:taskId 详情（:taskId 路由
           参数即选中任务 id）。react-router v6 路由排序静态段优先，/tasks 不
-          会被 /tasks/:taskId 吞掉；team undefined 守卫原样保留。 */}
+          会被 /tasks/:taskId 吞掉；team undefined 守卫原样保留。面板手动建
+          任务（docs/panelTaskCommission）：/tasks 透传 pool/sessionId/
+          onSelectTeam——添加任务弹窗的团队选项与 commission 会话锚。 */}
       <Route
         path="/tasks"
-        element={props.team !== undefined ? <TasksPage team={props.team} /> : null}
+        element={
+          props.team !== undefined ? (
+            <TasksPage
+              team={props.team}
+              pool={props.pool}
+              sessionId={props.sessionId}
+              onSelectTeam={props.onSelectTeam}
+            />
+          ) : null
+        }
       />
       <Route
         path="/tasks/:taskId"

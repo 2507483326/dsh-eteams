@@ -14,6 +14,8 @@ import { insertTeamRow, writeTeam, withTeamTx } from '../src/host/state/store';
 import { joinPath, type RuntimeEnv } from '../src/host/runtime/base';
 import {
   clearSessionTeam,
+  consumeSessionTeamBinding,
+  getConsumedSessionTeamId,
   getSessionTeamId,
   sessionTeamSection,
   setSessionTeam,
@@ -116,14 +118,24 @@ describe('sessionTeamSection branches', () => {
     expect(band).not.toContain('「用团队做X」');
   });
 
-  it('is the same relay band whether or not the leader was removed', () => {
-    // leaderRemoved once switched the main session into self-hosting; the
-    // relay split makes the roster entry irrelevant to the band（领队移出
-    // 现在只落在 task_members 领队行的 status 上，band 不读它）.
+  it('branches on hasLeader: leaderless team self-hosts（docs/panelTaskCommission）', () => {
+    // 旧口径「领队移出与 band 无关」已被面板手动建任务推翻：无领队团队的
+    // 完善/推进路径就是主会话直接主持（与面板 commission 路由的
+    // anchor.followup 唤醒同语义），band 必须切到直接主持分工并保留
+    // 「不自批开跑」红线；有领队仍是转交 band。两条互斥、不再同文。
     setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
     const kept = sessionTeamSection('s-other', () => team());
     const removed = sessionTeamSection('s-other', () => team({ hasLeader: false }));
-    expect(removed).toBe(kept);
+    // 有领队：转交持续领队子代理，本会话不碰 submit_task。
+    expect(kept).toContain('持续领队子代理');
+    expect(kept).toContain('eteams_dispatch_captain');
+    expect(kept).not.toContain('eteams_submit_task');
+    // 无领队：本会话直接主持（提交/问询/拆解），指派等批准后由小任务派发。
+    expect(removed).toContain('本团队未设领队');
+    expect(removed).toContain('由本会话直接主持');
+    expect(removed).toContain('eteams_submit_task');
+    expect(removed).toContain('不自批开跑');
+    expect(removed).not.toContain('eteams_dispatch_captain');
     expect(removed).not.toContain('由你（本会话）充当领队');
   });
 
@@ -154,6 +166,46 @@ describe('getSessionTeamId', () => {
   it('ignores blank session ids', () => {
     setSessionTeam('', { teamId: 't9', name: 'n', boundAt: 1 });
     expect(getSessionTeamId('')).toBeUndefined();
+  });
+});
+
+describe('一次性消费（用户迭代 2026-09-07 发送后清空选择）', () => {
+  it('consume moves the binding into a one-turn grant (band 与绑定查表分流)', () => {
+    setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
+    consumeSessionTeamBinding('s-other');
+    // 绑定已消费：普通绑定查表为空（客户端按钮面已清、不再重申）。
+    expect(getSessionTeamId('s-other')).toBeUndefined();
+    // 但本回合凭证仍在：band 照常注入（消费这条消息的工作流不中断）。
+    expect(sessionTeamSection('s-other', () => team())).toContain('【eteams 团队绑定·生效中】');
+    expect(getConsumedSessionTeamId('s-other')).toBe('demo');
+  });
+
+  it('the next user/message revokes the grant (回到普通对话)', () => {
+    setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
+    consumeSessionTeamBinding('s-other'); // 第一条消息：绑定 → 凭证
+    consumeSessionTeamBinding('s-other'); // 第二条消息：撤销凭证
+    expect(sessionTeamSection('s-other', () => team())).toBe('');
+    expect(getConsumedSessionTeamId('s-other')).toBeUndefined();
+  });
+
+  it('consume without any binding is a no-op', () => {
+    consumeSessionTeamBinding('s-other');
+    expect(getConsumedSessionTeamId('s-other')).toBeUndefined();
+    expect(sessionTeamSection('s-other', () => team())).toBe('');
+  });
+
+  it('explicit deselect also drops the in-flight grant', () => {
+    setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
+    consumeSessionTeamBinding('s-other');
+    clearSessionTeam('s-other');
+    expect(getConsumedSessionTeamId('s-other')).toBeUndefined();
+    expect(sessionTeamSection('s-other', () => team())).toBe('');
+  });
+
+  it('ignores blank session ids', () => {
+    setSessionTeam('', { teamId: 't9', name: 'n', boundAt: 1 });
+    consumeSessionTeamBinding('');
+    expect(getConsumedSessionTeamId('')).toBeUndefined();
   });
 });
 
@@ -215,6 +267,22 @@ describe('resolveCaller 绑定优先 (binding-first identity)', () => {
     const caller = await resolveCaller(envFor(ws), agentOf('s-other'));
     expect(caller.kind).toBe('captain');
     if (caller.kind === 'captain') expect(caller.team.id).toBe(seeded.id);
+  });
+
+  it('resolveCaller keeps working through the consumed turn (本回合凭证)', async () => {
+    // 一次性消费语义：绑定已随 user/message 转凭证，但消费这条消息的回合
+    // 里 dispatch/工具调用仍按绑定团队解析（sessionTeam.ts 模块头）。
+    const seeded = await seedTeam('演示团队', 's-creator');
+    setSessionTeam('s-other', { teamId: String(seeded.id), name: seeded.name, boundAt: 1 });
+    consumeSessionTeamBinding('s-other');
+    const caller = await resolveCaller(envFor(ws), agentOf('s-other'));
+    expect(caller.kind).toBe('captain');
+    if (caller.kind === 'captain') expect(caller.team.id).toBe(seeded.id);
+    // 下一条消息撤销凭证后，同一会话不再有团队身份。
+    consumeSessionTeamBinding('s-other');
+    await expect(resolveCaller(envFor(ws), agentOf('s-other'))).rejects.toThrow(
+      '当前会话不在任何 eteams 团队中',
+    );
   });
 
   it('resolves a registered captain child as its team captain (领队子代理)', async () => {

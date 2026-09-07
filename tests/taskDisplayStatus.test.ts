@@ -1,9 +1,11 @@
 /**
- * 展示态派生层单测（docs/27 §27.9#11 十态收敛）：10 态→展示态映射全表（含
- * cancelled 同桶异色特例）、retryCount 并入 detail、未知态中性回退、
- * isStartable/isTerminal 开始钮状态窗口（M3 收拢三处开始钮判据）、
- * group 汇总优先级（error > doing > waiting > done 全完成 null）与全部
- * done → null；成员五态词表/tone 与 13 态旧值兜底。
+ * 展示态派生层单测（docs/27 §27.9#11 十态收敛 + docs/panelTaskCommission
+ * 第 11 态 creating）：11 态→展示态映射全表（含 cancelled 同桶异色特例）、
+ * retryCount 并入 detail、未知态中性回退、isStartable/isTerminal 开始钮
+ * 状态窗口（M3 收拢三处开始钮判据）与 isGroupStartable（创建中容器不渲染
+ * 开始钮——与宿主 startGroupTask 同闸镜像）、group 汇总优先级
+ * （error > doing > waiting > done 全完成 null）与全部 done → null；
+ * 成员五态词表/tone 与 13 态旧值兜底。
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -13,13 +15,20 @@ import {
   STATUS_LABELS,
   displayStatusOf,
   groupDisplayOf,
+  isGroupStartable,
   isStartable,
   isTerminal,
   memberTone,
 } from '../src/client/features/tasks/taskDisplayStatus';
 
-describe('displayStatusOf（10 态→展示态全表）', () => {
-  it('六档映射逐格对表（key/label/tone；二十四轮 DA37 draft/ready 文案合并待开始）', () => {
+describe('displayStatusOf（11 态→展示态全表）', () => {
+  it('六档映射逐格对表（key/label/tone；二十四轮 DA37 draft/ready 文案合并待开始；creating 创建中占位 init 桶）', () => {
+    expect(displayStatusOf('creating')).toEqual({
+      key: 'init',
+      label: '创建中',
+      tone: 'info',
+      detail: '',
+    });
     expect(displayStatusOf('draft')).toEqual({
       key: 'init',
       label: '待开始',
@@ -117,12 +126,13 @@ describe('displayStatusOf（10 态→展示态全表）', () => {
   });
 });
 
-describe('STATUS_LABELS（10 态精确词表）', () => {
-  it('10 态齐全且值与词表一致（成员状态 pill 不再复用任务词表）', () => {
+describe('STATUS_LABELS（11 态精确词表）', () => {
+  it('11 态齐全且值与词表一致（成员状态 pill 不再复用任务词表）', () => {
     expect(Object.keys(STATUS_LABELS).sort()).toEqual(
       [
         'cancelled',
         'completed',
+        'creating',
         'draft',
         'failed',
         'paused',
@@ -133,6 +143,7 @@ describe('STATUS_LABELS（10 态精确词表）', () => {
         'wait_user',
       ].sort(),
     );
+    expect(STATUS_LABELS.creating).toBe('创建中');
     expect(STATUS_LABELS.draft).toBe('待开始');
     expect(STATUS_LABELS.ready).toBe('待开始');
     expect(STATUS_LABELS.wait).toBe('待接取');
@@ -205,6 +216,25 @@ describe('isStartable / isTerminal（M3 收拢三处开始钮判据的状态窗�
   });
 });
 
+describe('isGroupStartable（组开始钮判据扩位，docs/panelTaskCommission）', () => {
+  it('非终态且非创建中才渲染——creating 容器计划未定不渲染（与宿主 startGroupTask 同闸镜像）', () => {
+    expect(isGroupStartable('ready')).toBe(true);
+    expect(isGroupStartable('draft')).toBe(true);
+    expect(isGroupStartable('wait')).toBe(true);
+    expect(isGroupStartable('start')).toBe(true);
+    expect(isGroupStartable('paused')).toBe(true);
+    expect(isGroupStartable('wait_decision')).toBe(true);
+    expect(isGroupStartable('wait_user')).toBe(true);
+    expect(isGroupStartable('failed')).toBe(true);
+    // 创建中（面板手动建任务占位）与终态一律不渲染。
+    expect(isGroupStartable('creating')).toBe(false);
+    expect(isGroupStartable('completed')).toBe(false);
+    expect(isGroupStartable('cancelled')).toBe(false);
+    // 未知态非终态非创建中——照渲染（原 !isTerminal 同口径）。
+    expect(isGroupStartable('unknown_state')).toBe(true);
+  });
+});
+
 describe('groupDisplayOf（组卡汇总优先级）', () => {
   it('空小任务集 → null（不渲染 chip）', () => {
     expect(groupDisplayOf([])).toBeNull();
@@ -245,7 +275,7 @@ describe('groupDisplayOf（组卡汇总优先级）', () => {
   });
 });
 
-describe('STATUS_GROUPS（十态一列键序规范，十一轮 DA24 后列表平铺无渲染方）', () => {
+describe('STATUS_GROUPS（十一态一列键序规范，十一轮 DA24 后列表平铺无渲染方）', () => {
   it('每态独立成组，label/tone 来自展示态表', () => {
     expect(STATUS_GROUPS.map((g) => g.id)).toEqual(Object.keys(STATUS_LABELS));
     for (const group of STATUS_GROUPS) {

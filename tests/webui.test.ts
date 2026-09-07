@@ -21,6 +21,13 @@ import {
   setBuildParentSession,
 } from '../src/host/runtime/roleBuilder';
 import { joinPath } from '../src/host/runtime/base';
+import { registerCaptainChild, unregisterCaptainChild } from '../src/host/runtime/captainAgent';
+import {
+  registerMemberSession,
+  resetUsageMeterForTests,
+  seedSessionRouteForTests,
+} from '../src/host/runtime/usage';
+import { clearSessionTeam } from '../src/host/runtime/sessionTeam';
 import { getDb } from '../src/host/state/db';
 import { recordUsage, type UsageRecord } from '../src/host/state/usageStore';
 import { readTeamSync } from '../src/host/state/store';
@@ -1788,6 +1795,163 @@ describe('conversation task workflow (docs/26)', () => {
   });
 });
 
+describe('panel task commission (docs/panelTaskCommission)', () => {
+  it('creates a 「创建中」container and dispatches the leaderful captain (有领队交领队完善)', async () => {
+    const h = await installFull();
+    const created = await h.post('/eteams-api/team', { name: '手动建队', sessionId: 'cap-conv' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+
+    const description =
+      '把 docs 目录下所有旧版迁移文档整体搬到 archive 目录并逐条校对失效链接\n\n补充：顺手清理孤儿图片';
+    const res = await h.post(`/eteams-api/team/${teamId}/task/commission`, {
+      description,
+      sessionId: 'cap-conv',
+    });
+    expect(res.code, res.body).toBe(200);
+    const body = json<{ ok: boolean; taskId: number; dispatched: boolean; detail?: string }>(
+      res.body,
+    );
+    expect(body.ok).toBe(true);
+    expect(body.dispatched, body.detail ?? '').toBe(true);
+
+    // 容器落「创建中」：主题 = 描述首行截断占位（24 字上限），主会话快照入行。
+    const team = readTeam(teamId);
+    const task = team.tasks.at(-1)!;
+    expect(body.taskId).toBe(task.id);
+    expect(task.status).toBe('creating');
+    expect(task.parentId).toBeNull();
+    const firstLine = description.split('\n')[0]!;
+    expect(task.subject).toBe(firstLine.slice(0, 24));
+    expect(task.mainSessionId).toBe('cap-conv');
+    // 与对话建任务同口径：建任务即物化文档树（contract.md）。
+    expect(existsSync(join(workspace, task.workDir!, 'contract.md'))).toBe(true);
+
+    // 有领队 → dispatchCaptainCore 建立持续领队子代理（durable id 落主持行）。
+    const leaderRow = team.taskMembers.find(
+      (r) => r.mainTaskId === null && r.name === '项目牧羊人',
+    )!;
+    expect(leaderRow.sessionId).toMatch(/^sess-child-/);
+
+    // 动态事件如实记派发结果；创建中容器不计进度分母。
+    const snap = await h.get(`/eteams-api/team/${teamId}`);
+    const snapBody = json<{
+      progress: { total: number };
+      latestEvents: { type: string; text: string }[];
+    }>(snap.body);
+    expect(snapBody.progress.total).toBe(0);
+    expect(snapBody.latestEvents.find((e) => e.type === 'task_commissioned')!.text).toBe(
+      `面板创建任务 #${task.id}，已交领队完善`,
+    );
+    // 跨测试注册表残留清理：captainChildren 是模块级 Map，而每个 installFull
+    // 的子会话计数器都从 sess-child-1 重来——不清掉，后面用例的同名成员子
+    // 会话会被 identity.resolveCaller 误判成领队（注册表优先）。
+    unregisterCaptainChild(leaderRow.sessionId);
+  });
+
+  it('keeps the task as creating when no main-session anchor is found (无锚不回滚)', async () => {
+    const h = await installFake();
+    const created = await h.post('/eteams-api/team', { name: '无锚队', sessionId: 'sess-panel' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+
+    const res = await h.post(`/eteams-api/team/${teamId}/task/commission`, {
+      description: '盘点半导体行业资料',
+    });
+    expect(res.code, res.body).toBe(200);
+    const body = json<{ ok: boolean; dispatched: boolean; detail?: string }>(res.body);
+    expect(body.ok).toBe(true);
+    expect(body.dispatched).toBe(false);
+    expect(body.detail).toContain('未找到主会话锚点');
+
+    // 任务已入册不回滚——留在创建中（删除后重试是逃生门）。
+    expect(readTeam(teamId).tasks.at(-1)!.status).toBe('creating');
+    const snap = json<{ latestEvents: { type: string; text: string }[] }>(
+      (await h.get(`/eteams-api/team/${teamId}`)).body,
+    );
+    const event = snap.latestEvents.find((e) => e.type === 'task_commissioned')!.text;
+    expect(event).toContain('创建中');
+    expect(event).toContain('未找到主会话锚点');
+  });
+
+  it('rejects the commission when the session is bound to another team (绑定他队拒投)', async () => {
+    const h = await installFull();
+    const first = await h.post('/eteams-api/team', { name: '甲队', sessionId: 'cap-conv' });
+    const teamA = json<{ teamId: number }>(first.body).teamId;
+    const second = await h.post('/eteams-api/team', { name: '乙队', sessionId: 'cap-second' });
+    const teamB = json<{ teamId: number }>(second.body).teamId;
+
+    // 会话绑定乙队后对甲队投递会错配 caller.team（完善者调 eteams_* 必报
+    // 「任务不存在」），路由提前变成可诊断的明确失败。
+    await h.post('/eteams-api/session-team', { sessionId: 'cap-conv', teamId: String(teamB) });
+    const res = await h.post(`/eteams-api/team/${teamA}/task/commission`, {
+      description: '梳理双周报模板',
+      sessionId: 'cap-conv',
+    });
+    expect(res.code, res.body).toBe(200);
+    const body = json<{ ok: boolean; dispatched: boolean; detail?: string }>(res.body);
+    expect(body.dispatched).toBe(false);
+    expect(body.detail).toContain('该会话已绑定其他团队');
+    // 任务仍创建（留在创建中可删后重试）。
+    expect(readTeam(teamA).tasks.at(-1)!.status).toBe('creating');
+    // 绑定表同为模块级状态——清掉，避免污染后续用例的 cap-conv 身份解析。
+    clearSessionTeam('cap-conv');
+  });
+
+  it('wakes the main conversation directly for a leaderless team (无领队主会话完善)', async () => {
+    const h = await installFull();
+    const created = await h.post('/eteams-api/team', { name: '自主持队', sessionId: 'cap-conv' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    const removed = await h.post(`/eteams-api/team/${teamId}/leader/remove`, {});
+    expect(removed.code, removed.body).toBe(200);
+
+    // 无领队路径的唤醒目标是主会话锚（Agent.followup）——harness 的 captain
+    // 桩没有 followup 方法，测试内补上（installFull 只起 subagents 桩）。
+    const wakes: unknown[] = [];
+    const captain = h.captains.get('cap-conv') as unknown as {
+      followup?: (msg: unknown) => void;
+    };
+    captain.followup = (msg) => {
+      wakes.push(msg);
+    };
+
+    const description = '盘点半导体行业资料并给出选题建议';
+    const res = await h.post(`/eteams-api/team/${teamId}/task/commission`, {
+      description,
+      sessionId: 'cap-conv',
+    });
+    expect(res.code, res.body).toBe(200);
+    const body = json<{ ok: boolean; taskId: number; dispatched: boolean; detail?: string }>(
+      res.body,
+    );
+    expect(body.dispatched, body.detail ?? '').toBe(true);
+    expect(wakes).toHaveLength(1);
+    // 消息正文带完善指令：任务描述原话 + 任务 #id。
+    const sent = JSON.stringify(wakes[0]);
+    expect(sent).toContain(description);
+    expect(sent).toContain(`#${body.taskId}`);
+
+    const snap = json<{ latestEvents: { type: string; text: string }[] }>(
+      (await h.get(`/eteams-api/team/${teamId}`)).body,
+    );
+    expect(snap.latestEvents.find((e) => e.type === 'task_commissioned')!.text).toBe(
+      `面板创建任务 #${body.taskId}，已交主会话完善`,
+    );
+  });
+
+  it('400s an empty description and 404s unknown teams (入参校验)', async () => {
+    const h = await installFull();
+    const created = await h.post('/eteams-api/team', { name: '校验队', sessionId: 'cap-conv' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+
+    const blank = await h.post(`/eteams-api/team/${teamId}/task/commission`, { description: '' });
+    expect(blank.code).toBe(400);
+    expect(blank.body).toContain('description 不能为空');
+
+    const ghost = await h.post('/eteams-api/team/999/task/commission', { description: '任意描述' });
+    expect(ghost.code).toBe(404);
+    expect(ghost.body).toContain('团队 999 不存在');
+  });
+});
+
 describe('GET /board 跨团队聚合 (docs/35 §6 Q1/Q3/Q4/Q5/Q9)', () => {
   it('aggregates columns, ready lane, group progress, deduped members and open decisions', async () => {
     // maxRetries 0：首次 fail 即进决策（重试预算零）。
@@ -2293,5 +2457,80 @@ describe('POST /eteams-api/rolebuilder/resume (docs/19.16)', () => {
     // 放弃不回收 durable 会话（恢复经 followup 或冷恢复重建续聊）。
     expect(calls.rebuilt).toBe(0);
     expect(calls.followups).toEqual([]);
+  });
+});
+
+describe('GET /session-route — 子会话观测路线与身份（用户迭代 2026-09-07）', () => {
+  beforeEach(() => {
+    // 身份登记表与路线缓存都是模块级 Map——逐用例清空防串扰。
+    resetUsageMeterForTests();
+  });
+
+  it('成员子代理返回 subagent/member 身份与观测路线', async () => {
+    const h = await installFake();
+    registerMemberSession('member-sess-1', {
+      teamId: 't1',
+      memberName: '张三',
+      employeeId: 2,
+      parentSessionId: 'parent-1',
+    });
+    seedSessionRouteForTests('member-sess-1', 'deepseek', 'deepseek-chat');
+    const got = await h.get('/eteams-api/session-route?sessionId=member-sess-1');
+    expect(got.code).toBe(200);
+    const view = json<{
+      subagent: boolean;
+      kind?: string;
+      memberName: string | null;
+      teamId: string | null;
+      route: { provider: string; model: string } | null;
+    }>(got.body);
+    expect(view.subagent).toBe(true);
+    expect(view.kind).toBe('member');
+    expect(view.memberName).toBe('张三');
+    expect(view.teamId).toBe('t1');
+    expect(view.route).toEqual({ provider: 'deepseek', model: 'deepseek-chat' });
+  });
+
+  it('领队子代理返回 captain 身份；未观测到请求时 route 为 null', async () => {
+    const h = await installFake();
+    registerCaptainChild('captain-sess-1', 't1');
+    const got = await h.get('/eteams-api/session-route?sessionId=captain-sess-1');
+    expect(got.code).toBe(200);
+    const view = json<{ subagent: boolean; kind?: string; route: unknown }>(got.body);
+    expect(view.subagent).toBe(true);
+    expect(view.kind).toBe('captain');
+    expect(view.route).toBeNull();
+  });
+
+  it('构建师子会话按落盘 builderChildId 识别为 builder', async () => {
+    const h = await installFake();
+    // markBuilderChild 在无构建会话时早退——先落一个构建会话再标记子会话
+    //（与 rolebuilder/resume 用例同款装配）。
+    await reportBuildProgress(stateRoot(), { request: '徽章识别', step: '收到需求' });
+    await markBuilderChild(stateRoot(), 'builder-sess-1');
+    seedSessionRouteForTests('builder-sess-1', 'deepseek', 'deepseek-reasoner');
+    const got = await h.get('/eteams-api/session-route?sessionId=builder-sess-1');
+    expect(got.code).toBe(200);
+    const view = json<{ subagent: boolean; kind?: string; route: unknown }>(got.body);
+    expect(view.subagent).toBe(true);
+    expect(view.kind).toBe('builder');
+    expect(view.route).toEqual({ provider: 'deepseek', model: 'deepseek-reasoner' });
+  });
+
+  it('非 eteams 子代理会话返回 subagent:false（主会话徽章不渲染）', async () => {
+    const h = await installFake();
+    seedSessionRouteForTests('user-conv', 'deepseek', 'deepseek-chat');
+    const got = await h.get('/eteams-api/session-route?sessionId=user-conv');
+    expect(got.code).toBe(200);
+    const view = json<{ subagent: boolean; kind?: string; route: unknown }>(got.body);
+    expect(view.subagent).toBe(false);
+    expect(view.kind).toBeUndefined();
+    expect(view.route).toBeNull();
+  });
+
+  it('缺 sessionId 参数返回 400', async () => {
+    const h = await installFake();
+    const got = await h.get('/eteams-api/session-route');
+    expect(got.code).toBe(400);
   });
 });

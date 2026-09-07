@@ -43,7 +43,7 @@ import {
   depPatchesForReorder,
   executionOrderOf,
 } from '../../features/tasks/taskAssignCore';
-import { groupDisplayOf, isStartable, isTerminal } from '../../features/tasks/taskDisplayStatus';
+import { groupDisplayOf, isGroupStartable, isStartable } from '../../features/tasks/taskDisplayStatus';
 import { BackBar } from '../../components/backBar';
 import { FormFooterActions } from '../../components/formDialog';
 import { Button } from '../../components/ui/button';
@@ -404,7 +404,12 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
     // 七轮 DA20：小任务按执行序展示（兄弟依赖拓扑序，创建序平局）。
     const subs = executionOrderOf(team.tasks.filter((t) => t.parentId === selected.taskId));
     const done = subs.filter((t) => t.status === 'completed').length;
-    const mutable = selected.status === 'draft' || selected.status === 'ready';
+    // docs/panelTaskCommission：就地编辑入口判据加 creating（与宿主
+    // updateTask 白名单对齐——创建中的容器可边完善边改主题/说明）。
+    const mutable =
+      selected.status === 'creating' ||
+      selected.status === 'draft' ||
+      selected.status === 'ready';
     // 三十一轮 DA44⑥：头部卡主题原位编辑态（与任务详情页头部卡同构——本任务
     // + scope='header' 才开编辑器）。
     const headerEditing =
@@ -448,7 +453,9 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
             // 上移，opts.actions 槽）——非终态且有小任务才渲染（DA40 判据
             // 不变；点击逐个派发 ready 小任务，跳过原因行内就地提示）。
             // 三十一轮 DA44⑥：「编辑」钮加在开始钮之前（开始保持最右）。
-            // M3：状态窗口收拢 isTerminal 谓词（判定逐位等价）。
+            // docs/panelTaskCommission：状态窗口收拢 isGroupStartable——
+            // creating 容器（手动建任务占位）不渲染开始钮（计划未定，
+            // 与宿主 startGroupTask 同闸镜像），终态照旧收。
             actions={
               <>
                 {mutable && (
@@ -461,7 +468,7 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
                     编辑
                   </Button>
                 )}
-                {!isTerminal(selected.status) && subs.length > 0 ? (
+                {isGroupStartable(selected.status) && subs.length > 0 ? (
                   <Button
                     type="button"
                     size="sm"
