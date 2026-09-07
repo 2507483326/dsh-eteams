@@ -28,7 +28,6 @@ import type { ETeamsResolvedConfig } from '../config.js';
 import { ETeamsError, stateRootOf, type RuntimeContext } from '../runtime/base.js';
 import type { TeamState } from '../model/types.js';
 import { readTeamSync } from '../state/store.js';
-import { teamView } from '../runtime/teamOps.js';
 import { envForAgent, resolveCaller } from './identity.js';
 import { dispatchCaptainCore } from '../runtime/captainAgent.js';
 import { captainDispatchPrompt } from '../prompts/steering/dispatch.js';
@@ -83,12 +82,9 @@ export function createCaptainDispatchTool(
       }
       const team: TeamState | undefined = readTeamSync(stateRootOf(env), caller.team.id);
       if (!team) throw new ETeamsError(`团队「${caller.team.id}」不存在`);
-      // 现状快照随派发现读（docs/26.2 状态驱动）：首轮快照给领队子代理建立
-      // 团队上下文；持续子代理后续轮次在既有上下文上续步，快照只作对账。
-      const prompt = captainDispatchPrompt(
-        JSON.stringify(teamView(env, team), null, 1),
-        args.message,
-      );
+      // 现状不随 prompt 内嵌（用户迭代 2026-09-08）：子代理先调
+      // eteams_team_status 自取（快照永远现读，单一事实源）。
+      const prompt = captainDispatchPrompt(args.message);
       // 派发核（dispatchCaptainCore）：续聊/重建/登记/落盘——与面板手动建
       // 任务路径共用同一链路（docs/panelTaskCommission）。
       return dispatchCaptainCore(env, config, exec.agent, team, prompt, exec.signal);

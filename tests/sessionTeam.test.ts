@@ -17,6 +17,7 @@ import {
   consumeSessionTeamBinding,
   getConsumedSessionTeamId,
   getSessionTeamId,
+  isHumanUserTurn,
   sessionTeamSection,
   setSessionTeam,
 } from '../src/host/runtime/sessionTeam';
@@ -85,20 +86,25 @@ describe('sessionTeamSection branches', () => {
     expect(sessionTeamSection(undefined, () => team())).toBe('');
   });
 
-  it('assigns relay duties to the bound session (领队子代理主持)', () => {
-    // Regression: the band no longer tells the main session to self-host
-    // (问询/拆解/指派 moved to the one-shot captain child).
+  it('runs the two-step workflow in the bound session (先建任务再转交)', () => {
+    // 用户迭代 2026-09-07 两步走：主会话第一步自己建主任务（标题由模型把
+    // 原话简化），第二步转交持续领队子代理分解分配——不再是「只转交不建任务」。
     setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
     const band = sessionTeamSection('s-other', () => team());
     expect(band).toContain('【eteams 团队绑定·生效中】');
     expect(band).toContain('领队子代理');
+    expect(band).toContain('第一步·建任务');
+    expect(band).toContain('eteams_submit_task');
+    expect(band).toContain('把用户原话简化成一句话任务标题');
+    expect(band).toContain('第二步·转交');
     expect(band).toContain('eteams_dispatch_captain');
-    expect(band).not.toContain('eteams_submit_task');
+    expect(band).toContain('主任务号');
+    expect(band).toContain('以领队的名字命名');
     expect(band).not.toContain('你就是该团队的领队');
     expect(band).not.toContain('他队');
   });
 
-  it('forbids the main session calling eteams_* directly (转交分工)', () => {
+  it('forbids the main session calling eteams_* beyond the two entry tools (转交分工)', () => {
     setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
     const band = sessionTeamSection('s-other', () => team());
     expect(band).toContain('不要直接调用其它 eteams_* 工具');
@@ -126,10 +132,11 @@ describe('sessionTeamSection branches', () => {
     setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
     const kept = sessionTeamSection('s-other', () => team());
     const removed = sessionTeamSection('s-other', () => team({ hasLeader: false }));
-    // 有领队：转交持续领队子代理，本会话不碰 submit_task。
+    // 有领队：两步走——先建主任务，再转交持续领队子代理分解分配。
     expect(kept).toContain('持续领队子代理');
     expect(kept).toContain('eteams_dispatch_captain');
-    expect(kept).not.toContain('eteams_submit_task');
+    expect(kept).toContain('eteams_submit_task');
+    expect(kept).toContain('第一步·建任务');
     // 无领队：本会话直接主持（提交/问询/拆解），指派等批准后由小任务派发。
     expect(removed).toContain('本团队未设领队');
     expect(removed).toContain('由本会话直接主持');
@@ -206,6 +213,46 @@ describe('一次性消费（用户迭代 2026-09-07 发送后清空选择）', (
     setSessionTeam('', { teamId: 't9', name: 'n', boundAt: 1 });
     consumeSessionTeamBinding('');
     expect(getConsumedSessionTeamId('')).toBeUndefined();
+  });
+});
+
+describe('isHumanUserTurn（真人输入判定）', () => {
+  it('accepts only source.kind === user', () => {
+    expect(isHumanUserTurn({ source: { kind: 'user' } })).toBe(true);
+    // 插件注入（唤醒/邮件/面板完善/steer）与 agent.inject 合成上下文、
+    // 工具结果、模型产物——一律不算真人。
+    expect(isHumanUserTurn({ source: { kind: 'plugin', plugin: 'dsh-eteams' } })).toBe(false);
+    expect(isHumanUserTurn({ source: { kind: 'tool', callId: 'c1' } })).toBe(false);
+    expect(isHumanUserTurn({ source: { kind: 'model' } })).toBe(false);
+  });
+
+  it('rejects missing or malformed data', () => {
+    expect(isHumanUserTurn(undefined)).toBe(false);
+    expect(isHumanUserTurn(null)).toBe(false);
+    expect(isHumanUserTurn({})).toBe(false);
+    expect(isHumanUserTurn({ source: {} })).toBe(false);
+    expect(isHumanUserTurn({ source: { kind: 42 } })).toBe(false);
+  });
+});
+
+describe('一次性消费 × 真人判定（回合中途注入不清凭证）', () => {
+  it('a plugin-injected user/message between consume and the tool call keeps the grant', () => {
+    // 用户实测 2026-09-07：绑定被真人消息消费后，回合中途到达的插件注入
+    // （领队唤醒/邮件/文件通知，同样走 user/message 事件）把凭证当「下一
+    // 条用户消息」撤销——随后的 eteams_dispatch_captain 报「当前会话不在
+    // 任何 eteams 团队中」。监听器按 isHumanUserTurn 过滤后注入不再撤销。
+    setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
+    // 真人消息到达：绑定 → 凭证。
+    expect(isHumanUserTurn({ source: { kind: 'user' } })).toBe(true);
+    consumeSessionTeamBinding('s-other');
+    expect(getConsumedSessionTeamId('s-other')).toBe('demo');
+    // 回合中途的插件注入到达：guard 为 false → 不消费（凭证保留）。
+    expect(isHumanUserTurn({ source: { kind: 'plugin', plugin: 'dsh-eteams' } })).toBe(false);
+    expect(getConsumedSessionTeamId('s-other')).toBe('demo');
+    // 下一条真人消息到达：凭证撤销，回到普通对话。
+    consumeSessionTeamBinding('s-other');
+    expect(getConsumedSessionTeamId('s-other')).toBeUndefined();
+    expect(sessionTeamSection('s-other', () => team())).toBe('');
   });
 });
 

@@ -136,7 +136,7 @@ const ROW_CHECK_CLASS = 'ml-auto h-4 w-4 shrink-0 text-primary';
 /* 弹层搜索框（用户迭代 2026-09-07：tab 下加搜索框，按当前 tab 过滤列表）——
    官网 Quick search 签名（S24-2，rail 同款）缩窄为弹层档：h-8、13px。 */
 const POPUP_SEARCH_CLASS =
-  'h-8 rounded-md border-0 pr-3 pl-8 text-[13px] leading-6 text-foreground outline-none [font-family:inherit] ring-1 ring-[color:var(--eteams-pill-bg)] focus-visible:ring-2 focus-visible:ring-sky-500/60';
+  'h-8 rounded-md border-0 pr-3 pl-7 text-[13px] leading-6 text-foreground outline-none [font-family:inherit] ring-1 ring-[color:var(--eteams-pill-bg)] focus-visible:ring-2 focus-visible:ring-sky-500/60';
 /* M6 局部重命名（EMPTY_CLASS → POPUP_EMPTY_CLASS）：shared 有同名
    EMPTY_CLASS 而两处类值不同（M8 平铺收口易混）——本文件类值逐字不变。 */
 const POPUP_EMPTY_CLASS = 'px-2.5 py-3.5 text-center text-xs text-muted-foreground';
@@ -463,16 +463,19 @@ function TeamsPopup(props: {
           </TabsList>
 
           {/* 搜索框（rail 官网 Quick search 签名缩窄档）：放大镜绝对定位，
-              Input 去 border 改 ring。 */}
-          <div className="relative flex-none px-1.5 pb-0.5 pt-2">
-            <Search className="pointer-events-none absolute left-3.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              type="text"
-              value={query}
-              placeholder="搜索"
-              onChange={(e) => setQuery(e.target.value)}
-              className={POPUP_SEARCH_CLASS}
-            />
+              Input 去 border 改 ring。内层 relative 只包 Input 本体——外层
+              pt-2/pb-0.5 不对称，top-1/2 若以外层为基准会整体偏上。 */}
+          <div className="flex-none px-1.5 pb-0.5 pt-2">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                type="text"
+                value={query}
+                placeholder="搜索"
+                onChange={(e) => setQuery(e.target.value)}
+                className={POPUP_SEARCH_CLASS}
+              />
+            </div>
           </div>
 
           <div className={LIST_CLASS}>

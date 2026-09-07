@@ -48,7 +48,6 @@ import {
   setLeaderRemoved,
   setMemberModel,
   syncMemberToRoster,
-  teamView,
   updateMember,
 } from './teamOps.js';
 import {
@@ -1315,12 +1314,7 @@ export function installWebSurface(
                 if (anchor === undefined) {
                   return '未找到主会话锚点（会话不在线且无法冷恢复；在对应团队对话中绑定后重试）';
                 }
-                const prompt = captainCommissionPrompt(
-                  JSON.stringify(teamView(env, team), null, 1),
-                  task.id,
-                  task.subject,
-                  description,
-                );
+                const prompt = captainCommissionPrompt(task.id, task.subject, description);
                 if (team.hasLeader) {
                   try {
                     await dispatchCaptainCore(env, config, anchor, team, prompt);

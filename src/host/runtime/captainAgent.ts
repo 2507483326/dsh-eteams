@@ -6,7 +6,8 @@
  * 首次 dispatch 建立、后续 followup 续聊）。
  *
  * 本模块持有三样基础设施：
- * - 子代理标签（`eteams-captain:<teamId>`，镜像 members 的 label 模式）；
+ * - 子代理标签（`eteams-captain:<领队名>`，用户迭代 2026-09-07：子代理以
+ *   领队的名字命名，不再用数字 team id）；
  * - 身份注册表：dispatch 建立的子代理会话 id → 团队 id，resolveCaller /
  *   envForAgent 据此把子代理的 eteams_* 调用按该团队领队解析（含跨工作区
  *   重指），band 组装据此对子代理静默（它自己就是领队，不能再看到
@@ -23,12 +24,18 @@
  */
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { SessionId } from '@deepseek-ai/dsh-session';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import type { ETeamsResolvedConfig } from '../config.js';
 import { ETeamsError, sessionDefaultRouteOf, stateRootFor, stateRootOf, type RuntimeEnv } from './base.js';
 import { readTeamSync, withTeamTx } from '../state/store.js';
 import { locks, teamLockKey } from '../state/lock.js';
 import { leaderRowOf } from './notifier.js';
-import { findRosterMember, LEADER_NAME } from './roster.js';
+import { LEADER_NAME } from './roster.js';
+import {
+  findRosterMemberInRoots,
+  rosterAuthoritativeRoot,
+} from './workspaces.js';
 import { composeCaptainPersona } from '../prompts/personas/captain.js';
 import { captainChildPersona } from '../prompts/spawn/captainChild.js';
 import { dispatchAck } from '../prompts/steering/dispatch.js';
@@ -37,16 +44,16 @@ import type { TeamState } from '../model/types.js';
 /** Label prefix identifying eteams captain children. */
 export const CAPTAIN_LABEL_PREFIX = 'eteams-captain:';
 
-/** `eteams-captain:<teamId>` — the child's display label. */
-export function buildCaptainLabel(teamId: string): string {
-  return `${CAPTAIN_LABEL_PREFIX}${teamId}`;
+/** `eteams-captain:<领队名>` — the child's display label（以领队的名字命名）. */
+export function buildCaptainLabel(leaderName: string): string {
+  return `${CAPTAIN_LABEL_PREFIX}${leaderName}`;
 }
 
 /** Inverse of {@link buildCaptainLabel}. */
-export function parseCaptainLabel(label: string | undefined): { teamId: string } | undefined {
+export function parseCaptainLabel(label: string | undefined): { leaderName: string } | undefined {
   if (!label || !label.startsWith(CAPTAIN_LABEL_PREFIX)) return undefined;
-  const teamId = label.slice(CAPTAIN_LABEL_PREFIX.length);
-  return teamId === '' ? undefined : { teamId };
+  const leaderName = label.slice(CAPTAIN_LABEL_PREFIX.length);
+  return leaderName === '' ? undefined : { leaderName };
 }
 
 /**
@@ -107,14 +114,41 @@ const textTurn = (value: string): { type: 'text'; text: string }[] => [
 const CAPTAIN_SOURCE = { kind: 'plugin' as const, plugin: 'dsh-eteams' };
 
 /**
- * 组装领队子代理人格：静态纪律 + 领队角色手册（用户迭代 2026-09-03
- * 「领队agent 没有把领队的md放到上下文中」——roster 项目牧羊人条目的
- * personaMd 是用户可编辑的领队手册，缺省回退内置手册）。
+ * 组装领队子代理人格：静态纪律 + 领队角色手册。手册的 live 源是角色库
+ * （2026-09-08 讨论定案：班底行/副本行是建队/拉人那一刻的烘焙快照，改手册
+ * 不回填，领队行本身没烘 personaMd——派发时现读角色库，创建子代理时的
+ * 手册即最终版，后续修改与当前子代理无关）。探查顺序：权威根
+ * （rosterAuthoritativeRoot = writeWorkspacePath，面板编辑都落这里）→
+ * 自己的根——注意自己根里可能有首启播种的陈旧「项目牧羊人」行，权威根
+ * 必须在前，否则用户改过的手册被遮蔽（实测「领队的 md 没注入」）。yaml
+ * 覆盖随同一根序找；来源打日志，一眼可诊断。
  */
 function captainPersonaOf(env: RuntimeEnv, config: ETeamsResolvedConfig): string {
-  const fromRoster = findRosterMember(stateRootOf(env), LEADER_NAME)?.personaMd;
-  const fallback = composeCaptainPersona(stateRootFor(config, env.workspace)).personaMd;
-  return captainChildPersona(fromRoster ?? fallback);
+  const roots = [
+    ...new Set([rosterAuthoritativeRoot(env.ctx, config), stateRootOf(env)]),
+  ].filter((root): root is string => root !== undefined && root !== '');
+  const found = findRosterMemberInRoots(roots, LEADER_NAME);
+  const fromRoster = found?.entry.personaMd?.trim();
+  let personaMd: string;
+  let source: string;
+  if (found !== undefined && fromRoster !== undefined && fromRoster !== '') {
+    personaMd = fromRoster;
+    source = `roster(${found.root})`;
+  } else {
+    // composeCaptainPersona 的缺省手册是常量（ROLE_DOCS['项目牧羊人']），
+    // 类型可空仅为字段可选——空串时 captainChildPersona 退静态纪律。
+    personaMd = composeCaptainPersona(stateRootFor(config, env.workspace)).personaMd ?? '';
+    source = 'builtin';
+    for (const root of roots) {
+      if (existsSync(join(root, 'captain-persona.yaml'))) {
+        personaMd = composeCaptainPersona(root).personaMd ?? '';
+        source = `yaml(${root})`;
+        break;
+      }
+    }
+  }
+  env.ctx.logger.info(`eteams: 领队子代理 persona 来源=${source}`);
+  return captainChildPersona(personaMd);
 }
 
 /**
@@ -202,7 +236,8 @@ export async function dispatchCaptainCore(
   // 返回，不等待轮次完成——汇报经 report 通道随后送达）。
   const start = await subagents.startContinuable({
     provider: config.memberProvider,
-    label: buildCaptainLabel(String(team.id)),
+    // 子代理以领队的名字命名（用户迭代 2026-09-07）；领队行缺席退内置领队名。
+    label: buildCaptainLabel(leader?.name ?? LEADER_NAME),
     request: {
       prompt: textTurn(prompt),
       parent,

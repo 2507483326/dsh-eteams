@@ -43,6 +43,7 @@ import { defaultCaptainPersona } from '../prompts/personas/captain.js';
 import { applyTransition, sanitizeKey, taskSlug } from '../model/taskMachine.js';
 import { ETeamsError, captainActor, memberActor, stateRootOf, type RuntimeEnv } from './base.js';
 import { clearSessionTeam, getSessionTeamId } from './sessionTeam.js';
+import { rosterProfilesAcrossWorkspaces } from './workspaces.js';
 import { renderTeamDocs, teamWorkDirRel } from './docs.js';
 import { findRosterMember, ROLE_BUILDER_NAME, upsertRosterMember } from './roster.js';
 import { interruptMember, drainMembers } from './members.js';
@@ -884,22 +885,36 @@ export async function sendMessage(
 
 /** Read-only team view used by both tool faces (JSON-safe for tool output). */
 export function teamView(env: RuntimeEnv, team: TeamState): Record<string, JsonValue> {
+  // 成员一句话简介（用户迭代 2026-09-08「去掉 role、把角色 profile 加进
+  // 来」）：v7 成员名=角色名，role 与 name 冗余；profile 的 live 源是角色库
+  // profile 列（跨工作区兜底），班底行烘焙的旧简介作回退，两处都无则 null。
+  const profiles = rosterProfilesAcrossWorkspaces(env.ctx, env.config, env.workspace);
   return {
     id: team.id,
     name: team.name,
     hasLeader: team.hasLeader,
     members: team.members
-      // v7 领队也是一行班底（普通成员）：不再过滤，工牌/角色/聚合状态照常透出。
+      // v7 领队也是一行班底（普通成员）：不再过滤，工牌/简介/聚合状态照常透出。
       // 团队现状精简（用户迭代 2026-09-03「团队现状太繁杂了」）：成员只带
-      // 工号/角色/聚合状态；状态取副本行聚合口径（docs/35 §5#12），currentTask
-      // 可从 tasks 的 assignee+status 读出，模型路线属于派发细节。name 保留：
-      // eteams_* 工具按工号/成员名指派，没有名字工号无法落地。
-      .map((m): JsonValue => ({
-        name: m.name,
-        employeeId: m.employeeId ?? null,
-        role: m.role,
-        status: memberStatusOf(team, m.employeeId ?? m.name),
-      })),
+      // 工号/一句话简介/聚合状态；状态取副本行聚合口径（docs/35 §5#12），
+      // currentTask 可从 tasks 的 assignee+status 读出，模型路线属于派发细节。
+      // name 保留：eteams_* 工具按工号/成员名指派，没有名字工号无法落地。
+      .map((m): JsonValue => {
+        const fromRoster = profiles.get(m.name);
+        const baked = m.persona.profile;
+        const profile =
+          fromRoster !== undefined && fromRoster !== ''
+            ? fromRoster
+            : baked !== undefined && baked !== ''
+              ? baked
+              : null;
+        return {
+          name: m.name,
+          employeeId: m.employeeId ?? null,
+          profile,
+          status: memberStatusOf(team, m.employeeId ?? m.name),
+        };
+      }),
     tasks: team.tasks.map((t): JsonValue => ({
       id: t.id,
       subject: t.subject,

@@ -9,8 +9,11 @@
  * 清本地按钮面（不删宿主绑定——那条消息还要靠绑定注入 band 并解析派发身
  * 份）。宿主在 user/message 事件到达时把绑定转为「本回合凭证」（consumed）：
  * band 组装与 resolveCaller 读 `绑定 ?? 凭证`，所以消费它的这条消息照常走
- * 团队工作流；下一条 user/message 到达即撤销凭证——再往后的消息回到普通
- * 对话，想再用团队需重新选择。
+ * 团队工作流；下一条**真人**消息到达即撤销凭证——再往后的消息回到普通
+ * 对话，想再用团队需重新选择。「真人」判定见 {@link isHumanUserTurn}：
+ * 插件注入的 user 消息（唤醒/邮件/steer/文件通知）同样走 user/message
+ * 事件，不区分会把消费回合中途的凭证误撤（实测：dispatch 工具随即报
+ * 「当前会话不在任何 eteams 团队中」）。
  *
  * band 文本组装在 prompts/system/sessionTeam.ts（纯函数，判别联合入参）——
  * 本文件只留 bindings/consumed store 与薄壳：领队子代理注册表守卫、绑定
@@ -74,6 +77,22 @@ export function consumeSessionTeamBinding(sessionId: string): void {
     return;
   }
   consumed.delete(sessionId);
+}
+
+/**
+ * 判定一条 user/message 事件是否真人输入（监听器据此决定是否消费/撤销）：
+ * 事件的 data 即 UserMessage 本体（dsh-session SessionEventMap），其
+ * `source.kind === 'user'` 才是「直接人类提示」。插件注入的 user 消息
+ * （领队/主会话唤醒 followup、成员邮件、面板完善、steer，source 均带
+ * `kind: 'plugin'`）与 agent.inject 合成上下文（文件变更通知、子目录
+ * AGENTS.md、cron 通知等）同样走 user/message 事件——不区分的话，它们在
+ * 消费回合中途到达就会被当成「下一条用户消息」把本回合凭证撤销，该回合
+ * 随后的 eteams_* 工具调用失去身份（实测 2026-09-07：eteams_dispatch_captain
+ * 报「当前会话不在任何 eteams 团队中」）。data 缺失/畸形一律不算真人。
+ */
+export function isHumanUserTurn(message: unknown): boolean {
+  const kind = (message as { source?: { kind?: unknown } } | undefined)?.source?.kind;
+  return kind === 'user';
 }
 
 /** The session's consumed (one-shot) teamId, if any — resolveCaller /

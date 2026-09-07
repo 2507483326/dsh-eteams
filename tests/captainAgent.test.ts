@@ -18,13 +18,13 @@ import { createCaptainTools } from '../src/host/tools/captainTools';
 import { createCaptainDispatchTool } from '../src/host/tools/captainDispatch';
 
 describe('captain child label', () => {
-  it('round-trips build/parse', () => {
-    const label = buildCaptainLabel('demo');
-    expect(label).toBe('eteams-captain:demo');
-    expect(parseCaptainLabel(label)).toEqual({ teamId: 'demo' });
+  it('round-trips build/parse（以领队的名字命名）', () => {
+    const label = buildCaptainLabel('项目牧羊人');
+    expect(label).toBe('eteams-captain:项目牧羊人');
+    expect(parseCaptainLabel(label)).toEqual({ leaderName: '项目牧羊人' });
   });
 
-  it('rejects non-captain labels and empty ids', () => {
+  it('rejects non-captain labels and empty names', () => {
     expect(parseCaptainLabel('eteams-team:demo/member')).toBeUndefined();
     expect(parseCaptainLabel('eteams-captain:')).toBeUndefined();
     expect(parseCaptainLabel(undefined)).toBeUndefined();

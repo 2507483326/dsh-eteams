@@ -27,7 +27,11 @@ import { resolveCaller } from '../src/host/tools/identity';
 import { insertTeamRow, readTeamSync, withTeamTx, writeTeamInTx } from '../src/host/state/store';
 import { appendMail } from '../src/host/state/events';
 import { teamView } from '../src/host/runtime/teamOps';
-import { findRosterMember, LEADER_NAME } from '../src/host/runtime/roster';
+import {
+  findRosterMember,
+  LEADER_NAME,
+  upsertRosterMember,
+} from '../src/host/runtime/roster';
 import { joinPath, type RuntimeEnv } from '../src/host/runtime/base';
 import type { MailMessage, TaskMemberRecord, TeamState } from '../src/host/model/types';
 import { cleanupTempWorkspace } from './support/tmpWorkspace';
@@ -230,7 +234,8 @@ describe('eteams_dispatch_captain', () => {
     // Spawn contract: continuable, leader persona + handbook, deny, snapshot.
     const spec = runtime.starts[0]!;
     expect(spec.provider).toBe(config.memberProvider);
-    expect(spec.label).toBe(`eteams-captain:${seeded.id}`);
+    // 子代理以领队的名字命名（用户迭代 2026-09-07）。
+    expect(spec.label).toBe(`eteams-captain:${LEADER_NAME}`);
     // 人设 = roster 领队手册（缺省回退内置手册）+ 子代理纪律。
     const fromRoster = findRosterMember(root, LEADER_NAME)?.personaMd;
     const fallbackMd = composeCaptainPersona(join(ws, '.eteams')).personaMd;
@@ -240,8 +245,10 @@ describe('eteams_dispatch_captain', () => {
     expect(spec.request.parent).toBe(captain);
     expect(spec.request.prompt).toHaveLength(1);
     const promptText = spec.request.prompt.map((p) => p.text).join('\n');
+    // 现状不内嵌（用户迭代 2026-09-08）：prompt 只带自取指令 + 用户消息。
     expect(promptText).toContain('【团队现状】');
-    expect(promptText).toContain('演示团队');
+    expect(promptText).toContain('eteams_team_status');
+    expect(promptText).not.toContain('"members"');
     expect(promptText).toContain('【用户/主对话最新消息】');
     expect(promptText).toContain('帮我做一个导出功能');
 
@@ -269,12 +276,46 @@ describe('eteams_dispatch_captain', () => {
     expect(runtime.followups).toHaveLength(1);
     expect(runtime.followups[0]!.childId).toBe('sess-child-1');
     expect(runtime.followups[0]!.text).toContain('改成导出 Excel');
-    expect(runtime.followups[0]!.text).toContain('【团队现状】');
+    expect(runtime.followups[0]!.text).toContain('eteams_team_status');
     expect(captainChildTeamOf('sess-child-1')).toBe(String(seeded.id));
     const persisted = readTeamSync(root, seeded.id);
     expect(persisted?.taskMembers.find((r) => r.mainTaskId === null)?.sessionId).toBe(
       'sess-child-1',
     );
+  });
+
+  it('injects the leader handbook read live across workspaces (领队 md 跨区注入)', async () => {
+    seedTeam();
+    // 角色库固定落在 writeWorkspacePath（另一个工作区的状态根）——派发只查
+    // 自己的库就是「领队的 md 没注入」的根因；fake ctx.get 提供注册表后，
+    // persona 必须现读到角色库手册（2026-09-08 定案：spawn 时即最终版）。
+    const otherWs = mkdtempSync(join(tmpdir(), 'eteams-roster-'));
+    try {
+      await upsertRosterMember(
+        joinPath(otherWs, '.eteams'),
+        { name: LEADER_NAME, role: '领队（项目牧羊人）', personaMd: '# 自定义领队手册标记 ABC123' },
+        { allowLeader: true },
+      );
+      const withRegistry = new Proxy(runtime.ctx, {
+        get(target, prop) {
+          if (prop === 'get') {
+            return (key: string) =>
+              key === 'workspaceRegistry'
+                ? { list: () => [{ path: otherWs, title: 'roster' }] }
+                : undefined;
+          }
+          return Reflect.get(target, prop);
+        },
+      });
+      const tool = createCaptainDispatchTool(config, withRegistry as unknown as Context);
+      await tool.execute(
+        { message: '继续' } as never,
+        { agent: captain, signal: undefined } as never,
+      );
+      expect(runtime.starts.at(-1)!.request.persona).toContain('# 自定义领队手册标记 ABC123');
+    } finally {
+      cleanupTempWorkspace(otherWs);
+    }
   });
 
   it('falls back to a fresh child when the stored child is unavailable', async () => {
@@ -348,6 +389,28 @@ describe('eteams_dispatch_captain', () => {
     });
   });
 
+  it('degrades a throwing cordis ctx to no agentOptions (without inject 兜底)', async () => {
+    seedTeam();
+    // cordis 4：未声明 inject 的服务在 ctx 属性访问时直接抛「cannot get
+    // property … without inject」（实测 2026-09-07 dispatch 整体失败）——
+    // sessionDefaultRouteOf 必须按「服务未挂」契约吞错，派发照常受理且退回
+    // 不带 agentOptions 的旧行为。
+    const throwing = new Proxy(runtime.ctx, {
+      get(target, prop) {
+        if (prop === 'agentDefaultModel') {
+          throw new Error('cannot get property "agentDefaultModel" without inject');
+        }
+        return Reflect.get(target, prop);
+      },
+    });
+    const hostile = createCaptainDispatchTool(config, throwing as unknown as Context);
+    await hostile.execute(
+      { message: '继续' } as never,
+      { agent: captain, signal: undefined } as never,
+    );
+    expect(runtime.starts[0]!.request.agentOptions).toBeUndefined();
+  });
+
   it('errors when the subagent service is unavailable', async () => {
     seedTeam();
     const bare = createCaptainDispatchTool(config, {
@@ -411,9 +474,17 @@ describe('teamView 团队现状精简 (用户迭代 2026-09-03)', () => {
     }
 
     const view = teamView(env, readTeamSync(root, seeded.id)!);
-    expect(view.members).toEqual([{ name: '甲', employeeId: 1, role: '前端', status: 'ready' }]);
+    // 角色库无 profile、班底 persona 也没烘 → null；role 已从快照移除（v7
+    // 成员名=角色名，与 name 冗余）。
+    expect(view.members).toEqual([{ name: '甲', employeeId: 1, profile: null, status: 'ready' }]);
+    // 角色库 profile 列是 live 源（用户迭代 2026-09-08）：upsert 后现读透出。
+    await upsertRosterMember(root, { name: '甲', role: '前端', profile: '一句话简介：前端交付' });
+    const fresh = teamView(env, readTeamSync(root, seeded.id)!);
+    expect(fresh.members).toEqual([
+      { name: '甲', employeeId: 1, profile: '一句话简介：前端交付', status: 'ready' },
+    ]);
     // Member persona/route never leak into the snapshot.
-    const json = JSON.stringify(view);
+    const json = JSON.stringify(fresh);
     expect(json).not.toContain('modelRoute');
     expect(json).not.toContain('executionPrompt');
 

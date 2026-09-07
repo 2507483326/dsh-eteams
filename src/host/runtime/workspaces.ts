@@ -14,11 +14,12 @@
  *
  * @module dsh-eteams/host/runtime/workspaces
  */
+import { existsSync } from 'node:fs';
 import { getDb } from '../state/db.js';
 import { ensureWorkspaceReady } from '../state/import.js';
 import { stateRootFor } from './base.js';
 import { readTeamSync } from '../state/store.js';
-import { findRosterMember, type RosterMember } from './roster.js';
+import { findRosterMember, readRoster, type RosterMember } from './roster.js';
 import type { TeamState } from '../model/types.js';
 import type { ETeamsResolvedConfig } from '../config.js';
 
@@ -148,6 +149,72 @@ export function findRosterMemberAcrossWorkspaces(
     if (found !== undefined) return found;
   }
   return undefined;
+}
+
+/**
+ * 角色库权威状态根（writeWorkspacePath 同口径，自 webui 上收——runtime 内
+ * 共用，避免 webui ↔ captainAgent 循环依赖）：注册表首个「已有 eteams 状态」
+ * 的工作区。面板的角色库读写都落这里；其余工作区根里的角色行是首启播种的
+ * 陈旧副本，不作为 live 源（实测：领队手册被本区种子行遮蔽 →「领队的 md
+ * 没注入」）。无注册表服务（单测 fake/旧运行时）返回 undefined，探查退回
+ * 自己的根。
+ */
+export function rosterAuthoritativeRoot(
+  ctx: unknown,
+  config: Pick<ETeamsResolvedConfig, 'stateDir'>,
+): string | undefined {
+  const registry = workspaceRegistryOf(ctx);
+  if (!registry) return undefined;
+  for (const ws of registry.list()) {
+    if (ws.path === '') continue;
+    const root = stateRootFor(config, ws.path);
+    if (existsSync(root)) return root;
+  }
+  return undefined;
+}
+
+/** 按根序查单个角色条目（首个命中即回，第一根即权威口径）。 */
+export function findRosterMemberInRoots(
+  roots: readonly (string | undefined)[],
+  name: string,
+): { entry: RosterMember; root: string } | undefined {
+  for (const root of roots) {
+    if (root === undefined || root === '') continue;
+    const entry = findRosterMember(root, name);
+    if (entry !== undefined) return { entry, root };
+  }
+  return undefined;
+}
+
+/**
+ * 角色库一句话简介索引（用户迭代 2026-09-08「团队现状去掉 role、把角色
+ * profile 加进来」）：profile 的 live 源是 roles 表 profile 列（成员名=
+ * 角色名）。探查顺序：权威根（writeWorkspacePath，面板编辑都落这里）→
+ * 自己的根 → 注册表其余根，first-hit wins——权威根的条目压过本区首启播种
+ * 的陈旧副本。teamView 用它取 profile；班底行 persona 里烘焙的旧简介由
+ * 消费位兜底。无库/未就绪的根跳过。
+ */
+export function rosterProfilesAcrossWorkspaces(
+  ctx: unknown,
+  config: Pick<ETeamsResolvedConfig, 'stateDir'>,
+  ownWorkspace: string,
+): Map<string, string | null> {
+  const profiles = new Map<string, string | null>();
+  const probe = (workspacePath: string): void => {
+    if (workspacePath === '') return;
+    try {
+      for (const entry of readRoster(stateRootFor(config, workspacePath))) {
+        if (!profiles.has(entry.name)) profiles.set(entry.name, entry.profile ?? null);
+      }
+    } catch {
+      // 该根无 eteams 状态/库未就绪：跳过（跨工作区查找同语义）。
+    }
+  };
+  probe(rosterAuthoritativeRoot(ctx, config) ?? '');
+  probe(ownWorkspace);
+  const registry = workspaceRegistryOf(ctx);
+  if (registry) for (const ws of registry.list()) probe(ws.path);
+  return profiles;
 }
 
 /**
