@@ -17,7 +17,6 @@ import { refreshActivitySoon, type TeamSnapshot } from '../../lib/monitor';
 import { cn } from '../../lib/cn';
 import { errorMessageOf, runWithBusy } from '../../lib/errors';
 import { AvatarStack } from '../../components/avatarStack';
-import { AVATAR_SHELL_CLASS } from '../../features/avatar/avatar';
 import { ConfirmDeleteDialog } from '../../components/confirmDeleteDialog';
 import { DeleteButton } from '../../components/deleteButton';
 import { FormDialog, FormFooterActions } from '../../components/formDialog';
@@ -26,11 +25,12 @@ import { Card } from '../../components/ui/card';
 import { Input } from '../../components/ui/input';
 import { FormErrorNote, PageHeader } from '../shared/components';
 import {
-  CARD_GRID_CLASS,
   EMPTY_CLASS,
   LIST_COUNT_CLASS,
   LIST_TITLE_CLASS,
   PANEL_CARD_CLASS,
+  TEAM_CHIP_CLASS,
+  TEAM_GRID_CLASS,
 } from '../shared/styles';
 
 /** ================================== 类型 ================================== */
@@ -49,10 +49,12 @@ export interface TeamPageProps {
 
 /** ================================== 样式类 ================================== */
 
-/** 团队小卡片（用户迭代 2026-09 八）：纵排两段式——头部放名称 + 人数，底栏
- * （上边框分区）放成员略缩图 + 「详情/删除」；min-h + justify-between
+/** 团队小卡片（用户迭代 2026-09 八）：纵排两段式——头部放徽章 + 名称 + 人数，
+ * 底栏（上边框分区）放成员略缩图 + 「详情/删除」；min-h + justify-between
  * 把两段上下撑开（卡片拉长、中段留白，用户「拉长好看一点」），整卡可点进
- * 详情；底色/边框/悬停仍由 .eteams-team-card 样式表接管。 */
+ * 详情；底色/边框/悬停仍由 .eteams-team-card 样式表接管。
+ * （用户迭代 2026-09-07：头部压 pb-2.5 与底栏 pt-2.5 对称——分割线上下
+ * 间距一致；标题行加对话选中团队同款首字徽章。） */
 const TEAM_CARD_CLASS =
   'flex min-h-28 min-w-0 cursor-pointer flex-col justify-between rounded-xl p-4';
 
@@ -126,7 +128,9 @@ export function TeamPage({ sessionId, pool, team, onSelectTeam }: TeamPageProps)
   };
 
   return (
-    <div>
+    // 列表卡满高（用户迭代 2026-09-07）：页根占内容列剩余空间，卡 flex-1
+    // 拉满、栅格 min-h-0 内部滚动（卡满高、页头常驻可视）。
+    <div className="flex min-h-0 flex-1 flex-col">
       {/* 团队页头（S24-2，官网 h2 签名）：标题 + 右侧「＋ 新增团队」主按钮。
         创建弹窗只从这里开——跳转信号自开弹窗已撤（用户反馈 2026-09：一进
         团队页就弹新增弹窗很突兀）。页头与创建弹窗在详情页同款常驻（拆分前
@@ -194,19 +198,20 @@ export function TeamPage({ sessionId, pool, team, onSelectTeam }: TeamPageProps)
         onConfirm={confirmDeleteTeam}
       />
 
-      {/* 列表态：小卡片栅格（用户迭代 2026-09 八，复用 CARD_GRID_CLASS）——
-      最小 210px 自适应列，窄两列宽三列。卡片纵排两段式：头部放名称 + 人数，
-      底栏（上边框分区）放成员略缩图 + 「详情/删除」；整卡
+      {/* 列表态：小卡片栅格（用户迭代 2026-09 八；2026-09-07 换
+      TEAM_GRID_CLASS 加宽一档——最小 240px 自适应列，窄列少宽列多，不并轨
+      CARD_GRID_CLASS 以免牵动角色列表）。卡片纵排两段式：头部放徽章 +
+      名称 + 人数，底栏（上边框分区）放成员略缩图 + 「详情/删除」；整卡
       可点进详情，按钮区 stopPropagation 不触发整卡点击。删除走确认弹窗
       （host 只放行 staged/completed/halted）。当前团队不再做选中高亮描边，
       目标行也只在有真目标时出现（用户迭代 2026-09 九）。 */}
       {pool.length > 0 && (
-        <Card className={cn(PANEL_CARD_CLASS, 'pb-3')}>
+        <Card className={cn(PANEL_CARD_CLASS, 'pb-3 flex min-h-0 flex-1 flex-col')}>
           <div className="mb-2.5 flex items-center gap-2">
             <h3 className={LIST_TITLE_CLASS}>团队</h3>
             <span className={LIST_COUNT_CLASS}>{pool.length} 个</span>
           </div>
-          <div className={CARD_GRID_CLASS}>
+          <div className={cn(TEAM_GRID_CLASS, 'min-h-0 flex-1 content-start overflow-y-auto')}>
             {pool.map((t) => {
               // 人数含领队（用户迭代 2026-09 六：领队也算成员，初始化默认在团；
               // 移出后只剩成员）——与详情页/添加弹窗同口径。
@@ -223,9 +228,18 @@ export function TeamPage({ sessionId, pool, team, onSelectTeam }: TeamPageProps)
                     navigate(`/team/${t.teamId}`);
                   }}
                 >
-                  <div className="min-w-0">
-                    <div className="eteams-team-name truncate text-base font-semibold text-foreground">
-                      {t.name}
+                  <div className="min-w-0 pb-2.5">
+                    {/* 标题行：对话选中团队同款首字徽章（shared/styles 的
+                    TEAM_CHIP_CLASS——与 teamsButton 收编同一常量，视觉由构造
+                    保证一致）+ 名称；头部压 pb-2.5 与底栏 pt-2.5 对称，
+                    分割线上下间距一致（用户迭代 2026-09-07）。 */}
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className={TEAM_CHIP_CLASS} aria-hidden={true}>
+                        {t.name.slice(0, 1)}
+                      </span>
+                      <div className="eteams-team-name truncate text-base font-semibold text-foreground">
+                        {t.name}
+                      </div>
                     </div>
                     <p className={cn('m-0 mt-0.5', LIST_COUNT_CLASS)}>{headcount} 人</p>
                   </div>
@@ -240,9 +254,7 @@ export function TeamPage({ sessionId, pool, team, onSelectTeam }: TeamPageProps)
                       {/* 成员略缩图（M7-7 收口 components/avatarStack）：领队 +
                       成员头像最多 3 个，超出 +N；小号头像负间距叠放，滑过整组
                       间距松开、滑过单个放大——动效由样式表
-                      .eteams-team-avatars 驱动，title 兜底全名。叠放壳改白底
-                      品牌描边（用户迭代 2026-09-07，同角色页描边环——原白
-                      ring 撤，壳收口 features/avatar AVATAR_SHELL_CLASS）。 */}
+                      .eteams-team-avatars 驱动，title 兜底全名。 */}
                       <AvatarStack
                         people={faces.map((m) => ({
                           name: m.name,
@@ -251,7 +263,7 @@ export function TeamPage({ sessionId, pool, team, onSelectTeam }: TeamPageProps)
                         }))}
                         size={20}
                         max={3}
-                        wrapperClass={`inline-flex shrink-0 ${AVATAR_SHELL_CLASS}`}
+                        wrapperClass="inline-flex shrink-0 rounded-full ring-2 ring-[color:var(--background)]"
                         overflow
                       />
                     </div>

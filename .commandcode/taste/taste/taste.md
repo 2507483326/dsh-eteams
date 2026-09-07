@@ -3,11 +3,24 @@
 - 功能改动收尾前跑全套验证、全绿才宣布完成：vitest 全量测试、`tsc --noEmit` 分别跑 tsconfig.host.json 与 tsconfig.client.json、对改动文件跑 eslint。 Confidence: 0.8
 - 用户以中文交流，回复与总结应使用中文。 Confidence: 0.85
 - 开发环境是 Windows（C:\eTeam）：shell 命令避免 Unix 专用工具（如 tail、管道 grep），直接运行命令即可。 Confidence: 0.9
-- shell 受命令白名单限制：`ls`/`dir` 会被拦，工程外路径（如 C:\Users\epat\AppData 下的应用安装目录）查不了；目录/文件探查优先用 glob/grep/read_file 工具，确需 shell 时改用可用命令（如 find）。 Confidence: 0.7
+- shell 受命令白名单限制：`ls`/`dir` 会被拦，工程外路径（如 C:\Users\epat\AppData 下的应用安装目录）查不了；目录/文件探查优先用 glob/grep/read_file 工具，确需 shell 时改用可用命令（如 find）。cmd 里 `ls`/`stat` 等 Unix 命令不存在（报「系统找不到指定的路径」），目录列表、产物/源码时间戳对比改用 powershell 工具（Get-ChildItem / Get-Item 查 LastWriteTime），已验证可用。 Confidence: 0.75
 - pnpm/corepack 垫片在这台机器上不可用（corepack 报错）：直接调用 `node_modules\.bin\*.cmd`（vitest.cmd、tsc.cmd、eslint.cmd）运行工具链。 Confidence: 0.85
 - 注释沿用仓库中英混排惯例；行为变更在模块头/相关注释标注来源（日期 + 用户原话，如「用户迭代 2026-09-07『发送后清空选择』」），并在易错点（竞态、时序、lint 规则约束）写明设计原因。 Confidence: 0.7
 - 测试用 vitest，位于 tests/*.test.ts；describe/it 可用中文表达业务语义；行为变更同步补用例（含回退/撤销等边缘路径）。 Confidence: 0.65
-- 头像视觉语言已定型为「白底 + 品牌实色描边壳」（border-2 border-business bg-white p-0.5）：用户要求跨界面统一（角色页描边环、任务区各处头像、团队卡叠放与 +N 余量牌），点名某界面时会要求改全该界面所有头像位（「都改一下」），新增头像位默认沿用同款壳。 Confidence: 0.75
+- 头像描边语言（用户迭代 2026-09-07 二次修正，原「白底 + 品牌实色描边壳」全表面推广被撤回）：通用头像一律在 Avatar 容器默认类上加 1px 实线深灰框（border-slate-500），紧贴头像无间隔、不占额外空间、尺寸不变；容器加 bg-white 垫在内联底色之下（无底色处不透出下层）。白底必须是值级的不透明兜底：背景池含 upstream 原样的 'transparent'，抽中时容器内联 background: transparent 会盖掉类上的 bg-white（内联样式优先级高于工具类），须在渲染处把 transparent 落成 #ffffff——用户报告「领队没有背景放大时透出来了」证实类级兜底救不了值级透明。白底品牌壳（AVATAR_SHELL_CLASS：border-2 business p-0.5）仅角色页描边环（avatarRing）保留，不再推广到其他头像位。点名某界面时仍会要求改全该界面所有头像位（「都改一下」）。 Confidence: 0.95
+- 种子驱动的确定性视觉内容（按 (seed, salt) 生成的头像等）保持既有输出稳定：修视觉 bug 时不动随机池本身——池长度参与 pick 索引，增删一项会全量重排所有既有 (seed, salt) 的底色，全部成员头像变脸；兜底在渲染/消费点做值级替换（如 transparent → #ffffff）。 Confidence: 0.7
+- 视觉微调不改变元素占位：用户要求加边框/描边这类外观调整时直接在元素本体改样式，不用带 padding 的外壳包装（会撑大尺寸、破坏叠放/对齐）——用户原话「怎么超出了原来的大小了」；发现尺寸变了要恢复原尺寸。 Confidence: 0.8
 - 重复的样式/行为字面值收口成共享常量供各消费位复用（如壳样式收口 features/avatar 的 AVATAR_SHELL_CLASS，avatarRing/taskAssign/teamPage/avatarStack 复用），不逐字复制。 Confidence: 0.6
 - 界面上要求显示的「实际」值以运行时观测为准（用户原话「实际的 provider/model」；数据源是 usage 旁路对 request 事件的观测缓存）：无观测（未发过请求/宿主重启）就不显示，不用配置别名或猜测值凑数；显示类增量做成非交互低调元素（muted 小字徽章），不干扰既有交互（主会话模型座位照旧）。 Confidence: 0.65
-- 弹窗/表单里的 textarea 不允许拖拽改大小（用户反馈 textarea 会被拖出弹窗）：加 `resize-none` 禁用 resize，不用 `rows` 而用固定 Tailwind 高度类（如 `h-28`），高度定得比原默认略高。 Confidence: 0.6
+- 弹窗/表单里的 textarea 不允许拖拽改大小（用户反馈 textarea 会被拖出弹窗）：加 `resize-none` 禁用 resize，不用 `rows` 而用固定 Tailwind 高度类。高度宁高勿矮：默认略高（h-28=112px）用户仍嫌矮，追加「高度再加100px」→ 固定 212px（用任意值类 `h-[212px]` 表达精确像素）；用户会以具体像素增量口头迭代尺寸，按当前值精确累加即可。 Confidence: 0.65
+- 客户端改动收尾要主动跑构建：用户在运行中的面板里验收效果，只改源码不编译会「好像没更新」（用户原话「编译一下，好像没更新」）。界面改动后跑 `npm run build`（tsc + tailwind + tsdown，客户端打包到 lib/client.js），收尾提醒重启宿主/刷新客户端才能看到新样式。 Confidence: 0.7
+- 卡片网格偏好高密度排布：角色卡片一排放 5 个，宁可拉宽/拉长页面容器来容纳，而不是保持原宽减少每行数量（用户原话「角色卡片页面拉长，一排放5个就行」）。做卡片列表布局时按每行 5 个设定网格列数，容器尺寸随内容适配。卡片文字层级同样偏紧凑：卡上条目名即用户说的「title」（非页头标题），字号要求小一档（用户原话「title字体小一点」），层级靠字重（semibold）撑。 Confidence: 0.7
+- 单行截断的文字配原生 `title` 属性悬停兜底看全文：卡片名字/简介这类 truncate 行都加 `title`（简介传 trim 后的全文），沿用团队卡成员略缩图「title 兜底全名」的同款手法（用户原话「title 和 profile 加上title，让鼠标挪上去可以看完整文字」）。 Confidence: 0.7
+- 页面专属的样式分档改动用新常量收口，不动多页共用的常量：团队列表卡加宽时新建 TEAM_GRID_CLASS（minmax 240px 自适应列，2026-09-07），不并轨 CARD_GRID_CLASS（210px，角色列表在用）以免牵动别页——同 TASK_GRID_CLASS（260px）不并轨的既有纪律；与前一条互补：两处视觉应一致时归一同一常量，刻意分档时各立常量。 Confidence: 0.7
+- 卡片内分区（上边框横线）上下留白对称：用户会点名「横线上下间距一致」——给分隔线上下两段配对等值 padding（如卡头 pb-2.5 对底栏 pt-2.5，各 10px）。 Confidence: 0.6
+- 用户会并发手动编辑文件（会话进行中在改别的功能，如 teamsButton 的搜索框）：动手前/遇错时重读文件确认当前状态；typecheck 报错先分辨是不是并发编辑造成的既有问题，与本任务无关的不抢修（用户往往自己已修），只动任务范围，并在总结里说明「其余未碰」。 Confidence: 0.6
+- 新增 UI 功能先找仓库内同类先例照做，保持一致而非新造模式：动手前先 grep/read 现有实现（ui 组件目录、同类页面的 placeholder 模式），搜索框沿用 rail 官网 Quick search 的样式签名缩小为弹层档（h-8、13px、放大镜绝对定位、Input 去 border 改 ring），过滤复用 lib/text 的 matchesQuery，输入框用 components/ui/Input，图标沿用 lucide 深层 .mjs 导入。 Confidence: 0.6
+- 列表/弹层行的选中态用就地可视指示替代文字说明：选中行行尾显示品牌主色 Check 勾（`text-primary`）代替「已选」文案；状态已可视后冗余的提示行（「已选「xxx」（再次点击可取消）」）要删掉——用户原话「把已选换成有颜色的勾」「去掉团队选中的提示」。 Confidence: 0.6
+- 列表页面容器高度占满：角色、团队、任务这类列表页要求 height 100%、容器卡片撑满内容区（用户原话「角色、团队、任务列表页面的高度100% 我想要里面的容器卡片是满的，方便展示」），页面/列表容器不随内容收缩。实现模式（teamsView 2026-09-07 落地）：CONTENT_CLASS 改纵 flex 列，列表页根 `flex min-h-0 flex-1 flex-col`，PANEL_CARD_CLASS 卡片加 `flex min-h-0 flex-1 flex-col` 拉满，卡内栅格加 `min-h-0 flex-1 content-start overflow-y-auto` 内部滚动——页头/分页常驻可视，卡片少时行保持自然高度、留白收在卡内；看板/汇报/详情页不跟着改（仍内容自适应整页滚动）。 Confidence: 0.6
+- 样式定调后全表面统一、不留旧式例外：改动落地后用户会逐页检查并点名漏改处（「角色详情页面还是老样子」；团队首字徽章上了列表卡标题后，用户随即点名「团队弹窗中的团队tab下面的团队也加上徽章」——同一实体的标识元素在它出现的每个面都要求同款），此前作为例外保留的旧样式组件也要一并撤掉换成新样式（撤组件本身，不只是改调用点），避免新旧双轨并存。 Confidence: 0.8
+��本身，不只是改调用点），避免新旧双轨并存。 Confidence: 0.8

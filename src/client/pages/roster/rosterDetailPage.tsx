@@ -22,7 +22,8 @@ import { cn } from '../../lib/cn';
 import { errorMessageOf } from '../../lib/errors';
 import { ROSTER_DETAIL_SUBTITLE_META } from '../../lib/status';
 import { MdEditor } from '../../features/mdEditor/mdEditor';
-import { AvatarRing, RandomAvatarButton, rollAvatarPair } from '../../components/avatarRing';
+import { Avatar } from '../../features/avatar/avatar';
+import { RandomAvatarButton, rollAvatarPair } from '../../components/avatarRing';
 import { BackBar } from '../../components/backBar';
 import { FormFooterActions } from '../../components/formDialog';
 import { Button } from '../../components/ui/button';
@@ -190,11 +191,12 @@ export function RosterDetailPage({ members, team, onDeleted }: RosterDetailPageP
       <BackBar label="返回角色列表" onClick={() => navigate('/roster')} />
       <Card className={cn(PANEL_CARD_CLASS, 'mt-2')}>
         <div className="flex items-center gap-3.5">
-          {/* 头像描边环（视觉升级）：品牌淡底档（D21b token），柔和不抢戏。
-          编辑态头像下挂「随机头像」钮（用户迭代 2026-09-03）。 */}
+          {/* 头像（描边环已撤——用户迭代 2026-09-07，描边统一走 Avatar
+          默认 1px 深灰框、白底、无间隔）；编辑态头像下挂「随机头像」钮
+          （用户迭代 2026-09-03）。 */}
           <div className="flex flex-none flex-col items-center gap-1.5">
-            {/* 头像描边环 +（编辑态）随机换一枚（M7-2 收口 components/avatarRing）。 */}
-            <AvatarRing
+            {/* 头像 +（编辑态）随机换一枚（M7-2 收口 components/avatarRing）。 */}
+            <Avatar
               name={detail.name}
               seed={avatarPair?.seed}
               salt={avatarPair?.salt}

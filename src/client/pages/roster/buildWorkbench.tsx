@@ -28,7 +28,7 @@ import { cn } from '../../lib/cn';
 import { errorMessageOf } from '../../lib/errors';
 import { Avatar } from '../../features/avatar/avatar';
 import { MdEditor } from '../../features/mdEditor/mdEditor';
-import { AvatarRing, RandomAvatarButton, rollAvatarPair } from '../../components/avatarRing';
+import { RandomAvatarButton, rollAvatarPair } from '../../components/avatarRing';
 import { StepGlyph } from '../../components/stepGlyph';
 import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
@@ -406,8 +406,9 @@ export function BuildWorkbench({ build, addMode, onConfirmed }: BuildWorkbenchPr
           <div className={cn(FORM_ROW_CLASS, 'mt-2')}>
             <span className={FORM_LABEL_CLASS}>头像</span>
             <div className="flex items-center gap-2.5">
-              {/* 描边环头像 + 随机换一枚（M7-2 收口 components/avatarRing）。 */}
-              <AvatarRing
+              {/* 头像 + 随机换一枚（描边环已撤——用户迭代 2026-09-07，
+              描边统一走 Avatar 默认 1px 深灰框）。 */}
+              <Avatar
                 name={draftEdit.name.trim() !== '' ? draftEdit.name.trim() : build.draft.name}
                 seed={draftAvatarPair?.seed}
                 salt={draftAvatarPair?.salt}

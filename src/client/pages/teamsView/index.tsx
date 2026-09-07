@@ -107,8 +107,10 @@ fns.progressFill → PROGRESS_FILL_CLASS + 宽度百分比 inline（S5 card 先�
 D22d 排版基线：官网侧栏/prose-sm 尺度 14px/24（原 13px/1.55 钉死档）。 */
 const SHELL_CLASS =
   'relative box-border flex h-full gap-4 overflow-hidden px-[18px] py-3.5 text-sm leading-6 text-foreground font-sans';
-/** 原 styles.content：内容列（纵滚/横截 + 2px 右距，用户反馈注记原样保留）。 */
-const CONTENT_CLASS = 'min-w-0 flex-1 overflow-x-hidden overflow-y-auto pr-0.5';
+/** 原 styles.content：内容列（纵滚/横截 + 2px 右距，用户反馈注记原样保留）。
+ * 用户迭代 2026-09-07「列表页容器卡片满高」：改纵 flex 列——页头 auto、
+ * 路由页根 flex-1（角色/任务页头在壳层、团队页头在页内，两态同链）。 */
+const CONTENT_CLASS = 'flex min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto pr-0.5';
 /* docs/23 S23-3：原 styles.formError（FORM_ERROR_CLASS）迁移 FormErrorNote
    （shadcn Alert destructive 紧凑档，见上方组件），常量删除。 */
 

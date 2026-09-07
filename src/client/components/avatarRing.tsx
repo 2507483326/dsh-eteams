@@ -1,22 +1,17 @@
 /**
- * 头像描边环与随机头像钮（docs/44 M7-2，46 清单）：四处「双线描边圆环头像」
- * （构建台 40、角色添加页 40、角色详情页 52、成员详情页 52）与三处
- * 「随机头像」ghost 小钮（构建台、角色添加页、角色详情页）原是逐字重复，
- * 连同掷骰种子对 rollAvatarPair 一起收口到这里。环壳现为白底 + business
- * 实色描边双线（border-2 + p-0.5，用户迭代 2026-09-07）、随机钮元数据
- * （标题/文案/小号类）借 lib/status 的 RANDOM_AVATAR_BTN_META 原值。
+ * 随机头像钮与掷骰工具（docs/44 M7-2，46 清单收口）：三处「随机头像」
+ * ghost 小钮（构建台、角色添加页、角色详情页）原是逐字重复，连同掷骰
+ * 种子对 rollAvatarPair 收口到这里；随机钮元数据（标题/文案/小号类）借
+ * lib/status 的 RANDOM_AVATAR_BTN_META 原值。原同文件的 AvatarRing 描边
+ * 环已撤（用户迭代 2026-09-07：头像描边统一为 Avatar 默认 1px 深灰框、
+ * 白底、无间隔——环壳与白缝废止），四处调用位改直用 features/avatar
+ * 的 Avatar。
  *
  * @module dsh-eteams/client/avatarRing
  */
 import type { ReactNode } from 'react';
 import Dices from 'lucide-react/dist/esm/icons/dices.mjs';
-import { Avatar, AVATAR_SHELL_CLASS } from '../features/avatar/avatar';
 import { Button } from './ui/button';
-
-/** 描边环壳：白底 + 品牌实色双线圆环（用户迭代 2026-09-07：白底、描边
- * 加重）——壳面收口 features/avatar 的 AVATAR_SHELL_CLASS（任务区头像、
- * 团队卡叠放同款），此处只补内容行高归零。 */
-const RING_CLASS = `${AVATAR_SHELL_CLASS} leading-none`;
 
 /**
  * 随机头像钮元数据（M2 查表原表逐字随迁，lib/status 原注记指明 M7 落位
@@ -50,28 +45,6 @@ export function rollAvatarPair(): AvatarPair {
 }
 
 /** ================================== 主组件 ================================== */
-
-/**
- * 描边环头像：size 透传（40/52 两档由调用方定），seed/salt 可选——手动
- * 未掷/回落原头像时原位就传 undefined（Avatar 自取名姓首字哈希）。
- */
-export function AvatarRing({
-  name,
-  seed,
-  salt,
-  size,
-}: {
-  name: string;
-  seed?: number;
-  salt?: number;
-  size: number;
-}): ReactNode {
-  return (
-    <div className={RING_CLASS}>
-      <Avatar name={name} seed={seed} salt={salt} size={size} />
-    </div>
-  );
-}
 
 /**
  * 随机头像钮：ghost sm 小号（RANDOM_AVATAR_BTN_META 类名/title/label

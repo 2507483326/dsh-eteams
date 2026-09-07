@@ -250,7 +250,9 @@ export function TasksPage({ team, pool, sessionId, onSelectTeam }: TasksPageProp
   // 拆页后列表页/详情页各包各的（现状口径不变）。
   return (
     <TaskDndProvider>
-      <div>
+      {/* 列表卡满高（用户迭代 2026-09-07）：页根占内容列剩余空间，卡 flex-1
+      拉满、栅格 min-h-0 内部滚动（卡满高、页头常驻可视）。 */}
+      <div className="flex min-h-0 flex-1 flex-col">
         {/* 十一…十五轮 DA24…DA28：任务主列表**平铺小卡栅格**（用户十一轮拍板
         「任务主列表不分对话任务、待指派这种，做成团队那种小卡片」；十二轮
         修订「去掉 #1 这种，文件夹左边…做成可以点击的，卡片再大一点，分行，
@@ -273,7 +275,7 @@ export function TasksPage({ team, pool, sessionId, onSelectTeam }: TasksPageProp
           // （空态也在卡内——「添加任务」钮常驻右上角，首任务从这进）；
           // 空态文案补「点右上角添加任务」指路。
           return (
-            <Card className={cn(PANEL_CARD_CLASS, 'pb-3')}>
+            <Card className={cn(PANEL_CARD_CLASS, 'pb-3 flex min-h-0 flex-1 flex-col')}>
               <div className="mb-2.5 flex items-center gap-2">
                 <h3 className={LIST_TITLE_CLASS}>任务</h3>
                 <span className={LIST_COUNT_CLASS}>{mainTasks.length} 个</span>
@@ -287,7 +289,7 @@ export function TasksPage({ team, pool, sessionId, onSelectTeam }: TasksPageProp
                   还没有任务。在对话中把任务交给团队，或计划批准后任务会出现在这里；也可以点右上角「添加任务」手动创建。
                 </div>
               ) : (
-                <div className={TASK_GRID_CLASS}>
+                <div className={cn(TASK_GRID_CLASS, 'min-h-0 flex-1 content-start overflow-y-auto')}>
                   {mainTasks.map((t) => (
                     // 三十一轮 DA44④：列表卡身抽 taskListCard（TaskListCard）——
                     // subs 统计/deletable 判据随迁卡内现算（task/allTasks 进 props）。

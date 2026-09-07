@@ -25,7 +25,8 @@ import type { RosterMember } from '../../lib/api';
 import { cn } from '../../lib/cn';
 import { errorMessageOf } from '../../lib/errors';
 import { MdEditor } from '../../features/mdEditor/mdEditor';
-import { AvatarRing, RandomAvatarButton, rollAvatarPair } from '../../components/avatarRing';
+import { Avatar } from '../../features/avatar/avatar';
+import { RandomAvatarButton, rollAvatarPair } from '../../components/avatarRing';
 import { BackBar } from '../../components/backBar';
 import { Alert } from '../../components/ui/alert';
 import { Button } from '../../components/ui/button';
@@ -212,8 +213,9 @@ export function RosterAddPage({
               <div className={cn(FORM_ROW_CLASS, 'mt-2.5')}>
                 <span className={FORM_LABEL_CLASS}>头像</span>
                 <div className="flex items-center gap-2.5">
-                  {/* 描边环头像 + 随机换一枚（M7-2 收口 components/avatarRing）。 */}
-                  <AvatarRing
+                  {/* 头像 + 随机换一枚（描边环已撤——用户迭代 2026-09-07，
+                  描边统一走 Avatar 默认 1px 深灰框）。 */}
+                  <Avatar
                     name={name}
                     seed={manualAvatar?.seed}
                     salt={manualAvatar?.salt}

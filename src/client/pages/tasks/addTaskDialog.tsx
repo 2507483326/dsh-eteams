@@ -68,7 +68,7 @@ export function AddTaskDialog({
         <Textarea
           value={description}
           autoFocus
-          className="h-28 resize-none"
+          className="h-[212px] resize-none"
           placeholder="任务描述：一句话说清目标，越具体越好，如「把 docs 下的旧文档迁移到新目录结构并校对链接」"
           onChange={(e) => onDescription(e.target.value)}
         />

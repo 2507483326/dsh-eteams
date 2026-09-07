@@ -23,7 +23,7 @@ import { cn } from '../../lib/cn';
 import { runWithBusy } from '../../lib/errors';
 import { MdEditor } from '../../features/mdEditor/mdEditor';
 import { MEMBER_STATUS_LABELS, memberTone } from '../../features/tasks/taskDisplayStatus';
-import { AvatarRing } from '../../components/avatarRing';
+import { Avatar } from '../../features/avatar/avatar';
 import { BackBar } from '../../components/backBar';
 import { FormDialog, FormFooterActions } from '../../components/formDialog';
 import { Button } from '../../components/ui/button';
@@ -325,9 +325,9 @@ export function MemberDetailPage({
 
       <Card className={cn(PANEL_CARD_CLASS, 'mt-2')}>
         <div className="flex items-center gap-3.5">
-          {/* 头像描边环：角色详情页同款（品牌淡底档）。（M7-2 收口
-          components/avatarRing。） */}
-          <AvatarRing
+          {/* 头像（描边环已撤——用户迭代 2026-09-07，描边统一走 Avatar
+          默认 1px 深灰框、白底、无间隔）。 */}
+          <Avatar
             name={view.name}
             seed={view.avatar?.seed}
             salt={view.avatar?.salt}

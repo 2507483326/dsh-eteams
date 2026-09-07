@@ -73,7 +73,9 @@ import { createPortal } from 'react-dom';
 import { Provider } from 'react-redux';
 import { writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives';
 // lucide 深层图标导入（dialog.tsx 先例：深层 .mjs 只进用到的图标）。
+import Check from 'lucide-react/dist/esm/icons/check.mjs';
 import Plus from 'lucide-react/dist/esm/icons/plus.mjs';
+import Search from 'lucide-react/dist/esm/icons/search.mjs';
 import { ADD_PEOPLE_TEMPLATE, prefillComposer } from '../lib/addPeople';
 import { ClientErrorBoundary, recordClientDiag } from '../lib/diagnostics';
 import { enterTeamsPanel } from './teamsPanel';
@@ -91,9 +93,11 @@ import { getApp } from '../store/app';
 import { Avatar } from '../features/avatar/avatar';
 import { cn } from '../lib/cn';
 import { errorMessageOf } from '../lib/errors';
-import { BORDER_L1_CLASS } from './shared/styles';
+import { matchesQuery } from '../lib/text';
+import { BORDER_L1_CLASS, TEAM_CHIP_CLASS } from './shared/styles';
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
+import { Input } from '../components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs';
 
 /** ================================== 类型 ================================== */
@@ -126,6 +130,13 @@ const ROW_CLASS =
   'flex w-full cursor-pointer items-center gap-2 rounded-[8px] border-none bg-transparent px-[9px] py-[7px] text-left text-sm text-foreground [font-family:inherit] hover:bg-muted data-[selected=true]:bg-business-tint data-[selected=true]:text-[color:var(--eteams-brand-ink)]';
 const ROW_NAME_CLASS = 'min-w-0 truncate font-medium';
 const ROW_META_CLASS = 'ml-auto shrink-0 text-xs text-muted-foreground';
+/* 选中勾（用户迭代 2026-09-07：已选文案换成有颜色的勾）——品牌主色，ml-auto
+   与原 meta 同位。 */
+const ROW_CHECK_CLASS = 'ml-auto h-4 w-4 shrink-0 text-primary';
+/* 弹层搜索框（用户迭代 2026-09-07：tab 下加搜索框，按当前 tab 过滤列表）——
+   官网 Quick search 签名（S24-2，rail 同款）缩窄为弹层档：h-8、13px。 */
+const POPUP_SEARCH_CLASS =
+  'h-8 rounded-md border-0 pr-3 pl-8 text-[13px] leading-6 text-foreground outline-none [font-family:inherit] ring-1 ring-[color:var(--eteams-pill-bg)] focus-visible:ring-2 focus-visible:ring-sky-500/60';
 /* M6 局部重命名（EMPTY_CLASS → POPUP_EMPTY_CLASS）：shared 有同名
    EMPTY_CLASS 而两处类值不同（M8 平铺收口易混）——本文件类值逐字不变。 */
 const POPUP_EMPTY_CLASS = 'px-2.5 py-3.5 text-center text-xs text-muted-foreground';
@@ -156,11 +167,11 @@ const POPUP_TAB_TRIGGER_CLASS =
 清除钮 16×16、默认隐藏、hover 按钮时显形（`group-hover` 搭配触发钮上的
 `group`），自身 hover 换交互悬停底与主文字色——逐条对应原样式表。过渡时长
 不用 duration 任意值（时间长度类同时匹配 transition/animation 两个工具、
-属歧义候选不产 CSS），改用任意属性 shorthand，逐字对应原 `transition:opacity .12s`。 */
+属歧义候选不产 CSS），改用任意属性 shorthand，逐字对应原 `transition:opacity .12s`。
+团队首字 chip 面收编 shared/styles 的 TEAM_CHIP_CLASS（M7-11 同值异名归一
+——团队列表卡标题复用同一常量，两处视觉由构造一致）。 */
 const FACE_ROW_CLASS = 'inline-flex items-center gap-1.5';
 const FACE_NAME_CLASS = 'max-w-[120px] truncate font-medium';
-const TEAM_CHIP_CLASS =
-  'inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] border border-solid bg-background text-xs font-semibold text-primary';
 const CLEAR_BUTTON_CLASS =
   'inline-flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded-full border-none bg-transparent p-0 text-sm leading-none text-muted-foreground opacity-0 [transition:opacity_120ms] group-hover:opacity-100 hover:bg-muted hover:text-foreground';
 
@@ -297,6 +308,9 @@ function TeamsPopup(props: {
 }): ReactNode {
   const { anchor, selectedMember, selectedTeam, onSelectMember, onSelectTeam, onClose } = props;
   const [tab, setTab] = useState<'team' | 'member'>(props.initialTab);
+  // 搜索框（按当前 tab 过滤团队/角色名，大小写不敏感子串）；切 tab 清空——
+  // 两个 tab 列表不同，残留关键词只会造成"莫名空列表"。
+  const [query, setQuery] = useState('');
   const panelRef = useRef<HTMLDivElement | null>(null);
   // Hand-rolled above-placement: right-aligned to the trigger, BOTTOM edge
   // `gap` above its top edge, clamped to the viewport. Until the first
@@ -406,6 +420,10 @@ function TeamsPopup(props: {
   };
 
   const teams = state.teams;
+  const visibleTeams = teams.filter((t) => matchesQuery(t.name, query));
+  // roster 为 null（加载中）时取空数组——可空类型无法从 roster 的判断收窄，
+  // 恒定数组让下方 JSX 链的"无匹配"分支直接用 length 判断。
+  const visibleRoster = (roster ?? []).filter((m) => matchesQuery(m.name, query));
 
   return (
     /* Portal 作用域根（D19b/S11）：弹层挂在 body 下，不在表面根子树里，
@@ -429,7 +447,10 @@ function TeamsPopup(props: {
             降高（pt-2/pb-2）。激活 = sky 文字 + 同色下划线 + semibold。 */}
         <Tabs
           value={tab}
-          onValueChange={(v) => setTab(v === 'member' ? 'member' : 'team')}
+          onValueChange={(v) => {
+            setTab(v === 'member' ? 'member' : 'team');
+            setQuery('');
+          }}
           className="flex min-h-0 flex-1 flex-col"
         >
           <TabsList className="h-auto w-full flex-none justify-start gap-0 rounded-none border-0 bg-transparent p-0">
@@ -441,6 +462,19 @@ function TeamsPopup(props: {
             </TabsTrigger>
           </TabsList>
 
+          {/* 搜索框（rail 官网 Quick search 签名缩窄档）：放大镜绝对定位，
+              Input 去 border 改 ring。 */}
+          <div className="relative flex-none px-1.5 pb-0.5 pt-2">
+            <Search className="pointer-events-none absolute left-3.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              type="text"
+              value={query}
+              placeholder="搜索"
+              onChange={(e) => setQuery(e.target.value)}
+              className={POPUP_SEARCH_CLASS}
+            />
+          </div>
+
           <div className={LIST_CLASS}>
             {tab === 'team' ? (
               teams.length === 0 ? (
@@ -449,8 +483,10 @@ function TeamsPopup(props: {
                     ? `${TEAM_EMPTY_META.error}${state.error}`
                     : TEAM_EMPTY_META.noTeam}
                 </div>
+              ) : visibleTeams.length === 0 ? (
+                <div className={POPUP_EMPTY_CLASS}>无匹配结果</div>
               ) : (
-                teams.map((t) => {
+                visibleTeams.map((t) => {
                   const isTeamSelected = selectedTeam?.teamId === t.teamId;
                   return (
                     <button
@@ -463,9 +499,15 @@ function TeamsPopup(props: {
                       // 不会在指针下重弹。
                       title={t.name}
                     >
+                      {/* 首字徽章（用户迭代 2026-09-07）：团队 tab 行与角色行
+                      的头像同位——同款 TEAM_CHIP_CLASS（与团队列表卡标题、
+                      触发钮选中面收编同一常量，视觉由构造一致）。 */}
+                      <span className={TEAM_CHIP_CLASS} aria-hidden={true}>
+                        {t.name.slice(0, 1)}
+                      </span>
                       <span className={ROW_NAME_CLASS}>{t.name}</span>
                       {isTeamSelected ? (
-                        <span className={ROW_META_CLASS}>已选</span>
+                        <Check className={ROW_CHECK_CLASS} aria-hidden={true} />
                       ) : (
                         <span className={ROW_META_CLASS}>
                           {t.progress.completed}/{t.progress.total} 完成
@@ -479,8 +521,10 @@ function TeamsPopup(props: {
               <div className={POPUP_EMPTY_CLASS}>角色库加载中…</div>
             ) : roster.length === 0 ? (
               <div className={POPUP_EMPTY_CLASS}>角色库为空——点下方「新增角色」创建。</div>
+            ) : visibleRoster.length === 0 ? (
+              <div className={POPUP_EMPTY_CLASS}>无匹配结果</div>
             ) : (
-              roster.map((m) => {
+              visibleRoster.map((m) => {
                 const isSelected = selectedMember?.name === m.name;
                 return (
                   <button
@@ -495,7 +539,7 @@ function TeamsPopup(props: {
                   >
                     <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} size={22} />
                     <span className={ROW_NAME_CLASS}>{m.name}</span>
-                    {isSelected && <span className={ROW_META_CLASS}>已选</span>}
+                    {isSelected && <Check className={ROW_CHECK_CLASS} aria-hidden={true} />}
                   </button>
                 );
               })
@@ -517,11 +561,6 @@ function TeamsPopup(props: {
                   对话将以「{selectedMember.name}」的角色输出（再次点击该角色可取消）。
                 </div>
               )}
-            {tab === 'team' && selectedTeam !== null && (
-              <div className={HINT_CLASS}>
-                已选「{selectedTeam.name}」（再次点击该团队可取消）。
-              </div>
-            )}
           </div>
 
           <div className={cn(FOOTER_CLASS, 'flex-none')}>

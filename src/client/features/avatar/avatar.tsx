@@ -33,17 +33,16 @@ function hueOf(name: string): number {
 }
 
 /** 静态容器面（S14）：工具类；尺寸/底色/字号随 props 动态（见 AVATAR_STYLE）。
- * 三十二轮 DA45：加 1px `--border` 描边——用户拍板「头像加上边框」，全仓
- * 各表面（任务区/团队/成员库/汇报…）统一生效；className 仍可覆盖。 */
+ * 三十二轮 DA45：加 1px 描边（用户拍板「头像加上边框」全表面统一）；用户
+ * 迭代 2026-09-07：描边定深灰（slate-500，原 --border 太浅）+ 白底兜底
+ * （bg-white 垫在内联底色之下，调用位名字色相/头像背景色盖其上，无底色
+ * 处不透出下层），框贴头像无间隔、尺寸不变；className 仍可覆盖。 */
 const AVATAR_CONTAINER_CLASS =
-  'inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full border border-solid border-[color:var(--border)] font-semibold text-white';
+  'inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full border border-solid border-slate-500 bg-white font-semibold text-white';
 
 /**
- * 白底品牌描边壳（用户迭代 2026-09-07「白底 + 描边加重」的收口常量）：
- * 须包在 Avatar **外层**使用——Avatar 容器底色是内联样式（名字色相 / 头像
- * 背景色），白底只有由外层壳承载才能透出。消费位：角色页描边环
- * （components/avatarRing）、任务区头像（features/tasks/taskAssign）、
- * 团队卡成员叠放（pages/team/teamPage + components/avatarStack 余量牌）。
+ * 白底品牌描边壳（用户迭代 2026-09-07，仅角色页描边环消费）：包在 Avatar
+ * **外层**——Avatar 容器底色是内联样式，壳的白底由自身承载。
  */
 export const AVATAR_SHELL_CLASS =
   'rounded-full border-2 border-solid border-business bg-white p-0.5';
@@ -117,12 +116,20 @@ function SeedAvatar({
 }): ReactNode {
   const reactId = useId().replaceAll(':', '');
   const option = generateAvatarOption(seed, salt);
+  // 背景池含 upstream 原样的 'transparent'（avatarOption AVATAR_BACKGROUND_
+  // COLORS 末位）：透明底的脸浮在页面上，团队卡叠放悬停放大会透出下层
+  // 头像（用户迭代 2026-09-07「领队没有背景，放大时透出来了」）——渲染
+  // 时落白底兜底（容器类的 bg-white 会被这条内联透明盖掉，必须在值上
+  // 替换）。不动池子本身：池长度参与 pick 索引，增删会全量重排既有
+  // (seed, salt) 的底色。
+  const faceBackground =
+    option.background.color === 'transparent' ? '#ffffff' : option.background.color;
   // The composed string is a complete <svg> document sized to `size`, so it
   // can sit directly inside the container span (upstream uses v-html too).
   return (
     <span
       className={cn(AVATAR_CONTAINER_CLASS, className)}
-      style={{ ...style, background: option.background.color }}
+      style={{ ...style, background: faceBackground }}
       data-eteams="avatar"
       title={name}
       dangerouslySetInnerHTML={{

@@ -130,8 +130,10 @@ export function RosterPage({
   };
 
   return (
-    <div>
-      <Card className={PANEL_CARD_CLASS}>
+    // 列表卡满高（用户迭代 2026-09-07）：页根占内容列剩余空间，卡 flex-1
+    // 拉满、栅格 min-h-0 内部滚动（卡满高、页头/分页常驻可视）。
+    <div className="flex min-h-0 flex-1 flex-col">
+      <Card className={cn(PANEL_CARD_CLASS, 'flex min-h-0 flex-1 flex-col')}>
         {/* 页头（用户迭代 2026-09-03）：搜索框与「角色」标题平齐（同一行），
           右侧留新增入口；空列表不渲染搜索框。 */}
         <div className="mb-2.5 flex items-center gap-2">
@@ -181,7 +183,7 @@ export function RosterPage({
             {/* 角色卡片栅格（用户迭代 2026-09-03）：一行式横排——头像在前、
             名称随后、删除钮常驻行尾（不再 hover 显形）；
             hover/描边由 ROLE_LIST_CSS 接管。 */}
-            <div className={CARD_GRID_CLASS}>
+            <div className={cn(CARD_GRID_CLASS, 'min-h-0 flex-1 content-start overflow-y-auto')}>
               {pageRows.map((m) => {
                 const isProtected = PROTECTED_MEMBERS.includes(m.name);
                 return (
@@ -194,11 +196,22 @@ export function RosterPage({
                     {/* 角色（用户反馈）：不再需要标签——名字即身份；简介
                     （用户迭代 2026-09-06）跟在名字下一行，单行截断。 */}
                     <div className="min-w-0 flex-1">
-                      <span className="eteams-role-name block max-w-full text-sm font-semibold text-foreground">
+                      {/* 名字即卡片标题（用户迭代 2026-09-07「title 字体小一点」）：
+                      text-sm → text-xs 一档，字重保留靠 semibold 撑层级。 */}
+                      {/* 悬停兜底全文（用户迭代 2026-09-07「title 和 profile 加上
+                      title」）：名字/简介都单行截断，原生 title 悬停看全文
+                      （团队卡成员略缩图同款手法）。 */}
+                      <span
+                        className="eteams-role-name block max-w-full text-xs font-semibold text-foreground"
+                        title={m.name}
+                      >
                         {m.name}
                       </span>
                       {m.profile !== undefined && m.profile.trim() !== '' && (
-                        <span className="eteams-role-name mt-0.5 block max-w-full truncate text-xs leading-5 text-muted-foreground">
+                        <span
+                          className="eteams-role-name mt-0.5 block max-w-full truncate text-xs leading-5 text-muted-foreground"
+                          title={m.profile.trim()}
+                        >
                           {m.profile.trim()}
                         </span>
                       )}

@@ -110,15 +110,28 @@ export const LIST_COUNT_CLASS = 'text-xs text-muted-foreground';
  * 语义 token --muted（与原 layer-2 档同值源）。 */
 export const CHIP_CLASS = `mr-1 mb-0.5 inline-block rounded-md bg-muted px-2 py-px text-xs text-muted-foreground`;
 
-/** 原 styles.cardGrid（团队/角色卡片栅格，最小 210px 自适应列）——团队与角色
- * 列表共用：按面板宽度自适应列数，窄两列宽三列，卡片不拉成长条
- * （用户迭代 2026-09 八）。 */
-export const CARD_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(210px,1fr))] gap-3';
+/** 团队首字徽章（原 teamsButton 局部常量收编——M7-11 同值异名归一）：对话
+ * 选中团队的按钮 chip 面（18×18 圆角方 + 首字），团队列表卡标题复用同一
+ * 常量（用户迭代 2026-09-07），两处视觉由构造保证一致。 */
+export const TEAM_CHIP_CLASS =
+  'inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] border border-solid bg-background text-xs font-semibold text-primary';
+
+/** 原 styles.cardGrid（角色卡片栅格，自适应列）——现仅角色列表消费（团队
+ * 卡已拆 TEAM_GRID_CLASS、任务卡 TASK_GRID_CLASS，不再共用）：按面板宽度
+ * 自适应列数，卡片不拉成长条。用户迭代 2026-09-07「角色列表卡片拉长一点」：
+ * 最小 210px → 240px 加宽一档（与团队卡同档）。 */
+export const CARD_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-3';
 
 /** 任务列表小卡栅格（十二轮 DA25：用户拍板「卡片再大一点」——任务卡比团队
  * 卡再宽一档，最小 260px 自适应列，窄列少宽列多；任务列表专用，不并轨
  * CARD_GRID_CLASS 以免牵动团队/角色列表）。 */
 export const TASK_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3';
+
+/** 团队列表小卡栅格（用户迭代 2026-09-07：团队卡加宽一档——最小 240px 自
+ * 适应列，窄列少宽列多；角色列表维持 210px 原档、任务卡 260px 仍宽一档）。
+ * 专用常量不并轨 CARD_GRID_CLASS，改动不牵动角色列表（同 TASK_GRID_CLASS
+ * 不并轨的纪律）。 */
+export const TEAM_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-3';
 /**
  * 角色/团队/任务列表注入样式表（ROLE_LIST_CSS）消费的主题 token——S12–S14
  * 迁移后 inline 样式消费面已清空；hover/focus-within/attr 选择器仍需样式表
