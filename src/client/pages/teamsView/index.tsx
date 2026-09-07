@@ -291,10 +291,8 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
 
         <div className={CONTENT_CLASS}>
           {/* 页签标题（S24-2，官网 h2 签名）：每 tab 内容区顶部一行页头。
-            团队域页头（含「＋ 新增团队」按钮）由 team/ 三页自渲染（列表页、
-            详情页与成员详情页同款常驻——拆分前 TeamTab 树内三态共用）——
-            创建弹窗开合是页内瞬态（用户反馈 2026-09：跳转信号自开弹窗撤销，
-            创建只从这里进）。 */}
+            团队域页头由 team/ 页自渲染（列表页与成员详情页保留「＋ 新增团队」
+            ——团队详情页页头按钮撤，用户迭代 2026-09-07）。 */}
           {activeTab === 'board' && <PageHeader label="看板" />}
           {activeTab === 'roster' && <PageHeader label="角色" />}
           {activeTab === 'tasks' && <PageHeader label="任务" />}
@@ -320,10 +318,6 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
             memberCap={state.maxMembers}
             onSelectTeam={(id) => dispatch({ type: 'ui/setSelectedTeam', payload: id })}
             agentActivity={agentActivity}
-            onOpenReports={(name) => {
-              dispatch({ type: 'ui/setDialogMember', payload: name });
-              navigate('/reports');
-            }}
             onDeleted={refreshRoster}
             onPrefillAddPeople={prefillAddPeople}
             openAddTick={openAddTick}

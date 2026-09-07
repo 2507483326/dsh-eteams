@@ -151,9 +151,11 @@ export function ModelRoutePicker({
       }}
     >
       <PopoverTrigger asChild>
+        {/* 触发器 h-8 对齐行尾 Button sm 档（用户迭代 2026-09-07「模型选择
+        和按钮的大小不一致」——原 h-7 与移出钮 32px 并排差一档）。 */}
         <button
           type="button"
-          className="inline-flex h-7 w-[132px] shrink-0 items-center gap-1 rounded-md border border-solid bg-transparent px-2 text-xs font-medium outline-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex h-8 w-[132px] shrink-0 items-center gap-1 rounded-md border border-solid bg-transparent px-2 text-xs font-medium outline-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
           title={title}
           disabled={disabled === true}
           aria-haspopup="menu"

@@ -283,6 +283,9 @@ export async function createTask(
             ? { personaMd: m.persona.personaMd }
             : {}),
           ...(m.modelRoute.model !== '' ? { model: m.modelRoute.model } : {}),
+          ...(m.modelRoute.model !== '' && m.modelRoute.provider !== undefined && m.modelRoute.provider !== ''
+            ? { provider: m.modelRoute.provider }
+            : {}),
           ...(m.modelRoute.reasoningEffort !== undefined && m.modelRoute.reasoningEffort !== ''
             ? { reasoningEffort: m.modelRoute.reasoningEffort }
             : {}),

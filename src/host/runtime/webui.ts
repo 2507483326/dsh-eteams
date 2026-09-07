@@ -59,7 +59,12 @@ import {
   taskOutcome,
   updateTask,
 } from './assignment.js';
-import { leaderRowOf, latestInstanceRow, memberStatusOf, teamMainSessionOf } from './notifier.js';
+import {
+  leaderRowOf,
+  latestInstanceRow,
+  memberStatusOf,
+  teamMainSessionOf,
+} from './notifier.js';
 import {
   answerBuildInterview,
   cancelBuildSession,
@@ -81,6 +86,7 @@ import {
   readAppUsageCalendar,
   sessionRouteOf,
 } from './usage.js';
+import { declaredRouteOf } from './sessionRoutes.js';
 import {
   findRosterMemberAcrossWorkspaces,
   locateTeamAcrossWorkspaces,
@@ -221,6 +227,9 @@ function memberView(team: TeamState, m: MemberRecord) {
     executionPrompt: m.persona.executionPrompt,
     status: memberStatusOf(team, m.employeeId ?? m.name),
     model: m.modelRoute.model,
+    // 覆盖路线的目录 provider（v9 回归）：客户端显示按 provider+model 精确
+    // 定位目录行（同 id 模型跨提供方时按 id 反查会命中错误条目）。
+    provider: m.modelRoute.provider ?? null,
     reasoningEffort: m.modelRoute.reasoningEffort ?? null,
     currentTaskId: currentTask?.id ?? null,
     childId: row?.sessionId ? row.sessionId : null,
@@ -242,8 +251,13 @@ function taskView(t: TaskRecord, team: TeamState, groupOutcomes?: Map<number, st
   return {
     taskId: t.id,
     subject: t.subject,
-    // 任务单（group 容器）判据：无父且有子任务（旧 kind 列已砍，docs/35 §3）。
-    kind: t.parentId === null && team.tasks.some((x) => x.parentId === t.id) ? 'group' : 'task',
+    // 任务单（group 容器）判据：无父且有子任务，或创建中占位（子任务未落库
+    // 时详情页也要走编排分支——罗列条/任务列表/新增小任务全程可见，
+    // docs/panelTaskCommission）（旧 kind 列已砍，docs/35 §3）。
+    kind:
+      t.parentId === null && (t.status === 'creating' || team.tasks.some((x) => x.parentId === t.id))
+        ? 'group'
+        : 'task',
     parentId: t.parentId ?? null,
     folder: taskDirRel(team, t),
     description: t.description ?? null,
@@ -304,10 +318,12 @@ export function teamSnapshot(
   // 领队工号 = 班底领队行自增主键（表自增，建队即入班底领号），异常缺行
   // 按 1 号兜底。
   const captainPersona = composeCaptainPersona(stateRoot);
-  const rosterLeader = readRoster(stateRoot).find((m) => m.name === LEADER_NAME);
+  // 领队识别一律按 is_leader 标识（v8）：角色库条目按 roles.is_leader，班底
+  // 行按 team_members.is_leader——不再按保留名匹配。
+  const rosterLeader = readRoster(stateRoot).find((m) => m.isLeader === true);
   const leader = leaderRowOf(team);
   const leaderBadge =
-    team.members.find((m) => m.name === LEADER_NAME)?.employeeId ?? leader?.employeeId ?? 1;
+    team.members.find((m) => m.isLeader === true)?.employeeId ?? leader?.employeeId ?? 1;
   // 组收口产出（docs/26）：task.completed 事件 payload.via='subtasks.completed'
   // 的聚合文本按 taskId 收敛，同任务多次收口取最新一条（Map 覆盖写）。
   const events = readEventsSync(stateRoot, team.id);
@@ -350,9 +366,10 @@ export function teamSnapshot(
       // 头像（用户迭代 2026-09-03）：优先名册领队条目——面板「随机头像」
       // 换脸后团队页领队卡同步；缺省回落固定 (hashName, 7)。
       avatar: rosterLeader?.avatar ?? { seed: avatarSeedFor('项目牧羊人'), salt: 7 },
-      // 模型路线（用户迭代 2026-09-04 恢复领队模型选择）：领队行
-      // model/reasoning_effort，空 model = 会话默认。
+      // 模型路线（用户迭代 2026-09-04 恢复领队模型选择）：领队主持行
+      // model/provider/reasoning_effort（v9 加 provider），空 model = 会话默认。
       model: leader?.model ?? '',
+      provider: leader?.provider ?? null,
       reasoningEffort: leader?.reasoningEffort ?? null,
     },
     // 成员 = 班底行（v7）。领队也是班底一行，但领队卡单独走 captain 段，
@@ -360,7 +377,7 @@ export function teamSnapshot(
     // （docs/35 §5#12 口径改按工号聚合——同名成员各判各的）。
     members: team.members
       .filter((m) => {
-        if (m.name === LEADER_NAME) return false;
+        if (m.isLeader === true) return false;
         const rows = team.taskMembers.filter(
           (r) => m.employeeId !== undefined && r.employeeId === m.employeeId,
         );
@@ -1019,6 +1036,7 @@ export function installWebSurface(
                   teamId: team.id,
                   name: member.name,
                   ...(member.employeeId !== undefined ? { employeeId: member.employeeId } : {}),
+                  ...(str(body.provider, '') !== '' ? { provider: str(body.provider) } : {}),
                   ...(str(body.model, '') !== '' ? { model: str(body.model) } : {}),
                   ...(str(body.reasoningEffort, '') !== ''
                     ? { reasoningEffort: str(body.reasoningEffort) }
@@ -1159,6 +1177,7 @@ export function installWebSurface(
               try {
                 await setLeaderModel(envFor(ctx, config, workspacePath), captainAgentOf(team), {
                   teamId: team.id,
+                  ...(str(body.provider, '') !== '' ? { provider: str(body.provider) } : {}),
                   ...(str(body.model, '') !== '' ? { model: str(body.model) } : {}),
                   ...(str(body.reasoningEffort, '') !== ''
                     ? { reasoningEffort: str(body.reasoningEffort) }
@@ -1980,6 +1999,44 @@ export function installWebSurface(
                   : isBuilder
                     ? 'builder'
                     : undefined;
+              // 显示组合（用户反馈 2026-09-07「主会话是 tokenrouter/glm-5.3-free，
+              // 徽章却显示 tokenrouter/z-ai/glm-5.3-free」）：观测 model 是解析
+              // 后的上游限定 id，与主会话模型座位的目录级 id 不一致——model 取
+              // 声明值（descriptor agentOptions），provider 取观测值（真实适配
+              // 名；覆盖路线误填传输名 'spawn'/'fork' 的声明 provider 不采信）。
+              // 只有一侧时整体用那一侧；冷恢复未观测即纯声明路线。
+              const declared = declaredRouteOf(sessionId);
+              const observed = sessionRouteOf(sessionId);
+              let route: { provider: string; model: string } | null = null;
+              if (declared !== undefined || observed !== undefined) {
+                const provider = observed?.provider ?? declared?.provider ?? '';
+                const model = declared?.model ?? observed?.model ?? '';
+                if (provider !== '' && model !== '') route = { provider, model };
+              }
+              // 目录显示名（用户迭代 2026-09-08「显示目录模型」）：自定义
+              // provider 的模型 id 本身可能是限定串（z-ai/glm-5.3-free），而
+              // 主会话模型座位显示的是目录项 name（glm1/glm-5.3-free）——经
+              // ctx.llm.listModels(provider) 反查。服务缺失（旧运行时/单测）
+              // 或查不到回退 null，客户端显示 provider/model 原值。
+              let modelLabel: string | null = null;
+              if (route !== null) {
+                try {
+                  const llm = (ctx as unknown as {
+                    llm?: { listModels?: (provider: string) => Promise<{ id: string; name: string }[]> };
+                  }).llm;
+                  if (llm?.listModels !== undefined) {
+                    const models = await llm.listModels(route.provider);
+                    modelLabel = models.find((m) => m.id === route!.model)?.name ?? null;
+                  }
+                } catch (error) {
+                  const logger = (ctx as unknown as { logger?: { warn?: (msg: string) => void } })
+                    .logger;
+                  logger?.warn?.(
+                    `eteams: /session-route 目录名反查失败（回退 id 显示）：${String(error)}`,
+                  );
+                  modelLabel = null;
+                }
+              }
               sendJson(res, 200, {
                 subagent: kind !== undefined,
                 kind,
@@ -1987,7 +2044,8 @@ export function installWebSurface(
                 teamId: member?.teamId ?? captainTeam ?? null,
                 // 路线只对 eteams 子代理透出（非子代理即使碰巧有观测也回
                 // null——主会话的模型座位是显示的权威来源，徽章不掺和）。
-                route: kind !== undefined ? (sessionRouteOf(sessionId) ?? null) : null,
+                route: kind !== undefined ? route : null,
+                modelLabel: kind !== undefined ? modelLabel : null,
                 serverTime: Date.now(),
               });
               return;

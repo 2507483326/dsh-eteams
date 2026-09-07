@@ -26,32 +26,30 @@ interface SessionModelBadgeProps {
   readonly session?: unknown;
 }
 
-/** muted 小字档：与模型座位触发器的低调观感对齐（13px 座位 → 12px 徽章），
+/** 徽章观感对齐主会话模型座位（trigger：28px 高 / 24px 圆角胶囊 /
+ * 13px·20px medium / label-secondary 字色）并按用户要求带**背景色**
+ * （用户迭代 2026-09-07「也没主会话一样有背景色」）——muted 淡底胶囊。
  * inline-block + truncate 防长 model id 把工具行撑爆。 */
 const BADGE_CLASS =
-  'inline-block max-w-[240px] truncate align-middle text-xs leading-[18px] text-muted-foreground';
+  'inline-block h-7 max-w-[260px] truncate rounded-full bg-muted px-2.5 text-[13px] leading-[28px] font-medium text-muted-foreground';
 
 /** 徽章标题（原生 tooltip；静态串防闪烁——不随路线值变化）。 */
-const BADGE_TITLE = '子代理会话实际运行的模型（观测自最近一次请求）';
+const BADGE_TITLE = '子代理会话实际运行的模型路线';
 
 /**
  * 徽章文本拼装（纯函数，tests/sessionModelBadge.test.ts 逐分支锁定）：
- * kind=member → `{memberName} · {provider}/{model}`；captain → `领队 · …`；
- * builder → `构建师 · …`。非子代理或无观测路线（subagent≠true / route 空）
- * 返回空串——消费位以空串判「不渲染」。
+ * 显示目录模型名（用户迭代 2026-09-08「去掉领队 ·，显示目录模型」——模型
+ * id 本身可能是限定串如 z-ai/glm-5.3-free，主会话座位显示的是目录项
+ * name）；目录未命中回退 `provider/model` 原值。非子代理或无观测路线返回
+ * 空串——消费位以空串判「不渲染」。
  */
 export function sessionModelLabel(view: SessionRouteView): string {
   if (view.subagent !== true) return '';
   const route = view.route;
   if (route === null || route === undefined) return '';
-  const who =
-    view.kind === 'captain'
-      ? '领队'
-      : view.kind === 'builder'
-        ? '构建师'
-        : (view.memberName ?? '');
-  const routeText = `${route.provider}/${route.model}`;
-  return who !== '' ? `${who} · ${routeText}` : routeText;
+  const label = view.modelLabel;
+  if (label !== null && label !== undefined && label !== '') return label;
+  return `${route.provider}/${route.model}`;
 }
 
 /** The eteams composer tool-row badge: one session's actual provider/model. */

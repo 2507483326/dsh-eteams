@@ -1,5 +1,5 @@
 -- =====================================================================
--- ETeams SQLite schema v7（db_schema_version = 7；v3 成员=角色合并：member
+-- ETeams SQLite schema v10（db_schema_version = 10；v3 成员=角色合并：member
 -- 表精简改名成 roles 角色库表（去 team_id/role_id/model/reasoning_effort，
 -- 新增 profile），班底另起 team_members 表，旧 roles 标签登记表删除；
 -- v4 班底行补 role_name/persona_md/profile 角色信息副本列；v5 任务行补主
@@ -8,7 +8,11 @@
 -- 代理会话）；v7 工号挪到班底（表自增）：工号 = team_members 行的自增主键
 -- （AUTOINCREMENT 只增不复用），班底/团队表不加新列；roles.employee_id 弃用
 -- ——列保留不读写；mail_messages 补 employee_id 分箱列、attempts 补
--- task_member_id 副本行列（v2/v3/v4/v5/v6/v7 旧库经 getDb 迁移回填）
+-- task_member_id 副本行列；v8 领队标识列：roles/team_members/task_members
+-- 补 is_leader（项目牧羊人=1 其余=0，领队行查找按标识不按名；旧库经 getDb
+-- 迁移回填）；v9 班底/任务成员补 provider 路线列；v10 班底行补 avatar 头像
+-- 副本列（角色修改保存后随 roles.avatar 按 role_id 同步刷新，角色删除不
+-- 进行同步；旧库经 getDb 迁移回填）
 -- 主键 = 每张表自己的编号列，统一 INTEGER 自增（schema_meta 例外：key 即主键）
 -- 时间列一律 *_time 结尾（Unix 毫秒）；每张表末尾 created_time / update_time
 -- 枚举 = TEXT（合法值写在列注释里）；JSON = TEXT 存 JSON 字符串
@@ -53,6 +57,7 @@ CREATE TABLE IF NOT EXISTS roles (
   role_id        INTEGER PRIMARY KEY AUTOINCREMENT,  -- 角色 ID，自增（team_members.role_id 引用它）
   role_name      TEXT NOT NULL,                -- 角色名（成员名=角色名；全库唯一，写入代码查重）
   employee_id    INTEGER,                      -- 【v7 弃用】工号已挪到 team_members（表自增主键即工号）；列保留不读写，旧库回滚兼容
+  is_leader      INTEGER NOT NULL DEFAULT 0,   -- 领队标识（v8）：项目牧羊人=1 其余=0；写入层由保留名派生，读端按标识取领队
   persona_md     TEXT,                         -- 完整角色手册（Markdown 全文；duty/style/skills 等结构字段写入时烘进手册）
   profile        TEXT,                         -- 一句话简介（列表卡片/详情头展示；独立成列，不再烘进 persona_md）
   avatar         TEXT,                         -- 头像
@@ -64,8 +69,8 @@ CREATE TABLE IF NOT EXISTS roles (
 -- 3. team_members —— 班底（团队 × 角色：一行一个在队成员 + 该队派发路线；
 --    v7 起是工牌发放处：工号 = 本表自增主键（AUTOINCREMENT 只增不复用，
 --    全机器唯一），允许同名同角色多行，人员身份键 = 工号；人设/头像经
---    role_id 松引用解析自 roles；role_name/persona_md/profile 是随角色行
---    同步刷新的副本列（v4，真相在 roles）；执行实例（状态/会话/当前任务）
+--    role_id 松引用解析自 roles；role_name/persona_md/profile/avatar 是随角色行
+--    同步刷新的副本列（v4/v10，真相在 roles）；执行实例（状态/会话/当前任务）
 --    在 task_members）
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS team_members (
@@ -75,8 +80,11 @@ CREATE TABLE IF NOT EXISTS team_members (
   role_name        TEXT,                -- 角色名副本（写入时随 roles.role_name 同步刷新；悬空行 NULL；直查/展示用）
   persona_md       TEXT,                -- 角色手册副本（写入时随 roles.persona_md 同步刷新；真相在 roles）
   profile          TEXT,                -- 一句话简介副本（写入时随 roles.profile 同步刷新；真相在 roles）
-  model            TEXT,                -- 该队派发路线；NULL=会话默认（settings agent-default-model），有值=覆盖（provider 派发时按配置解析）
+  avatar           TEXT,                -- 头像副本（v10：写入时随 roles.avatar 按 role_id 同步刷新；真相在 roles；悬空行 NULL）
+  model            TEXT,                -- 该队派发路线：模型 id；NULL=会话默认（settings agent-default-model），有值=覆盖
+  provider         TEXT,                -- 覆盖路线的目录 provider（v9 同 id 模型跨提供方歧义，用户迭代 2026-09-08）；NULL=跟随/旧数据
   reasoning_effort TEXT,                -- 模型思考强度
+  is_leader        INTEGER NOT NULL DEFAULT 0,  -- 领队标识（v8）：班底领队行=1 其余=0；写入层由保留名派生，读端按标识取领队
   created_time     INTEGER NOT NULL,    -- 创建时间
   update_time      INTEGER NOT NULL     -- 更新时间
 );
@@ -137,8 +145,10 @@ CREATE TABLE IF NOT EXISTS task_members (
                    -- 成员状态：staged / ready / working / paused / removed
   persona_md       TEXT,                -- 执行时的人设手册（沿用 roles 角色行的手册，可按任务微调）
   model            TEXT,                -- 执行时采用的模型（沿用 team_members 班底路线；NULL=跟随）
+  provider         TEXT,                -- 覆盖路线的目录 provider（v9，同班底行口径；NULL=跟随/旧数据）
   reasoning_effort TEXT,                -- 模型思考强度
   avatar           TEXT,                -- 头像
+  is_leader        INTEGER NOT NULL DEFAULT 0,  -- 领队标识（v8）：领队行（含副本）=1 其余=0；写入层由保留名派生，读端按标识取领队
   created_time     INTEGER NOT NULL,    -- 创建时间
   update_time      INTEGER NOT NULL     -- 更新时间
 );

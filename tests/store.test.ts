@@ -15,6 +15,7 @@ import {
   atomicWriteText,
   insertTeamRow,
   readTeam,
+  syncTeamMemberRoleMirrorInTx,
   withTeamTx,
   writeTeam,
 } from '../src/host/state/store';
@@ -163,7 +164,7 @@ describe('team snapshots', () => {
     expect(again?.updatedAt).toBeGreaterThanOrEqual(state.updatedAt);
   });
 
-  it('writeTeam fills team_members mirror columns from roles（v4 副本列）', async () => {
+  it('writeTeam fills team_members mirror columns from roles（v4/v10 副本列，含头像）', async () => {
     const state = seedTeam('镜像团队');
     state.members.push({
       memberId: 1,
@@ -187,16 +188,18 @@ describe('team snapshots', () => {
     const db = getDb(root);
     const mirror = db
       .prepare(
-        'SELECT tm.role_name, tm.persona_md, tm.profile FROM team_members tm WHERE tm.team_id = ?',
+        'SELECT tm.role_name, tm.persona_md, tm.profile, tm.avatar FROM team_members tm WHERE tm.team_id = ?',
       )
       .get(state.id) as {
       role_name: string | null;
       persona_md: string | null;
       profile: string | null;
+      avatar: string | null;
     };
     expect(mirror.role_name).toBe('王测试');
     expect(mirror.persona_md).toContain('王测试');
     expect(mirror.profile).toBeNull();
+    expect(mirror.avatar).toBe(JSON.stringify({ seed: 9, salt: 8 }));
     // 重写快照：同名角色行已存在时人设以角色行为准（同源语义），镜像随
     // 角色行刷新、不被内存 persona 覆盖。
     state.members[0].persona.profile = '内存里的一句话';
@@ -210,6 +213,23 @@ describe('team snapshots', () => {
         profile: string | null;
       }).profile,
     ).toBeNull();
+    // 角色修改保存后按 role_id 全量刷新（v10：头像也随 roles 更新，全部
+    // 引用行一遍刷净）；角色删除不进行同步（删除路径见 rosterProtected）。
+    db.prepare('UPDATE roles SET avatar = ? WHERE role_name = ?')
+      .run(JSON.stringify({ seed: 3, salt: 4 }), '王测试');
+    withTeamTx(root, undefined, (tx) => {
+      syncTeamMemberRoleMirrorInTx(tx, {
+        roleId: (
+          db.prepare('SELECT role_id FROM roles WHERE role_name = ?').get('王测试') as {
+            role_id: number;
+          }
+        ).role_id,
+      });
+    });
+    const refreshed = db
+      .prepare('SELECT tm.avatar FROM team_members tm WHERE tm.team_id = ?')
+      .get(state.id) as { avatar: string | null };
+    expect(refreshed.avatar).toBe(JSON.stringify({ seed: 3, salt: 4 }));
   });
 
   it('readTeam returns undefined for missing teams', async () => {
@@ -634,6 +654,99 @@ describe('v3→v4 team_members role mirror columns migration', () => {
   });
 });
 
+// v9→v10 班底头像副本列迁移：team_members 缺 avatar 列，补列后按角色行
+// 回填（悬空 role_id 行刷成 NULL，与 v4 副本列同口径）；全新库 DDL 即新
+// 形状、只跑幂等回填兜底。角色删除不进行同步——删除路径由班底守卫挡住，
+// 不产生悬空镜像行。
+describe('v9→v10 team_members avatar mirror column migration', () => {
+  const V9_ROLES_DDL = `CREATE TABLE roles (
+    role_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    role_name    TEXT NOT NULL,
+    employee_id  INTEGER,
+    is_leader    INTEGER NOT NULL DEFAULT 0,
+    persona_md   TEXT,
+    profile      TEXT,
+    avatar       TEXT,
+    created_time INTEGER NOT NULL,
+    update_time  INTEGER NOT NULL
+  );`;
+  const V9_TEAM_MEMBERS_DDL = `CREATE TABLE team_members (
+    team_member_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_id          INTEGER NOT NULL,
+    role_id          INTEGER,
+    role_name        TEXT,
+    persona_md       TEXT,
+    profile          TEXT,
+    model            TEXT,
+    provider         TEXT,
+    reasoning_effort TEXT,
+    is_leader        INTEGER NOT NULL DEFAULT 0,
+    created_time     INTEGER NOT NULL,
+    update_time      INTEGER NOT NULL
+  );`;
+
+  it('adds the avatar column to team_members and backfills from roles on connect', () => {
+    const legacyRoot = mkdtempSync(join(tmpdir(), 'eteams-mig-v10-'));
+    try {
+      mkdirSync(dbDirOf(legacyRoot), { recursive: true });
+      const legacy = new DatabaseSync(dbFileOf(legacyRoot));
+      legacy.exec(V9_ROLES_DDL);
+      legacy.exec(V9_TEAM_MEMBERS_DDL);
+      legacy
+        .prepare(
+          'INSERT INTO roles (role_id, role_name, is_leader, persona_md, profile, avatar, created_time, update_time) ' +
+            "VALUES (5, '张工程师', 0, '# 人设 · 张工程师', '负责页面', '{\"seed\":3,\"salt\":4}', 10, 11)",
+        )
+        .run();
+      // 班底行一行引用角色行、一行悬空（role_id 指向不存在的角色）。
+      legacy
+        .prepare(
+          'INSERT INTO team_members (team_member_id, team_id, role_id, role_name, persona_md, profile, created_time, update_time) ' +
+            "VALUES (1, 1, 5, '张工程师', '# 人设 · 张工程师', '负责页面', 20, 21)",
+        )
+        .run();
+      legacy
+        .prepare(
+          'INSERT INTO team_members (team_member_id, team_id, role_id, created_time, update_time) ' +
+            'VALUES (2, 1, 999, 22, 23)',
+        )
+        .run();
+      legacy.close();
+
+      const db = getDb(legacyRoot);
+      const columns = (
+        db.prepare('PRAGMA table_info(team_members)').all() as Array<{ name: string }>
+      ).map((c) => c.name);
+      expect(columns).toContain('avatar');
+      // 引用行：头像从 roles 回填（角色行的 avatar 列 JSON 原样副本）。
+      const linked = db
+        .prepare('SELECT avatar FROM team_members WHERE team_member_id = 1')
+        .get() as { avatar: string | null };
+      expect(linked.avatar).toBe('{"seed":3,"salt":4}');
+      // 悬空行：头像刷成 NULL（与 loadMembers 防御性跳过同口径）。
+      const dangling = db
+        .prepare('SELECT avatar FROM team_members WHERE team_member_id = 2')
+        .get() as { avatar: string | null };
+      expect(dangling.avatar).toBeNull();
+
+      // 幂等：重开连接只重复回填（自愈），不报错、不改行数。
+      closeDb(legacyRoot);
+      const again = getDb(legacyRoot);
+      expect(
+        (again.prepare('SELECT COUNT(*) AS n FROM team_members').get() as { n: number }).n,
+      ).toBe(2);
+      expect(
+        (again.prepare('SELECT avatar FROM team_members WHERE team_member_id = 1').get() as {
+          avatar: string | null;
+        }).avatar,
+      ).toBe('{"seed":3,"salt":4}');
+      closeDb(legacyRoot);
+    } finally {
+      cleanupTempWorkspace(legacyRoot);
+    }
+  });
+});
+
 // getDb 首次连接时的会话列迁移链（v5 + v6，docs/51）：v4 旧库 task 缺
 // session_id 列——v5 补列后按 task_members 领队行（name=项目牧羊人、
 // main_task_id 为空）锚定的 main_session_id 回填（只补 NULL 行：快照语义，
@@ -922,6 +1035,96 @@ describe('v6→v7 工牌迁移（工号=班底自增主键：副本重键/邮件
       expect(
         (again.prepare('SELECT COUNT(*) AS n FROM task_members').get() as { n: number }).n,
       ).toBe(4);
+      closeDb(legacyRoot);
+    } finally {
+      cleanupTempWorkspace(legacyRoot);
+    }
+  });
+});
+
+describe('v7→v8 领队标识迁移（roles/team_members/task_members.is_leader 回填）', () => {
+  it('adds is_leader columns and backfills 项目牧羊人=1 on connect', () => {
+    // v7 → v8 的形状差只有 3 列（三表 is_leader）——先用当前 DDL 建全新库，
+    // 再 DROP 这 3 列并把版本号降回 7，重开连接即走 v8 迁移回填。
+    const legacyRoot = mkdtempSync(join(tmpdir(), 'eteams-mig-v8-'));
+    try {
+      mkdirSync(dbDirOf(legacyRoot), { recursive: true });
+      getDb(legacyRoot); // 建当前全新库
+      closeDb(legacyRoot);
+      const legacy = new DatabaseSync(dbFileOf(legacyRoot));
+      legacy.exec('ALTER TABLE roles DROP COLUMN is_leader');
+      legacy.exec('ALTER TABLE team_members DROP COLUMN is_leader');
+      legacy.exec('ALTER TABLE task_members DROP COLUMN is_leader');
+      legacy
+        .prepare("UPDATE schema_meta SET value = '7' WHERE key = 'db_schema_version'")
+        .run();
+      legacy.exec('PRAGMA user_version = 7');
+
+      // v7 形状的旧数据：角色库 + 班底 + 领队主持行/任务副本行（含领队副本）。
+      legacy
+        .prepare(
+          'INSERT INTO team (team_id, team_name, has_leader, created_time, update_time) ' +
+            "VALUES (1, '迁移队', 1, 10, 11)",
+        )
+        .run();
+      const insRole = legacy.prepare(
+        'INSERT INTO roles (role_id, role_name, persona_md, created_time, update_time) ' +
+          'VALUES (?, ?, ?, 10, 11)',
+      );
+      insRole.run(1, '张三', '# 人设 · 张三');
+      insRole.run(2, '项目牧羊人', '# 人设 · 领队');
+      const insTm = legacy.prepare(
+        'INSERT INTO team_members (team_member_id, team_id, role_id, role_name, created_time, update_time) ' +
+          'VALUES (?, 1, ?, ?, 10, 11)',
+      );
+      insTm.run(1, 1, '张三');
+      insTm.run(2, 2, '项目牧羊人');
+      const insRow = legacy.prepare(
+        'INSERT INTO task_members (task_member_id, team_id, main_task_id, name, employee_id, session_id, status, created_time, update_time) ' +
+          'VALUES (?, 1, ?, ?, ?, ?, ?, 10, 11)',
+      );
+      insRow.run(10, null, '项目牧羊人', 2, '', 'ready');
+      insRow.run(11, 10, '张三', 1, '', 'staged');
+      insRow.run(12, 10, '项目牧羊人', 2, '', 'staged');
+      legacy.close();
+
+      const db = getDb(legacyRoot);
+
+      // roles：项目牧羊人=1，其余=0。
+      expect(
+        db.prepare('SELECT role_name, is_leader FROM roles ORDER BY role_id').all(),
+      ).toEqual([
+        { role_name: '张三', is_leader: 0 },
+        { role_name: '项目牧羊人', is_leader: 1 },
+      ]);
+      // team_members：班底领队行=1。
+      expect(
+        db.prepare('SELECT role_name, is_leader FROM team_members ORDER BY team_member_id').all(),
+      ).toEqual([
+        { role_name: '张三', is_leader: 0 },
+        { role_name: '项目牧羊人', is_leader: 1 },
+      ]);
+      // task_members：领队主持行与领队任务副本行=1，成员行=0。
+      expect(
+        db
+          .prepare('SELECT name, main_task_id, is_leader FROM task_members ORDER BY task_member_id')
+          .all(),
+      ).toEqual([
+        { name: '项目牧羊人', main_task_id: null, is_leader: 1 },
+        { name: '张三', main_task_id: 10, is_leader: 0 },
+        { name: '项目牧羊人', main_task_id: 10, is_leader: 1 },
+      ]);
+
+      // 幂等：重开连接回填自愈（值不重写、行数不变）。
+      closeDb(legacyRoot);
+      const again = getDb(legacyRoot);
+      expect(
+        (again.prepare('SELECT COUNT(*) AS n FROM roles WHERE is_leader = 1').get() as { n: number })
+          .n,
+      ).toBe(1);
+      expect(
+        (again.prepare('SELECT COUNT(*) AS n FROM task_members').get() as { n: number }).n,
+      ).toBe(3);
       closeDb(legacyRoot);
     } finally {
       cleanupTempWorkspace(legacyRoot);

@@ -23,19 +23,21 @@
  * @module dsh-eteams/host/runtime/captainAgent
  */
 import type { Agent } from '@deepseek-ai/dsh-agent';
-import type { SessionId } from '@deepseek-ai/dsh-session';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { SessionId } from '@deepseek-ai/dsh-session';
+import { randomUUID } from 'node:crypto';
 import type { ETeamsResolvedConfig } from '../config.js';
-import { ETeamsError, sessionDefaultRouteOf, stateRootFor, stateRootOf, type RuntimeEnv } from './base.js';
+import {
+  ETeamsError,
+  sessionDefaultRouteOf,
+  stateRootFor,
+  stateRootOf,
+  type RuntimeEnv,
+} from './base.js';
 import { readTeamSync, withTeamTx } from '../state/store.js';
+import { getDb } from '../state/db.js';
 import { locks, teamLockKey } from '../state/lock.js';
 import { leaderRowOf } from './notifier.js';
 import { LEADER_NAME } from './roster.js';
-import {
-  findRosterMemberInRoots,
-  rosterAuthoritativeRoot,
-} from './workspaces.js';
 import { composeCaptainPersona } from '../prompts/personas/captain.js';
 import { captainChildPersona } from '../prompts/spawn/captainChild.js';
 import { dispatchAck } from '../prompts/steering/dispatch.js';
@@ -57,22 +59,29 @@ export function parseCaptainLabel(label: string | undefined): { leaderName: stri
 }
 
 /**
- * Live dispatch registry: child session id → teamId, written at spawn and on
- * every followup re-registration (persisted child id survives host restarts,
- * so the map must be re-populated). Dropped only when the same team rebuilds
- * its child (stale lineage) — the child is persistent, not turn-scoped.
+ * Live dispatch registry: child session id → { teamId, workspace root },
+ * written at spawn and on every followup re-registration (persisted child id
+ * survives host restarts, so the map must be re-populated). Dropped only when
+ * the same team rebuilds its child (stale lineage) — the child is persistent,
+ * not turn-scoped. root 供领队手册插槽按子会话直查团队库（免注册表扫描）。
  */
-const captainChildren = new Map<string, string>();
+const captainChildren = new Map<string, { teamId: string; root: string }>();
 
 /** Register a freshly spawned captain child (identity.ts 领队解析依据). */
-export function registerCaptainChild(childId: string, teamId: string): void {
+export function registerCaptainChild(childId: string, teamId: string, root = ''): void {
   if (childId === '' || teamId === '') return;
-  captainChildren.set(childId, teamId);
+  captainChildren.set(childId, { teamId, root });
 }
 
 /** The team a captain child serves (undefined for non-captain sessions). */
 export function captainChildTeamOf(childId: string): string | undefined {
-  return captainChildren.get(childId);
+  return captainChildren.get(childId)?.teamId;
+}
+
+/** The workspace state root a captain child's team lives in (手册插槽用). */
+export function captainChildRootOf(childId: string): string | undefined {
+  const root = captainChildren.get(childId)?.root;
+  return root === '' ? undefined : root;
 }
 
 /** Drop the registry entry after the run settles (or on spawn failure). */
@@ -114,46 +123,62 @@ const textTurn = (value: string): { type: 'text'; text: string }[] => [
 const CAPTAIN_SOURCE = { kind: 'plugin' as const, plugin: 'dsh-eteams' };
 
 /**
- * 组装领队子代理人格：静态纪律 + 领队角色手册。手册的 live 源是角色库
- * （2026-09-08 讨论定案：班底行/副本行是建队/拉人那一刻的烘焙快照，改手册
- * 不回填，领队行本身没烘 personaMd——派发时现读角色库，创建子代理时的
- * 手册即最终版，后续修改与当前子代理无关）。探查顺序：权威根
- * （rosterAuthoritativeRoot = writeWorkspacePath，面板编辑都落这里）→
- * 自己的根——注意自己根里可能有首启播种的陈旧「项目牧羊人」行，权威根
- * 必须在前，否则用户改过的手册被遮蔽（实测「领队的 md 没注入」）。yaml
- * 覆盖随同一根序找；来源打日志，一眼可诊断。
+ * 领队手册缓存 + 插槽（2026-09-08 定案「读团队成员表中的缓存MD，角色新修改
+ * 的不管」）：
+ * - 缓存就是**领队主持行（task_members，main_task_id 为空）的 persona_md
+ *   列**：createTeam 建队时把当时角色库的手册烘进该列，之后无人改写（镜像
+ *   同步 syncTeamMemberRoleMirrorInTx 只刷 team_members 班底行，不碰
+ *   task_members）——天然就是「创建时即最终版」的冻结位。
+ * - 读取必须走**原始列**：readTeamSync 对班底/主持行的 persona 一律 LEFT
+ *   JOIN roles 实时取（TeamState.personaMd 是角色库现值，不是缓存）。
+ * - persona 段文本只含插槽引用 `{{eteams_leader_handbook}}`（index.ts 装机
+ *   注册的同名 prompt 变量，按装配作用域现读缓存列）——宿主对替换值**不做
+ *   二次扫描**，md 里的真实 `{{占位}}` 原样保留，转义不再需要。
  */
-function captainPersonaOf(env: RuntimeEnv, config: ETeamsResolvedConfig): string {
-  const roots = [
-    ...new Set([rosterAuthoritativeRoot(env.ctx, config), stateRootOf(env)]),
-  ].filter((root): root is string => root !== undefined && root !== '');
-  const found = findRosterMemberInRoots(roots, LEADER_NAME);
-  const fromRoster = found?.entry.personaMd?.trim();
-  let personaMd: string;
-  let source: string;
-  if (found !== undefined && fromRoster !== undefined && fromRoster !== '') {
-    personaMd = fromRoster;
-    source = `roster(${found.root})`;
-  } else {
-    // composeCaptainPersona 的缺省手册是常量（ROLE_DOCS['项目牧羊人']），
-    // 类型可空仅为字段可选——空串时 captainChildPersona 退静态纪律。
-    personaMd = composeCaptainPersona(stateRootFor(config, env.workspace)).personaMd ?? '';
-    source = 'builtin';
-    for (const root of roots) {
-      if (existsSync(join(root, 'captain-persona.yaml'))) {
-        personaMd = composeCaptainPersona(root).personaMd ?? '';
-        source = `yaml(${root})`;
-        break;
-      }
-    }
+const LEADER_HANDBOOK_SLOT = '{{eteams_leader_handbook}}';
+
+/** 读领队主持行的缓存手册原始列（v8 按 is_leader 定位，不走 hydration join）。空/缺行返回 ''。 */
+function readLeaderRowHandbook(root: string, teamId: string): string {
+  try {
+    const row = getDb(root)
+      .prepare(
+        'SELECT persona_md FROM task_members ' +
+          'WHERE team_id = ? AND is_leader = 1 AND main_task_id IS NULL LIMIT 1',
+      )
+      .get(teamId) as { persona_md: string | null } | undefined;
+    return row?.persona_md ?? '';
+  } catch {
+    return '';
   }
-  env.ctx.logger.info(`eteams: 领队子代理 persona 来源=${source}`);
-  return captainChildPersona(personaMd);
 }
 
 /**
- * 落盘持续领队子代理的 durable id：写领队行（task_members 领队行，name=
- * 领队名且 main_task_id 为空）的 session_id——v6 该列记本行自己的子代理
+ * 插槽 provider 入口（index.ts 注册 `eteams_leader_handbook` 变量时调用）：
+ * 领队子代理 → 领队行缓存 md；缓存为空（极老团队）/未登记（非领队子代理
+ * 或装配竞态窗）→ 内置手册兜底——绝不让装配失败。
+ */
+export function leaderHandbookForChild(config: ETeamsResolvedConfig, scopeId: string): string {
+  const teamId = captainChildTeamOf(scopeId);
+  const root = captainChildRootOf(scopeId);
+  if (teamId === undefined || root === undefined) {
+    return composeCaptainPersona(stateRootFor(config, process.cwd())).personaMd ?? '';
+  }
+  const cached = readLeaderRowHandbook(root, teamId);
+  if (cached !== '') return cached;
+  return composeCaptainPersona(stateRootFor(config, process.cwd())).personaMd ?? '';
+}
+
+function captainPersonaOf(env: RuntimeEnv, config: ETeamsResolvedConfig, team: TeamState): string {
+  const cached = readLeaderRowHandbook(stateRootOf(env), String(team.id));
+  env.ctx.logger.info(
+    `eteams: 领队子代理 persona 来源=${cached !== '' ? 'team_member_cache' : 'builtin'}`,
+  );
+  return captainChildPersona(LEADER_HANDBOOK_SLOT);
+}
+
+/**
+ * 落盘持续领队子代理的 durable id：写领队行（task_members 领队行，is_leader
+ * 标识=1 且 main_task_id 为空）的 session_id——v6 该列记本行自己的子代理
  * 会话。团队锁内同步事务直改该列，不整存整取快照。团队消失（删除竞态）
  * 时静默放弃——子代理已建立但惰性无害，下一次 dispatch 按空缺处理。
  */
@@ -167,14 +192,31 @@ async function persistCaptainChildId(
     const team = readTeamSync(root, teamId);
     if (team === undefined) return;
     const leader = leaderRowOf(team);
-    if (leader === undefined || leader.sessionId === childId) return;
+    if (leader !== undefined && leader.sessionId === childId) return;
     withTeamTx(root, team.id, (tx) => {
-      tx.db
+      const updated = tx.db
         .prepare(
           'UPDATE task_members SET session_id = ?, update_time = ? ' +
-            'WHERE team_id = ? AND name = ? AND main_task_id IS NULL',
+            'WHERE team_id = ? AND is_leader = 1 AND main_task_id IS NULL',
         )
-        .run(childId, Date.now(), team.id, LEADER_NAME);
+        .run(childId, Date.now(), team.id);
+      if (Number(updated.changes) > 0) return;
+      // 主持行缺失自愈（用户迭代 2026-09-08「选择模型没保存到表」同根因）：
+      // 按班底领队行补建主持行并直接落子代理会话锚——班底也没有领队行时
+      // INSERT..SELECT 零行插入，维持静默放弃口径。
+      const inserted = tx.db
+        .prepare(
+          "INSERT INTO task_members (team_id, main_task_id, name, employee_id, status, " +
+            'session_id, is_leader, created_time, update_time) ' +
+            "SELECT team_id, NULL, role_name, employee_id, 'ready', ?, 1, ?, ? " +
+            'FROM team_members WHERE team_id = ? AND is_leader = 1 LIMIT 1',
+        )
+        .run(childId, Date.now(), Date.now(), team.id);
+      if (Number(inserted.changes) > 0) {
+        env.ctx.logger.warn(
+          `eteams: 领队主持行缺失——已自愈补建并落子代理会话锚（team=${teamId} child=${childId}）`,
+        );
+      }
     });
   });
 }
@@ -184,10 +226,12 @@ async function persistCaptainChildId(
  * 解析领队子代理锚（主持行 sessionId）→ followup 续聊、失败重建
  * （startContinuable，parent 必须是真实直接父——lineage 授权）→ 登记注册表
  * + 落盘 durable id。prompt 由调用方组装（对话 = captainDispatchPrompt；
- * 面板完善 = captainCommissionPrompt，两者都自带团队现状快照）。
+ * 面板完善 = captainCommissionPrompt，两者都自带现状自取指令）。领队手册
+ * 经 persona 系统段的 {{eteams_leader_handbook}} 插槽进入子代理上下文，
+ * 槽值 = 领队行缓存 md（readLeaderRowHandbook 现读原始列）。
  * @param parent 派发父代理（lineage 直接父）：对话路径 = exec.agent；面板
  *   路径 = captainFor 解析的主会话代理。两者只是来源不同，语义同一层。
- * @param prompt 组装好的完整 prompt 文本（含团队现状快照）。
+ * @param prompt 组装好的完整 prompt 文本（现状自取指令 + 用户消息）。
  */
 export async function dispatchCaptainCore(
   env: RuntimeEnv,
@@ -202,54 +246,72 @@ export async function dispatchCaptainCore(
     throw new ETeamsError('子代理服务不可用，无法派发领队子代理');
   }
   const sig = signal ?? new AbortController().signal;
-  const persona = captainPersonaOf(env, config);
+  const persona = captainPersonaOf(env, config, team);
+  const root = stateRootOf(env);
   const leader = leaderRowOf(team);
   const previous = leader?.sessionId ?? '';
   // 领队子代理运行路线（用户迭代 2026-09-04 恢复领队模型选择）：领队行
-  // model 有值即 override（provider 固定 config.memberProvider，docs/35
-  // §3#5）；空 = 会话默认——宿主 agent-default-model 即时快照 pin；服务
-  // 缺失退回不带 agentOptions 的旧行为。
+  // model 有值即 override；v9 加 provider（同 id 模型跨提供方消歧）；空 =
+  // 会话默认——宿主 agent-default-model 即时快照 pin；服务缺失退回不带
+  // agentOptions 的旧行为。
   const leaderModel = leader?.model ?? '';
   const agentOptions =
     leaderModel !== ''
       ? {
-          provider: config.memberProvider,
+          // v9 provider 回归：覆盖路线带目录 provider（同 id 模型跨提供方消
+          // 歧）；旧数据未记录时省略——运行时按会话默认解析（此前填
+          // config.memberProvider 是 'spawn'/'fork' 传输名，不是 LLM provider）。
+          ...(leader?.provider !== undefined && leader.provider !== ''
+            ? { provider: leader.provider }
+            : {}),
           model: leaderModel,
           ...(leader?.reasoningEffort ? { reasoningEffort: leader.reasoningEffort } : {}),
         }
       : sessionDefaultRouteOf(env.ctx);
   // 先试续聊（含宿主重启后的冷恢复）；失败（会话记录被回收/lineage 不
-  // 符）再重建。注册表先撤旧条目再登记新会话。
+  // 符）再重建。注册表**先**登记再续聊——续聊触发的首轮装配就在子代理上
+  // 下文里读手册插槽，登记滞后会漏一次（装配竞态）；失败再撤条目。
   if (previous !== '') {
+    registerCaptainChild(previous, String(team.id), root);
     try {
       await subagents.followup(parent, previous as unknown as SessionId, textTurn(prompt), {
         source: { ...CAPTAIN_SOURCE },
         signal: sig,
       });
-      registerCaptainChild(previous, String(team.id));
       return { ok: true, relayed: dispatchAck(previous) };
     } catch {
       unregisterCaptainChild(previous);
     }
   }
   // 首次派发：startContinuable 建立持久子代理（inbox 接受初始 prompt 即
-  // 返回，不等待轮次完成——汇报经 report 通道随后送达）。
-  const start = await subagents.startContinuable({
-    provider: config.memberProvider,
-    // 子代理以领队的名字命名（用户迭代 2026-09-07）；领队行缺席退内置领队名。
-    label: buildCaptainLabel(leader?.name ?? LEADER_NAME),
-    request: {
-      prompt: textTurn(prompt),
-      parent,
-      persona,
-      toolFilter: { deny: [...CAPTAIN_CHILD_DENIED_TOOLS] },
-      ...(agentOptions !== undefined ? { agentOptions } : {}),
-    },
-    signal: sig,
-  });
-  const childId = String(start.childId);
+  // 返回，不等待轮次完成——汇报经 report 通道随后送达）。childId 由调用方
+  // 预留并**先登记后 spawn**——子代理首次装配早于 startContinuable 兑现，
+  // 插槽必须有登记可查；spawn 兑现后按返回 id 再登记一次（后端改发 id 的
+  // 兜底），失败撤预留条目。
+  const childId = SessionId(randomUUID());
+  registerCaptainChild(String(childId), String(team.id), root);
+  let start: { childId: string; messageId: unknown };
+  try {
+    start = await subagents.startContinuable({
+      provider: config.memberProvider,
+      // 子代理以领队的名字命名（用户迭代 2026-09-07）；领队行缺席退内置领队名。
+      label: buildCaptainLabel(leader?.name ?? LEADER_NAME),
+      childId,
+      request: {
+        prompt: textTurn(prompt),
+        parent,
+        persona,
+        toolFilter: { deny: [...CAPTAIN_CHILD_DENIED_TOOLS] },
+        ...(agentOptions !== undefined ? { agentOptions } : {}),
+      },
+      signal: sig,
+    });
+  } catch (error) {
+    unregisterCaptainChild(String(childId));
+    throw error;
+  }
   // 子代理的 eteams_* 调用按该团队领队解析（identity.ts / 跨工作区重指）。
-  registerCaptainChild(childId, String(team.id));
-  await persistCaptainChildId(env, String(team.id), childId);
-  return { ok: true, relayed: dispatchAck(childId) };
+  registerCaptainChild(String(start.childId), String(team.id), root);
+  await persistCaptainChildId(env, String(team.id), String(start.childId));
+  return { ok: true, relayed: dispatchAck(String(start.childId)) };
 }

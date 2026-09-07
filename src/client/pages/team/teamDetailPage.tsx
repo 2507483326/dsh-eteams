@@ -1,10 +1,12 @@
 /**
  * 团队详情页（docs/13.3 团队）：返回条 + 成员卡列表（领队卡/成员卡：模型
- * 路线/推理等级/移出）+ 添加成员弹窗——自 teamTab 拆出（docs/44 M4，行为
- * 零变更），路由 /team/:teamId，:teamId 路由参数即原 detailId 态（选中团队
- * id）。页头（含「＋ 新增团队」按钮）与创建弹窗同款常驻（拆分前 TeamTab
- * 列表/详情两态共用同一页头——创建成功落新团队详情）；成员卡点击进成员
- * 详情——原 memberDetail 态改 /team/:teamId/member/:name 路由（见
+ * 路线/推理等级/移出）+ 选择成员弹窗——自 teamTab 拆出（docs/44 M4），路由
+ * /team/:teamId，:teamId 路由参数即原 detailId 态（选中团队 id）。页头不再
+ * 挂「＋ 新增团队」（用户迭代 2026-09-07「团队详情页面，去掉新增团队按钮」
+ * ——创建只从团队列表页进）；「任务 X/Y 完成」进度行同步撤（进度在任务页
+ * 看）；成员列表容器内部滚动（用户迭代 2026-09-07「团队成员内部加滚动条，
+ * 不是页面滚动」，列表页满高纪律 docs/41 同链）。成员卡点击进成员详情——
+ * 原 memberDetail 态改 /team/:teamId/member/:name 路由（见
  * memberDetailPage.tsx）。模型路线乐观补丁/推理等级/领队移除等提交回调
  * 逐位保持；详情态成员操作错误就地 FormErrorNote。
  *
@@ -14,7 +16,6 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import Plus from 'lucide-react/dist/esm/icons/plus.mjs';
 import {
-  createTeamViaPanel,
   removeTeamMember,
   setLeaderModel,
   setMemberModel,
@@ -31,14 +32,12 @@ import {
   type RouteTriple,
   type TeamSnapshot,
 } from '../../lib/monitor';
-import { catalogRow, catalogRowByModel, useModelCatalog } from '../../lib/modelCatalog';
+import { catalogRow, useModelCatalog } from '../../lib/modelCatalog';
 import { cn } from '../../lib/cn';
-import { errorMessageOf, runWithBusy } from '../../lib/errors';
+import { errorMessageOf } from '../../lib/errors';
 import { BackBar } from '../../components/backBar';
-import { FormDialog, FormFooterActions } from '../../components/formDialog';
 import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
-import { Input } from '../../components/ui/input';
 import { AddMembersDialog } from './addMembersDialog';
 import { LeaderCard, MemberCard } from './memberCards';
 import { FormErrorNote, PageHeader } from '../shared/components';
@@ -57,12 +56,10 @@ export interface TeamDetailPageProps {
   sessionId: string | undefined;
   /** 全部团队池（:teamId 回查团队快照）。 */
   pool: TeamSnapshot[];
-  /** 角色库（添加成员弹窗购物车）。 */
+  /** 角色库（选择成员弹窗清单）。 */
   roster: RosterMember[];
-  /** 每队成员上限（host /state maxMembers）：添加成员弹窗的购物车配额。 */
+  /** 每队成员上限（host /state maxMembers）：选择成员弹窗的名额配额。 */
   memberCap: number;
-  /** 选中团队回写（建团成功落新团队详情——原创建流程 onSelectTeam 保留）。 */
-  onSelectTeam: (teamId: string) => void;
   /** Member subagent activity dots (docs/20.4 P4): childId → running/inactive. */
   agentActivity: Record<string, string>;
 }
@@ -76,30 +73,22 @@ const MEMBER_LIST_CLASS = 'flex flex-col gap-2.5';
 /** ================================== 主组件 ================================== */
 
 /**
- * 团队详情（用户迭代 2026-09）：点团队卡进来——团队成员、拉人组队都在这里。
- * 返回按钮回团队列表。页头 + 创建弹窗与列表页同款常驻（拆分前 TeamTab 两态
- * 共用）；成员卡列表（LeaderCard/MemberCard）行尾模型二级菜单与移出钮的
- * 乐观补丁提交链逐位保持。
+ * 团队详情（用户迭代 2026-09）：点团队卡进来——团队成员、选择成员都在这里。
+ * 返回按钮回团队列表。成员卡列表（LeaderCard/MemberCard）行尾模型二级菜单
+ * 与移出钮的乐观补丁提交链逐位保持。
  */
 export function TeamDetailPage({
   sessionId,
   pool,
   roster,
   memberCap,
-  onSelectTeam,
   agentActivity,
 }: TeamDetailPageProps): ReactNode {
   const navigate = useNavigate();
   // :teamId 路由参数即原 detailId 态（选中团队 id，M4 拆页）。
   const { teamId } = useParams();
-  const [name, setName] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  // 创建弹窗开合（组件内瞬态）：页头「＋ 新增团队」按钮打开；卸载即复位
-  // （用户反馈 2026-09 的自开弹窗类问题不再可能）。
-  const [createOpen, setCreateOpen] = useState(false);
-  // 添加成员弹窗（用户迭代 2026-09：Ele.me 点餐式）开合；详情态成员操作
-  // （模型选择/移出/领队移除）的错误就地提示，不再静默吞掉。
+  // 选择成员弹窗（用户迭代 2026-09-07 改名，原「添加成员」）开合；详情态
+  // 成员操作（模型选择/移出/领队移除）的错误就地提示，不再静默吞掉。
   const [addOpen, setAddOpen] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [modelSavingName, setModelSavingName] = useState<string | null>(null);
@@ -109,9 +98,6 @@ export function TeamDetailPage({
   // 缺失（旧运行时），退回静态选项。成员/领队卡的选项与推理等级词汇表都
   // 来自这里。
   const modelCatalog = useModelCatalog(sessionId);
-  // 面板创建团队绑定当前会话（领队即该会话代理）；浮层/无会话时没有可绑定的
-  // 会话，创建按钮禁用并给出指引，而不是提交后吃 400 错误。
-  const canCreate = typeof sessionId === 'string' && sessionId !== '';
   // 团队不在池中（已删/畸形 :teamId）：原 detailId 态快照回读落空即回落列表
   // 渲染的窗口，拆页后 navigate('/team')——渲染一帧空即跳列表（M3 任务详情
   // 页同款拆页差异，见 46 清单验收注记）。
@@ -123,38 +109,20 @@ export function TeamDetailPage({
 
   /* —— 事件处理 —— */
 
-  const create = async (): Promise<void> => {
-    // M7-5 busy/error 壳收口 runWithBusy（守卫留在调用点，与原时机一致）。
-    if (busy || !canCreate || name.trim() === '') return;
-    await runWithBusy(
-      async () => {
-        const created = await createTeamViaPanel(sessionId, name.trim());
-        setName('');
-        setCreateOpen(false);
-        // 创建成功即选中并跳进新团队详情（从 /state 快照回读前先按返回 id 落位
-        // ——原 setDetailId(created.teamId) 改路由导航，M4 拆页）。
-        if (created.teamId !== '') {
-          onSelectTeam(created.teamId);
-          navigate(`/team/${created.teamId}`);
-        }
-      },
-      setBusy,
-      setError,
-    );
-  };
-
   // 行值 → POST body（与对话 /model 选择的 selectionOf 同语义，用户迭代
   // 2026-09：模型选择与对话一致）：行 id 为 `provider/model`；换模型取该
   // 模型目录默认强度（model.reasoning.defaultEffort——对话 /model 弹层的
   // selectionOf 同款）；同一路线重选由菜单自行关闭不上送（对话 choose()
-  // 同款）。目录查不到的旧路线按裸模型 id 下发（host 按配置解析 provider）。
+  // 同款）。v9 provider 回归（用户迭代 2026-09-08「选 glm1 显示
+  // glm-5.3-free」）：provider 整组入档——同 id 模型跨提供方时按 id 反推
+  // 会命中错误条目。目录查不到的旧路线按裸模型 id 下发。
   // 'inherit' = 清 override（会话默认：用户迭代 2026-09-04——model 空串=
   // settings agent-default-model 即时快照，host 空 body 即重置）。null =
   // 非法行值（防御）。
   const routeBody = (
     value: string,
     stored: RouteTriple,
-  ): { model?: string; reasoningEffort?: string } | null => {
+  ): { provider?: string; model?: string; reasoningEffort?: string } | null => {
     if (value === 'inherit') return {};
     const slash = value.indexOf('/');
     if (slash === -1) {
@@ -165,13 +133,12 @@ export function TeamDetailPage({
     const provider = value.slice(0, slash);
     const model = value.slice(slash + 1);
     const row = catalogRow(modelCatalog.catalog, provider, model);
-    // 同模型跨提供方时以目录行核对 provider；反查不到的旧路线按裸 model 下发
-    // （stored.provider 已随快照瘦身砍掉，provider 由目录反推）。
     const effort =
-      stored.model === model && catalogRowByModel(modelCatalog.catalog, stored.model) !== null
+      stored.model === model && (stored.provider ?? '') === provider
         ? (stored.reasoningEffort ?? row?.model.reasoning?.defaultEffort)
         : row?.model.reasoning?.defaultEffort;
     return {
+      provider,
       model,
       ...(effort !== undefined && effort !== '' ? { reasoningEffort: effort } : {}),
     };
@@ -186,6 +153,7 @@ export function TeamDetailPage({
     if (member2 === undefined) return;
     const previous: RouteTriple = {
       model: member2.model,
+      provider: member2.provider ?? null,
       reasoningEffort: member2.reasoningEffort,
     };
     const body = routeBody(value, previous);
@@ -198,7 +166,11 @@ export function TeamDetailPage({
     const patch: RoutePatch = {
       teamId: detailTeam.teamId,
       target: { kind: 'member', employeeId },
-      route: { model: body.model ?? '', reasoningEffort: body.reasoningEffort ?? null },
+      route: {
+        model: body.model ?? '',
+        provider: body.provider ?? null,
+        reasoningEffort: body.reasoningEffort ?? null,
+      },
     };
     applyRoutePatch(patch);
     // inherit = 跟随（host 空 body = 重置）；其余按会话模型目录（与对话一致）。
@@ -227,9 +199,11 @@ export function TeamDetailPage({
     setModelSavingName(member.name);
     const previous: RouteTriple = {
       model: member2.model,
+      provider: member2.provider ?? null,
       reasoningEffort: member2.reasoningEffort,
     };
-    // 同 changeModel：乐观补丁即时生效，POST 确认/回滚。
+    // 同 changeModel：乐观补丁即时生效，POST 确认/回滚。整条路线重发必须带
+    // provider（v9：漏发会丢覆盖 provider，显示退回按 id 反查）。
     const patch: RoutePatch = {
       teamId: detailTeam.teamId,
       target: { kind: 'member', employeeId },
@@ -237,6 +211,7 @@ export function TeamDetailPage({
     };
     applyRoutePatch(patch);
     void setMemberModel(detailTeam.teamId, employeeId, {
+      ...(previous.provider !== null && previous.provider !== '' ? { provider: previous.provider } : {}),
       model: member2.model,
       ...(effort !== null && effort !== '' ? { reasoningEffort: effort } : {}),
     })
@@ -265,6 +240,7 @@ export function TeamDetailPage({
     if (detailTeam === null) return;
     const previous: RouteTriple = {
       model: detailTeam.captain.model ?? '',
+      provider: detailTeam.captain.provider ?? null,
       reasoningEffort: detailTeam.captain.reasoningEffort ?? null,
     };
     const body = routeBody(value, previous);
@@ -274,7 +250,11 @@ export function TeamDetailPage({
     const patch: RoutePatch = {
       teamId: detailTeam.teamId,
       target: { kind: 'captain' },
-      route: { model: body.model ?? '', reasoningEffort: body.reasoningEffort ?? null },
+      route: {
+        model: body.model ?? '',
+        provider: body.provider ?? null,
+        reasoningEffort: body.reasoningEffort ?? null,
+      },
     };
     applyRoutePatch(patch);
     void setLeaderModel(detailTeam.teamId, body)
@@ -296,6 +276,7 @@ export function TeamDetailPage({
     setModelSavingName('__captain__');
     const previous: RouteTriple = {
       model: captain.model ?? '',
+      provider: captain.provider ?? null,
       reasoningEffort: captain.reasoningEffort ?? null,
     };
     const patch: RoutePatch = {
@@ -305,6 +286,7 @@ export function TeamDetailPage({
     };
     applyRoutePatch(patch);
     void setLeaderModel(detailTeam.teamId, {
+      ...(previous.provider !== null && previous.provider !== '' ? { provider: previous.provider } : {}),
       model: captain.model ?? '',
       ...(effort !== null && effort !== '' ? { reasoningEffort: effort } : {}),
     })
@@ -331,77 +313,34 @@ export function TeamDetailPage({
   }
 
   return (
-    <div>
-      {/* 团队页头（S24-2，官网 h2 签名）：标题 + 右侧「＋ 新增团队」主按钮。
-        拆分前 TeamTab 列表/详情两态共用同一页头——详情态保持原观感，创建
-        弹窗开合是组件内瞬态（用户反馈 2026-09：跳转信号自开弹窗撤销）。 */}
-      <PageHeader label="团队">
-        <Button type="button" size="sm" onClick={() => setCreateOpen(true)}>
-          <Plus className="h-3.5 w-3.5" />
-          新增团队
-        </Button>
-      </PageHeader>
-      {/* 新增团队弹窗（用户迭代 2026-09）：shadcn Dialog + Input，输入名称按
-      「新增团队」创建——创建由面板会话绑定限制（canCreate）同表单一致。
-      创建成功跳新团队详情（详情态建团的落点，M4 拆页注记）。 */}
-      <FormDialog
-        open={createOpen}
-        onOpenChange={(next) => {
-          if (!next) {
-            setCreateOpen(false);
-            setError(null);
-            setName('');
-          }
-        }}
-        title="新增团队"
-        description={
-          canCreate
-            ? '只需名称即可创建——目标与任务在对话中与领队继续完善。'
-            : '当前还没有进行中的对话——开始对话后才能创建团队。'
-        }
-      >
-        <Input
-          value={name}
-          autoFocus
-          placeholder="团队名称，如：文档迁移小组"
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') void create();
-          }}
-        />
-        {error !== null && <FormErrorNote>{error}</FormErrorNote>}
-        <FormFooterActions
-          cancelDisabled={busy}
-          confirmDisabled={busy || !canCreate || name.trim() === ''}
-          confirmLabel="新增团队"
-          onCancel={() => setCreateOpen(false)}
-          onConfirm={() => void create()}
-        />
-      </FormDialog>
+    // 根改纵 flex 列并占满内容列（用户迭代 2026-09-07「团队成员内部加滚动
+    // 条，不是页面滚动」）：成员卡 flex-1 拉满、卡内列表内部滚动——页面本体
+    // 不再纵滚（列表页满高纪律 docs/41 同链）。
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* 团队页头（S24-2，官网 h2 签名）：「＋ 新增团队」按钮撤（用户迭代
+      2026-09-07）——创建只从团队列表页进，页头只留标题。 */}
+      <PageHeader label="团队" />
 
       {/* 返回条（M7-3 收口 components/backBar，outline 默认档；原返回钮清
       detailId/detailError/memberDetail 三态——拆页后瞬态随页面卸载即清，
-      navigate 回列表即可）。 */}
+      navigate 回列表即可）。「任务 X/Y 完成」撤（用户迭代 2026-09-07——
+      进度在任务页看）。 */}
       <div className="flex flex-wrap items-center gap-1.5">
         <BackBar label="返回团队列表" onClick={() => navigate('/team')} />
         <span className="text-lg font-semibold tracking-tight text-foreground">
           {detailTeam.name}
         </span>
-        <span className={LIST_COUNT_CLASS}>
-          任务 {detailTeam.progress.completed}/{detailTeam.progress.total} 完成
-        </span>
       </div>
 
       {/* 团队成员卡（S13/S14）：容器 shadcn Card（PANEL_CARD_CLASS 覆盖层，
-      S12 先例）；拉人下拉已移除（用户迭代 2026-09），改为右上「添加成员」
-      按钮点开点餐式弹窗。成员卡点击进成员详情（原 memberDetail 态改路由，
-      M4 拆页）。 */}
-      <Card className={cn(PANEL_CARD_CLASS, 'mt-2')}>
+      S12 先例）纵 flex 拉满（用户迭代 2026-09-07 内滚链，见根注记）；右上
+      「选择成员」按钮（用户迭代 2026-09-07 改名，原「添加成员」）点开弹窗。
+      成员卡点击进成员详情（原 memberDetail 态改路由，M4 拆页）。 */}
+      <Card className={cn(PANEL_CARD_CLASS, 'mt-2 flex min-h-0 flex-1 flex-col')}>
         <div className="mb-2.5 flex items-center gap-2">
           <h3 className={LIST_TITLE_CLASS}>团队成员</h3>
           <span className={LIST_COUNT_CLASS}>
-            {detailTeam.members.length + (detailTeam.leaderRemoved ? 0 : 1)}/{memberCap} 人 ·{' '}
-            {detailTeam.leaderRemoved ? '领队已移除' : '含领队'}
+            {detailTeam.members.length + (detailTeam.leaderRemoved ? 0 : 1)}/{memberCap} 人
           </span>
           <span className="flex-1" />
           <Button
@@ -413,11 +352,13 @@ export function TeamDetailPage({
             }}
           >
             <Plus className="h-3.5 w-3.5" />
-            添加成员
+            选择成员
           </Button>
         </div>
         {detailError !== null && <FormErrorNote className="mb-2.5">{detailError}</FormErrorNote>}
-        <div className={MEMBER_LIST_CLASS}>
+        {/* 成员列表：卡内弹性区 + 纵向内部滚动（页面不滚，用户迭代
+        2026-09-07「团队成员内部加滚动条」）。 */}
+        <div className={cn(MEMBER_LIST_CLASS, 'min-h-0 flex-1 overflow-y-auto pr-0.5')}>
           {!detailTeam.leaderRemoved && (
             <LeaderCard
               captain={detailTeam.captain}
@@ -449,14 +390,13 @@ export function TeamDetailPage({
             />
           ))}
           {detailTeam.members.length === 0 && (
-            <div className={MUTED_CLASS}>
-              还没有成员——点右上角「添加成员」，像点餐一样把角色加进团队。
-            </div>
+            <div className={MUTED_CLASS}>还没有成员——点右上角「选择成员」把角色加进团队。</div>
           )}
         </div>
       </Card>
 
-      {/* 添加成员弹窗（用户迭代 2026-09）：Ele.me 点餐式角色加团。 */}
+      {/* 选择成员弹窗（用户迭代 2026-09-07 改名）：步进器显示在团份数，
+      确认一次性应用增减。 */}
       <AddMembersDialog
         open={addOpen}
         onOpenChange={setAddOpen}

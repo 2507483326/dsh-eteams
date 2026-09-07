@@ -65,8 +65,6 @@ export interface ETeamsRoutesProps {
   onSelectTeam: (teamId: string) => void;
   /** 团队：成员子代理活动点（childId → running/inactive）。 */
   agentActivity: Record<string, string>;
-  /** 团队：领队卡「汇报」跳汇报页（壳 navigate('/reports') + 选成员）。 */
-  onOpenReports: (name: string) => void;
   /** 角色：删除回拉（roster/fetchRoster）。 */
   onDeleted: () => void;
   /** 角色：一键预填 composer（'set'/'copied'/'aborted'）。 */
@@ -176,7 +174,6 @@ export function ETeamsViewRoutes(props: ETeamsRoutesProps): ReactNode {
             pool={props.pool}
             roster={props.roster}
             memberCap={props.memberCap}
-            onSelectTeam={props.onSelectTeam}
             agentActivity={props.agentActivity}
           />
         }
@@ -188,7 +185,6 @@ export function ETeamsViewRoutes(props: ETeamsRoutesProps): ReactNode {
             sessionId={props.sessionId}
             pool={props.pool}
             onSelectTeam={props.onSelectTeam}
-            onOpenReports={props.onOpenReports}
           />
         }
       />

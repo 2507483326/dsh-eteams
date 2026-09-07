@@ -78,6 +78,8 @@ export interface SessionRouteView {
   memberName?: string | null;
   teamId?: string | null;
   route?: { provider: string; model: string } | null;
+  /** 目录项显示名（host 经 ctx.llm.listModels 反查）；null = 目录未命中，显示 provider/model 原值。 */
+  modelLabel?: string | null;
 }
 
 /**
@@ -151,14 +153,14 @@ export async function addTeamMember(
 /**
  * Set one member's model route（成员卡右侧模型选择）：model 为空 = 重置为
  * 会话默认（settings agent-default-model，用户迭代 2026-09-04）。运行中的
- * 成员在下次启动时生效（staged 成员启动即生效）。docs/35 §3#5：body 只收
- * {model, reasoningEffort}，provider 由 host 按配置解析。v7 R3：成员作用域
- * 路由按工号定位（同名成员各归各）。
+ * 成员在下次启动时生效（staged 成员启动即生效）。v9 provider 回归：provider
+ * 整组入档（同 id 模型跨提供方消歧）。v7 R3：成员作用域路由按工号定位
+ * （同名成员各归各）。
  */
 export async function setMemberModel(
   teamId: string,
   employeeId: number,
-  model: { model?: string; reasoningEffort?: string },
+  model: { provider?: string; model?: string; reasoningEffort?: string },
 ): Promise<void> {
   await requestJson(
     `${API_BASE}/team/${encodeURIComponent(teamId)}/member/${encodeURIComponent(String(employeeId))}/model`,
@@ -173,11 +175,11 @@ export async function setMemberModel(
 /**
  * Set the leader's model route（领队卡模型二级菜单，用户迭代 2026-09-04
  * 恢复领队模型选择）：model 为空 = 重置为会话默认；有值 = 团队默认路线，
- * 领队子代理派发按它解析。
+ * 领队子代理派发按它解析。v9 provider 回归：provider 整组入档。
  */
 export async function setLeaderModel(
   teamId: string,
-  model: { model?: string; reasoningEffort?: string },
+  model: { provider?: string; model?: string; reasoningEffort?: string },
 ): Promise<void> {
   await requestJson(`${API_BASE}/team/${encodeURIComponent(teamId)}/leader/model`, {
     method: 'POST',

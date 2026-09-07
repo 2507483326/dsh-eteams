@@ -24,7 +24,9 @@ const routeKey = (teamId: string, target: RoutePatch['target']): string =>
   target.kind === 'captain' ? `${teamId}|captain` : `${teamId}|member|${target.employeeId}`;
 
 const sameRoute = (a: RouteTriple, b: RouteTriple): boolean =>
-  a.model === b.model && (a.reasoningEffort ?? null) === (b.reasoningEffort ?? null);
+  a.model === b.model &&
+  (a.provider ?? null) === (b.provider ?? null) &&
+  (a.reasoningEffort ?? null) === (b.reasoningEffort ?? null);
 
 /** 读快照里目标路线；团队/成员不在（已删等）返回 null。 */
 const readRoute = (
@@ -38,13 +40,18 @@ const readRoute = (
     // 旧运行时快照领队不带路线字段 → 视为会话默认（空路线）。
     return {
       model: team.captain.model ?? '',
+      provider: team.captain.provider ?? null,
       reasoningEffort: team.captain.reasoningEffort ?? null,
     };
   }
   // 成员按工号定位（v7）：快照里工号是显示串（'ET-0007'），解析回数字比对。
   const member = team.members.find((m) => employeeIdNumberOf(m.employeeId) === target.employeeId);
   if (member === undefined) return null;
-  return { model: member.model, reasoningEffort: member.reasoningEffort };
+  return {
+    model: member.model,
+    provider: member.provider ?? null,
+    reasoningEffort: member.reasoningEffort,
+  };
 };
 
 /** 不可变地写目标路线（沿途浅拷贝）；目标不在返回 null=无从写。 */
@@ -61,7 +68,13 @@ const writeRoute = (
   if (target.kind === 'captain') {
     teams[at] = {
       ...team,
-      captain: { ...team.captain, model: route.model, reasoningEffort: route.reasoningEffort },
+      captain: {
+        ...team.captain,
+        model: route.model,
+        // provider 条件展开（补丁无 provider 时保持快照原值，不引入 null 键）。
+        ...(route.provider !== undefined ? { provider: route.provider } : {}),
+        reasoningEffort: route.reasoningEffort,
+      },
     };
     return { ...snapshot, teams };
   }
@@ -70,7 +83,13 @@ const writeRoute = (
     ...team,
     members: team.members.map((m) =>
       employeeIdNumberOf(m.employeeId) === target.employeeId
-        ? { ...m, model: route.model, reasoningEffort: route.reasoningEffort }
+        ? {
+            ...m,
+            model: route.model,
+            // 同上：provider 条件展开，保持「补丁未声明 = 不改写」的口径。
+            ...(route.provider !== undefined ? { provider: route.provider } : {}),
+            reasoningEffort: route.reasoningEffort,
+          }
         : m,
     ),
   };

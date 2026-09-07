@@ -8,7 +8,6 @@
  * @module dsh-eteams/runtime/notifier
  */
 import { appendMail, insertMailInTx, memberBoxKey, readMailboxSync } from '../state/events.js';
-import { LEADER_NAME } from '../state/db.js';
 import type { TeamTx } from '../state/store.js';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import type { SessionId } from '@deepseek-ai/dsh-session';
@@ -66,9 +65,47 @@ export function deliverMailInTx(
 // 站点/旧数据兼容）。
 // --------------------------------------------------------------------------
 
-/** 领队行（领队锚点，docs/36 建议 3 统一判据）。 */
+/** 领队行（领队锚点）：v8 按领队标识定位（is_leader=1 且主持行 mainTaskId
+ * 为空），不再按名字匹配。 */
 export function leaderRowOf(team: TeamState): TaskMemberRecord | undefined {
-  return team.taskMembers.find((r) => r.name === LEADER_NAME && r.mainTaskId === null);
+  return team.taskMembers.find((r) => r.isLeader === true && r.mainTaskId === null);
+}
+
+/**
+ * 领队主持行自愈（用户迭代 2026-09-08「选择模型没保存到表」根因处置）：
+ * 实测库中主持行（task_members.is_leader=1 且 main_task_id 为空）可能缺失
+ * ——此时 leaderRowOf 为 undefined，领队模型选择/子代理锚落盘等写路径全部
+ * 静默 no-op。本助手在写事务内就地补建：从班底领队行（team_members）派生
+ * （is_leader=1、mainTaskId=null、sessionId 留空待首派），id=0 走落库发号
+ * 回填。班底也没有领队行（领队从未就位）返回 undefined——调用方维持原
+ * 静默口径。warn 回调透传宿主日志，自愈发生即留痕。
+ */
+export function ensureLeaderAnchorRow(
+  team: TeamState,
+  now: number,
+  warn?: (message: string) => void,
+): TaskMemberRecord | undefined {
+  const existing = leaderRowOf(team);
+  if (existing !== undefined) return existing;
+  const rosterLeader = team.members.find((m) => m.isLeader === true);
+  if (rosterLeader === undefined) return undefined;
+  warn?.(
+    'eteams: 领队主持行缺失（task_members 无 is_leader=1 且 main_task_id 为空的行）——已从班底领队行自愈补建',
+  );
+  const row: TaskMemberRecord = {
+    id: 0,
+    teamId: team.id,
+    mainTaskId: null,
+    nowTaskId: null,
+    name: rosterLeader.name,
+    employeeId: rosterLeader.employeeId ?? null,
+    sessionId: '',
+    status: 'ready',
+    isLeader: true,
+    createdAt: now,
+  };
+  team.taskMembers.push(row);
+  return row;
 }
 
 /**

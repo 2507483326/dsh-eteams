@@ -24,8 +24,9 @@ const DESCRIPTION_CLASS = 'text-xs leading-5 text-muted-foreground [overflow-wra
 /**
  * 表单弹窗壳：open/onOpenChange 原样透传（消费位保留各自 if (!next) 复位
  * 守卫），标题/描述入官网左对齐头（space-y-1 text-left），描述吃 muted 小字
- * 档；正文（输入/错误槽/尾行）由 children 承载。width 默认 max-w-sm
- * （新增团队三份），任务弹窗传 max-w-md。
+ * 档、可省（用户迭代 2026-09-07「选择成员」弹窗去描述行——省略时不渲染
+ * DialogDescription，头区只留标题）；正文（输入/错误槽/尾行）由 children
+ * 承载。width 默认 max-w-sm（新增团队三份），任务弹窗传 max-w-md。
  */
 export function FormDialog({
   open,
@@ -38,7 +39,7 @@ export function FormDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: ReactNode;
-  description: ReactNode;
+  description?: ReactNode;
   width?: string;
   children?: ReactNode;
 }): ReactNode {
@@ -47,7 +48,9 @@ export function FormDialog({
       <DialogContent className={width}>
         <DialogHeader className="space-y-1 text-left">
           <DialogTitle>{title}</DialogTitle>
-          <DialogDescription className={DESCRIPTION_CLASS}>{description}</DialogDescription>
+          {description !== undefined && (
+            <DialogDescription className={DESCRIPTION_CLASS}>{description}</DialogDescription>
+          )}
         </DialogHeader>
         {children}
       </DialogContent>

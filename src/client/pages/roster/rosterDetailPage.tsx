@@ -213,7 +213,7 @@ export function RosterDetailPage({ members, team, onDeleted }: RosterDetailPageP
                 value={detailDraftName}
                 onChange={(e) => setDetailDraftName(e.target.value)}
                 aria-label="角色名称"
-                className="h-9 max-w-[320px] text-lg font-semibold"
+                className="h-9 max-w-[420px] text-lg font-semibold"
               />
             ) : (
               <div className="text-lg font-semibold tracking-tight text-foreground">

@@ -192,7 +192,9 @@ export interface GroupSummary {
  * - 否则含 doing（start）→ 「n 执行中」（info）；
  * - 否则含 waiting（wait/paused）→ 「n 待接取」（warn）；
  * - 全部 done → null（「小任务 n/n 完成」进度行已表达，不加 chip）；
- * - 其余（ready/draft 混合）→ 「待开始」（中性；二十四轮 DA37 文案合并）。
+ * - 其余（ready/draft 混合）→ null（用户迭代 2026-09-08「去掉那个圆角的
+ *   待开始」：卡底状态 pill 已表达待开始，chip 再画一个重复了——chip 只
+ *   承担异常/执行中/待接取这类增量信息）。
  * group 的 draft（拆解中）不做汇总——调用方只在 ready 时消费本函数。
  */
 export function groupDisplayOf(
@@ -215,8 +217,7 @@ export function groupDisplayOf(
   if (waiting.length > 0) {
     return { label: `${waiting.length} 待接取`, tone: 'warn', icon: '', detail: '' };
   }
-  if (views.every((v) => v.key === 'done')) return null;
-  return { label: '待开始', tone: 'muted', icon: '', detail: '' };
+  return null;
 }
 
 /**

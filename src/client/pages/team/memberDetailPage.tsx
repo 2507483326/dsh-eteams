@@ -1,27 +1,26 @@
 /**
- * 成员详情页（docs/13.3 团队 / 用户迭代 2026-09 四）：查看/编辑成员自己的
- * 手册副本（「保存」只写成员记录），「同步到角色」把当前手册写回角色库同名
- * 角色（副本成员无同名角色时按成员记录新建）；领队也走这一页：手册由系统
- * 合成，只读、无保存/同步。自 teamMembers 拆出（docs/44 M4，行为零变更），
- * 路由 /team/:teamId/member/:name——:teamId 路由参数即团队 id（快照池回查），
- * :name 即成员/领队名（react-router 自动解码）；原 memberDetail 的 kind
- * （领队/成员）语义并入路由：:name 命中成员行 = 成员详情，命中领队名 =
- * 领队详情。页头（「团队 + ＋ 新增团队」）与创建弹窗同款常驻——拆分前成员
- * 详情视图在 TeamTab 树内渲染，页头原样可达（创建成功落同 :name 的新队
- * 成员/领队详情——原 detailId 换队 + memberDetail 保留的同态映射）。
- * 领队卡/成员卡见 memberCards.tsx（本页头领队徽标 ROLE_CHIP_CLASS
- * 自那里导入）。
+ * 成员详情页（docs/13.3 团队 / 用户迭代 2026-09 四）：查看成员自己的手册
+ * 副本（只读——用户迭代 2026-09-07「团队成员详情里面去掉汇报记录，去掉
+ * 编辑和同步到角色按钮」：编辑/同步/汇报入口撤，手册卡与领队一致走只读
+ * 渲染）；领队也走这一页：手册由系统合成，只读。自 teamMembers 拆出
+ * （docs/44 M4），路由 /team/:teamId/member/:name——:teamId 路由参数即团队
+ * id（快照池回查），:name 即成员/领队名（react-router 自动解码）；原
+ * memberDetail 的 kind（领队/成员）语义并入路由：:name 命中成员行 = 成员
+ * 详情，命中领队名 = 领队详情。页头（「团队 + ＋ 新增团队」）与创建弹窗
+ * 同款常驻——拆分前成员详情视图在 TeamTab 树内渲染，页头原样可达（创建
+ * 成功落同 :name 的新队成员/领队详情——原 detailId 换队 + memberDetail
+ * 保留的同态映射）。领队卡/成员卡见 memberCards.tsx（本页头领队徽标
+ * ROLE_CHIP_CLASS 自那里导入）。
  *
  * @module dsh-eteams/client/pages/team/memberDetailPage
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import Plus from 'lucide-react/dist/esm/icons/plus.mjs';
-import { createTeamViaPanel, syncMemberToRoster, updateMemberPersona } from '../../lib/api';
-import { employeeIdNumberOf, refreshActivitySoon, type TeamSnapshot } from '../../lib/monitor';
+import { createTeamViaPanel } from '../../lib/api';
+import type { TeamSnapshot } from '../../lib/monitor';
 import { cn } from '../../lib/cn';
 import { runWithBusy } from '../../lib/errors';
-import { MdEditor } from '../../features/mdEditor/mdEditor';
 import { MEMBER_STATUS_LABELS, memberTone } from '../../features/tasks/taskDisplayStatus';
 import { Avatar } from '../../features/avatar/avatar';
 import { BackBar } from '../../components/backBar';
@@ -29,7 +28,6 @@ import { FormDialog, FormFooterActions } from '../../components/formDialog';
 import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
 import { Input } from '../../components/ui/input';
-import { toast } from '../../hooks/useToast';
 import { MarkdownDoc } from '../shared/markdownDoc';
 import { handbookSeed, type HandbookSource } from '../roster/buildDraft';
 import { ROLE_CHIP_CLASS } from './memberCards';
@@ -46,35 +44,21 @@ export interface MemberDetailPageProps {
   pool: TeamSnapshot[];
   /** 选中团队回写（页头建团成功落新团队——原创建流程 onSelectTeam 保留）。 */
   onSelectTeam: (teamId: string) => void;
-  /** 「汇报记录」跳汇报页（壳 navigate('/reports') + 选成员）。 */
-  onOpenReports?: (name: string) => void;
 }
 
 /** ================================== 主组件 ================================== */
 
 /**
  * 成员详情页（原 MemberDetailView 收编为路由页）：成员详情与角色详情是两份
- * 独立数据——加入团队时从角色库复制一份，之后各自演化。编辑/同步/toast 反馈
- * 行为逐位保持；返回钮回团队详情页（原 onBack = 收起 memberDetail 态）。
+ * 独立数据——加入团队时从角色库复制一份，之后各自演化。手册只读展示；返回
+ * 钮回团队详情页（原 onBack = 收起 memberDetail 态）。
  */
-export function MemberDetailPage({
-  sessionId,
-  pool,
-  onSelectTeam,
-  onOpenReports,
-}: MemberDetailPageProps): ReactNode {
+export function MemberDetailPage({ sessionId, pool, onSelectTeam }: MemberDetailPageProps): ReactNode {
   const navigate = useNavigate();
   // :teamId 即团队 id（快照池回查），:name 即成员/领队名。
   const { teamId, name } = useParams();
-  // 编辑缓冲：null = 只读渲染；string = 编辑中。进入编辑时从当前手册播种。
-  const [draft, setDraft] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [syncing, setSyncing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   // 页头创建弹窗（与列表/详情页同款常驻——拆分前成员详情视图在 TeamTab 树
-  // 内，页头按钮原样可达）：表单瞬态，卸载即复位。error 是手册编辑错误，
-  // 创建表单错误独立命名 createError（原两态分属 TeamTab/MemberDetailView
-  // 两个组件的各自 error）。
+  // 内，页头按钮原样可达）：表单瞬态，卸载即复位。
   const [createName, setCreateName] = useState('');
   const [busy, setBusy] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -94,17 +78,14 @@ export function MemberDetailPage({
 
   // kind 并入路由：:name 命中成员行 = 成员详情；命中领队名 = 领队详情（手册
   // 只读）；两者皆不中 = 原成员不在团队里的 not-found 窗口（可能刚被移出）。
-  // v7：成员数据的保存/同步按工号定位（employeeId 解析自行内显示串；导航
-  // 仍按名——路由参数不动）。
   const memberRow =
     team === null || name === undefined ? undefined : team.members.find((m) => m.name === name);
-  const memberEmployeeId = memberRow !== undefined ? employeeIdNumberOf(memberRow.employeeId) : null;
   const target:
     | { kind: 'captain' }
-    | { kind: 'member'; name: string; employeeId: number | null }
+    | { kind: 'member'; name: string; employeeId: string | null }
     | null =
     memberRow !== undefined && name !== undefined
-      ? { kind: 'member', name, employeeId: memberEmployeeId }
+      ? { kind: 'member', name, employeeId: memberRow.employeeId }
       : team !== null && name !== undefined && team.captain.name === name
         ? { kind: 'captain' }
         : null;
@@ -211,7 +192,7 @@ export function MemberDetailPage({
   }
 
   // 详情页展示口径：优先成员自己的手册副本；旧成员没有副本时按结构字段
-  // 合成骨架（首次保存/同步即落成正式手册）。
+  // 合成骨架。
   const view: {
     name: string;
     employeeId: string | null;
@@ -255,59 +236,6 @@ export function MemberDetailPage({
         };
   const display = handbookSeed(view.source);
 
-  const save = async (): Promise<void> => {
-    // M7-5 busy/error 壳收口 runWithBusy（空稿守卫留在调用点——早退不发请求，
-    // 与原时机一致）。
-    if (draft === null || saving || target.kind !== 'member') return;
-    const text = draft.trim();
-    if (text === '') {
-      setError('手册内容为空');
-      return;
-    }
-    // v7 R3：按工号定位保存；无号（异常旧行）不可保存——host 路由找不到人。
-    if (target.employeeId === null) {
-      setError('该成员没有工号，无法保存');
-      return;
-    }
-    await runWithBusy(
-      async () => {
-        await updateMemberPersona(team.teamId, target.employeeId!, text);
-        setDraft(null);
-        // 保存反馈迁 shadcn toast()（docs/43 十九轮；原就地瞬时行 2.5s 撤除）。
-        toast({ title: '✓ 已保存到成员详情' });
-        refreshActivitySoon();
-      },
-      setSaving,
-      setError,
-    );
-  };
-
-  const syncToRole = async (): Promise<void> => {
-    // M7-5 busy/error 壳收口 runWithBusy（空稿守卫留在调用点，与原时机一致）。
-    if (syncing || target.kind !== 'member') return;
-    const text = (draft ?? display).trim();
-    if (text === '') {
-      setError('成员手册为空，先编辑保存');
-      return;
-    }
-    // v7 R3：按工号定位同步；无号（异常旧行）不可同步。
-    if (target.employeeId === null) {
-      setError('该成员没有工号，无法同步');
-      return;
-    }
-    await runWithBusy(
-      async () => {
-        await syncMemberToRoster(team.teamId, target.employeeId!, text);
-        if (draft !== null) setDraft(null); // 编辑中的草稿已一并落库
-        // 同步反馈迁 shadcn toast()（docs/43 十九轮；原就地瞬时行 2.5s 撤除）。
-        toast({ title: `✓ 已同步到角色「${view.name}」` });
-        refreshActivitySoon();
-      },
-      setSyncing,
-      setError,
-    );
-  };
-
   return (
     <div>
       {teamHeader}
@@ -340,22 +268,7 @@ export function MemberDetailPage({
               {view.role}
               {target.kind === 'captain' ? ' · 不接任务：负责拆解、指派与调度' : ''}
             </div>
-            {target.kind === 'member' && (
-              <div className={cn(MUTED_CLASS, 'mt-0.5')}>
-                详情独立于角色库：加入团队时复制了一份，可编辑后同步回去
-              </div>
-            )}
           </div>
-          {target.kind === 'member' && onOpenReports !== undefined && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => onOpenReports(view.name)}
-            >
-              汇报记录
-            </Button>
-          )}
         </div>
       </Card>
 
@@ -364,61 +277,13 @@ export function MemberDetailPage({
           <span className="flex-1">
             {target.kind === 'captain' ? '领队手册（Markdown）' : '成员手册（Markdown）'}
           </span>
-          {target.kind === 'captain' ? (
+          {target.kind === 'captain' && (
             <span className={MUTED_CLASS}>领队手册由系统合成，只读</span>
-          ) : draft === null ? (
-            <>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => {
-                  setError(null);
-                  setDraft(display);
-                }}
-              >
-                编辑
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={syncing}
-                onClick={() => void syncToRole()}
-                title="把当前手册写回角色库同名角色（无同名角色时按成员新建）；编辑中的草稿会一并保存"
-              >
-                同步到角色
-              </Button>
-            </>
-          ) : (
-            <>
-              {/* 保存行（M7-1 收口 FormFooterActions，ghost 取消档）+ 同步到角色
-              原位外挂——与原三钮 gap-2 行同距。 */}
-              <FormFooterActions
-                className=""
-                cancelVariant="ghost"
-                cancelDisabled={saving}
-                confirmDisabled={saving}
-                confirmLabel="保存"
-                onCancel={() => setDraft(null)}
-                onConfirm={() => void save()}
-              />
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={saving || syncing}
-                onClick={() => void syncToRole()}
-                title="把当前手册写回角色库同名角色（无同名角色时按成员新建）"
-              >
-                同步到角色
-              </Button>
-            </>
           )}
         </div>
-        {draft === null ? (
-          <MarkdownDoc text={display} />
-        ) : (
-          <MdEditor value={draft} onChange={setDraft} minHeight={260} />
-        )}
-        {error !== null && <FormErrorNote className="mt-2">{error}</FormErrorNote>}
+        {/* 手册只读（用户迭代 2026-09-07：编辑/同步到角色撤——成员与领队
+        同款 MarkdownDoc；手册改动去「角色」页编辑角色库）。 */}
+        <MarkdownDoc text={display} />
       </Card>
     </div>
   );

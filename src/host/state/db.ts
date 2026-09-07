@@ -29,14 +29,29 @@ import { fallbackExecutionPrompt, PERSONA_FRAMEWORK_VERSION } from '../prompts/p
  * （AUTOINCREMENT 只增不复用；roles.employee_id 弃用——列保留不读写，DROP
  * 是单向门会炸旧版 lib 回滚）；mail_messages 补 employee_id 分箱列；attempts
  * 补 task_member_id 副本行列；存量队补建领队班底行、存量容器任务按班底全员
- * 补建副本行，副本/邮箱/链站按名 join 重键（旧库 getDb 迁移回填）。 */
-export const DB_SCHEMA_VERSION = 7;
+ * 补建副本行，副本/邮箱/链站按名 join 重键（旧库 getDb 迁移回填）。
+ * v8（领队标识列）：roles/team_members/task_members 补 is_leader（项目牧羊人
+ * =1 其余=0）——领队行查找按标识不按名（旧库 getDb 迁移回填）。
+ * v9（路线 provider 列）：team_members/task_members 补 provider——同 id 模型
+ * 跨提供方时模型 id 有歧义，显示与 spawn 都需要目录 provider（用户迭代
+ * 2026-09-08「选的是 glm1 显示的是 glm-5.3-free」；旧库 getDb 迁移回填）。
+ * v10（班底头像副本列）：team_members 补 avatar——角色修改保存后按 role_id
+ * 随 roles.avatar 同步刷新（role_name/profile/persona_md 之外补齐头像；
+ * 角色删除不进行同步；旧库 getDb 迁移回填）。 */
+export const DB_SCHEMA_VERSION = 10;
 
 /**
- * 领队保留名（docs/27）：task_members 领队行 `name` 固定值，领队行查找
- * 统一按 `team_id = ? AND name = 领队名 AND main_task_id IS NULL`。
+ * 领队保留名（docs/27）：task_members 领队行 `name` 固定值。v8 起领队身份
+ * 落 is_leader 标识列（写入层由本名派生，读端按标识取领队）；本名仍作
+ * 保留名守卫（upsert/删除保护）与写入层派生源。
  */
 export const LEADER_NAME = '项目牧羊人';
+
+/** 领队标识派生（v8 写入口径）：领队保留名 → 1，其余 → 0。所有三表
+ * is_leader 列的写入一律经它，保证「项目牧羊人=1 其余=0」不变量。 */
+export function leaderFlagOf(name: string): 0 | 1 {
+  return name === LEADER_NAME ? 1 : 0;
+}
 
 /** 库文件目录：`<stateRoot>/db/`（主库与 -wal/-shm 同目录，与 json 配置分开放）。 */
 export function dbDirOf(stateRoot: string): string {
@@ -112,6 +127,9 @@ export function getDb(stateRoot: string): DatabaseSync {
   migrateTaskSessionIdV5(db);
   migrateTaskSessionColumnsV6(db);
   migrateMemberBadgeV7(db);
+  migrateLeaderFlagV8(db);
+  migrateRouteProviderV9(db);
+  migrateTeamMemberAvatarV10(db);
   connections.set(stateRoot, db);
   return db;
 }
@@ -624,6 +642,102 @@ function migrateMemberBadgeV7(db: DatabaseSync): void {
   }
 }
 
+/**
+ * v8 迁移（领队标识列）：roles/team_members/task_members 三表补 is_leader
+ * 列（项目牧羊人=1 其余=0，领队行查找按标识不按名）。全新库的 DDL 已是新
+ * 形状（table_info 检测到三列，跳过 ALTER）；旧库 ALTER 补列后按保留名
+ * 回填——roles/班底按角色名（role_name 副本悬空时经 roles join 兜底），
+ * task_members 按成员名（领队主持行与领队任务副本行同置 1）。幂等：已补
+ * 列的库重开只重复回填（自愈，不报错）。随 v4/v5 先例不显式开事务。
+ */
+function migrateLeaderFlagV8(db: DatabaseSync): void {
+  const columnsOf = (table: string): string[] =>
+    (
+      db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+    ).map((c) => c.name);
+  const rolesColumns = columnsOf('roles');
+  const rosterColumns = columnsOf('team_members');
+  const taskMemberColumns = columnsOf('task_members');
+  // 三表都缺列 = 全新库 DDL 未跑（不会发生，防御）；任一表存在即继续。
+  if (
+    rolesColumns.length === 0 &&
+    rosterColumns.length === 0 &&
+    taskMemberColumns.length === 0
+  ) {
+    return;
+  }
+  if (rolesColumns.length > 0 && !rolesColumns.includes('is_leader')) {
+    db.exec('ALTER TABLE roles ADD COLUMN is_leader INTEGER NOT NULL DEFAULT 0;');
+  }
+  if (rosterColumns.length > 0 && !rosterColumns.includes('is_leader')) {
+    db.exec('ALTER TABLE team_members ADD COLUMN is_leader INTEGER NOT NULL DEFAULT 0;');
+  }
+  if (taskMemberColumns.length > 0 && !taskMemberColumns.includes('is_leader')) {
+    db.exec('ALTER TABLE task_members ADD COLUMN is_leader INTEGER NOT NULL DEFAULT 0;');
+  }
+  // 回填（幂等自愈）：领队保留名 → 1，其余行保持 0。
+  if (rolesColumns.length > 0) {
+    db.exec(`UPDATE roles SET is_leader = 1 WHERE role_name = '${LEADER_NAME}'`);
+  }
+  if (rosterColumns.length > 0) {
+    db.exec(
+      `UPDATE team_members SET is_leader = 1 WHERE role_name = '${LEADER_NAME}' OR role_id IN ` +
+        `(SELECT role_id FROM roles WHERE role_name = '${LEADER_NAME}')`,
+    );
+  }
+  if (taskMemberColumns.length > 0) {
+    db.exec(`UPDATE task_members SET is_leader = 1 WHERE name = '${LEADER_NAME}'`);
+  }
+}
+
+/**
+ * v9 迁移（路线 provider 列）：team_members/task_members 补 provider TEXT 列
+ * （可空）。同 id 模型跨提供方（用户实测 tokenrouter 与 tr-test 都定义了
+ * `z-ai/glm-5.3-free`、显示名不同）时，只存模型 id 无法区分用户选的是哪个
+ * 提供方的目录项——显示按 id 反查会命中错误条目，spawn 也无法把正确的
+ * provider 传给 agentOptions。全新库 DDL 已是新形状（列存在即跳过）；旧库
+ * ALTER 补列，存量行保持 NULL（语义=跟随/旧数据，读端按目录反查兜底）。
+ * 幂等：已补列的库重开无事可做。随 v4/v5/v8 先例不显式开事务。
+ */
+function migrateRouteProviderV9(db: DatabaseSync): void {
+  const columnsOf = (table: string): string[] =>
+    (
+      db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+    ).map((c) => c.name);
+  const rosterColumns = columnsOf('team_members');
+  if (rosterColumns.length > 0 && !rosterColumns.includes('provider')) {
+    db.exec('ALTER TABLE team_members ADD COLUMN provider TEXT;');
+  }
+  const taskMemberColumns = columnsOf('task_members');
+  if (taskMemberColumns.length > 0 && !taskMemberColumns.includes('provider')) {
+    db.exec('ALTER TABLE task_members ADD COLUMN provider TEXT;');
+  }
+}
+
+/**
+ * v10 迁移（班底头像副本列）：team_members 补 avatar TEXT 列——角色修改
+ * 保存后按 role_id 随 roles.avatar 同步刷新（用户迭代：team_members 要有
+ * 最新的角色信息，role_name/persona_md/profile 之外补齐头像；角色删除不
+ * 进行同步）。全新库 DDL 已是新形状（列存在即跳过）；旧库 ALTER 补列后
+ * 按 roles 回填（悬空 role_id 行刷成 NULL，与 v4 副本列同口径）。幂等：
+ * 已补列的库重开只重复回填（自愈，不报错）。随 v4/v5/v8/v9 先例不显式
+ * 开事务。
+ */
+const TEAM_MEMBER_AVATAR_BACKFILL_SQL =
+  'UPDATE team_members SET ' +
+  'avatar = (SELECT r.avatar FROM roles r WHERE r.role_id = team_members.role_id)';
+
+function migrateTeamMemberAvatarV10(db: DatabaseSync): void {
+  const columns = (
+    db.prepare('PRAGMA table_info(team_members)').all() as Array<{ name: string }>
+  ).map((c) => c.name);
+  if (columns.length === 0) return; // team_members 都不存在：不会发生（防御）
+  if (!columns.includes('avatar')) {
+    db.exec('ALTER TABLE team_members ADD COLUMN avatar TEXT;');
+  }
+  db.exec(TEAM_MEMBER_AVATAR_BACKFILL_SQL);
+}
+
 /** 关闭并丢弃该状态根的缓存连接（测试收尾 / 状态根失效时用）。 */
 export function closeDb(stateRoot: string): void {
   const db = connections.get(stateRoot);
@@ -650,7 +764,7 @@ function loadSchemaSql(): string {
 
 // === SCHEMA_SQL BEGIN（由 schema.sql 生成，逐字一致） ===
 const SCHEMA_SQL = `-- =====================================================================
--- ETeams SQLite schema v7（db_schema_version = 7；v3 成员=角色合并：member
+-- ETeams SQLite schema v10（db_schema_version = 10；v3 成员=角色合并：member
 -- 表精简改名成 roles 角色库表（去 team_id/role_id/model/reasoning_effort，
 -- 新增 profile），班底另起 team_members 表，旧 roles 标签登记表删除；
 -- v4 班底行补 role_name/persona_md/profile 角色信息副本列；v5 任务行补主
@@ -659,7 +773,11 @@ const SCHEMA_SQL = `-- =========================================================
 -- 代理会话）；v7 工号挪到班底（表自增）：工号 = team_members 行的自增主键
 -- （AUTOINCREMENT 只增不复用），班底/团队表不加新列；roles.employee_id 弃用
 -- ——列保留不读写；mail_messages 补 employee_id 分箱列、attempts 补
--- task_member_id 副本行列（v2/v3/v4/v5/v6/v7 旧库经 getDb 迁移回填）
+-- task_member_id 副本行列；v8 领队标识列：roles/team_members/task_members
+-- 补 is_leader（项目牧羊人=1 其余=0，领队行查找按标识不按名；旧库经 getDb
+-- 迁移回填）；v9 班底/任务成员补 provider 路线列；v10 班底行补 avatar 头像
+-- 副本列（角色修改保存后随 roles.avatar 按 role_id 同步刷新，角色删除不
+-- 进行同步；旧库经 getDb 迁移回填）
 -- 主键 = 每张表自己的编号列，统一 INTEGER 自增（schema_meta 例外：key 即主键）
 -- 时间列一律 *_time 结尾（Unix 毫秒）；每张表末尾 created_time / update_time
 -- 枚举 = TEXT（合法值写在列注释里）；JSON = TEXT 存 JSON 字符串
@@ -704,6 +822,7 @@ CREATE TABLE IF NOT EXISTS roles (
   role_id        INTEGER PRIMARY KEY AUTOINCREMENT,  -- 角色 ID，自增（team_members.role_id 引用它）
   role_name      TEXT NOT NULL,                -- 角色名（成员名=角色名；全库唯一，写入代码查重）
   employee_id    INTEGER,                      -- 【v7 弃用】工号已挪到 team_members（表自增主键即工号）；列保留不读写，旧库回滚兼容
+  is_leader      INTEGER NOT NULL DEFAULT 0,   -- 领队标识（v8）：项目牧羊人=1 其余=0；写入层由保留名派生，读端按标识取领队
   persona_md     TEXT,                         -- 完整角色手册（Markdown 全文；duty/style/skills 等结构字段写入时烘进手册）
   profile        TEXT,                         -- 一句话简介（列表卡片/详情头展示；独立成列，不再烘进 persona_md）
   avatar         TEXT,                         -- 头像
@@ -715,8 +834,8 @@ CREATE TABLE IF NOT EXISTS roles (
 -- 3. team_members —— 班底（团队 × 角色：一行一个在队成员 + 该队派发路线；
 --    v7 起是工牌发放处：工号 = 本表自增主键（AUTOINCREMENT 只增不复用，
 --    全机器唯一），允许同名同角色多行，人员身份键 = 工号；人设/头像经
---    role_id 松引用解析自 roles；role_name/persona_md/profile 是随角色行
---    同步刷新的副本列（v4，真相在 roles）；执行实例（状态/会话/当前任务）
+--    role_id 松引用解析自 roles；role_name/persona_md/profile/avatar 是随角色行
+--    同步刷新的副本列（v4/v10，真相在 roles）；执行实例（状态/会话/当前任务）
 --    在 task_members）
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS team_members (
@@ -726,8 +845,11 @@ CREATE TABLE IF NOT EXISTS team_members (
   role_name        TEXT,                -- 角色名副本（写入时随 roles.role_name 同步刷新；悬空行 NULL；直查/展示用）
   persona_md       TEXT,                -- 角色手册副本（写入时随 roles.persona_md 同步刷新；真相在 roles）
   profile          TEXT,                -- 一句话简介副本（写入时随 roles.profile 同步刷新；真相在 roles）
-  model            TEXT,                -- 该队派发路线；NULL=会话默认（settings agent-default-model），有值=覆盖（provider 派发时按配置解析）
+  avatar           TEXT,                -- 头像副本（v10：写入时随 roles.avatar 按 role_id 同步刷新；真相在 roles；悬空行 NULL）
+  model            TEXT,                -- 该队派发路线：模型 id；NULL=会话默认（settings agent-default-model），有值=覆盖
+  provider         TEXT,                -- 覆盖路线的目录 provider（v9 同 id 模型跨提供方歧义，用户迭代 2026-09-08）；NULL=跟随/旧数据
   reasoning_effort TEXT,                -- 模型思考强度
+  is_leader        INTEGER NOT NULL DEFAULT 0,  -- 领队标识（v8）：班底领队行=1 其余=0；写入层由保留名派生，读端按标识取领队
   created_time     INTEGER NOT NULL,    -- 创建时间
   update_time      INTEGER NOT NULL     -- 更新时间
 );
@@ -788,8 +910,10 @@ CREATE TABLE IF NOT EXISTS task_members (
                    -- 成员状态：staged / ready / working / paused / removed
   persona_md       TEXT,                -- 执行时的人设手册（沿用 roles 角色行的手册，可按任务微调）
   model            TEXT,                -- 执行时采用的模型（沿用 team_members 班底路线；NULL=跟随）
+  provider         TEXT,                -- 覆盖路线的目录 provider（v9，同班底行口径；NULL=跟随/旧数据）
   reasoning_effort TEXT,                -- 模型思考强度
   avatar           TEXT,                -- 头像
+  is_leader        INTEGER NOT NULL DEFAULT 0,  -- 领队标识（v8）：领队行（含副本）=1 其余=0；写入层由保留名派生，读端按标识取领队
   created_time     INTEGER NOT NULL,    -- 创建时间
   update_time      INTEGER NOT NULL     -- 更新时间
 );
@@ -1116,12 +1240,17 @@ export function avatarFromJson(raw: string | null): AvatarRecord | undefined {
   }
 }
 
-/** 内存模型路线（model 空 = 跟随）→ member/task_members 两列。 */
+/** 内存模型路线（model 空 = 跟随）→ member/task_members 三列（v9 加 provider）。 */
 export function routeToColumns(
   route: ModelRouteSnapshot,
-): { model: string | null; effort: string | null } {
+): { model: string | null; provider: string | null; effort: string | null } {
   return {
     model: route.model === '' ? null : route.model,
+    // provider 只在有覆盖模型时有意义（会话默认整体跟随，provider 随默认走）。
+    provider:
+      route.model === '' || route.provider === undefined || route.provider === ''
+        ? null
+        : route.provider,
     effort:
       route.reasoningEffort === undefined || route.reasoningEffort === ''
         ? null
@@ -1129,10 +1258,17 @@ export function routeToColumns(
   };
 }
 
-/** member/task_members 两列 → 内存模型路线。 */
-export function routeFromColumns(model: string | null, effort: string | null): ModelRouteSnapshot {
+/** member/task_members 三列 → 内存模型路线（provider NULL/旧数据缺省 = 未记录）。 */
+export function routeFromColumns(
+  model: string | null,
+  provider: string | null,
+  effort: string | null,
+): ModelRouteSnapshot {
   return {
     model: model ?? '',
+    ...(model !== null && model !== '' && provider !== null && provider !== ''
+      ? { provider }
+      : {}),
     ...(effort !== null && effort !== '' ? { reasoningEffort: effort } : {}),
   };
 }

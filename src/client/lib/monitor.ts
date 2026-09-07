@@ -45,6 +45,11 @@ export interface MemberView {
   status: string;
   /** 模型路线（docs/35 §3#5）：空串 = 会话默认（用户迭代 2026-09-04）。 */
   model: string;
+  /**
+   * 覆盖路线的目录 provider（v9 回归，用户迭代 2026-09-08）：同 id 模型跨
+   * 提供方时按 provider+model 精确定位目录行；null/缺省 = 旧快照未记录。
+   */
+  provider?: string | null;
   reasoningEffort: string | null;
   currentTaskId: number | null;
   currentAttemptId: number | null;
@@ -141,6 +146,8 @@ export interface CaptainView {
   avatar: { seed: number; salt: number };
   /** 模型路线（用户迭代 2026-09-04 恢复领队模型选择）：空串 = 会话默认。 */
   model?: string;
+  /** 覆盖路线的目录 provider（v9 回归）；null/缺省 = 旧快照未记录。 */
+  provider?: string | null;
   reasoningEffort?: string | null;
 }
 
@@ -180,10 +187,11 @@ export interface ActivityState {
   pendingRoutes?: Record<string, PendingRouteEntry>;
 }
 
-/** 成员模型路线二元组（docs/35 §3#5：provider 随审批重构砍掉，路线=model
- * + effort；model 空串 = 跟随领队会话模型）。 */
+/** 成员模型路线三元组（v9 provider 回归：同 id 模型跨提供方需 provider 消
+ * 歧；provider null/缺省 = 未记录，显示按目录反查兜底）。 */
 export interface RouteTriple {
   model: string;
+  provider?: string | null;
   reasoningEffort: string | null;
 }
 

@@ -417,8 +417,13 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
     // docs/29 B.2 组卡汇总：ready 且有小任务时叠加汇总 chip。
     const summary = selected.status === 'ready' && subs.length > 0 ? groupDisplayOf(subs) : null;
     // 罗列条/指派提示块渲染判据（八轮 DA21 口径）：存在可放置任务
-    // （draft/ready）才渲染，仍是卡槽拖拽源。
-    const stripShow = subs.some((t) => t.status === 'draft' || t.status === 'ready');
+    // （draft/ready）才渲染，仍是卡槽拖拽源。docs/panelTaskCommission：
+    // creating 占位也显示罗列条（成员随完善全程可见，仅展示无卡槽可放）；
+    // 指派提示块仍要求存在可放置任务——无小任务时不提示拖拽。
+    const stripShow =
+      selected.status === 'creating' ||
+      subs.some((t) => t.status === 'draft' || t.status === 'ready');
+    const assignHintShow = subs.some((t) => t.status === 'draft' || t.status === 'ready');
     return (
       <TaskDndProvider>
         <div>
@@ -510,7 +515,7 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
           {startError !== null && startError.taskId === selected.taskId && (
             <FormErrorNote>{startError.message}</FormErrorNote>
           )}
-          {stripShow && <StripAssignHint />}
+          {assignHintShow && <StripAssignHint />}
           {/* 二十轮 DA33：卡片下面加「任务列表」节标题（用户拍板「卡片下面
             加标题 任务列表」）——小任务编排区从此有标题。二十一轮 DA34
             修订（用户拍板「任务列表右侧是新增任务」）：标题行改 flex——
@@ -601,6 +606,9 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
               );
             })}
           </Accordion>
+          {/* docs/panelTaskCommission：0 条也显示（用户拍板「0条也要显示
+            出来」）——创建完善期子任务未落库时空态行兜底，任务列表区不空窗。 */}
+          {subs.length === 0 && <div className={cn(MUTED_CLASS, 'mt-2')}>暂无小任务</div>}
           {dialogs}
         </div>
       </TaskDndProvider>
@@ -618,7 +626,12 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
     selected.parentId !== null
       ? (team.tasks.find((t) => t.taskId === selected.parentId) ?? null)
       : null;
-  const subMutable = selected.status === 'draft' || selected.status === 'ready';
+  // docs/panelTaskCommission：就地编辑入口判据加 creating（与 group 分支
+  // mutable 及宿主 updateTask 白名单对齐——创建中的任务边完善边改）。
+  const subMutable =
+    selected.status === 'creating' ||
+    selected.status === 'draft' ||
+    selected.status === 'ready';
   // DA41 头部卡就地编辑态：本任务 + scope='header' 才开编辑器。
   const headerEditing =
     inlineEdit !== null && inlineEdit.taskId === selected.taskId && inlineEdit.scope === 'header';

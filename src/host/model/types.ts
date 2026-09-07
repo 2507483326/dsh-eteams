@@ -94,13 +94,16 @@ export interface PersonaRecord {
 }
 
 /**
- * Snapshot of the model route a member runs on (docs/05.3, FR-08；docs/35
- * §3#5 精简：只留 model + reasoningEffort 两项，provider 由派发时按
- * config.memberProvider 解析，内存不再携带；model 空串 = 会话默认（用户
- * 迭代 2026-09-04：settings agent-default-model 即时快照），有值 = 覆盖）。
+ * Snapshot of the model route a member runs on (docs/05.3, FR-08；v9 provider
+ * 回归：同 id 模型跨提供方（用户实测 tokenrouter/tr-test 都有
+ * z-ai/glm-5.3-free、目录显示名不同）时模型 id 有歧义——显示与 spawn 都需要
+ * 目录 provider。model 空串 = 会话默认（用户迭代 2026-09-04：settings
+ * agent-default-model 即时快照，provider 随默认走），有值 = 覆盖。
  */
 export interface ModelRouteSnapshot {
   model: string;
+  /** 覆盖路线的目录 provider；undefined/'' = 未记录（旧数据，读端反查兜底）。 */
+  provider?: string;
   reasoningEffort?: string;
 }
 
@@ -137,6 +140,8 @@ export interface MemberRecord {
   persona: PersonaRecord;
   modelRoute: ModelRouteSnapshot;
   avatar: AvatarRecord;
+  /** 领队标识（v8 team_members.is_leader）：项目牧羊人=1 其余=0；领队行查找按它不按名。 */
+  isLeader?: boolean;
   createdAt: number;
 }
 
@@ -165,8 +170,12 @@ export interface TaskMemberRecord {
   personaMd?: string;
   /** 执行时采用的模型（空串 = 会话默认，用户迭代 2026-09-04）。 */
   model?: string;
+  /** 覆盖路线的目录 provider（v9，同 ModelRouteSnapshot.provider 口径）；undefined/'' = 未记录。 */
+  provider?: string;
   reasoningEffort?: string;
   avatar?: AvatarRecord;
+  /** 领队标识（v8 task_members.is_leader）：项目牧羊人行=1 其余=0；领队行查找按它不按名。 */
+  isLeader?: boolean;
   createdAt: number;
 }
 

@@ -10,7 +10,7 @@
  * @module dsh-eteams/runtime/roster
  */
 import type { PersonaRecord } from '../model/types.js';
-import { avatarFromJson, avatarToJson, getDb, hashName, LEADER_NAME, personaFromMd, personaToMd } from '../state/db.js';
+import { avatarFromJson, avatarToJson, getDb, hashName, leaderFlagOf, LEADER_NAME, personaFromMd, personaToMd } from '../state/db.js';
 import { ensureWorkspaceReady, seedPresetRows } from '../state/import.js';
 import { rolesRowByName, syncTeamMemberRoleMirrorInTx, withTeamTx } from '../state/store.js';
 import type { TeamTx } from '../state/store.js';
@@ -39,6 +39,8 @@ export interface RosterMember {
   role: string;
   /** 一句话简介（列表卡片与详情头展示；空/缺省=不展示）。 */
   profile?: string;
+  /** 领队标识（v8 roles.is_leader）：项目牧羊人=1 其余=0；领队条目按它识别不按名。 */
+  isLeader?: boolean;
   /** Persona framework fields (D13) — content is copied on team adoption. */
   duty?: string;
   style?: string;
@@ -90,12 +92,14 @@ function rosterPersona(m: RosterMember, name: string): PersonaRecord {
 }
 
 /** roles 角色行 → RosterMember（手册全文解析回六字段；profile 列值优先）。
- * v7：roles.employee_id 弃用不读——工号在班底（team_members.employee_id）。 */
+ * v7：roles.employee_id 弃用不读——工号在班底（team_members.employee_id）。
+ * v8：is_leader 标识随行读出（项目牧羊人=1）。 */
 function rowToRosterMember(row: {
   role_name: string;
   persona_md: string | null;
   profile: string | null;
   avatar: string | null;
+  is_leader: number;
   update_time: number;
 }): RosterMember {
   const name = row.role_name;
@@ -109,6 +113,7 @@ function rowToRosterMember(row: {
       : persona.profile !== undefined
         ? { profile: persona.profile }
         : {}),
+    ...(row.is_leader === 1 ? { isLeader: true } : {}),
     duty: persona.duty,
     style: persona.style,
     skills: persona.skills,
@@ -121,9 +126,9 @@ function rowToRosterMember(row: {
 }
 
 /** roles 角色库行的公共 SELECT（成员=角色，全局一份；v7 不读弃用的
- * employee_id 列）。 */
+ * employee_id 列，v8 读 is_leader 领队标识）。 */
 const ROSTER_ROW_SQL =
-  'SELECT role_name, persona_md, profile, avatar, update_time FROM roles';
+  'SELECT role_name, persona_md, profile, avatar, is_leader, update_time FROM roles';
 
 /** Read the workspace roster（角色库全表，role_id 升序）. */
 export function readRoster(stateRoot: string): RosterMember[] {
@@ -203,16 +208,17 @@ export async function upsertRosterMember(
     const profile = persona.profile ?? null;
     if (previous === undefined) {
       db.prepare(
-        'INSERT INTO roles (role_name, persona_md, profile, avatar, created_time, update_time) ' +
-          'VALUES (?, ?, ?, ?, ?, ?)',
-      ).run(name, personaMd, profile, avatarJson, now, now);
+        'INSERT INTO roles (role_name, persona_md, profile, avatar, is_leader, created_time, update_time) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?)',
+      ).run(name, personaMd, profile, avatarJson, leaderFlagOf(name), now, now);
     } else {
       db.prepare(
         'UPDATE roles SET persona_md = ?, profile = ?, avatar = ?, update_time = ? ' +
           'WHERE role_name = ?',
       ).run(personaMd, profile, avatarJson, now, name);
     }
-    // v4 副本列刷新：角色行刚落库，team_members 里引用它的班底行镜像随之同步
+    // v4/v10 副本列刷新：角色行刚落库，team_members 里引用它的班底行镜像
+    // （role_name/persona_md/profile/avatar 四列）随之同步
     const roleId = rolesRowByName(db, name)?.role_id;
     syncTeamMemberRoleMirrorInTx(tx, roleId !== undefined ? { roleId } : undefined);
     return stored;
@@ -256,8 +262,9 @@ export async function ensurePresetMembers(stateRoot: string): Promise<void> {
     const captain = defaultCaptainPersona();
     // The leader first: it belongs to the member list (用户模型：领队也是成员),
     // is default-joined to every new team as the 团队页 leader card, and is
-    // protected from deletion (removeRosterMember rejects it).
-    const leader = members.find((m) => m.name === LEADER_NAME);
+    // protected from deletion (removeRosterMember rejects it). v8：领队条目按
+    // is_leader 标识识别，不按名。
+    const leader = members.find((m) => m.isLeader === true);
     if (
       leader !== undefined &&
       captain.personaMd !== undefined &&
@@ -345,14 +352,8 @@ export async function removeRosterMember(stateRoot: string, name: string): Promi
     }
     const info = tx.db.prepare('DELETE FROM roles WHERE role_name = ?').run(trimmed);
     if (Number(info.changes) === 0) throw new Error(`成员「${trimmed}」不存在`);
-    // v4 副本列清空：角色行已删，引用它的班底行镜像置 NULL（悬空行口径，
-    // 与 loadMembers 防御性跳过同源）
-    if (roleId !== undefined) {
-      tx.db
-        .prepare(
-          'UPDATE team_members SET role_name = NULL, persona_md = NULL, profile = NULL WHERE role_id = ?',
-        )
-        .run(roleId);
-    }
+    // 角色删除不进行同步（用户迭代：删除时不动 team_members）——上面的班底
+    // 守卫已保证删角色时没有任何班底行引用（引用行须先随 removeMember 移除），
+    // 这里本就无行可刷；v4 副本列的悬空 NULL 兜底由读端防御跳过承担。
   });
 }

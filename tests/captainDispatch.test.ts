@@ -20,6 +20,7 @@ import { composeCaptainPersona } from '../src/host/prompts/personas/captain';
 import {
   CAPTAIN_CHILD_DENIED_TOOLS,
   captainChildTeamOf,
+  leaderHandbookForChild,
   registerCaptainChild,
   unregisterCaptainChild,
 } from '../src/host/runtime/captainAgent';
@@ -27,11 +28,7 @@ import { resolveCaller } from '../src/host/tools/identity';
 import { insertTeamRow, readTeamSync, withTeamTx, writeTeamInTx } from '../src/host/state/store';
 import { appendMail } from '../src/host/state/events';
 import { teamView } from '../src/host/runtime/teamOps';
-import {
-  findRosterMember,
-  LEADER_NAME,
-  upsertRosterMember,
-} from '../src/host/runtime/roster';
+import { LEADER_NAME, upsertRosterMember } from '../src/host/runtime/roster';
 import { joinPath, type RuntimeEnv } from '../src/host/runtime/base';
 import type { MailMessage, TaskMemberRecord, TeamState } from '../src/host/model/types';
 import { cleanupTempWorkspace } from './support/tmpWorkspace';
@@ -39,8 +36,9 @@ import { cleanupTempWorkspace } from './support/tmpWorkspace';
 // ---------- fake runtime (subagents surface used by the dispatch tool) ----
 
 interface ContinuableSpec {
-  provider?: string;
-  label?: string;
+  provider: string;
+  label: string;
+  childId?: string;
   request: {
     prompt: { type: string; text: string }[];
     parent: unknown;
@@ -65,7 +63,8 @@ function fakeRuntime() {
       async startContinuable(
         spec: ContinuableSpec,
       ): Promise<{ childId: string; messageId: string }> {
-        const childId = `sess-child-${++childSeq}`;
+        // 真实契约：调用方预留的 childId 兑现为 durable id（无预留才自增）。
+        const childId = spec.childId ?? `sess-child-${++childSeq}`;
         starts.push(spec);
         spawnedIds.push(childId);
         return { childId, messageId: `${childId}-m1` };
@@ -91,7 +90,7 @@ let runtime: ReturnType<typeof fakeRuntime>;
 let captain: Agent;
 let tool: ReturnType<typeof createCaptainDispatchTool>;
 
-function leaderRow(teamId: number, childSessionId = ''): TaskMemberRecord {
+function leaderRow(teamId: number, childSessionId = '', personaMd?: string): TaskMemberRecord {
   return {
     id: 0,
     teamId,
@@ -102,6 +101,7 @@ function leaderRow(teamId: number, childSessionId = ''): TaskMemberRecord {
     sessionId: childSessionId,
     roleId: null,
     status: 'ready',
+    ...(personaMd !== undefined ? { personaMd } : {}),
     createdAt: 1,
   };
 }
@@ -123,14 +123,19 @@ function memberRow(teamId: number, childSessionId: string): TaskMemberRecord {
 }
 
 /** SQLite 契约播种（team.json 已退场）：team 行 + 领队实例行（可预置持久
- * 子会话 id）+ 可选成员实例行；领队身份锚点盖章在任务行快照（v6）。 */
-function seedTeam(opts: { memberChild?: string; leaderChild?: string } = {}): TeamState {
+ * 子会话 id 与建队时烘焙的手册缓存）+ 可选成员实例行；领队身份锚点盖章在
+ * 任务行快照（v6）。 */
+function seedTeam(
+  opts: { memberChild?: string; leaderChild?: string; leaderHandbook?: string } = {},
+): TeamState {
   const name = '演示团队';
   let teamId = 0;
   withTeamTx(root, undefined, (tx) => {
     teamId = insertTeamRow(tx, name, true, tx.now);
   });
-  const taskMembers: TaskMemberRecord[] = [leaderRow(teamId, opts.leaderChild ?? '')];
+  const taskMembers: TaskMemberRecord[] = [
+    leaderRow(teamId, opts.leaderChild ?? '', opts.leaderHandbook),
+  ];
   // v7：成员有工牌才有身份——拉人即落班底行（工牌发放处），实例行（工牌 1）
   // 靠它过 resolveCaller 的 R1 离职截断。
   const members =
@@ -236,30 +241,34 @@ describe('eteams_dispatch_captain', () => {
     expect(spec.provider).toBe(config.memberProvider);
     // 子代理以领队的名字命名（用户迭代 2026-09-07）。
     expect(spec.label).toBe(`eteams-captain:${LEADER_NAME}`);
-    // 人设 = roster 领队手册（缺省回退内置手册）+ 子代理纪律。
-    const fromRoster = findRosterMember(root, LEADER_NAME)?.personaMd;
-    const fallbackMd = composeCaptainPersona(join(ws, '.eteams')).personaMd;
-    expect(spec.request.persona).toBe(captainChildPersona(fromRoster ?? fallbackMd));
+    // persona 段只含领队手册插槽引用（2026-09-08：手册走团队成员表缓存，
+    // 由 index.ts 注册的 prompt 变量按装配注入，真实 {{}} 不经插值）。
+    expect(spec.request.persona).toBe(captainChildPersona('{{eteams_leader_handbook}}'));
     expect(spec.request.persona).toContain('角色手册（领队 · 项目牧羊人）');
     expect(spec.request.toolFilter?.deny).toEqual([...CAPTAIN_CHILD_DENIED_TOOLS]);
     expect(spec.request.parent).toBe(captain);
     expect(spec.request.prompt).toHaveLength(1);
     const promptText = spec.request.prompt.map((p) => p.text).join('\n');
-    // 现状不内嵌（用户迭代 2026-09-08）：prompt 只带自取指令 + 用户消息。
+    // prompt 只带现状自取指令 + 用户消息（现状 JSON 与手册原文都不内嵌，
+    // 手册走 persona 系统段）。
     expect(promptText).toContain('【团队现状】');
     expect(promptText).toContain('eteams_team_status');
     expect(promptText).not.toContain('"members"');
+    expect(promptText).not.toContain('【领队手册');
     expect(promptText).toContain('【用户/主对话最新消息】');
     expect(promptText).toContain('帮我做一个导出功能');
 
-    // Identity registry + durable child id persisted on the 领队行.
-    expect(captainChildTeamOf('sess-child-1')).toBe(String(seeded.id));
+    // Identity registry + durable child id persisted on the 领队行（调用方
+    // 预留 childId 被兑现——registry 以预留 id 为键，先登记后 spawn）。
     const persisted = readTeamSync(root, seeded.id);
-    expect(persisted?.taskMembers.find((r) => r.mainTaskId === null)?.sessionId).toBe(
-      'sess-child-1',
-    );
+    const childId = persisted?.taskMembers.find((r) => r.mainTaskId === null)?.sessionId ?? '';
+    expect(childId).not.toBe('');
+    expect(runtime.spawnedIds).toContain(childId);
+    expect(captainChildTeamOf(childId)).toBe(String(seeded.id));
+    // fixture 无建队缓存 → 插槽 provider 退内置手册（绝不返回空）。
+    expect(leaderHandbookForChild(config, childId)).toBe(composeCaptainPersona(root).personaMd);
     // The child's eteams_* calls resolve as this team's captain.
-    const caller = await resolveCaller(envFor(ws), agentOf('sess-child-1'));
+    const caller = await resolveCaller(envFor(ws), agentOf(childId));
     expect(caller.kind).toBe('captain');
     if (caller.kind === 'captain') expect(caller.team.id).toBe(seeded.id);
   });
@@ -284,38 +293,34 @@ describe('eteams_dispatch_captain', () => {
     );
   });
 
-  it('injects the leader handbook read live across workspaces (领队 md 跨区注入)', async () => {
-    seedTeam();
-    // 角色库固定落在 writeWorkspacePath（另一个工作区的状态根）——派发只查
-    // 自己的库就是「领队的 md 没注入」的根因；fake ctx.get 提供注册表后，
-    // persona 必须现读到角色库手册（2026-09-08 定案：spawn 时即最终版）。
-    const otherWs = mkdtempSync(join(tmpdir(), 'eteams-roster-'));
-    try {
-      await upsertRosterMember(
-        joinPath(otherWs, '.eteams'),
-        { name: LEADER_NAME, role: '领队（项目牧羊人）', personaMd: '# 自定义领队手册标记 ABC123' },
-        { allowLeader: true },
-      );
-      const withRegistry = new Proxy(runtime.ctx, {
-        get(target, prop) {
-          if (prop === 'get') {
-            return (key: string) =>
-              key === 'workspaceRegistry'
-                ? { list: () => [{ path: otherWs, title: 'roster' }] }
-                : undefined;
-          }
-          return Reflect.get(target, prop);
-        },
-      });
-      const tool = createCaptainDispatchTool(config, withRegistry as unknown as Context);
-      await tool.execute(
-        { message: '继续' } as never,
-        { agent: captain, signal: undefined } as never,
-      );
-      expect(runtime.starts.at(-1)!.request.persona).toContain('# 自定义领队手册标记 ABC123');
-    } finally {
-      cleanupTempWorkspace(otherWs);
-    }
+  it('serves the 领队行 persona_md cache and ignores later role edits (团队成员表缓存)', async () => {
+    // 2026-09-08 定案：领队手册源 = 领队主持行 persona_md（建队时烘焙的冻结
+    // 列，插槽 provider 直读原始列、绕过 hydration 的 roles join）——角色库
+    // 后续修改不影响本团队。
+    const marker = '# 建队缓存手册标记 XYZ456';
+    seedTeam({ leaderChild: 'sess-child-1', leaderHandbook: marker });
+    await tool.execute(
+      { message: '继续' } as never,
+      { agent: captain, signal: undefined } as never,
+    );
+    const childId = 'sess-child-1';
+    expect(leaderHandbookForChild(config, childId)).toContain(marker);
+    // 角色库随后修改（面板保存路径）→ 缓存原样，插槽读到的仍是建队时手册。
+    await upsertRosterMember(
+      root,
+      {
+        name: LEADER_NAME,
+        role: '领队（项目牧羊人）',
+        personaMd: '# 角色库新手册（应被忽略）',
+      },
+      { allowLeader: true },
+    );
+    expect(leaderHandbookForChild(config, childId)).toContain(marker);
+    expect(leaderHandbookForChild(config, childId)).not.toContain('应被忽略');
+    // 未登记的会话（非领队子代理）→ 内置手册兜底，绝不返回空。
+    expect(leaderHandbookForChild(config, 'sess-stranger')).toBe(
+      composeCaptainPersona(root).personaMd,
+    );
   });
 
   it('falls back to a fresh child when the stored child is unavailable', async () => {
@@ -354,11 +359,13 @@ describe('eteams_dispatch_captain', () => {
   it('spawns the fresh child on the leader route override (领队模型选择)', async () => {
     const seeded = seedTeam();
     // 领队行预置路线（setLeaderModel 的写入路径由 lifecycle.test.ts 覆盖，
-    // 这里按整存整取快照直接播种）。
+    // 这里按整存整取快照直接播种；v9 路线含目录 provider）。
     const withRoute: TeamState = {
       ...seeded,
       taskMembers: seeded.taskMembers.map((r) =>
-        r.mainTaskId === null ? { ...r, model: 'deepseek-reasoner', reasoningEffort: 'high' } : r,
+        r.mainTaskId === null
+          ? { ...r, model: 'deepseek-reasoner', provider: 'tr-test', reasoningEffort: 'high' }
+          : r,
       ),
     };
     withTeamTx(root, seeded.id, (tx) => writeTeamInTx(tx, withRoute));
@@ -367,7 +374,9 @@ describe('eteams_dispatch_captain', () => {
       { agent: captain, signal: undefined } as never,
     );
     expect(runtime.starts[0]!.request.agentOptions).toEqual({
-      provider: config.memberProvider,
+      // v9 provider 回归：覆盖路线的目录 provider 原样传 agentOptions
+      // （同 id 模型跨提供方消歧；不再是 'spawn'/'fork' 传输名）。
+      provider: 'tr-test',
       model: 'deepseek-reasoner',
       reasoningEffort: 'high',
     });

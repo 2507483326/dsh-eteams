@@ -32,6 +32,7 @@ import { installMemberRuntime } from './runtime/members.js';
 import { installUsageMeter } from './runtime/usage.js';
 import { installWebSurface, locateTeam } from './runtime/webui.js';
 import { stateRootFor } from './runtime/base.js';
+import { leaderHandbookForChild } from './runtime/captainAgent.js';
 import { sessionPersonaSection, sessionIdOfScope } from './runtime/sessionPersona.js';
 import {
   sessionTeamSection,
@@ -58,6 +59,9 @@ export const inject = [
   'systemPrompt',
   'commands',
   'agentDefaultModel',
+  // llm（dsh-llm 提供）供 /session-route 反查模型目录显示名（用户迭代
+  // 2026-09-08「显示目录模型」：id 是限定串，座位显示的是目录 name）。
+  'llm',
 ];
 
 /** Config schema consumed by the cordis loader (validated before apply). */
@@ -291,6 +295,26 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
     log.info('eteams: session team one-shot consumer registered');
   } catch (error) {
     log.warn('eteams: session team consumer registration failed: %s', String(error));
+  }
+
+  // 3b3-3) 领队手册插槽（用户迭代 2026-09-08「让真实的 {{}} 渲染出来」）：
+  // 领队子代理的 persona 段只含 {{eteams_leader_handbook}} 引用，本插槽按
+  // 装配作用域解析领队子代理 → 领队行缓存 md（bakeLeaderHandbook 派发前烘
+  // 焙，角色库后续修改不影响）。宿主对插槽替换值**不做二次扫描**，md 里的
+  // 真实 {{占位}} 原样进入系统提示。provider 对每个 agent 的每次装配都会
+  // 求值：非领队子代理快速返回空串，且全程吞错（空串最多让手册段为空，
+  // 绝不让装配失败）。
+  try {
+    ctx.systemPrompt.variable('eteams_leader_handbook', (context: { scope?: unknown }) => {
+      try {
+        return leaderHandbookForChild(config, sessionIdOfScope(context.scope) ?? '');
+      } catch {
+        return '';
+      }
+    });
+    log.info('eteams: leader handbook prompt variable registered');
+  } catch (error) {
+    log.warn('eteams: leader handbook variable registration failed: %s', String(error));
   }
 
   // 3c) /eteam slash command (docs/19.4, D18): 命令平面统一注册口——/eteam

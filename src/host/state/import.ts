@@ -34,6 +34,7 @@ import type {
 import {
   avatarToJson,
   hashName,
+  leaderFlagOf,
   LEADER_NAME,
   personaToMd,
   readSchemaVersion,
@@ -320,8 +321,8 @@ export function seedPresetRows(tx: TeamTx, now: number): void {
   const { db } = tx;
   const selectRole = db.prepare('SELECT role_id FROM roles WHERE role_name = ?');
   const insertRole = db.prepare(
-    'INSERT INTO roles (role_name, persona_md, profile, avatar, created_time, update_time) ' +
-      'VALUES (?, ?, ?, ?, ?, ?)',
+    'INSERT INTO roles (role_name, persona_md, profile, avatar, is_leader, created_time, update_time) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?)',
   );
   for (const seed of presetMemberSeeds()) {
     if (selectRole.get(seed.name) !== undefined) continue;
@@ -330,6 +331,7 @@ export function seedPresetRows(tx: TeamTx, now: number): void {
       personaToMd(seed.persona, seed.name),
       seed.persona.profile ?? null,
       avatarToJson(seed.avatar),
+      leaderFlagOf(seed.name),
       now,
       now,
     );
@@ -651,8 +653,8 @@ function importLegacyTeam(
   // ---- 班底行（v7：工牌发放处——领队也是一行；工号 = 行的自增主键
   // （表自增），旧号不保留——副本/邮箱/链站在本导入内按新号重键）----
   const insertTeamMember = db.prepare(
-    'INSERT INTO team_members (team_id, role_id, model, reasoning_effort, created_time, update_time) ' +
-      'VALUES (?, ?, ?, ?, ?, ?)',
+    'INSERT INTO team_members (team_id, role_id, model, reasoning_effort, is_leader, created_time, update_time) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?)',
   );
   const employeeByMember = new Map<string, number>();
   for (const m of old.members ?? []) {
@@ -670,6 +672,7 @@ function importLegacyTeam(
       roleId,
       route.model,
       route.effort,
+      leaderFlagOf(name),
       m.createdAt ?? now,
       now,
     );
@@ -684,7 +687,15 @@ function importLegacyTeam(
       personaFromFields(leaderTemplate ?? {}, LEADER_NAME, leaderTemplate?.role ?? LEADER_NAME),
       { avatar: { seed: hashName(LEADER_NAME), salt: 7 } },
     );
-    const info = insertTeamMember.run(teamId, roleId, null, null, old.createdAt ?? now, now);
+    const info = insertTeamMember.run(
+      teamId,
+      roleId,
+      null,
+      null,
+      leaderFlagOf(LEADER_NAME),
+      old.createdAt ?? now,
+      now,
+    );
     employeeByMember.set(LEADER_NAME, Number(info.lastInsertRowid));
   }
   // v4 副本列刷新：本队班底行刚落库，镜像按角色行统一回填

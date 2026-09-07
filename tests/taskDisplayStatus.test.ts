@@ -269,9 +269,8 @@ describe('groupDisplayOf（组卡汇总优先级）', () => {
     expect(groupDisplayOf([{ status: 'completed' }, { status: 'completed' }])).toBeNull();
   });
 
-  it('其余（created/init 混合）→ 待开始（中性；二十四轮 DA37 文案合并）', () => {
-    const summary = groupDisplayOf([{ status: 'ready' }, { status: 'draft' }]);
-    expect(summary).toEqual({ label: '待开始', tone: 'muted', icon: '', detail: '' });
+  it('其余（ready/draft 混合）→ null（用户迭代 2026-09-08：状态 pill 已表达待开始，chip 不重复画）', () => {
+    expect(groupDisplayOf([{ status: 'ready' }, { status: 'draft' }])).toBeNull();
   });
 });
 

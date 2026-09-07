@@ -33,7 +33,8 @@ export function dispatchAck(childId: string): string {
 
 /**
  * 领队子代理的派发 prompt：自取现状指令 + 用户/主对话最新消息（现状不
- * 内嵌，见 {@link TEAM_STATE_DIRECTIVE}）。
+ * 内嵌，见 {@link TEAM_STATE_DIRECTIVE}）。领队手册走 persona 系统段
+ * （注入前经 neutralizeInterpolation 转义），不随消息携带。
  */
 export function captainDispatchPrompt(message: string): string {
   return [

@@ -27,6 +27,10 @@ import {
   resetUsageMeterForTests,
   seedSessionRouteForTests,
 } from '../src/host/runtime/usage';
+import {
+  resetSessionRoutesForTests,
+  seedDeclaredRouteForTests,
+} from '../src/host/runtime/sessionRoutes';
 import { clearSessionTeam } from '../src/host/runtime/sessionTeam';
 import { getDb } from '../src/host/state/db';
 import { recordUsage, type UsageRecord } from '../src/host/state/usageStore';
@@ -728,24 +732,43 @@ describe('panel write routes (M5 first slice)', () => {
     expect(typeof novaId).toBe('number');
 
     const set = await h.post(`/eteams-api/team/${teamId}/member/${novaId}/model`, {
-      model: 'deepseek-reasoner',
+      provider: 'tr-test',
+      model: 'z-ai/glm-5.3-free',
       reasoningEffort: 'high',
     });
     expect(set.code).toBe(200);
     const overridden = readTeam(teamId).members.find((m) => m.name === 'Nova')!.modelRoute;
-    expect(overridden).toMatchObject({ model: 'deepseek-reasoner', reasoningEffort: 'high' });
+    // v9 provider 回归：provider/model/effort 整组入档（同 id 模型跨提供方消歧）。
+    expect(overridden).toMatchObject({
+      provider: 'tr-test',
+      model: 'z-ai/glm-5.3-free',
+      reasoningEffort: 'high',
+    });
+    const providerSnap = teamSnapshot(readTeam(teamId), workspace, config);
+    const providerMember = (
+      providerSnap.members as {
+        name: string;
+        model: string;
+        provider: string | null;
+        reasoningEffort: string | null;
+      }[]
+    ).find((m) => m.name === 'Nova')!;
+    expect(providerMember.model).toBe('z-ai/glm-5.3-free');
+    expect(providerMember.provider).toBe('tr-test');
 
     // 空 body = 跟随领队 — 路线清回空（派发时解析）。
     const reset = await h.post(`/eteams-api/team/${teamId}/member/${novaId}/model`, {});
     expect(reset.code).toBe(200);
     const inherited = readTeam(teamId).members.find((m) => m.name === 'Nova')!.modelRoute;
     expect(inherited.model).toBe('');
+    expect(inherited.provider).toBeUndefined();
     expect(inherited.reasoningEffort).toBeUndefined();
     const snap = teamSnapshot(readTeam(teamId), workspace, config);
     const member = (
-      snap.members as { name: string; model: string; reasoningEffort: string | null }[]
+      snap.members as { name: string; model: string; provider: string | null; reasoningEffort: string | null }[]
     ).find((m) => m.name === 'Nova')!;
     expect(member.model).toBe('');
+    expect(member.provider).toBeNull();
     expect(member.reasoningEffort).toBeNull();
   });
 
@@ -1064,25 +1087,37 @@ describe('panel write routes (M5 first slice)', () => {
     const approve = await h.post(`/eteams-api/team/${teamId}/approve`, {});
     expect(approve.code).toBe(405);
     // 领队模型选择恢复（用户迭代 2026-09-04）：POST /team/<id>/leader/model
-    // 200 落库，快照 captain 带回路线；空 model 重置为会话默认。
+    // 200 落库，快照 captain 带回路线；空 model 重置为会话默认。v9：provider
+    // 整组入档并从快照带回（同 id 模型跨提供方消歧，用户迭代 2026-09-08）。
     const leaderModel = await h.post(`/eteams-api/team/${teamId}/leader/model`, {
-      model: 'deepseek-chat',
+      provider: 'tr-test',
+      model: 'z-ai/glm-5.3-free',
       reasoningEffort: 'low',
     });
     expect(leaderModel.code).toBe(200);
     const state = await h.get('/eteams-api/state');
     const team = json<{
-      teams: { teamId: number; captain: { model?: string; reasoningEffort?: string | null } }[];
+      teams: {
+        teamId: number;
+        captain: {
+          model?: string;
+          provider?: string | null;
+          reasoningEffort?: string | null;
+        };
+      }[];
     }>(state.body).teams.find((t) => t.teamId === teamId)!;
-    expect(team.captain.model).toBe('deepseek-chat');
+    expect(team.captain.model).toBe('z-ai/glm-5.3-free');
+    expect(team.captain.provider).toBe('tr-test');
     expect(team.captain.reasoningEffort).toBe('low');
     const reset = await h.post(`/eteams-api/team/${teamId}/leader/model`, {});
     expect(reset.code).toBe(200);
     const state2 = await h.get('/eteams-api/state');
-    const team2 = json<{ teams: { teamId: number; captain: { model?: string } }[] }>(
+    const team2 = json<{ teams: { teamId: number; captain: { model?: string; provider?: string | null } }[] }>(
       state2.body,
     ).teams.find((t) => t.teamId === teamId)!;
     expect(team2.captain.model ?? '').toBe('');
+    // 重置后 provider 一并清空（路线整体回会话默认）。
+    expect(team2.captain.provider ?? null).toBeNull();
   });
 
   it('collects the shared global state root once (全局单库不重复出队)', async () => {
@@ -2462,8 +2497,9 @@ describe('POST /eteams-api/rolebuilder/resume (docs/19.16)', () => {
 
 describe('GET /session-route — 子会话观测路线与身份（用户迭代 2026-09-07）', () => {
   beforeEach(() => {
-    // 身份登记表与路线缓存都是模块级 Map——逐用例清空防串扰。
+    // 身份登记表、观测路线缓存与声明路线登记都是模块级 Map——逐用例清空防串扰。
     resetUsageMeterForTests();
+    resetSessionRoutesForTests();
   });
 
   it('成员子代理返回 subagent/member 身份与观测路线', async () => {
@@ -2532,5 +2568,56 @@ describe('GET /session-route — 子会话观测路线与身份（用户迭代 2
     const h = await installFake();
     const got = await h.get('/eteams-api/session-route');
     expect(got.code).toBe(400);
+  });
+
+  it('显示组合：model 取声明目录级 id，provider 取观测适配名（用户反馈场景）', async () => {
+    const h = await installFake();
+    registerCaptainChild('cap-sess-2', 't1');
+    // 声明 = descriptor agentOptions（目录级 id；覆盖路线的 provider 还会
+    // 误填传输名 'spawn'——这正是 provider 必须取观测值的理由）。
+    seedDeclaredRouteForTests('cap-sess-2', { provider: 'spawn', model: 'glm-5.3-free' });
+    // 观测 = request/header（provider 真实，model 是上游限定 id）。
+    seedSessionRouteForTests('cap-sess-2', 'tokenrouter', 'z-ai/glm-5.3-free');
+    const got = await h.get('/eteams-api/session-route?sessionId=cap-sess-2');
+    expect(got.code).toBe(200);
+    const view = json<{ route: { provider: string; model: string } | null }>(got.body);
+    // 组合出与主会话模型座位一致的「tokenrouter/glm-5.3-free」。
+    expect(view.route).toEqual({ provider: 'tokenrouter', model: 'glm-5.3-free' });
+  });
+
+  it('冷恢复仅有声明路线（未观测到请求）时整体用声明值', async () => {
+    const h = await installFake();
+    registerCaptainChild('cap-sess-3', 't1');
+    seedDeclaredRouteForTests('cap-sess-3', { provider: 'tokenrouter', model: 'glm-5.3-free' });
+    const got = await h.get('/eteams-api/session-route?sessionId=cap-sess-3');
+    expect(got.code).toBe(200);
+    const view = json<{ route: { provider: string; model: string } | null }>(got.body);
+    expect(view.route).toEqual({ provider: 'tokenrouter', model: 'glm-5.3-free' });
+  });
+
+  it('modelLabel：经 ctx.llm.listModels 反查目录显示名（限定 id → glm1）', async () => {
+    const registered: Handler[] = [];
+    const captains = new Map<string, { id: string; session: { header: { cwd: string } } }>();
+    const ctx = {
+      logger: { info: () => undefined, warn: () => undefined },
+      agents: { get: (id: string) => captains.get(id) },
+      llm: {
+        listModels: async (provider: string) =>
+          provider === 'tr-test' ? [{ id: 'z-ai/glm-5.3-free', name: 'glm1' }] : [],
+      },
+      ...surfaceCtx(captains, registered),
+    } as unknown as Context;
+    installWebSurface(ctx, config);
+    const handler = registered[0]!;
+    registerCaptainChild('cap-llm', 't1');
+    // 实测场景（用户迭代 2026-09-08）：settings agent-default-model 的模型
+    // id 本身是限定串（z-ai/glm-5.3-free），声明=观测=它；目录项 name 才是
+    // 座位显示的「glm1」。
+    seedDeclaredRouteForTests('cap-llm', { provider: 'tr-test', model: 'z-ai/glm-5.3-free' });
+    const got = await fire(handler, 'GET', '/eteams-api/session-route?sessionId=cap-llm');
+    expect(got.code).toBe(200);
+    const view = json<{ route: unknown; modelLabel: string | null }>(got.body);
+    expect(view.route).toEqual({ provider: 'tr-test', model: 'z-ai/glm-5.3-free' });
+    expect(view.modelLabel).toBe('glm1');
   });
 });

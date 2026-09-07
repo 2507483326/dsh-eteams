@@ -37,7 +37,7 @@ import {
   type TeamKey,
   type TeamTx,
 } from '../state/store.js';
-import { hashName, LEADER_NAME, nextAutoincrementId, personaFromMd, personaToMd } from '../state/db.js';
+import { hashName, leaderFlagOf, LEADER_NAME, nextAutoincrementId, personaFromMd, personaToMd } from '../state/db.js';
 import { insertEventInTx, insertMailInTx } from '../state/events.js';
 import { defaultCaptainPersona } from '../prompts/personas/captain.js';
 import { applyTransition, sanitizeKey, taskSlug } from '../model/taskMachine.js';
@@ -49,6 +49,7 @@ import { findRosterMember, ROLE_BUILDER_NAME, upsertRosterMember } from './roste
 import { interruptMember, drainMembers } from './members.js';
 import { readBuildPresence } from './roleBuilder.js';
 import {
+  ensureLeaderAnchorRow,
   leaderRowOf,
   latestInstanceRow,
   makeMail,
@@ -134,10 +135,10 @@ export async function createTeam(
       const leaderMemberId = nextAutoincrementId(tx.db, 'team_members');
       tx.db
         .prepare(
-          'INSERT INTO team_members (team_member_id, team_id, role_id, created_time, update_time) ' +
-            'VALUES (?, ?, ?, ?, ?)',
+          'INSERT INTO team_members (team_member_id, team_id, role_id, is_leader, created_time, update_time) ' +
+            'VALUES (?, ?, ?, ?, ?, ?)',
         )
-        .run(leaderMemberId, teamId, leaderRoleId, now, now);
+        .run(leaderMemberId, teamId, leaderRoleId, leaderFlagOf(LEADER_NAME), now, now);
       // 领队行（docs/35 §5#12）：团队级主持行只记自己的子代理会话（v6 领队
       // 行 session_id = 领队子代理，未派发时空串）；主会话快照归 task 行。
       // 工号 = 班底领队行刚发的自增主键，手册沿角色库行（项目牧羊人
@@ -238,6 +239,8 @@ export async function addMember(
     /** Full Markdown role playbook (agency-agents-zh style). */
     personaMd?: string;
     model?: string;
+    /** 覆盖路线的目录 provider（v9 回归；添加时通常缺省 = 会话默认）。 */
+    provider?: string;
     reasoningEffort?: string;
     /** Pre-generated avatar (docs/14); generated from the name when absent. */
     avatar?: { seed: number; salt: number };
@@ -295,7 +298,7 @@ export async function addMember(
       employeeId: memberId,
       role: persona.role,
       persona,
-      modelRoute: routeFromParams(params.model, params.reasoningEffort),
+      modelRoute: routeFromParams(params.provider, params.model, params.reasoningEffort),
       avatar: params.avatar ?? { seed: hashName(name), salt: Math.floor(Math.random() * 1000) },
       createdAt: now,
     };
@@ -347,15 +350,23 @@ export async function addMember(
   return { team: fresh, member };
 }
 
-/** 参数路线 → ModelRouteSnapshot（docs/35 §3#5：只挑模型，provider 派发时定）。 */
+/**
+ * 参数路线 → ModelRouteSnapshot（v9 provider 回归）：provider/model/effort
+ * 整组落库——同 id 模型跨提供方（用户实测 tokenrouter/tr-test 都有
+ * z-ai/glm-5.3-free）时模型 id 有歧义，显示与 spawn 都按 provider 消歧。
+ * provider 缺省（旧客户端/旧数据）= 未记录，读端目录反查兜底。
+ */
 function routeFromParams(
+  provider: string | undefined,
   model: string | undefined,
   effort: string | undefined,
 ): ModelRouteSnapshot {
+  const trimmedProvider = provider?.trim() ?? '';
   const trimmedModel = model?.trim() ?? '';
   const trimmedEffort = effort?.trim() ?? '';
   return {
     model: trimmedModel,
+    ...(trimmedModel !== '' && trimmedProvider !== '' ? { provider: trimmedProvider } : {}),
     ...(trimmedModel !== '' && trimmedEffort !== '' ? { reasoningEffort: trimmedEffort } : {}),
   };
 }
@@ -431,9 +442,9 @@ export async function updateMember(
  * Set one member's model route (user iteration 2026-09: per-member model
  * select on the member card). Empty model resets to 会话默认（用户迭代
  * 2026-09-04：settings agent-default-model，spawn 侧 sessionDefaultRouteOf）；
- * 有值即 override——provider 不再入档（docs/35 §3#5），派发起会话时按
- * config.memberProvider 解析。写班底行；副本行在建任务/派发时定版，不再
- * 随写同步（v7 #14）；已起会话的成员在下次起会话生效。
+ * 有值即 override——provider 整组入档（v9 回归：同 id 模型跨提供方需消歧，
+ * spawn 按它传 agentOptions.provider）。写班底行；副本行在建任务/派发时
+ * 定版，不再随写同步（v7 #14）；已起会话的成员在下次起会话生效。
  */
 export async function setMemberModel(
   env: RuntimeEnv,
@@ -443,6 +454,7 @@ export async function setMemberModel(
     name: string;
     /** v7 同名成员按工号精确定位（缺省按名——旧口径兼容）。 */
     employeeId?: number;
+    /** 覆盖路线的目录 provider（v9 回归）：显示与 spawn 消歧用。 */
     provider?: string;
     model?: string;
     reasoningEffort?: string;
@@ -454,7 +466,7 @@ export async function setMemberModel(
       : await requireCaptainTeam(env, captain);
   const fresh = await withTeam(env, team.id, (teamNow, _root, tx) => {
     const member = requireMemberTemplate(teamNow, params.name, params.employeeId);
-    member.modelRoute = routeFromParams(params.model, params.reasoningEffort);
+    member.modelRoute = routeFromParams(params.provider, params.model, params.reasoningEffort);
     insertEventInTx(tx, teamNow.id, {
       seq: 0,
       at: tx.now,
@@ -470,16 +482,19 @@ export async function setMemberModel(
 
 /**
  * Set the 领队 model route（用户迭代 2026-09-04「领队模型选择」回归）：
- * 写 task_members 领队行（name=项目牧羊人、main_task_id 为空）的
- * model/reasoning_effort——团队级默认路线，领队子代理派发起会话按它解析。
- * 空 model = 会话默认（settings agent-default-model，spawn 侧
- * sessionDefaultRouteOf）；行不存在（领队从未就位）静默不写。
+ * 写 task_members 领队主持行（is_leader=1 且 main_task_id 为空）的
+ * model/provider/reasoning_effort——团队级默认路线，领队子代理派发起会话
+ * 按它解析。v9 加 provider 列（同 id 模型跨提供方消歧）；主持行缺失自愈
+ * 补建后再写（用户迭代 2026-09-08「选择模型没保存到表」）。空 model =
+ * 会话默认（settings agent-default-model，spawn 侧 sessionDefaultRouteOf）；
+ * 行不存在且班底也无领队行（领队从未就位）静默不写。
  */
 export async function setLeaderModel(
   env: RuntimeEnv,
   captain: Agent,
   params: {
     teamId?: TeamKey;
+    /** 覆盖路线的目录 provider（v9 回归）：显示与 spawn 消歧用。 */
     provider?: string;
     model?: string;
     reasoningEffort?: string;
@@ -489,23 +504,26 @@ export async function setLeaderModel(
     params.teamId !== undefined
       ? await requireTeamById(env, captain, params.teamId)
       : await requireCaptainTeam(env, captain);
-  const route = routeFromParams(params.model, params.reasoningEffort);
+  const route = routeFromParams(params.provider, params.model, params.reasoningEffort);
   const fresh = await withTeam(env, team.id, (teamNow, _root, tx) => {
-    const leader = leaderRowOf(teamNow);
+    // 主持行缺失自愈（用户迭代 2026-09-08「选择模型没保存到表」）：库中主持
+    // 行可能丢失，leaderRowOf 为 undefined 曾让本写路径静默 no-op——就地
+    // 补建后再写模型路线。
+    const leader = ensureLeaderAnchorRow(teamNow, tx.now, (m) => env.ctx.logger.warn(m));
     if (leader === undefined) return teamNow;
     leader.model = route.model;
+    // v9 provider 回归：与 model/effort 同写入（此前漏赋——事件 payload 带
+    // provider 而行上 NULL，实测 2026-09-08「表里面还是空的」根因之一）。
+    if (route.provider !== undefined && route.provider !== '') {
+      leader.provider = route.provider;
+    } else {
+      delete leader.provider;
+    }
     if (route.reasoningEffort !== undefined) {
       leader.reasoningEffort = route.reasoningEffort;
     } else {
       delete leader.reasoningEffort;
     }
-    insertEventInTx(tx, teamNow.id, {
-      seq: 0,
-      at: tx.now,
-      actor: captainActor(teamNow),
-      type: 'member.updated',
-      payload: { name: leader.name, route },
-    });
     return teamNow;
   });
   renderTeamDocs(env.workspace, fresh, (msg) => env.ctx.logger.warn(msg));
@@ -604,9 +622,10 @@ export async function setLeaderRemoved(
       leader.status = 'removed';
       teamNow.hasLeader = false;
       // 班底领队行硬删（v7 R7）：号作废不回收；重加领队走下方加回分支续新号。
-      teamNow.members = teamNow.members.filter((m) => m.name !== LEADER_NAME);
+      // v8：按 is_leader 标识定位（不再按名过滤）。
+      teamNow.members = teamNow.members.filter((m) => m.isLeader !== true);
     } else {
-      const rosterRow = teamNow.members.find((m) => m.name === LEADER_NAME);
+      const rosterRow = teamNow.members.find((m) => m.isLeader === true);
       // 已就位且班底在册：幂等 no-op（重复「加回」不改任何状态）。
       if (leader !== undefined && leader.status !== 'removed' && rosterRow !== undefined) {
         return teamNow;
@@ -637,6 +656,7 @@ export async function setLeaderRemoved(
           persona,
           modelRoute: { model: '', reasoningEffort: undefined },
           avatar: { seed: hashName(LEADER_NAME), salt: 7 },
+          isLeader: true,
           createdAt: tx.now,
         });
       } else {
@@ -655,6 +675,7 @@ export async function setLeaderRemoved(
           employeeId: number,
           sessionId: '',
           status: 'ready',
+          isLeader: true,
           createdAt: tx.now,
         };
         teamNow.taskMembers.push(leader);

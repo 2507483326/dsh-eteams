@@ -19,6 +19,7 @@ import {
   ROLE_BUILDER_NAME,
   upsertRosterMember,
 } from '../src/host/runtime/roster.js';
+import { LEADER_NAME, closeDb, getDb } from '../src/host/state/db';
 import { cleanupTempWorkspace } from './support/tmpWorkspace';
 
 let root = '';
@@ -61,6 +62,37 @@ describe('protected system members', () => {
       personaMd: '# 自定义手册',
     });
     expect(stored.personaMd).toBe('# 自定义手册');
+  });
+
+  it('角色修改保存后按 role_id 同步 team_members 副本列（含头像，v10）', async () => {
+    await ensurePresetMembers(root);
+    await upsertRosterMember(root, { name: '临时成员', role: 'tester' });
+    const db = getDb(root);
+    // 模拟一条班底引用行（引用行存在时删除本就被班底守卫拒掉——删除不产生
+    // 悬空镜像，同步只发生在保存路径）。
+    const roleId = (
+      db.prepare('SELECT role_id FROM roles WHERE role_name = ?').get('临时成员') as {
+        role_id: number;
+      }
+    ).role_id;
+    db.prepare(
+      'INSERT INTO team_members (team_member_id, team_id, role_id, created_time, update_time) ' +
+        'VALUES (11, 1, ?, 1, 1)',
+    ).run(roleId);
+    // 角色修改保存（改头像+简介）→ 引用它的班底行镜像全量刷新。
+    await upsertRosterMember(root, {
+      name: '临时成员',
+      role: 'tester',
+      profile: '新简介',
+      avatar: { seed: 5, salt: 6 },
+    });
+    const mirror = db
+      .prepare('SELECT role_name, profile, avatar FROM team_members WHERE team_member_id = 11')
+      .get() as { role_name: string | null; profile: string | null; avatar: string | null };
+    expect(mirror.role_name).toBe('临时成员');
+    expect(mirror.profile).toBe('新简介');
+    expect(mirror.avatar).toBe(JSON.stringify({ seed: 5, salt: 6 }));
+    closeDb(root);
   });
 
   it('edits the leader only through the explicit panel opt-in（用户迭代 2026-09-03）', async () => {

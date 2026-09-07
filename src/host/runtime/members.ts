@@ -11,6 +11,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { SessionId } from '@deepseek-ai/dsh-session';
 import { foldSubagentDescriptor } from '@deepseek-ai/dsh-subagent';
+import { recordSessionRoute } from './sessionRoutes.js';
 import type { ETeamsResolvedConfig } from '../config.js';
 import type { MemberRecord, TaskMemberRecord, TaskRecord, TeamState } from '../model/types.js';
 import { insertMailInTx } from '../state/events.js';
@@ -25,6 +26,7 @@ import { makeMail, memberBoxOf, memberRefId, type Wake, wakeMember } from './not
 import { readBuildPresence } from './roleBuilder.js';
 import { assignmentMail } from '../prompts/handoff/mails.js';
 import { memberWelcome } from '../prompts/spawn/member.js';
+import { neutralizeInterpolation } from './sessionPersona.js';
 import { registerMemberSession } from './usage.js';
 
 /** Label prefix identifying eteams member children. */
@@ -125,11 +127,14 @@ export async function spawnMember(
   const template = memberTemplateOf(team, row.employeeId ?? row.name);
   const persona = template?.persona;
   // 人设手册全文（docs/36 建议 4）：personaMd 有烘全文时用它，结构字段不
-  // 再渲染进 persona；无手册（旧数据）退回 executionPrompt。
-  const personaText =
+  // 再渲染进 persona；无手册（旧数据）退回 executionPrompt。进 persona 前
+  // 经 neutralizeInterpolation 转义——宿主对系统提示段做严格 {{变量}} 插值，
+  // 用户 md 里的花括号引用会让整段装配抛错（sessionPersona band 同口径）。
+  const personaText = neutralizeInterpolation(
     persona?.personaMd !== undefined && persona.personaMd.trim() !== ''
       ? persona.personaMd
-      : (persona?.executionPrompt ?? `你是「${row.name}」，以团队成员身份为团队交付。`);
+      : (persona?.executionPrompt ?? `你是「${row.name}」，以团队成员身份为团队交付。`),
+  );
   const route = template?.modelRoute;
   const start = await env.ctx.subagents.startContinuable({
     provider: env.config.memberProvider,
@@ -143,7 +148,13 @@ export async function spawnMember(
       ...(route !== undefined && route.model !== ''
         ? {
             agentOptions: {
-              provider: env.config.memberProvider,
+              // v9 provider 回归：覆盖路线带目录 provider（同 id 模型跨提供方
+              // 消歧）；旧数据未记录时省略 provider——运行时按会话默认解析
+              // （此前填 config.memberProvider 是 'spawn'/'fork' 传输名，不是
+              // LLM provider，实测 2026-09-08 修复）。
+              ...(route.provider !== undefined && route.provider !== ''
+                ? { provider: route.provider }
+                : {}),
               model: route.model,
               ...(route.reasoningEffort ? { reasoningEffort: route.reasoningEffort } : {}),
             },
@@ -255,6 +266,13 @@ export function installMemberRuntime(
     const suffix = child.session?.events?.slice(seedLength) ?? [];
     const descriptor = foldSubagentDescriptor(suffix);
     if (descriptor?.mode !== 'continuable') return () => undefined;
+    // 声明路线登记（用户迭代 2026-09-07）：所有 continuable 子代理（成员/
+    // 领队/构建师）一律记——观测路线的 model 是解析后的上游限定 id，面板
+    // 显示以声明的目录级 id 为准（见 runtime/sessionRoutes 模块头）。
+    recordSessionRoute(String(child.id), {
+      provider: descriptor.agentProvider ?? '',
+      model: descriptor.agentModel ?? '',
+    });
     const identity = parseMemberLabel(descriptor.label);
     if (!identity) return () => undefined;
     const workspace = child.session?.header?.cwd ?? process.cwd();

@@ -547,11 +547,12 @@ describe('member spawn route resolution (per-member model, docs/35 §3#5)', () =
     // Overrider pins its own model; Follower keeps 会话默认（用户迭代
     // 2026-09-04：model 空串 = settings agent-default-model 即时快照）——
     // 本测试的 fake ctx 不挂 agentDefaultModel 服务，spawn 退回不带
-    // agentOptions 的旧行为（provider 不再入档，派发时按
-    // config.memberProvider 解析）。
+    // agentOptions 的旧行为。v9 provider 回归：覆盖路线带目录 provider，
+    // spawn 原样传 agentOptions.provider（不再是 'spawn'/'fork' 传输名）。
     await setMemberModel(runtimeEnvFor(), captain as never, {
       teamId,
       name: 'Overrider',
+      provider: 'deepseek',
       model: 'deepseek-chat',
     });
 
@@ -564,7 +565,7 @@ describe('member spawn route resolution (per-member model, docs/35 §3#5)', () =
     await cap('eteams_assign_task', { taskId: t2.taskId, member: String(overriderId) });
     const overriderChild = childByEmployee(overriderId);
     expect(overriderChild.request.agentOptions).toMatchObject({
-      provider: 'spawn',
+      provider: 'deepseek',
       model: 'deepseek-chat',
     });
 

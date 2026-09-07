@@ -75,8 +75,9 @@ export function LeaderCard({
   modelSaving?: boolean;
 }): ReactNode {
   // 领队行路线只剩 {model, reasoningEffort}——菜单内部仍按 `provider/model`
-  // 行值渲染选中态，provider 由 model 经目录反查；会话默认（model 空）回
-  // inherit 哨兵；目录查不到的历史路线按裸模型 id 兜底。
+  // 行值渲染选中态，provider 优先用快照声明的（v9 回归：同 id 模型跨提供方
+  // 时按 id 反查会命中错误条目）；旧快照缺省回退目录反查，再退 'legacy'；
+  // 会话默认（model 空）回 inherit 哨兵。
   const routeRow = catalogRowByModel(catalog.catalog, captain.model ?? '');
   return (
     <div className={MEMBER_CARD_CLASS}>
@@ -108,7 +109,8 @@ export function LeaderCard({
               (captain.model ?? '') === ''
                 ? { provider: 'inherit', model: 'inherit', reasoningEffort: null }
                 : {
-                    provider: routeRow?.group.id ?? 'legacy',
+                    provider:
+                      captain.provider ?? routeRow?.group.id ?? 'legacy',
                     model: captain.model ?? '',
                     reasoningEffort: captain.reasoningEffort ?? null,
                   }
@@ -163,9 +165,9 @@ export function MemberCard({
   const openDetail = (): void => {
     if (onOpenDetail !== undefined) onOpenDetail(m.name);
   };
-  // 快照路线只剩 {model, reasoningEffort}（docs/35 §3#5）——菜单内部仍按
-  // `provider/model` 行值渲染选中态，provider 由 model 经目录反查；会话默认
-  // （model 空串）回 inherit 哨兵；目录查不到的历史路线按裸模型 id 兜底。
+  // 快照路线 v9 起带 provider——菜单内部仍按 `provider/model` 行值渲染选中
+  // 态，provider 优先用快照声明的（同 id 模型跨提供方时按 id 反查会命中错误
+  // 条目）；旧快照缺省回退目录反查；会话默认（model 空串）回 inherit 哨兵。
   const routeRow = catalogRowByModel(catalog.catalog, m.model);
   const inherit = m.model === '';
   // 子代理活动点查表（lib/status.ts ACTIVITY_DOT，M4 双三元收拢）：键只算
@@ -203,7 +205,7 @@ export function MemberCard({
               inherit
                 ? { provider: 'inherit', model: 'inherit', reasoningEffort: null }
                 : {
-                    provider: routeRow?.group.id ?? 'legacy',
+                    provider: m.provider ?? routeRow?.group.id ?? 'legacy',
                     model: m.model,
                     reasoningEffort: m.reasoningEffort,
                   }

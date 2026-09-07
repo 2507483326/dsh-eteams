@@ -35,6 +35,13 @@
  *    insertMarkdown（mdast→Lexical 导入管线，插在当前选区）；普通文本与
  *    富文本 HTML 粘贴不受影响。粘贴文本自带的 frontmatter 一律剥除（本
  *    编辑器的 frontmatter 区由原文档管理，正文落点在光标处）。
+ * 6. 裸 JSX 式标签中和（用户反馈 2026-09-07「角色构建师 点编辑后 md 编辑器
+ *    是空的」）——mdxeditor 的 markdown 导入走严格 MDX 解析（core 常驻
+ *    micromark-extension-mdx-jsx），正文里裸的 `<X>`/`<Y>`/`</X>` 未闭合直接
+ *    抛 MarkdownParseError，编辑器整体导入失败渲染空白（角色构建师预置手册
+ *    的「访谈开场」行即含此类占位符，其它角色手册无）。markdown 进编辑器前
+ *    （挂载 prop / 受控同步 / 粘贴）经 neutralizeJsxLikeTags 把裸标签转义为
+ *    字面文本（`\<`），围栏与行内 code span 不动——见 ./jsxLikeTags。
  *
  * @module dsh-eteams/client/mdEditor
  */
@@ -86,6 +93,7 @@ import mdxEditorCss from '@mdxeditor/editor/style.css';
 import { recordClientDiag } from '../../lib/diagnostics';
 import { errorMessageOf } from '../../lib/errors';
 import { useHostDark } from '../../hooks/useHostDark';
+import { neutralizeJsxLikeTags } from './jsxLikeTags';
 
 const T = {
   sunken: 'var(--dsw-alias-bg-layer-2, #edf0f4)',
@@ -240,6 +248,11 @@ export function MdEditor({
   // overflow 裁剪）后弹层与锚点同坐标系，定位精准。
   const [overlayEl, setOverlayEl] = useState<HTMLDivElement | null>(null);
 
+  // 裸 JSX 式标签中和（模块注释第 6 条）：进编辑器的 markdown 一律先转义，
+  // prop 与受控同步同源同式（见 neutralizeJsxLikeTags——幂等，onChange 上抛
+  // 的导出形式再进来不二次改写）。
+  const safeValue = useMemo(() => neutralizeJsxLikeTags(value), [value]);
+
   // 受控同步：外部 value ≠ 最近一次发出的值（面板换成员/构建刷新草稿/值
   // 后到——确认表单先以空态挂载、全量草稿下一拍才到，docs/19.19）时整体
   // 重置；用户打字产生的回环（value === lastEmitted）不动编辑器。不设
@@ -249,9 +262,9 @@ export function MdEditor({
   useEffect(() => {
     if (value !== lastEmittedRef.current) {
       lastEmittedRef.current = value;
-      methodsRef.current?.setMarkdown(value);
+      methodsRef.current?.setMarkdown(safeValue);
     }
-  }, [value]);
+  }, [value, safeValue]);
 
   const plugins = useMemo(
     () => [
@@ -321,7 +334,9 @@ export function MdEditor({
     if (pasted.trim() === '') return;
     e.preventDefault();
     e.stopPropagation();
-    methodsRef.current?.insertMarkdown(pasted);
+    // 粘贴稿同样过裸标签中和（模块注释第 6 条）：insertMarkdown 走同一条
+    // 导入管线，裸 `<X>` 会让插入整体失败。
+    methodsRef.current?.insertMarkdown(neutralizeJsxLikeTags(pasted));
   };
 
   return (
@@ -358,7 +373,7 @@ export function MdEditor({
       <div style={{ minHeight, overflow: 'hidden', borderRadius: '0 0 10px 10px' }}>
         <MDXEditor
           ref={methodsRef}
-          markdown={value}
+          markdown={safeValue}
           onChange={(md) => {
             lastEmittedRef.current = md;
             onChange(md);

@@ -173,19 +173,6 @@ export function rosterAuthoritativeRoot(
   return undefined;
 }
 
-/** 按根序查单个角色条目（首个命中即回，第一根即权威口径）。 */
-export function findRosterMemberInRoots(
-  roots: readonly (string | undefined)[],
-  name: string,
-): { entry: RosterMember; root: string } | undefined {
-  for (const root of roots) {
-    if (root === undefined || root === '') continue;
-    const entry = findRosterMember(root, name);
-    if (entry !== undefined) return { entry, root };
-  }
-  return undefined;
-}
-
 /**
  * 角色库一句话简介索引（用户迭代 2026-09-08「团队现状去掉 role、把角色
  * profile 加进来」）：profile 的 live 源是 roles 表 profile 列（成员名=
