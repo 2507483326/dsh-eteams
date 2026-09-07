@@ -110,8 +110,7 @@ describe('team snapshots', () => {
           nowTaskId: null,
           name: LEADER_NAME,
           employeeId: null,
-          mainSessionId: 'cap-1',
-          childSessionId: '',
+          sessionId: '',
           roleId: null,
           status: 'ready',
           createdAt: 1,
@@ -127,6 +126,8 @@ describe('team snapshots', () => {
           chain: [{ member: 'Bob', stageBrief: '产出映射表' }],
           chainCursor: 0,
           status: 'wait',
+          // 主会话快照（task.main_session_id，v5 落列 v6 改名）：随快照整存整取。
+          mainSessionId: 'cap-1',
           attempts: [],
           retryCount: 0,
           createdAt: 1,
@@ -151,6 +152,7 @@ describe('team snapshots', () => {
     expect(loaded?.taskMembers[0]?.status).toBe('ready');
     expect(loaded?.tasks[0]?.subject).toBe('映射表');
     expect(loaded?.tasks[0]?.status).toBe('wait');
+    expect(loaded?.tasks[0]?.mainSessionId).toBe('cap-1');
     expect(loaded?.tasks[0]?.chain[0]?.member).toBe('Bob');
     expect(loaded?.pendingDecisions).toEqual([]);
     // 重写一次：同号覆盖（DELETE + 带原号重 INSERT），不产生重复行。
@@ -159,6 +161,55 @@ describe('team snapshots', () => {
     expect(again?.tasks).toHaveLength(1);
     expect(again?.taskMembers).toHaveLength(1);
     expect(again?.updatedAt).toBeGreaterThanOrEqual(state.updatedAt);
+  });
+
+  it('writeTeam fills team_members mirror columns from roles（v4 副本列）', async () => {
+    const state = seedTeam('镜像团队');
+    state.members.push({
+      memberId: 1,
+      roleId: null,
+      name: '王测试',
+      role: '测试工程师',
+      persona: {
+        frameworkVersion: 1,
+        role: '测试工程师',
+        duty: '验证交付',
+        style: '严谨',
+        skills: '用例设计',
+        rules: [],
+        executionPrompt: 'ep',
+      },
+      modelRoute: { model: '' },
+      avatar: { seed: 9, salt: 8 },
+      createdAt: 1,
+    });
+    await writeTeam(root, state);
+    const db = getDb(root);
+    const mirror = db
+      .prepare(
+        'SELECT tm.role_name, tm.persona_md, tm.profile FROM team_members tm WHERE tm.team_id = ?',
+      )
+      .get(state.id) as {
+      role_name: string | null;
+      persona_md: string | null;
+      profile: string | null;
+    };
+    expect(mirror.role_name).toBe('王测试');
+    expect(mirror.persona_md).toContain('王测试');
+    expect(mirror.profile).toBeNull();
+    // 重写快照：同名角色行已存在时人设以角色行为准（同源语义），镜像随
+    // 角色行刷新、不被内存 persona 覆盖。
+    state.members[0].persona.profile = '内存里的一句话';
+    await writeTeam(root, state);
+    const again = db
+      .prepare('SELECT tm.profile FROM team_members tm WHERE tm.team_id = ?')
+      .get(state.id) as { profile: string | null };
+    expect(again.profile).toBeNull();
+    expect(
+      (db.prepare('SELECT profile FROM roles WHERE role_name = ?').get('王测试') as {
+        profile: string | null;
+      }).profile,
+    ).toBeNull();
   });
 
   it('readTeam returns undefined for missing teams', async () => {
@@ -434,16 +485,20 @@ describe('v2→v3 member/roles consolidation migration', () => {
       expect(li.employee_id).toBe(8);
       expect(li.persona_md).toContain('李新员');
 
-      // team_members：班底行搬表，role_id 按名解析，路线列跟着走。
+      // team_members：班底行搬表，role_id 按名解析，路线列跟着走；v4 副本列
+      //（role_name/persona_md/profile）从 roles 回填到位。
       const teamRows = db
         .prepare(
-          'SELECT team_member_id, team_id, role_id, model, reasoning_effort FROM team_members ' +
-            'WHERE team_id = 1 ORDER BY team_member_id',
+          'SELECT team_member_id, team_id, role_id, role_name, persona_md, profile, model, ' +
+            'reasoning_effort FROM team_members WHERE team_id = 1 ORDER BY team_member_id',
         )
         .all() as Array<{
         team_member_id: number;
         team_id: number;
         role_id: number;
+        role_name: string | null;
+        persona_md: string | null;
+        profile: string | null;
         model: string | null;
         reasoning_effort: string | null;
       }>;
@@ -452,6 +507,11 @@ describe('v2→v3 member/roles consolidation migration', () => {
         model: 'deepseek-chat', reasoning_effort: 'high' });
       expect(teamRows[1]).toMatchObject({ team_member_id: 11, role_id: li.role_id,
         model: null, reasoning_effort: null });
+      expect(teamRows[0]?.role_name).toBe('张工程师');
+      expect(teamRows[0]?.persona_md).toBe(LEGACY_PERSONA_MD);
+      expect(teamRows[0]?.profile).toBe('负责页面骨架与交互');
+      expect(teamRows[1]?.role_name).toBe('李新员');
+      expect(teamRows[1]?.profile).toBeNull();
 
       // task_members 的 role_id 死列已移除，行数不丢。
       const tmColumns = (
@@ -468,6 +528,216 @@ describe('v2→v3 member/roles consolidation migration', () => {
       expect(
         (again.prepare('SELECT COUNT(*) AS n FROM roles').get() as { n: number }).n,
       ).toBe(3);
+      closeDb(legacyRoot);
+    } finally {
+      cleanupTempWorkspace(legacyRoot);
+    }
+  });
+});
+
+// getDb 首次连接时 ALTER + 从 roles 回填（v4 班底行角色信息副本）：v3 旧库
+// team_members 缺 role_name/persona_md/profile 三列，补列后按角色行刷新
+//（悬空 role_id 行刷成 NULL，与 loadMembers 防御性跳过同口径）；全新库 DDL
+// 即新形状、只跑幂等回填兜底。
+describe('v3→v4 team_members role mirror columns migration', () => {
+  const V3_ROLES_DDL = `CREATE TABLE roles (
+    role_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    role_name    TEXT NOT NULL,
+    employee_id  INTEGER,
+    persona_md   TEXT,
+    profile      TEXT,
+    avatar       TEXT,
+    created_time INTEGER NOT NULL,
+    update_time  INTEGER NOT NULL
+  );`;
+  const V3_TEAM_MEMBERS_DDL = `CREATE TABLE team_members (
+    team_member_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_id          INTEGER NOT NULL,
+    role_id          INTEGER,
+    model            TEXT,
+    reasoning_effort TEXT,
+    created_time     INTEGER NOT NULL,
+    update_time      INTEGER NOT NULL
+  );`;
+
+  it('adds mirror columns to team_members and backfills from roles on connect', () => {
+    const legacyRoot = mkdtempSync(join(tmpdir(), 'eteams-mig-v4-'));
+    try {
+      mkdirSync(dbDirOf(legacyRoot), { recursive: true });
+      const legacy = new DatabaseSync(dbFileOf(legacyRoot));
+      legacy.exec(V3_ROLES_DDL);
+      legacy.exec(V3_TEAM_MEMBERS_DDL);
+      legacy
+        .prepare(
+          'INSERT INTO roles (role_id, role_name, employee_id, persona_md, profile, avatar, created_time, update_time) ' +
+            "VALUES (5, '张工程师', 7, '# 人设 · 张工程师', '负责页面', NULL, 10, 11)",
+        )
+        .run();
+      // 班底行一行引用角色行、一行悬空（role_id 指向不存在的角色）。
+      legacy
+        .prepare(
+          'INSERT INTO team_members (team_member_id, team_id, role_id, model, created_time, update_time) ' +
+            'VALUES (1, 1, 5, NULL, 20, 21)',
+        )
+        .run();
+      legacy
+        .prepare(
+          'INSERT INTO team_members (team_member_id, team_id, role_id, created_time, update_time) ' +
+            'VALUES (2, 1, 999, 22, 23)',
+        )
+        .run();
+      legacy.close();
+
+      const db = getDb(legacyRoot);
+      const columns = (
+        db.prepare('PRAGMA table_info(team_members)').all() as Array<{ name: string }>
+      ).map((c) => c.name);
+      expect(columns).toEqual(expect.arrayContaining(['role_name', 'persona_md', 'profile']));
+      // 引用行：三列从 roles 回填。
+      const linked = db
+        .prepare('SELECT role_name, persona_md, profile FROM team_members WHERE team_member_id = 1')
+        .get() as { role_name: string | null; persona_md: string | null; profile: string | null };
+      expect(linked.role_name).toBe('张工程师');
+      expect(linked.persona_md).toBe('# 人设 · 张工程师');
+      expect(linked.profile).toBe('负责页面');
+      // 悬空行：三列刷成 NULL（与 loadMembers 防御性跳过同口径）。
+      const dangling = db
+        .prepare('SELECT role_name, persona_md, profile FROM team_members WHERE team_member_id = 2')
+        .get() as { role_name: string | null; persona_md: string | null; profile: string | null };
+      expect(dangling.role_name).toBeNull();
+      expect(dangling.persona_md).toBeNull();
+      expect(dangling.profile).toBeNull();
+
+      // 幂等：重开连接只重复回填（自愈），不报错、不改行数。
+      closeDb(legacyRoot);
+      const again = getDb(legacyRoot);
+      expect(
+        (again.prepare('SELECT COUNT(*) AS n FROM team_members').get() as { n: number }).n,
+      ).toBe(2);
+      closeDb(legacyRoot);
+    } finally {
+      cleanupTempWorkspace(legacyRoot);
+    }
+  });
+});
+
+// getDb 首次连接时的会话列迁移链（v5 + v6，docs/51）：v4 旧库 task 缺
+// session_id 列——v5 补列后按 task_members 领队行（name=项目牧羊人、
+// main_task_id 为空）锚定的 main_session_id 回填（只补 NULL 行：快照语义，
+// 已盖章行不随领队重锚改写）；v6 再把 session_id 改名 main_session_id、
+// task_members 的 main_session_id+child_session_id 合并成 session_id（领队
+// 行留自己的子代理会话，主会话锚点归任务行）；无领队行/未锚定的任务保持
+// NULL；全新库 DDL 即 v6 形状、迁移零操作。
+describe('v4→v5→v6 task/member session column migration', () => {
+  const V4_TASK_DDL = `CREATE TABLE task (
+    task_id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_id           INTEGER NOT NULL,
+    parent_id         INTEGER,
+    subject           TEXT NOT NULL,
+    description       TEXT,
+    depend_tasks      TEXT NOT NULL DEFAULT '[]',
+    member_chain_list TEXT NOT NULL DEFAULT '[]',
+    chain_cursor      INTEGER NOT NULL DEFAULT -1,
+    status            TEXT NOT NULL DEFAULT 'draft',
+    current_member    TEXT,
+    current_member_id INTEGER,
+    retry_count       INTEGER NOT NULL DEFAULT 0,
+    status_note       TEXT,
+    contract_md       TEXT,
+    idempotency_note  TEXT,
+    blocked_from      TEXT,
+    work_dir          TEXT,
+    completed_time    INTEGER,
+    created_time      INTEGER NOT NULL,
+    update_time       INTEGER NOT NULL
+  );`;
+  const V4_TASK_MEMBERS_DDL = `CREATE TABLE task_members (
+    task_member_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_id          INTEGER NOT NULL,
+    main_task_id     INTEGER,
+    now_task_id      INTEGER,
+    name             TEXT NOT NULL,
+    employee_id      INTEGER,
+    main_session_id  TEXT NOT NULL DEFAULT '',
+    child_session_id TEXT NOT NULL DEFAULT '',
+    status           TEXT NOT NULL DEFAULT 'staged',
+    persona_md       TEXT,
+    model            TEXT,
+    reasoning_effort TEXT,
+    avatar           TEXT,
+    created_time     INTEGER NOT NULL,
+    update_time      INTEGER NOT NULL
+  );`;
+
+  function columnNames(db: DatabaseSync, table: string): string[] {
+    return (
+      db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+    ).map((c) => c.name);
+  }
+
+  it('renames task session_id and merges member session columns on connect', () => {
+    const legacyRoot = mkdtempSync(join(tmpdir(), 'eteams-mig-v5-'));
+    try {
+      mkdirSync(dbDirOf(legacyRoot), { recursive: true });
+      const legacy = new DatabaseSync(dbFileOf(legacyRoot));
+      legacy.exec(V4_TASK_DDL);
+      legacy.exec(V4_TASK_MEMBERS_DDL);
+      // 领队行：团队 1 锚 cap-old（子会话 lead-child）；团队 2 无领队行。
+      legacy
+        .prepare(
+          'INSERT INTO task_members (task_member_id, team_id, main_task_id, name, main_session_id, child_session_id, status, created_time, update_time) ' +
+            "VALUES (1, 1, NULL, '项目牧羊人', 'cap-old', 'lead-child', 'ready', 10, 11)",
+        )
+        .run();
+      // 任务行：团队 1 一行（从领队行回填）、团队 2 一行（无领队行 → NULL）、
+      // 一行迁移后手工盖章（重开回填不覆盖——快照语义）。
+      const insTask = legacy.prepare(
+        'INSERT INTO task (task_id, team_id, subject, status, created_time, update_time) ' +
+          'VALUES (?, ?, ?, ?, 20, 21)',
+      );
+      insTask.run(1, 1, '回填行', 'ready');
+      insTask.run(2, 2, '无领队行', 'ready');
+      insTask.run(3, 1, '已盖章行', 'ready');
+      legacy.close();
+
+      const db = getDb(legacyRoot);
+      // v6 终态：task 列已改名 main_session_id；task_members 只剩 session_id。
+      expect(columnNames(db, 'task')).toContain('main_session_id');
+      expect(columnNames(db, 'task')).not.toContain('session_id');
+      expect(columnNames(db, 'task_members')).toContain('session_id');
+      expect(columnNames(db, 'task_members')).not.toContain('main_session_id');
+      expect(columnNames(db, 'task_members')).not.toContain('child_session_id');
+      const rows = db
+        .prepare('SELECT task_id, main_session_id FROM task ORDER BY task_id')
+        .all() as Array<{ task_id: number; main_session_id: string | null }>;
+      // v5 回填按领队行锚定，v6 原值改名（快照语义：落库后不变）。
+      expect(rows[0]).toEqual({ task_id: 1, main_session_id: 'cap-old' });
+      expect(rows[1]).toEqual({ task_id: 2, main_session_id: null });
+      // 领队行只留自己的子代理会话（child_session_id 合并进来），主会话锚点
+      // 不再落行。
+      const leader = db
+        .prepare('SELECT session_id FROM task_members WHERE task_member_id = 1')
+        .get() as { session_id: string };
+      expect(leader.session_id).toBe('lead-child');
+      // 迁移后手工盖章，重开迁移不得覆盖（快照落库后不变）。
+      db.prepare('UPDATE task SET main_session_id = ? WHERE task_id = 3').run('cap-mine');
+
+      // 幂等：重开连接迁移逐步跳过，不报错、不改行数、不覆盖已盖章行。
+      closeDb(legacyRoot);
+      const again = getDb(legacyRoot);
+      expect(
+        (again.prepare('SELECT COUNT(*) AS n FROM task').get() as { n: number }).n,
+      ).toBe(3);
+      expect(
+        (again.prepare('SELECT main_session_id FROM task WHERE task_id = 3').get() as {
+          main_session_id: string | null;
+        }).main_session_id,
+      ).toBe('cap-mine');
+      expect(
+        (again.prepare('SELECT main_session_id FROM task WHERE task_id = 1').get() as {
+          main_session_id: string | null;
+        }).main_session_id,
+      ).toBe('cap-old');
       closeDb(legacyRoot);
     } finally {
       cleanupTempWorkspace(legacyRoot);

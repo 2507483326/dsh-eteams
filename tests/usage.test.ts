@@ -49,8 +49,8 @@ afterEach(() => {
   cleanupTempWorkspace(root);
 });
 
-/** SQLite seed: team row + leader instance row (usage captain attribution
- * matches the leader row's mainSessionId on disk). */
+/** SQLite seed: team row + leader instance row + one stamped task (usage
+ * captain attribution matches the task row's main_session_id snapshot, v6). */
 async function seedTeam(name: string, leaderSession: string): Promise<number> {
   let teamId = 0;
   withTeamTx(stateRoot, undefined, (tx) => {
@@ -70,15 +70,29 @@ async function seedTeam(name: string, leaderSession: string): Promise<number> {
         nowTaskId: null,
         name: LEADER_NAME,
         employeeId: null,
-        mainSessionId: leaderSession,
-        childSessionId: '',
+        sessionId: '',
         roleId: null,
         status: 'ready' as const,
         createdAt: 1,
       },
     ],
     members: [],
-    tasks: [],
+    tasks: [
+      {
+        id: 1,
+        subject: '演示任务',
+        parentId: null,
+        dependencies: [],
+        chain: [],
+        chainCursor: -1,
+        status: 'ready' as const,
+        attempts: [],
+        retryCount: 0,
+        mainSessionId: leaderSession,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ],
     pendingDecisions: [],
   } satisfies TeamState;
   await writeTeam(stateRoot, state);
@@ -242,7 +256,7 @@ describe('attribution priority', () => {
     expect(rows[0]?.member_name).toBeNull();
   });
 
-  it('captain session matches the leader row mainSessionId on disk', async () => {
+  it('captain session matches the task-row mainSessionId snapshot on disk', async () => {
     const teamId = await seedTeam('bing-dui', 'cap-9');
     const meter = installMeter();
     meter.emit(

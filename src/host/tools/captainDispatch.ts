@@ -83,10 +83,10 @@ function captainPersonaOf(env: RuntimeEnv, config: ETeamsResolvedConfig): string
 }
 
 /**
- * 落盘持续领队子代理的 durable id：写领队行（task_members 领队锚点行，
- * name=领队名且 main_task_id 为空）的 child_session_id——团队锁内同步事务
- * 直改该列，不整存整取快照。团队消失（删除竞态）时静默放弃——子代理已
- * 建立但惰性无害，下一次 dispatch 按空缺处理。
+ * 落盘持续领队子代理的 durable id：写领队行（task_members 领队行，name=
+ * 领队名且 main_task_id 为空）的 session_id——v6 该列记本行自己的子代理
+ * 会话。团队锁内同步事务直改该列，不整存整取快照。团队消失（删除竞态）
+ * 时静默放弃——子代理已建立但惰性无害，下一次 dispatch 按空缺处理。
  */
 async function persistCaptainChildId(
   env: RuntimeEnv,
@@ -98,11 +98,11 @@ async function persistCaptainChildId(
     const team = readTeamSync(root, teamId);
     if (team === undefined) return;
     const leader = leaderRowOf(team);
-    if (leader === undefined || leader.childSessionId === childId) return;
+    if (leader === undefined || leader.sessionId === childId) return;
     withTeamTx(root, team.id, (tx) => {
       tx.db
         .prepare(
-          'UPDATE task_members SET child_session_id = ?, update_time = ? ' +
+          'UPDATE task_members SET session_id = ?, update_time = ? ' +
             'WHERE team_id = ? AND name = ? AND main_task_id IS NULL',
         )
         .run(childId, Date.now(), team.id, LEADER_NAME);
@@ -159,7 +159,7 @@ export function createCaptainDispatchTool(
       );
       const persona = captainPersonaOf(env, config);
       const leader = leaderRowOf(team);
-      const previous = leader?.childSessionId ?? '';
+      const previous = leader?.sessionId ?? '';
       // 领队子代理运行路线（用户迭代 2026-09-04 恢复领队模型选择）：领队行
       // model 有值即 override（provider 固定 config.memberProvider，docs/35
       // §3#5）；空 = 会话默认——宿主 agent-default-model 即时快照 pin；服务

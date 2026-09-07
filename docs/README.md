@@ -48,7 +48,9 @@
 | 44   | [44 客户端结构性改造：页面规范与整体方案](44-page-structure-spec.md) | 六项诉求（Router 页面拆分/组件复用/状态机查表/目录重排/分区横幅规范/工作流推进）的方案定稿：react-router-dom v6 MemoryRouter 每表面一棵（插件不拥有 URL）+ 十路径路由树、lib/status.ts 查表层、components/ 领域组件层、pages 两级目录终表（域目录上提 + 组件名全驼峰）、七区横幅分区规范与三种文件模板、M1-M8 模块序列与执行纪律 |
 | 45   | [45 客户端项目地图与组件清单](45-project-map.md) | src/client 全量文件地图（入口/表面/teamsView 20 文件含去向/features/lib/hooks/store/components）+ 依赖方向规则 + 可复用组件清单（既有件与消费位、M7 新增 11 件）；M8 收口为终态 |
 | 46   | [46 结构性改造清单](46-refactor-checklist.md) | M1-M8 逐文件 checkbox（路由骨架/角色域三页/任务域两页/团队域三页/看板汇报/弹层卡片/复用收口 11 项/目录重排终检）+ 四道门禁基线与验收记录 |
-| 49   | [49 成员=角色合并（DB v2→v3）](49-member-roles-consolidation.md) | member 表并入 roles 角色库表（成员=角色全局一份：profile 一句话简介独立成列、人设单一来源、加成员即入库、显式工号改写角色行）+ 新增 team_members 班底表（团队×角色 + 该队派发路线）、旧 roles 标签登记表删除、task_members 的 role_id 死列移除：动机 / 新模型 DDL / 单事务迁移 / 行为变化对照 / 380 用例四绿门验收 |
+| 49   | [49 成员=角色合并（DB v2→v3，v4 副本列增补）](49-member-roles-consolidation.md) | member 表并入 roles 角色库表（成员=角色全局一份：profile 一句话简介独立成列、人设单一来源、加成员即入库、显式工号改写角色行）+ 新增 team_members 班底表（团队×角色 + 该队派发路线）、旧 roles 标签登记表删除、task_members 的 role_id 死列移除：动机 / 新模型 DDL / 单事务迁移 / 行为变化对照 / 382 用例四绿门验收；§49.6 v4 增补——team_members 补 role_name/persona_md/profile 副本列（真相在 roles，写路径统一回填、删角色刷 NULL、旧库自动迁移） |
+| 50   | [50 任务行主会话快照（DB v4→v5）](50-task-session-id.md) | task 表补 session_id 列：建任务时盖章领队行锚定的主会话 ID（快照语义落库后不变，领队重锚不回改；面板/工具/旧版导入三路同源；v4 旧库 getDb ALTER 补列 + 只补 NULL 行从领队行回填）：语义 / DDL / 写入路径 / 迁移 / 验收（**v6 改名 main_session_id，见 51**） |
+| 51   | [51 会话列归位（DB v5→v6）](51-task-main-session-id.md) | 主会话 ID 只属于任务行：task.session_id 改名 main_session_id（快照语义不变）；task_members.main_session_id 改名 session_id（本行自己的子代理会话，领队行=领队子代理），child_session_id 合并消失；team 表不存会话（团队级锚按任务行快照 ∪ 心跳派生，建队主会话记 team.created 事件留痕 captainSession，findTeamByCaptain 快照∪事件双查）；v5 迁移 PRAGMA 守卫 + v6 RENAME/合并迁移；补章（派发时盖任务行）+ requireTeamById 四判据：语义 / DDL / 迁移链 / 锚点派生 / 留痕 / 身份判据 / 写入路径 / 验收 / 边界 |
 
 ## 决策记录（2026-02 与用户确认）
 

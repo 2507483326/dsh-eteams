@@ -801,3 +801,58 @@ GUI 装机冒烟持续**未验证**（链式接力交棒、开始钮显示需装
 改动面：`src/client/features/tasks/taskAssignCore.ts`（`nextChainAfterDrop` 删、`insertionIndexOf`/`chainAfterInsert` 增）、`taskAssign.tsx`（容器 drop/caret/StationChip/title 文案）、`tests/taskAssign.test.ts`（`nextChainAfterDrop` 用例改写为 insertionIndexOf 5 例 + chainAfterInsert 6 例；含 chip 定点替换 3 例随语义废止删除）。
 
 **三十五轮四绿门（2026-09-06）**：typecheck / lint（0 error）/ test（28 文件 **373 用例**全过——基线 369：撤 7 增 11 净 +4，含用户未提交 host 测试无失败）/ build（`SMOKE OK: id=dsh-eteams, exports=[apply, inject]`）全绿。GUI 装机冒烟持续**未验证**（拖拽落点前后判位、插入指示线位置、chip 调序回归、去重闪现落容器需装机后在 DSH 面板人工过一遍；请重启 DSH 载入最新构建包后再验）。
+
+## 三十六轮追加（2026-09-06，DA49：draft 派发即就绪——开始钮零反馈修复）
+
+用户原话：「任务点击开始没有反应」。
+
+根因（读库实锤）：用户现库主任务下 4 张小任务全是 **draft**（v2 时期导入数据——现行建任务即 ready 口径之前），而两道闸一起挡死：①宿主 `startGroupTask` 发棒序只消费 ready，draft 卡静默 `continue`，整体开始返回 `{started:0, skipped:[]}` 零反馈；②客户端 `isStartable` 只认 ready，draft 卡连开始钮都不渲染（面板又没有 draft→ready 晋升钮）。点开始等于没点，且无任何提示。
+
+| 项 | 落法 |
+| --- | --- |
+| ①派发核 draft 即就绪 | `prepareAssignment`（`forReassign !== true` 分支）开头：`task.status === 'draft'` 先 `applyTransition(task, 'ready', Date.now())`（draft→ready 本就是合法边，taskMachine EDGES），状态闸只挡其余态——依赖未完成/占用校验在其后原样兜（draft 卡依赖未完成 → 「依赖未完成：N」诚实跳过）；单任务开始（webui /task/:id/start 单分支）/领队指派/接力续派同走派发核，一并生效 |
+| ②发棒序放行 draft | `startGroupTask` 循环过滤改 `['draft','ready']`——draft+空链卡照旧「需要选择成员」跳过、draft+依赖未完成照旧按卡透出原因；整体开始不再 `{started:0, skipped:[]}` 静默 |
+| ③客户端判据放行 draft | `isStartable` = `ready ‖ draft`（taskDisplayStatus，注释同步 DA37「待开始」语义闭环：面板显示待开始的卡必有开始钮或「需要选择成员」提示面）；taskSubtaskItem 行头/taskDetailPage 行首判据收拢位自动生效，两处行内注释同步；已入执行/终态依旧不渲染 |
+| ④测试 | tests/webui.test.ts 新增整体开始用例（SQL 翻 draft 模拟 legacy）：draft 组整体开始→首棒晋升派发（wait/Alice）、后棒「等待链式接力」、空链「需要选择成员」；draft 单任务直接开始→wait；draft+依赖 wait→跳过原因含「依赖未完成」 |
+
+改动面：`src/host/runtime/assignment.ts`（prepareAssignment 晋升 + startGroupTask 过滤）、`src/client/features/tasks/taskDisplayStatus.ts`（isStartable）、`src/client/pages/tasks/taskSubtaskItem.tsx` / `taskDetailPage.tsx`（行内注释校正）、`tests/webui.test.ts`。
+
+**三十六轮四绿门（2026-09-06）**：typecheck 全绿；test 28 文件 **383 用例**全过（基线 382 +1）；build 通过。GUI 装机冒烟**未验证**（用户现库 4 张 draft 小任务点开始应派发首棒并透出跳过原因——需重启 DSH 载入新构建后人工过一遍；重启同时带走 v4 team_members 副本列迁移）。
+
+
+## 三十七轮追加（2026-09-06，DA50：主会话锚点冷恢复——起会话不再要求主会话窗口在线）
+
+用户原话：「还记得那个会话的ID吗？不能直接跳转到那个会话吗」「那就可以直接跳到这个会话启动任务啊」。
+
+背景（读库实锤）：用户团队领队行登记的主会话 `session-081e9c8e-…` 已关窗，成员「文档技术调研大师」又从未起过会话——起成员子会话必须拿**活的父 Agent** 当 parent（`startContinuable`/`followup` 收 Agent 对象不收 ID 串），两级锚点（领队行在册 → 心跳在册）都落空时只能报「主会话窗口不在线」，逼用户先手动开窗口。而 DSH 运行时 `AgentRegistry`（ctx.agents 真实接口，插件此前只声明了 `get` 子集）本就提供 `resume({ resumeSessionId })`——按持久化会话 ID 把会话加载回活代理。
+
+| 项 | 落法 |
+| --- | --- |
+| ①seam 增可选能力 | `base.ts` RuntimeContext.agents 增可选 `resume(options: { resumeSessionId: SessionId; signal? }) => Promise<{ agent }>`（结构子集，真实 ResumeAgentOptions 字段更宽）——运行时版本门控，调用方 feature-detect |
+| ②captainFor 升三级梯度 | ①领队行锚点在册 → ②心跳锚点在册（DA38/DA40 语义原样）→ ③两锚都不在册但领队行记得主会话 ID 时冷恢复：`agents.resume` 按持久化会话 ID 无窗复活主会话（不跑任何回合只当派发父锚；与领队行同 ID，ensureSpawned 重锚 no-op）；恢复失败/旧运行时落 undefined 走原报错；恢复成败各落一条 warn 日志 |
+| ③句柄纪律 | resume 返回的 AgentHandle **dispose 绝不调用**（create 语义里 dispose 拆会话）——复活的主会话像用户开着的窗口一样常驻到进程回收，句柄弃置由注册表持有 |
+| ④报错文案 | ensureSpawned 锚点不可用文案对齐三级梯度：「成员「X」尚未起会话，主会话锚点不可用（不在线且无法冷恢复）」+ 提示开窗口/开心跳 |
+| ⑤测试 | tests/webui.test.ts 新增 2 例（harness 增 ctx.agents 引用）：领队锚点下线+无心跳 → 整体开始冷恢复派发成功（started 1、恢复 ID=领队行登记值、领队行原样、复活后二次派发不再 resume）；resume 抛错 → 跳过原因含「尚未起会话/无法冷恢复」、卡保持 ready 零半步 |
+
+改动面：`src/host/runtime/base.ts`（agents.resume 可选能力）、`src/host/runtime/assignment.ts`（captainFor 三级梯度 + 两调用点 await + 报错文案）、`tests/webui.test.ts`。
+
+**三十七轮四绿门（2026-09-06）**：typecheck 全绿；lint（改动文件）零告警；test 28 文件 **386 用例**全过（基线 384 +2）；build 通过（SMOKE OK）。GUI 装机冒烟**未验证**（现库团队主会话关窗后点开始应自动冷恢复并派发首棒——需重启 DSH 载入新构建后人工过一遍；旧运行时若无 agents.resume 则维持原报错行为，属预期降级）。
+
+## 三十八轮追加（2026-09-07，DB v6：会话列归位——主会话快照归任务行，成员行只记自己的子会话）
+
+用户原话（两轮纠偏定案）：「main_session_id 应该属于task表，task_members 应该记录的是自己的子agent session_id。把task_members 中的main_session_id 修改为 session_id。task表加上 main_session_id」「为啥 team 会加 main_session_id，team 属于多个task啊。task_members 也不需要main_session_id 啊，它可以通过task_id 反查出main_session_id啊」。
+
+模型定案：`task.main_session_id`（v5 session_id 改名，快照语义不变）；`task_members.session_id` = 本行自己的子代理会话（成员行=成员子会话，领队行=领队子代理冷恢复凭证），旧 main/child 两列合并丢弃；team 表不存会话列。详见 docs/51（语义 / DDL / 迁移链 / 锚点派生 / 留痕 / 判据 / 写入路径 / 边界）。
+
+| 项 | 落法 |
+| --- | --- |
+| ①迁移 | getDb 链尾 migrateTaskSessionColumnsV6：task 缺 main_session_id 时 RENAME（快照保留）或 ADD；task_members 缺 session_id 时 ADD + `UPDATE session_id = child_session_id` + DROP main/child；v5 迁移加 PRAGMA 守卫（task_members 还有 main_session_id 列才跑领队行回填，防 SCHEMA_SQL 预建 v6 形状的残缺库误跑） |
+| ②锚点派生 | teamMainSessionOf(team) = 首个非空任务行快照；唤醒/回收/发消息等团队级锚点全部 `快照 ∥ 心跳`；captainFor 三级梯度锚源换任务行（①快照在册 ②心跳 ③冷恢复）；captainAgentOf/agentactivity/workspaces 同步换源 |
+| ③建队留痕 | createTeam 的 team.created payload 增 `captainSession`；store.findTeamByCaptain 重写为任务快照 ∪ 建队事件 UNION；新增 store.teamCreatedBy 定向查；resolveCaller/usage 领队层改调 findTeamByCaptain——补齐「建队→首个任务」窗口期的领队身份 |
+| ④补章 | ensureSpawned 起人前任务行未登记主会话时按本次派发锚点补章（心跳锚也收），已登记不改写；面板建卡无心跳的场景由 DA38/DA40 用例锁行为（sub.mainSessionId === 'cap-second'，领队行 sessionId 仍空串） |
+| ⑤身份判据 | requireTeamById 四判据：任务行快照 / 领队行子代理会话 / 会话绑定 / 建队事件留痕（面板合成代理空串放行）；addMember 领队守卫简化为只拦不在册/已移除；面板 addMember 路由显式传 teamId（修无任务团队建成员误报「你还没有团队」） |
+| ⑥测试 | 六个测试文件种子/断言全面换 v6 形状（领队行 sessionId=''、任务行 mainSessionId 盖章、DA50 冷恢复断言改按任务行快照、迁移用例改 v4→v5→v6 链）；store.test.ts 新增迁移链 describe（columnNames 助手 + 三表形状/值断言） |
+
+改动面：`src/host/state/db.ts`（V5 守卫 + V6 迁移 + SCHEMA_SQL/schema.sql v6）、`src/host/state/schema.sql`、`src/host/state/store.ts`（findTeamByCaptain + teamCreatedBy）、`src/host/state/import.ts`、`src/host/runtime/teamOps.ts`（行字面量/事件留痕/锚点派生/requireTeamById）、`src/host/runtime/assignment.ts`（补章注释）、`src/host/runtime/webui.ts`（投影/路由/建卡收 sessionId）、`src/host/runtime/usage.ts`、`src/host/runtime/workspaces.ts`、`src/host/tools/identity.ts`、`src/host/tools/captainDispatch.ts`、`src/client/lib/monitor.ts`、tests/（workspaces/sessionTeam/usage/captainDispatch/lifecycle/store/webui）。
+
+**三十八轮四绿门（2026-09-07）**：typecheck 全绿；lint（改动文件）零告警；test 28 文件 **386 用例**全过（基线不变：用例数守恒，断言面换 v6 形状）；build 通过（SMOKE OK）；SCHEMA_SQL 与 schema.sql 逐字一致核对通过。GUI 装机冒烟**未验证**（用户现库 v5 重启宿主自动迁移：任务行盖章保留、子会话保留 session_id、领队行 main 列丢弃——面板建队→建任务→派发→重启冷恢复全链需人工过一遍；v6 前旧团队的 team.created 无 captainSession 字段，身份靠任务快照，v5 迁移已保证存量任务全部有值）。

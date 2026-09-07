@@ -139,13 +139,13 @@ export function displayStatusOf(status: string, retryCount = 0): DisplayStatus {
 
 /**
  * 任务/小任务「开始」钮状态判据（docs/44 44.2.2，M3 自 tasks/taskSubtaskItem
- * 行头与任务详情页头收拢）：状态窗口 = ready（执行链就绪待派单——host
- * /task/<id>/start 派发核只消费 ready 链；draft 拆解中与已入执行不渲染）。
- * 链是否为空（ready 无链 = 行内「需要选择成员」提示面）是数据判据，调用位
- * 与状态判据并列消费——判定结果与收拢前逐位等价。
+ * 行头与任务详情页头收拢）：状态窗口 = ready / draft（三十六轮 DA49——派发核
+ * draft 即就绪，待开始语义闭环；draft 与 ready 面板同显「待开始」，旧库导入
+ * 的 draft 卡此前不渲染开始钮）。链是否为空（无链 = 行内「需要选择成员」
+ * 提示面）是数据判据，调用位与状态判据并列消费——判定结果与收拢前逐位等价。
  */
 export function isStartable(status: string): boolean {
-  return status === 'ready';
+  return status === 'ready' || status === 'draft';
 }
 
 /**

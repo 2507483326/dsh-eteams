@@ -23,7 +23,7 @@ import {
 } from '../src/host/runtime/captainAgent';
 import { cleanupTempWorkspace } from './support/tmpWorkspace';
 import type { ETeamsResolvedConfig } from '../src/host/config';
-import type { TaskMemberRecord, TeamState } from '../src/host/model/types';
+import type { TaskMemberRecord, TaskRecord, TeamState } from '../src/host/model/types';
 
 let base: string;
 let wsA: string;
@@ -47,7 +47,7 @@ afterEach(() => {
   unregisterCaptainChild('s-child');
 });
 
-function leaderRow(teamId: number, mainSessionId: string): TaskMemberRecord {
+function leaderRow(teamId: number): TaskMemberRecord {
   return {
     id: 0,
     teamId,
@@ -55,8 +55,7 @@ function leaderRow(teamId: number, mainSessionId: string): TaskMemberRecord {
     nowTaskId: null,
     name: LEADER_NAME,
     employeeId: null,
-    mainSessionId,
-    childSessionId: '',
+    sessionId: '',
     roleId: null,
     status: 'ready',
     createdAt: 1,
@@ -65,7 +64,7 @@ function leaderRow(teamId: number, mainSessionId: string): TaskMemberRecord {
 
 function memberRow(
   teamId: number,
-  childSessionId: string,
+  sessionId: string,
   status: TaskMemberRecord['status'],
 ): TaskMemberRecord {
   return {
@@ -75,15 +74,15 @@ function memberRow(
     nowTaskId: null,
     name: '甲',
     employeeId: null,
-    mainSessionId: '',
-    childSessionId,
+    sessionId,
     roleId: null,
     status,
     createdAt: 1,
   };
 }
 
-/** SQLite 契约播种（替代旧 team.json 落盘）：team 行 + 可选领队/成员实例行。 */
+/** SQLite 契约播种（替代旧 team.json 落盘）：team 行 + 可选领队/成员实例行。
+ * 领队身份锚点（v6）落在任务行 main_session_id 快照——leaderSession 同值盖章。 */
 function seedTeam(
   ws: string,
   opts: {
@@ -100,7 +99,24 @@ function seedTeam(
     teamId = insertTeamRow(tx, name, opts.leaderSession !== undefined, tx.now);
   });
   const taskMembers: TaskMemberRecord[] = [];
-  if (opts.leaderSession !== undefined) taskMembers.push(leaderRow(teamId, opts.leaderSession));
+  const tasks: TaskRecord[] = [];
+  if (opts.leaderSession !== undefined) {
+    taskMembers.push(leaderRow(teamId));
+    tasks.push({
+      id: 1,
+      subject: '演示任务',
+      parentId: null,
+      dependencies: [],
+      chain: [],
+      chainCursor: -1,
+      status: 'ready',
+      attempts: [],
+      retryCount: 0,
+      mainSessionId: opts.leaderSession,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+  }
   if (opts.memberSession !== undefined) {
     taskMembers.push(memberRow(teamId, opts.memberSession, opts.memberStatus ?? 'ready'));
   }
@@ -112,7 +128,7 @@ function seedTeam(
     updatedAt: 1,
     taskMembers,
     members: [],
-    tasks: [],
+    tasks,
     pendingDecisions: [],
   };
   withTeamTx(root, teamId, (tx) => writeTeamInTx(tx, state));

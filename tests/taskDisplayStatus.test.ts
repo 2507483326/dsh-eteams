@@ -176,9 +176,9 @@ describe('memberTone（成员状态五档 + 旧值兜底）', () => {
 });
 
 describe('isStartable / isTerminal（M3 收拢三处开始钮判据的状态窗口）', () => {
-  it('isStartable：任务/小任务「开始」钮仅 ready 渲染（十态逐格，判定与收拢前逐位等价）', () => {
+  it('isStartable：任务/小任务「开始」钮 ready/draft 渲染（十态逐格；三十六轮 DA49 draft 并入待开始窗口）', () => {
     expect(isStartable('ready')).toBe(true);
-    expect(isStartable('draft')).toBe(false);
+    expect(isStartable('draft')).toBe(true);
     expect(isStartable('wait')).toBe(false);
     expect(isStartable('start')).toBe(false);
     expect(isStartable('paused')).toBe(false);

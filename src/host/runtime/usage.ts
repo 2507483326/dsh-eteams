@@ -33,10 +33,9 @@ import {
   type UsageRoleKind,
   type UsageTotals,
 } from '../state/usageStore.js';
-import { listTeams } from '../state/store.js';
+import { findTeamByCaptain } from '../state/store.js';
 import { captainChildTeamOf } from './captainAgent.js';
 import { getSessionTeamId } from './sessionTeam.js';
-import { leaderRowOf } from './notifier.js';
 import { stateRootFor, type RuntimeLogger } from './base.js';
 
 // ---------- 行模型（docs/40；类型本体在 state/usageStore，此处转出兼容） ----------
@@ -108,7 +107,7 @@ function rememberRoute(sessionId: string, provider: unknown, model: unknown): vo
 
 /**
  * 身份缓存（解析一次、缓存）：member/captain-child/binding 命中是内存注册表
- * 查询，captain 命中要读盘（listTeams）——全量短 TTL 缓存，避免活跃会话
+ * 查询，captain 命中要读盘（findTeamByCaptain）——全量短 TTL 缓存，避免活跃会话
  * 每事件读盘（28.3.2「解析失败短 TTL 缓存」同口径扩到正向命中；绑定可被
  * 用户随时解除，TTL 过期后按最新状态重解析）。
  */
@@ -136,15 +135,11 @@ async function resolveIdentity(sessionId: string, root: string): Promise<Session
     if (childTeam !== undefined) {
       identity = { teamId: childTeam, memberName: null, roleKind: 'captain-child' };
     } else {
-      // 3. 领队主会话：本工作区团队快照比对领队行 main_session_id（领队锚点
-      //    docs/36 建议 3；team.captainSessionId 字段已随锚点迁入领队行）
+      // 3. 领队主会话：任务行 main_session_id 快照（v6 派生：同队任务由同一
+      //    领队会话创建，任一任务盖章即归属）；无任务团队退建队事件留痕。
       let captainTeamId: string | undefined;
       try {
-        const teams = await listTeams(root);
-        const hit = teams.find((t) => {
-          const leader = leaderRowOf(t);
-          return leader !== undefined && leader.mainSessionId === sessionId;
-        });
+        const hit = await findTeamByCaptain(root, sessionId);
         if (hit !== undefined) captainTeamId = String(hit.id);
       } catch {
         // 读盘失败不归属（落 workspace 桶）；下次 TTL 过期重试

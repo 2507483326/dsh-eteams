@@ -18,8 +18,12 @@ import { fallbackExecutionPrompt, PERSONA_FRAMEWORK_VERSION } from '../prompts/p
 /** Current db schema version (docs/27：与 team.json 结构版本互不相干，从 1 起步).
  * v2（十六轮 DA29）：task 合同四数组列合并为 contract_md 单列。
  * v3（成员=角色合并）：member 表精简改名成 roles 角色库表，班底另起
- * team_members 表，旧 roles 标签登记表删除（旧库 getDb 迁移回填）。 */
-export const DB_SCHEMA_VERSION = 3;
+ * team_members 表，旧 roles 标签登记表删除（旧库 getDb 迁移回填）。
+ * v4（班底行角色信息副本）：team_members 补 role_name/persona_md/profile
+ * 副本列，真相在 roles，写入路径同步刷新（旧库 getDb ALTER + 回填）。
+ * v5（任务行主会话快照）：task 补 session_id 列，建任务时盖章领队行锚定的
+ * 主会话 ID（快照，落库后不变；旧库 getDb ALTER + 从领队行回填）。 */
+export const DB_SCHEMA_VERSION = 6;
 
 /**
  * 领队保留名（docs/27）：task_members 领队行 `name` 固定值，领队行查找
@@ -97,6 +101,9 @@ export function getDb(stateRoot: string): DatabaseSync {
   migrateMemberRolesV3(db);
   db.exec(loadSchemaSql());
   migrateTaskContractMd(db);
+  migrateTeamMemberRoleColumnsV4(db);
+  migrateTaskSessionIdV5(db);
+  migrateTaskSessionColumnsV6(db);
   connections.set(stateRoot, db);
   return db;
 }
@@ -294,6 +301,9 @@ function migrateMemberRolesV3(db: DatabaseSync): void {
       db.prepare('PRAGMA table_info(task_members)').all() as Array<{ name: string }>
     ).map((c) => c.name);
     if (tmColumns.includes('role_id')) db.exec('ALTER TABLE task_members DROP COLUMN role_id;');
+    // v4 副本列回填：本次迁移新落的 team_members 行也带上三列镜像（DDL 已是
+    // v4 形状，三列现值为 NULL；与后续 migrateTeamMemberRoleColumnsV4 同口径）
+    db.exec(TEAM_MEMBER_MIRROR_BACKFILL_SQL);
     db.exec('COMMIT');
   } catch (error) {
     try {
@@ -309,6 +319,117 @@ function migrateMemberRolesV3(db: DatabaseSync): void {
 function profileFromLegacyMd(md: string | null | undefined): string | null {
   if (md === null || md === undefined) return null;
   return personaFromMd(md, '', '').profile ?? null;
+}
+
+/**
+ * v4 班底行角色信息副本回填：三列一律从 roles 按名刷新（相关子查询，悬空
+ * role_id 行刷成 NULL，与读路径防御性跳过同口径）。幂等自愈，不碰
+ * update_time（副本刷新不算行变更）。迁移与写入路径共用同一条 SQL——db.ts
+ * 不依赖 store.ts，这里留一份内联副本。
+ */
+const TEAM_MEMBER_MIRROR_BACKFILL_SQL =
+  'UPDATE team_members SET ' +
+  'role_name = (SELECT r.role_name FROM roles r WHERE r.role_id = team_members.role_id), ' +
+  'persona_md = (SELECT r.persona_md FROM roles r WHERE r.role_id = team_members.role_id), ' +
+  'profile = (SELECT r.profile FROM roles r WHERE r.role_id = team_members.role_id)';
+
+/**
+ * v4 迁移（班底行角色信息副本）：team_members 补 role_name/persona_md/profile
+ * 三列。全新库的 DDL 已是新形状（table_info 检测到三列，只跑回填兜底）；
+ * v2/v3 旧库 ALTER 补列后按 roles 角色行回填。幂等：已补列的库重开只重复
+ * 回填（自愈，不报错）。随 migrateTaskContractMd 先例不显式开事务。
+ */
+function migrateTeamMemberRoleColumnsV4(db: DatabaseSync): void {
+  const columns = (
+    db.prepare('PRAGMA table_info(team_members)').all() as Array<{ name: string }>
+  ).map((c) => c.name);
+  if (columns.length === 0) return; // team_members 都不存在：不会发生（防御）
+  if (!columns.includes('role_name')) {
+    db.exec('ALTER TABLE team_members ADD COLUMN role_name TEXT;');
+  }
+  if (!columns.includes('persona_md')) {
+    db.exec('ALTER TABLE team_members ADD COLUMN persona_md TEXT;');
+  }
+  if (!columns.includes('profile')) {
+    db.exec('ALTER TABLE team_members ADD COLUMN profile TEXT;');
+  }
+  db.exec(TEAM_MEMBER_MIRROR_BACKFILL_SQL);
+}
+
+/**
+ * v5 迁移（任务行主会话快照）：task 补 session_id 列，旧库已有任务行从
+ * task_members 领队行（`name=领队名 AND main_task_id IS NULL`）锚定的
+ * main_session_id 回填——与建任务时盖章同一条口径。快照语义：只补 NULL 行
+ * （已盖章行不随领队重锚改写）；无领队行/未锚定的任务保持 NULL（悬空
+ * NULL，与 v4 副本列同口径）。幂等：已补列的库重开只重复补 NULL（自愈，
+ * 不报错）。随 migrateTaskContractMd 先例不显式开事务。
+ */
+const TASK_SESSION_BACKFILL_SQL =
+  'UPDATE task SET session_id = (' +
+  `SELECT tm.main_session_id FROM task_members tm WHERE tm.team_id = task.team_id AND tm.name = '${LEADER_NAME}' ` +
+  'AND tm.main_task_id IS NULL) WHERE session_id IS NULL';
+
+function migrateTaskSessionIdV5(db: DatabaseSync): void {
+  const columns = (
+    db.prepare('PRAGMA table_info(task)').all() as Array<{ name: string }>
+  ).map((c) => c.name);
+  if (columns.length === 0) return; // task 表都不存在：不会发生（防御）
+  if (!columns.includes('session_id')) {
+    // v6 库（task 列已是 main_session_id）直接跳过：v5 只服务旧形状。
+    if (columns.includes('main_session_id')) return;
+    db.exec('ALTER TABLE task ADD COLUMN session_id TEXT;');
+  }
+  // 回填判据：task_members 领队行的 main_session_id 列还在（v5 前旧形状）。
+  // v6 库该列已合并丢弃、残缺库（仅 task 表）由 SCHEMA_SQL 补建的新形状
+  // task_members（无该列）也不回填——v6 迁移随后接管。
+  const tmColumns = (
+    db.prepare('PRAGMA table_info(task_members)').all() as Array<{ name: string }>
+  ).map((c) => c.name);
+  if (tmColumns.includes('main_session_id')) {
+    db.exec(TASK_SESSION_BACKFILL_SQL);
+  }
+}
+
+/**
+ * v6 迁移（会话列归位，docs/51）：主会话 ID 只落在 task 行——session_id 改名
+ * main_session_id（v5 快照语义不变）；task_members 只记本行自己的子代理会话：
+ * main_session_id + child_session_id 合并成 session_id（成员行=成员子会话，
+ * 领队行=领队子代理会话），领队主会话锚点列随合并丢弃（v5 迁移已把全部任务行
+ * 按它回填过；锚点消费点改按任务行快照 + 心跳派生，见 docs/51）。team 表不存
+ * 会话列。幂等：各步按 table_info 形状检测，已迁移的库逐步跳过；随 v4/v5 先例
+ * 不显式开事务。
+ */
+function migrateTaskSessionColumnsV6(db: DatabaseSync): void {
+  const taskColumns = (
+    db.prepare('PRAGMA table_info(task)').all() as Array<{ name: string }>
+  ).map((c) => c.name);
+  if (taskColumns.length === 0) return; // task 表都不存在：不会发生（防御）
+  if (!taskColumns.includes('main_session_id')) {
+    if (taskColumns.includes('session_id')) {
+      db.exec('ALTER TABLE task RENAME COLUMN session_id TO main_session_id;');
+    } else {
+      db.exec('ALTER TABLE task ADD COLUMN main_session_id TEXT;');
+    }
+  }
+  const tmColumns = (
+    db.prepare('PRAGMA table_info(task_members)').all() as Array<{ name: string }>
+  ).map((c) => c.name);
+  if (tmColumns.length === 0) return; // task_members 都不存在：不会发生（防御）
+  if (!tmColumns.includes('session_id')) {
+    db.exec("ALTER TABLE task_members ADD COLUMN session_id TEXT NOT NULL DEFAULT '';");
+    // 本行自己的子代理会话：成员行=成员子会话；领队行=领队子代理（持久领队
+    // 子代理的冷恢复凭证，captainDispatch 落盘）。旧 main_session_id 列是
+    // v5 前的领队主会话锚点，任务行已按它回填过，随合并丢弃。
+    if (tmColumns.includes('child_session_id')) {
+      db.exec('UPDATE task_members SET session_id = child_session_id');
+    }
+    if (tmColumns.includes('main_session_id')) {
+      db.exec('ALTER TABLE task_members DROP COLUMN main_session_id;');
+    }
+    if (tmColumns.includes('child_session_id')) {
+      db.exec('ALTER TABLE task_members DROP COLUMN child_session_id;');
+    }
+  }
 }
 
 /** 关闭并丢弃该状态根的缓存连接（测试收尾 / 状态根失效时用）。 */
@@ -337,10 +458,13 @@ function loadSchemaSql(): string {
 
 // === SCHEMA_SQL BEGIN（由 schema.sql 生成，逐字一致） ===
 const SCHEMA_SQL = `-- =====================================================================
--- ETeams SQLite schema v3（db_schema_version = 3；成员=角色合并：member 表
--- 精简改名成 roles 角色库表（去 team_id/role_id/model/reasoning_effort，
+-- ETeams SQLite schema v6（db_schema_version = 6；v3 成员=角色合并：member
+-- 表精简改名成 roles 角色库表（去 team_id/role_id/model/reasoning_effort，
 -- 新增 profile），班底另起 team_members 表，旧 roles 标签登记表删除；
--- v2 旧库经 getDb 迁移回填）
+-- v4 班底行补 role_name/persona_md/profile 角色信息副本列；v5 任务行补主
+-- 会话快照列（session_id）；v6 会话列归位：task.session_id 改名
+-- main_session_id，task_members 两列会话合并成 session_id（本行自己的子
+-- 代理会话），team 行不存会话；v2/v3/v4/v5 旧库经 getDb 迁移回填）
 -- 主键 = 每张表自己的编号列，统一 INTEGER 自增（schema_meta 例外：key 即主键）
 -- 时间列一律 *_time 结尾（Unix 毫秒）；每张表末尾 created_time / update_time
 -- 枚举 = TEXT（合法值写在列注释里）；JSON = TEXT 存 JSON 字符串
@@ -367,7 +491,7 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 CREATE TABLE IF NOT EXISTS team (
   team_id        INTEGER PRIMARY KEY AUTOINCREMENT,  -- 团队 ID，自增（展示名见 team_name）
   team_name      TEXT NOT NULL,                -- 展示名（原文本团队 ID 转为普通列，由写入代码查重）
-  has_leader     INTEGER NOT NULL DEFAULT 0,   -- 是否包含领队（0/1）；领队会话锚点在 task_members 的领队行上
+  has_leader     INTEGER NOT NULL DEFAULT 0,   -- 是否包含领队（0/1）；主会话快照在 task 行（main_session_id），领队子代理会话在 task_members 领队行
   created_time   INTEGER NOT NULL,             -- 创建时间
   update_time    INTEGER NOT NULL              -- 更新时间
 );
@@ -392,13 +516,17 @@ CREATE TABLE IF NOT EXISTS roles (
 
 -- ---------------------------------------------------------------------
 -- 3. team_members —— 班底（团队 × 角色：一行一个在队成员 + 该队派发路线；
---    人设/工号/头像经 role_id 松引用解析自 roles；执行实例（状态/会话/
+--    工号/头像经 role_id 松引用解析自 roles；role_name/persona_md/profile
+--    是随角色行同步刷新的副本列（v4，真相在 roles）；执行实例（状态/会话/
 --    当前任务）在 task_members）
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS team_members (
   team_member_id   INTEGER PRIMARY KEY AUTOINCREMENT,  -- 自增主键（内存新建行 0 落库发号）
   team_id          INTEGER NOT NULL,    -- 属于哪个团队（team.team_id）
   role_id          INTEGER,             -- 角色 ID（roles.role_id，松引用；人设/工号/头像都在角色行上）
+  role_name        TEXT,                -- 角色名副本（写入时随 roles.role_name 同步刷新；悬空行 NULL；直查/展示用）
+  persona_md       TEXT,                -- 角色手册副本（写入时随 roles.persona_md 同步刷新；真相在 roles）
+  profile          TEXT,                -- 一句话简介副本（写入时随 roles.profile 同步刷新；真相在 roles）
   model            TEXT,                -- 该队派发路线；NULL=会话默认（settings agent-default-model），有值=覆盖（provider 派发时按配置解析）
   reasoning_effort TEXT,                -- 模型思考强度
   created_time     INTEGER NOT NULL,    -- 创建时间
@@ -424,6 +552,7 @@ CREATE TABLE IF NOT EXISTS task (
                     -- wait_decision / wait_user / completed / failed / cancelled
   current_member    TEXT,                -- 当前执行成员名（松引用：成员移除也不影响这列）
   current_member_id INTEGER,             -- 当前执行成员 ID（v2 的 member.member_id 口径随 v3 合并废弃；写入代码恒置 NULL，物理残留列）
+  main_session_id   TEXT,                -- 主会话 ID 快照（v5 落列 v6 改名：建任务时登记的主会话 ID，落库后不变；直查/展示用）
   retry_count       INTEGER NOT NULL DEFAULT 0,  -- 当前执行人连续失败次数（换人清零）
   status_note       TEXT,                -- 当前状态说明（挂起原因等也并在这列）
   contract_md       TEXT,                -- 任务合同全文（Markdown，十六轮 DA29：原 acceptance/in_scope/out_of_scope/deliverables 四数组列合并——验收标准/允许改动/禁止改动/交付物统一写在这篇 MD 里；旧库由 getDb 迁移 ALTER + 回填，旧四列物理残留不再读写）
@@ -453,8 +582,7 @@ CREATE TABLE IF NOT EXISTS task_members (
   now_task_id      INTEGER,             -- 当前执行任务 ID（task.task_id）
   name             TEXT NOT NULL,       -- 成员名（与 roles.role_name 同名，写入代码查重）
   employee_id      INTEGER,             -- 工号副本（引用 roles.employee_id，松引用）
-  main_session_id  TEXT NOT NULL DEFAULT '',  -- 主代理会话 ID；还没启动时是空串（领队行存领队会话）
-  child_session_id TEXT NOT NULL DEFAULT '',  -- 子代理会话 ID；还没启动时是空串
+  session_id       TEXT NOT NULL DEFAULT '',  -- 本行自己的子代理会话 ID（v6：成员行=成员子会话，领队行=领队子代理会话）；还没启动时是空串
   status           TEXT NOT NULL DEFAULT 'staged',
                    -- 成员状态：staged / ready / working / paused / removed
   persona_md       TEXT,                -- 执行时的人设手册（沿用 roles 角色行的手册，可按任务微调）

@@ -11,6 +11,12 @@
 > 2026-09-04 用户改版定稿：表精简为 11 张（team / roles / member / task / task_members + attempts / events / mail_messages / decisions / task_status_changes + schema_meta）；**主键 = 每张表自己的编号列，统一整数自增**（team_id / role_id / member_id / task_id / task_member_id / attempt_id / decision_id / seq / change_id；schema_meta 例外，key 即主键）；**每张表最后两列固定 created_time / update_time**，时间相关列一律 `_time` 结尾；**工号 = member.employee_id 列，数据库递增发号**（显示补零，1 → 0001，即 ET-0001）；**库文件放状态根的 `db/` 子目录——状态根 = `<状态根>/db/`，默认配置 `stateDir: C:/Users/epat/.eteams` 为绝对路径即全局单库（2026-09-04 用户定案：所有工作区共用一个 eteams.db、一份成员库；stateDir 配相对路径才是旧口径 per-workspace `<workspace>/.eteams`）**。
 >
 > 2026-09-06 用户改版定稿（v3，成员=角色）：**member 表并入 roles 角色库表**——去掉 team_id / role_id / model / reasoning_effort，新增 profile（一句话简介列），人设/工号/头像/简介都挂角色行，成员=角色全局一份；**班底另起 team_members 表**（team_member_id / team_id / role_id / model / reasoning_effort），人设/工号/头像经 role_id 松引用解析自角色行；旧 roles 标签登记表删除；task_members 的 role_id 死列移除；工号改在 roles.employee_id 上发号（同人同号）。v2 旧库 getDb 首次连接时单事务迁移：公共行→roles 角色行、班底行→team_members、旧标签行按名补缺。
+>
+> 2026-09-06 同日增补（v4，班底行角色信息副本）：**team_members 补 role_name / persona_md / profile 三列**——随 roles 角色行同步刷新的副本（真相在 roles），给直查/展示用，不改「人设单一来源」语义：班底成员读人设仍以角色行为准，改角色全局生效。写入路径（快照落库/名册 upsert/成员详情改手册/预设手册升级/旧版导入）落库后统一从 roles 回填镜像，角色删除时引用行刷成 NULL（悬空行，读路径防御性跳过）；v2/v3 旧库 getDb 首次连接时 ALTER 补列 + 回填。
+>
+> 2026-09-06 同日增补（v5，任务行主会话快照）：**task 补 session_id 列**——建任务时盖章该团队领队行（task_members，`name='项目牧羊人'`、`main_task_id` 为空）锚定的主会话 ID，**快照语义：落库后不变**，领队重锚不回改旧任务；面板/对话工具建任务、旧版团队导入三路同源取值；v4 旧库 getDb 首次连接时 ALTER 补列 + 只对 NULL 行从领队行回填（已盖章行不覆盖）。
+>
+> 2026-09-07 用户改版定稿（v6，会话列归位）：**主会话 ID 只属于任务行**——`task.session_id` 改名 `main_session_id`（v5 快照语义不变）；`task_members` 只记**本行自己的子代理会话**：`main_session_id` 改名 `session_id`（成员行=成员子会话，领队行=领队子代理），`child_session_id` 列合并消失；team 表不存会话列（team 属于多个 task，团队级锚点按任务行快照 ∪ 心跳派生，建队主会话记进 team.created 事件留痕）。
 
 ## 27.1 为什么引入 SQLite
 
@@ -116,10 +122,13 @@ PRAGMA busy_timeout = 3000;    -- 杀软/索引器短暂持锁时等待而非立
 
 ```sql
 -- =====================================================================
--- ETeams SQLite schema v3（db_schema_version = 3；成员=角色合并：member 表
--- 精简改名成 roles 角色库表（去 team_id/role_id/model/reasoning_effort，
+-- ETeams SQLite schema v6（db_schema_version = 6；v3 成员=角色合并：member
+-- 表精简改名成 roles 角色库表（去 team_id/role_id/model/reasoning_effort，
 -- 新增 profile），班底另起 team_members 表，旧 roles 标签登记表删除；
--- v2 旧库经 getDb 迁移回填）
+-- v4 班底行补 role_name/persona_md/profile 角色信息副本列；v5 task 补
+-- 会话快照列（session_id）；v6 会话列归位：task.session_id 改名
+-- main_session_id，task_members 两列会话合并成 session_id（本行自己的子
+-- 代理会话），team 行不存会话；v2/v3/v4/v5 旧库经 getDb 迁移回填）
 -- 主键 = 每张表自己的编号列，统一 INTEGER 自增（schema_meta 例外：key 即主键）
 -- 时间列一律 *_time 结尾（Unix 毫秒）；每张表末尾 created_time / update_time
 -- 枚举 = TEXT（合法值写在列注释里）；JSON = TEXT 存 JSON 字符串
@@ -167,13 +176,17 @@ CREATE TABLE roles (
 
 -- ---------------------------------------------------------------------
 -- 3. team_members —— 班底（团队 × 角色：一行一个在队成员 + 该队派发路线；
---    人设/工号/头像经 role_id 松引用解析自 roles；执行实例（状态/会话/
+--    工号/头像经 role_id 松引用解析自 roles；role_name/persona_md/profile
+--    是随角色行同步刷新的副本列（v4，真相在 roles）；执行实例（状态/会话/
 --    当前任务）在 task_members）
 -- ---------------------------------------------------------------------
 CREATE TABLE team_members (
   team_member_id   INTEGER PRIMARY KEY AUTOINCREMENT,  -- 自增主键（内存新建行 0 落库发号）
   team_id          INTEGER NOT NULL,    -- 属于哪个团队（team.team_id）
   role_id          INTEGER,             -- 角色 ID（roles.role_id，松引用；人设/工号/头像都在角色行上）
+  role_name        TEXT,                -- 角色名副本（写入时随 roles.role_name 同步刷新；悬空行 NULL；直查/展示用）
+  persona_md       TEXT,                -- 角色手册副本（写入时随 roles.persona_md 同步刷新；真相在 roles）
+  profile          TEXT,                -- 一句话简介副本（写入时随 roles.profile 同步刷新；真相在 roles）
   model            TEXT,                -- 该队派发路线；NULL=会话默认（settings agent-default-model），有值=覆盖（provider 派发时按配置解析）
   reasoning_effort TEXT,                -- 模型思考强度
   created_time     INTEGER NOT NULL,    -- 创建时间
@@ -199,6 +212,7 @@ CREATE TABLE task (
                     -- wait_decision / wait_user / completed / failed / cancelled
   current_member    TEXT,                -- 当前执行成员名（松引用：成员移除也不影响这列）
   current_member_id INTEGER,             -- 当前执行成员 ID（v2 的 member.member_id 口径随 v3 合并废弃；写入代码恒置 NULL，物理残留列）
+  main_session_id   TEXT,                -- 主会话 ID 快照（v5 落列 v6 改名：建任务时登记的主会话 ID，落库后不变；直查/展示用）
   retry_count       INTEGER NOT NULL DEFAULT 0,  -- 当前执行人连续失败次数（换人清零）
   status_note       TEXT,                -- 当前状态说明（挂起原因等也并在这列）
   acceptance        TEXT,                -- 验收标准（JSON 字符串数组，如 ["登录返回 200 和 token"]）
@@ -231,8 +245,7 @@ CREATE TABLE task_members (
   now_task_id      INTEGER,             -- 当前执行任务 ID（task.task_id）
   name             TEXT NOT NULL,       -- 成员名（与 roles.role_name 同名，写入代码查重）
   employee_id      INTEGER,             -- 工号副本（引用 roles.employee_id，松引用）
-  main_session_id  TEXT NOT NULL DEFAULT '',  -- 主代理会话 ID；还没启动时是空串（领队行存领队会话）
-  child_session_id TEXT NOT NULL DEFAULT '',  -- 子代理会话 ID；还没启动时是空串
+  session_id       TEXT NOT NULL DEFAULT '',  -- 本行自己的子代理会话 ID（v6：成员行=成员子会话，领队行=领队子代理会话）；还没启动时是空串
   status           TEXT NOT NULL DEFAULT 'staged',
                    -- 成员状态：staged / ready / working / paused / removed
   persona_md       TEXT,                -- 执行时的人设手册（沿用 roles 角色行的手册，可按任务微调）
@@ -421,6 +434,9 @@ CREATE TABLE usage_daily_total (
 
 - **13 张表**：`schema_meta`、`team`、`roles`、`team_members`、`task`、`task_members`、`attempts`、`events`、`mail_messages`、`decisions`、`task_status_changes`、`usage_detail`、`usage_daily_total`。每张表只有列定义、自增主键、普通索引——没有外键、CHECK、UNIQUE、触发器。
 - **成员=角色（v3）**：`roles` 角色库表一人一行（人设手册/工号/头像/一句话简介都挂角色行，全局一份）；`team_members` 班底表一行 = 团队 × 角色 + 该队派发路线（model / reasoning_effort），人设/工号/头像经 role_id 松引用解析；`task_members` 仍是执行实例（状态/会话锚点/当前任务），其人设/模型/头像列是建行时的快照。加成员即入库：面板/领队添加成员时，写入代码在同一事务里确保角色行存在（缺则按名自建）。
+- **班底行角色信息副本（v4）**：`team_members` 上另有 role_name / persona_md / profile 三列，是随 roles 角色行同步刷新的**副本**（真相在 roles）——每次角色行写入路径（名册 upsert、成员详情改手册、预设手册升级、快照落库、旧版导入）落库后统一从 roles 反查回填，角色删除时引用行刷成 NULL（悬空行，读路径防御性跳过）；副本刷新不碰 update_time。读端（loadMembers）仍走 LEFT JOIN roles 以角色行为准，副本列只服务直查/展示，不参与「人设单一来源」的判定。
+- **任务行主会话快照（v5，v6 改名）**：`task.main_session_id` 一列（v5 名 `session_id`），建任务/派发补章时登记该团队领队主会话 ID——面板建任务、领队工具建任务、旧版团队导入三路同源取值，随快照整存整取。**快照语义**：落库后不变，领队重锚不回改旧任务（和 work_dir 同款「分配后固定」）；v4 旧库 getDb 首次连接时 ALTER 补列 + 只对 NULL 行回填（已盖章行不覆盖，幂等自愈）。**团队级锚点按任务行派生**：同队任务由同一领队会话创建，取首个非空快照即领队锚；无任务团队退建队事件留痕（team.created 的 captainSession 字段）。
+- **会话列归位（v6）**：`task_members.session_id` = 本行自己的子代理会话（成员行=成员子会话，领队行=领队子代理冷恢复凭证），未起会话空串；旧 `main_session_id`（领队主会话锚）与 `child_session_id` 两列合并丢弃——主会话快照已随 v5 迁移回填进任务行，成员行要主会话按 task_id 反查任务行。
 - **主键 = 表自己的编号列，统一整数自增**：team_id / role_id / team_member_id / task_id / task_member_id / attempt_id / decision_id / events.event_id / mail_messages.mail_message_id / change_id 都是 `INTEGER PRIMARY KEY AUTOINCREMENT`（删行不复用）；`schema_meta` 键值表与 `usage_daily_total` 日行表是例外，`key` / `day` 即主键。所有引用列随之统一为整数。
 - **工号 = roles.employee_id**：独立发号（插入角色行时取 roles 表最大工号 +1）、显示补零（1 → 0001，即 ET-0001）、同人同号；team_member_id 只是班底行号。不再需要计数器文件。
 - **不再需要发号器**：任务号/尝试号/决策号/事件号/邮件序号全部数据库自增——写入代码只负责成员名/角色名查重和邮箱幂等键生成（message_id 是内容键，不是计数器）。
@@ -435,13 +451,13 @@ CREATE TABLE usage_daily_total (
 |---|---|
 | TeamState 的 id / name | `team.team_id`（自增整数）/ `team_name`（文本目录名不入库，目录映射由写入代码按 team_name 推导查重） |
 | TeamState 的 goal / phase / planReviewState | **砍掉**（定案：团队只是流程容器，不要目标/阶段/进展；「批准后开跑」是对话内确认，不落团队级状态） |
-| TeamState 的 captainSessionId / captainChildId | **砍掉**——领队会话锚点在 task_members 领队行（`name='项目牧羊人'`、`main_task_id` 为空）的 `main_session_id / child_session_id` 上，重启后去 task_members 找；team 表只留 `has_leader` |
+| TeamState 的 captainSessionId / captainChildId | **砍掉**——主会话快照在 task 行的 `main_session_id`（团队级锚按任务行快照 ∪ 心跳 ∪ 建队事件派生）；领队子代理会话在 task_members 领队行（`name='项目牧羊人'`、`main_task_id` 为空）的 `session_id` 上，重启后去 task_members 找；team 表只留 `has_leader` |
 | TeamState 的 leaderModelRoute / maxRetries / activeSwitch | leaderModelRoute **回队**（用户迭代 2026-09-04 恢复领队模型选择）：落在 task_members 领队行的 `model / reasoning_effort` 列上（领队子代理派发按它解析；空 = 会话默认），不需要 team 表列；maxRetries 重试上限用全局配置；activeSwitch 是死字段 |
 | TeamState 的 workDir | **`task.work_dir`**（定案：工作目录归任务，逐任务分配） |
 | TeamState 的 leaderRemoved / version / taskSeq·attemptSeq·mailSeq | `has_leader`；version 不存（进程锁 + 事务已够）；三个序号被自增主键取代，删 |
-| MemberRecord（班底模板行） | 班底 = `team_members` 行：memberId → team_member_id、modelRoute（model + reasoning_effort）落班底列；人设/工号/头像经 `role_id` 松引用解析自 `roles` 角色行（role_name / employee_id / persona_md / profile / avatar）；provider 不存（派发时按配置解析）；**status、子会话 id、当前尝试不在班底表** |
-| MemberRecord 的 status / id（子会话）/ currentAttemptId / removedAt | `task_members.status / child_session_id / now_task_id`；当前尝试反查 attempts；removedAt 用 update_time |
-| TaskRecord 任务号/父子/标题/正文/依赖/执行链/状态/执行人/重试/完成时间 | `task` 表同名列（编号整数自增；depend_tasks 存整数任务号） |
+| MemberRecord（班底模板行） | 班底 = `team_members` 行：memberId → team_member_id、modelRoute（model + reasoning_effort）落班底列；人设/工号/头像经 `role_id` 松引用解析自 `roles` 角色行（role_name / employee_id / persona_md / profile / avatar）；provider 不存（派发时按配置解析）；**status、子会话 id、当前尝试不在班底表**。v4：team_members 行上另有 role_name / persona_md / profile 副本列，随角色行同步刷新（真相在 roles），读端仍走 JOIN 以角色行为准 |
+| MemberRecord 的 status / id（子会话）/ currentAttemptId / removedAt | `task_members.status / session_id / now_task_id`；当前尝试反查 attempts；removedAt 用 update_time |
+| TaskRecord 任务号/父子/标题/正文/依赖/执行链/状态/执行人/重试/完成时间 | `task` 表同名列（编号整数自增；depend_tasks 存整数任务号）；v5 落列 v6 改名：sessionId 盖章进 `main_session_id` 列（建任务时登记的主会话快照，落库后不变） |
 | TaskRecord 合同（acceptance/inScope/outOfScope/deliverables/idempotencyNote） | `task` 表 `acceptance / in_scope / out_of_scope / deliverables`（JSON 数组）+ `idempotency_note`（已定补列） |
 | TaskRecord 的 blockedFrom / suspendNote / decisionId / currentAttemptId / outcome / kind / workDir | `blocked_from` 列；suspendNote 并入 status_note；decisionId / currentAttemptId 反查 decisions / attempts；outcome 反查 attempts 最新成功行；kind 由 parent_id 为空表达；`work_dir` 列 |
 | `attempts[]` / `pendingDecisions[]` | `attempts` / `decisions` 表 |
@@ -581,7 +597,7 @@ UPDATE task SET status = 'start', update_time = ?2
 7. **归档形态——已定案（2026-09-04）**：归档下线。archiveTeam 与面板归档页删除，删团队走对话内确认 + 数据库事务删除；archive/ 目录不导入。
 8. **角色/人设配置的入库范围——部分定案**：预置角色模板与角色构建师产物进 `roles` 表（已定）；领队人设覆盖（captain-persona.yaml）是否入库待定。
 9. **邮箱序号——已定案**：邮件号（mail_message_id）全库自增（数据库发号），箱内顺序按它排；message_id 只做幂等键。
-10. **member 与 task_members 的分工——已定案**：member = 成员模板（一人一行，无状态无会话，`team_id` 空=全局公共模板（成员库）、非空=该团队班底，工号在此发号）；task_members = 任务成员执行实例（状态/会话锚点/当前任务都在这），**按大任务粒度建行（同一人每条大任务一行、各绑一个子会话，用户定案）**，领队也是一行（`name='项目牧羊人'`、`main_task_id` 空）。实例行的人设/模型沿用模板值；模板编辑是否回填存量实例行默认不回填。**修订（2026-09-06 v3，成员=角色）**：member 表并入 roles 角色库表（成员=角色全局一份，工号/人设/头像/简介都挂角色行），班底另起 team_members 表（team_member_id / team_id / role_id / model / reasoning_effort）；task_members 仍为执行实例（role_id 死列移除），实例行的人设/模型/头像列保持建行时快照，角色行编辑全局生效、默认不回填存量实例行。
+10. **member 与 task_members 的分工——已定案**：member = 成员模板（一人一行，无状态无会话，`team_id` 空=全局公共模板（成员库）、非空=该团队班底，工号在此发号）；task_members = 任务成员执行实例（状态/会话锚点/当前任务都在这），**按大任务粒度建行（同一人每条大任务一行、各绑一个子会话，用户定案）**，领队也是一行（`name='项目牧羊人'`、`main_task_id` 空）。实例行的人设/模型沿用模板值；模板编辑是否回填存量实例行默认不回填。**修订（2026-09-06 v3，成员=角色）**：member 表并入 roles 角色库表（成员=角色全局一份，工号/人设/头像/简介都挂角色行），班底另起 team_members 表（team_member_id / team_id / role_id / model / reasoning_effort）；task_members 仍为执行实例（role_id 死列移除），实例行的人设/模型/头像列保持建行时快照，角色行编辑全局生效、默认不回填存量实例行。**增补（2026-09-06 v4）**：team_members 补 role_name / persona_md / profile 副本列随角色行同步刷新（真相在 roles，写入路径落库后统一回填、删除角色刷 NULL），班底行不再依赖 JOIN 也能直查角色名/手册/简介；「改角色全局生效、副本不反向覆盖角色行」的单一来源语义不变。
 11. **任务状态枚举——已定案（10 态 + 映射方案 A）**：draft / ready / wait / start / paused / wait_decision / wait_user / completed / failed / cancelled；代码从 13 态收敛：assigned→wait、in_progress→start、retrying→wait（重试=重新排队）、suspended→paused（原因进 status_note）、blocked→wait（记 blocked_from，解除时还原）。**毒化集随收敛更新：paused / failed / wait_decision / wait_user 毒化下游依赖任务（旧 suspended 毒化、paused 不毒化，合并后 paused 也毒化——用户定案）**。
 12. **多实例并发**：两个进程打开同一工作区时，WAL 允许多连接但写互斥——单写者场景进程锁已够；若将来多实例，再补乐观 version 列。
 13. **node:sqlite 稳定性**：仍标记实验性（Node 24 打警告）；个别 API（`backup()` 等）按目标 Node 版本验证。若遇 API 缺口，按 27.2 兜底换 better-sqlite3（同一份 DDL）。

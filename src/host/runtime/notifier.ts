@@ -1,9 +1,9 @@
 /**
  * Mailbox delivery + wake (docs/09.1 FR-40 → docs/27 mail_messages 表)：邮件
  * 随团队快照同一同步事务落库（insertMailInTx，seq 由库发号），唤醒是提交后
- * 的最佳努力投递（成员：按实例行 child_session_id 续投；领队：按领队行
- * main_session_id 唤醒）。收件人不在线时邮件留在库里（持久），下次唤醒随
- * 派发消息送达。实例行选行规则见 docs/35 §5#12。
+ * 的最佳努力投递（成员：按实例行 session_id 续投；领队：按任务行快照
+ * main_session_id 唤醒，v6 派生，缺时心跳兜底）。收件人不在线时邮件留在库里
+ * （持久），下次唤醒随派发消息送达。实例行选行规则见 docs/35 §5#12。
  *
  * @module dsh-eteams/runtime/notifier
  */
@@ -21,6 +21,7 @@ import type {
   TeamState,
 } from '../model/types.js';
 import { ETeamsError, PLUGIN_ACTOR, stateRootOf, type RuntimeEnv } from './base.js';
+import { readBuildPresence } from './roleBuilder.js';
 
 /** 提交后的最佳努力唤醒动作（事务内登记、COMMIT 后执行）。 */
 export type Wake = () => Promise<boolean>;
@@ -68,6 +69,16 @@ export function leaderRowOf(team: TeamState): TaskMemberRecord | undefined {
   return team.taskMembers.find((r) => r.name === LEADER_NAME && r.mainTaskId === null);
 }
 
+/**
+ * 团队主会话锚点（v6 派生值，不再落列）：按任务行快照取——同队任务由同一
+ * 领队会话创建（建队去重约束），按 task_id 升序取首个非空快照。无任务或
+ * 未盖章返回空串（调用方再用心跳/在线注册表兜底）。
+ */
+export function teamMainSessionOf(team: TeamState): string {
+  const hit = team.tasks.find((t) => t.mainSessionId !== undefined && t.mainSessionId !== '');
+  return hit?.mainSessionId ?? '';
+}
+
 /** 任务所属大任务 id（独立无链任务 = 自身 id；§5#12 实例行锚定粒度）。 */
 export function rootTaskIdOf(task: Pick<TaskRecord, 'id' | 'parentId'>): number {
   return task.parentId ?? task.id;
@@ -88,13 +99,13 @@ export function findInstanceRow(
 }
 
 /**
- * 跨任务选行（§5#12）：非 removed、已起会话（child_session_id 非空）的最
+ * 跨任务选行（§5#12）：非 removed、已起会话（session_id 非空）的最
  * 近活跃行。TaskMemberRecord 内存不带 update_time（docs/27 库列），以
  * createdAt/id 最大行近似「最近活跃」。
  */
 export function latestInstanceRow(team: TeamState, name: string): TaskMemberRecord | undefined {
   const rows = team.taskMembers
-    .filter((r) => r.name === name && r.status !== 'removed' && r.childSessionId !== '')
+    .filter((r) => r.name === name && r.status !== 'removed' && r.sessionId !== '')
     .sort((a, b) => b.createdAt - a.createdAt || b.id - a.id);
   return rows[0];
 }
@@ -125,9 +136,9 @@ export function memberStatusOf(team: TeamState, name: string): MemberStatus {
 // --------------------------------------------------------------------------
 
 /**
- * Wake one member: 领队行 main_session_id 找到队长代理，向该成员实例行的
- * childSessionId 续投消息。staged（child_session_id 为空）不唤醒——邮件留
- * 在邮箱，起会话后随派发消息送达。
+ * Wake one member: 按任务行快照/心跳派生的领队代理向该成员实例行的
+ * sessionId 续投消息。staged（session_id 为空）不唤醒——邮件留在邮箱，
+ * 起会话后随派发消息送达。
  */
 export async function wakeMember(
   env: RuntimeEnv,
@@ -135,19 +146,20 @@ export async function wakeMember(
   row: TaskMemberRecord,
   text: string,
 ): Promise<boolean> {
-  if (row.childSessionId === '') return false;
-  const leader = leaderRowOf(team);
-  const captain = leader !== undefined ? env.ctx.agents.get(leader.mainSessionId) : undefined;
+  if (row.sessionId === '') return false;
+  // 主会话锚点（v6 派生）：任务行快照，缺时用心跳定位用户正在看的对话。
+  const anchorId = teamMainSessionOf(team) || readBuildPresence(stateRootOf(env))?.sessionId || '';
+  const captain = anchorId !== '' ? env.ctx.agents.get(anchorId) : undefined;
   if (!captain) {
     env.ctx.logger.warn(
-      `eteams: 领队会话不在线（${leader?.mainSessionId ?? '未设领队'}），成员 ${row.name} 的邮件留在邮箱`,
+      `eteams: 领队会话不在线（${anchorId || '未登记'}），成员 ${row.name} 的邮件留在邮箱`,
     );
     return false;
   }
   try {
     await env.ctx.subagents.followup(
       captain,
-      row.childSessionId as unknown as SessionId,
+      row.sessionId as unknown as SessionId,
       [{ type: 'text', text }],
       { source: { kind: 'plugin', plugin: 'dsh-eteams' }, signal: env.signal },
     );
@@ -160,8 +172,8 @@ export async function wakeMember(
 
 /** 领队唤醒（纯会话侧 followup；邮件落库由调用方负责）。 */
 function wakeCaptain(env: RuntimeEnv, team: TeamState, content: string): boolean {
-  const leader = leaderRowOf(team);
-  const captain = leader ? env.ctx.agents.get(leader.mainSessionId) : undefined;
+  const anchorId = teamMainSessionOf(team) || readBuildPresence(stateRootOf(env))?.sessionId || '';
+  const captain = anchorId !== '' ? env.ctx.agents.get(anchorId) : undefined;
   if (!captain) {
     env.ctx.logger.warn('eteams: 领队会话不在线，汇报留在领队邮箱');
     return false;

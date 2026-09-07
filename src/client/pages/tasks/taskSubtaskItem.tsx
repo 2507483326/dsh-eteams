@@ -202,12 +202,13 @@ export function SubtaskItem({
           不动。 */}
           <div className="flex shrink-0 items-center gap-1.5">
             {/* 二十四轮 DA37：开始按钮（用户拍板「卡片加上开始
-                按钮」）——ready 且有链才渲染（点击派发执行链下一
-                站）；ready 无链改渲染「需要选择成员」行内提示
+                按钮」）——待开始且有链才渲染（点击派发执行链下一
+                站）；无链改渲染「需要选择成员」行内提示
                 （用户拍板「如果有任务没有成员，则提示需要选择
-                成员就行」，不设按钮）。draft（拆解中）与已入执行
-                不渲染。M3：状态窗口收拢 isStartable 谓词（判定逐位
-                等价）。二十五轮 DA38：防冒泡包装层撤除（卡身点击
+                成员就行」，不设按钮）。三十六轮 DA49：draft 并入
+                isStartable（draft 即就绪，旧库 draft 卡也渲染开始
+                钮），已入执行不渲染。M3：状态窗口收拢 isStartable
+                谓词（判定逐位等价）。二十五轮 DA38：防冒泡包装层撤除（卡身点击
                 进详情口径已废，包装层随之无用；点击恢复原生冒泡
                 ——多选面板的外出点击关闭不再被拦断）。 */}
             {isStartable(task.status) && task.chain.length > 0 && (

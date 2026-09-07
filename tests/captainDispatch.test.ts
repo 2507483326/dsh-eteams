@@ -87,7 +87,7 @@ let runtime: ReturnType<typeof fakeRuntime>;
 let captain: Agent;
 let tool: ReturnType<typeof createCaptainDispatchTool>;
 
-function leaderRow(teamId: number, mainSessionId: string, childSessionId = ''): TaskMemberRecord {
+function leaderRow(teamId: number, childSessionId = ''): TaskMemberRecord {
   return {
     id: 0,
     teamId,
@@ -95,8 +95,7 @@ function leaderRow(teamId: number, mainSessionId: string, childSessionId = ''): 
     nowTaskId: null,
     name: LEADER_NAME,
     employeeId: null,
-    mainSessionId,
-    childSessionId,
+    sessionId: childSessionId,
     roleId: null,
     status: 'ready',
     createdAt: 1,
@@ -111,8 +110,7 @@ function memberRow(teamId: number, childSessionId: string): TaskMemberRecord {
     nowTaskId: null,
     name: '甲',
     employeeId: null,
-    mainSessionId: '',
-    childSessionId,
+    sessionId: childSessionId,
     roleId: null,
     status: 'ready',
     createdAt: 1,
@@ -120,14 +118,14 @@ function memberRow(teamId: number, childSessionId: string): TaskMemberRecord {
 }
 
 /** SQLite 契约播种（team.json 已退场）：team 行 + 领队实例行（可预置持久
- * 子会话 id）+ 可选成员实例行。 */
+ * 子会话 id）+ 可选成员实例行；领队身份锚点盖章在任务行快照（v6）。 */
 function seedTeam(opts: { memberChild?: string; leaderChild?: string } = {}): TeamState {
   const name = '演示团队';
   let teamId = 0;
   withTeamTx(root, undefined, (tx) => {
     teamId = insertTeamRow(tx, name, true, 1);
   });
-  const taskMembers: TaskMemberRecord[] = [leaderRow(teamId, 'cap-1', opts.leaderChild ?? '')];
+  const taskMembers: TaskMemberRecord[] = [leaderRow(teamId, opts.leaderChild ?? '')];
   if (opts.memberChild !== undefined) taskMembers.push(memberRow(teamId, opts.memberChild));
   const state: TeamState = {
     id: teamId,
@@ -137,7 +135,22 @@ function seedTeam(opts: { memberChild?: string; leaderChild?: string } = {}): Te
     updatedAt: 1,
     taskMembers,
     members: [],
-    tasks: [],
+    tasks: [
+      {
+        id: 1,
+        subject: '演示任务',
+        parentId: null,
+        dependencies: [],
+        chain: [],
+        chainCursor: -1,
+        status: 'ready',
+        attempts: [],
+        retryCount: 0,
+        mainSessionId: 'cap-1',
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ],
     pendingDecisions: [],
   };
   withTeamTx(root, teamId, (tx) => writeTeamInTx(tx, state));
@@ -207,7 +220,7 @@ describe('eteams_dispatch_captain', () => {
     // Identity registry + durable child id persisted on the 领队行.
     expect(captainChildTeamOf('sess-child-1')).toBe(String(seeded.id));
     const persisted = readTeamSync(root, seeded.id);
-    expect(persisted?.taskMembers.find((r) => r.mainTaskId === null)?.childSessionId).toBe(
+    expect(persisted?.taskMembers.find((r) => r.mainTaskId === null)?.sessionId).toBe(
       'sess-child-1',
     );
     // The child's eteams_* calls resolve as this team's captain.
@@ -231,7 +244,7 @@ describe('eteams_dispatch_captain', () => {
     expect(runtime.followups[0]!.text).toContain('【团队现状】');
     expect(captainChildTeamOf('sess-child-1')).toBe(String(seeded.id));
     const persisted = readTeamSync(root, seeded.id);
-    expect(persisted?.taskMembers.find((r) => r.mainTaskId === null)?.childSessionId).toBe(
+    expect(persisted?.taskMembers.find((r) => r.mainTaskId === null)?.sessionId).toBe(
       'sess-child-1',
     );
   });
@@ -255,7 +268,7 @@ describe('eteams_dispatch_captain', () => {
     expect(captainChildTeamOf('sess-stale')).toBeUndefined();
     expect(captainChildTeamOf(freshId)).toBe(String(seeded.id));
     const persisted = readTeamSync(root, seeded.id);
-    expect(persisted?.taskMembers.find((r) => r.mainTaskId === null)?.childSessionId).toBe(freshId);
+    expect(persisted?.taskMembers.find((r) => r.mainTaskId === null)?.sessionId).toBe(freshId);
   });
 
   it('rejects a member caller (只有团队领队会话可以转交)', async () => {

@@ -28,7 +28,6 @@ import {
   avatarFromJson,
   avatarToJson,
   getDb,
-  LEADER_NAME,
   nextEmployeeId,
   personaFromMd,
   personaToMd,
@@ -204,6 +203,40 @@ export function ensureRolesRowInTx(
 }
 
 /**
+ * 班底行角色信息副本刷新（v4）：team_members 的 role_name/persona_md/profile
+ * 三列是随 roles 角色行同步刷新的副本（真相在 roles）。每次写路径落库后调用
+ * ——一律从 roles 反查回填（不从内存 persona 取值，同源语义：已有角色行优先），
+ * 悬空 role_id 行刷成 NULL（与 loadMembers 防御性跳过同口径）。刷新不算行
+ * 变更，不碰 update_time。scope 省略 = 全表（导入/迁移兜底）；给 roleId 按
+ * 角色刷、给 teamId 按队刷，两者可并用（AND）。
+ */
+export function syncTeamMemberRoleMirrorInTx(
+  tx: TeamTx,
+  scope?: { roleId?: number; teamId?: number },
+): void {
+  const clauses: string[] = [];
+  const args: number[] = [];
+  if (scope?.roleId !== undefined) {
+    clauses.push('role_id = ?');
+    args.push(scope.roleId);
+  }
+  if (scope?.teamId !== undefined) {
+    clauses.push('team_id = ?');
+    args.push(scope.teamId);
+  }
+  const where = clauses.length > 0 ? ` WHERE ${clauses.join(' AND ')}` : '';
+  tx.db
+    .prepare(
+      'UPDATE team_members SET ' +
+        'role_name = (SELECT r.role_name FROM roles r WHERE r.role_id = team_members.role_id), ' +
+        'persona_md = (SELECT r.persona_md FROM roles r WHERE r.role_id = team_members.role_id), ' +
+        'profile = (SELECT r.profile FROM roles r WHERE r.role_id = team_members.role_id)' +
+        where,
+    )
+    .run(...args);
+}
+
+/**
  * 新建团队行（docs/35 §5#2）：在调用方事务内 INSERT，返回自增 team_id；
  * 领队 task_members 行由调用方（teamOps.createTeam，波次 2）紧接着写。
  */
@@ -226,9 +259,9 @@ export function insertTaskMemberRow(tx: TeamTx, row: TaskMemberRecord): number {
   const info = tx.db
     .prepare(
       'INSERT INTO task_members (task_member_id, team_id, main_task_id, now_task_id, name, ' +
-        'employee_id, main_session_id, child_session_id, status, persona_md, model, ' +
+        'employee_id, session_id, status, persona_md, model, ' +
         'reasoning_effort, avatar, created_time, update_time) ' +
-        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     )
     .run(
       assigned,
@@ -237,8 +270,7 @@ export function insertTaskMemberRow(tx: TeamTx, row: TaskMemberRecord): number {
       row.nowTaskId,
       row.name,
       row.employeeId ?? null,
-      row.mainSessionId,
-      row.childSessionId,
+      row.sessionId,
       row.status,
       row.personaMd ?? null,
       row.model !== undefined && row.model !== '' ? row.model : null,
@@ -340,7 +372,7 @@ function loadTaskMembers(db: DatabaseSync, teamId: number): TaskMemberRecord[] {
   const rows = db
     .prepare(
       'SELECT task_member_id, team_id, main_task_id, now_task_id, name, employee_id, ' +
-        'main_session_id, child_session_id, status, persona_md, model, ' +
+        'session_id, status, persona_md, model, ' +
         'reasoning_effort, avatar, created_time FROM task_members WHERE team_id = ? ' +
         'ORDER BY task_member_id',
     )
@@ -351,8 +383,7 @@ function loadTaskMembers(db: DatabaseSync, teamId: number): TaskMemberRecord[] {
     now_task_id: number | null;
     name: string;
     employee_id: number | null;
-    main_session_id: string;
-    child_session_id: string;
+    session_id: string;
     status: TaskMemberRecord['status'];
     persona_md: string | null;
     model: string | null;
@@ -367,8 +398,7 @@ function loadTaskMembers(db: DatabaseSync, teamId: number): TaskMemberRecord[] {
     nowTaskId: row.now_task_id,
     name: row.name,
     employeeId: row.employee_id,
-    mainSessionId: row.main_session_id,
-    childSessionId: row.child_session_id,
+    sessionId: row.session_id,
     status: row.status,
     ...(row.persona_md !== null ? { personaMd: row.persona_md } : {}),
     ...(row.model !== null ? { model: row.model } : {}),
@@ -454,7 +484,7 @@ function loadTasks(
     .prepare(
       'SELECT task_id, parent_id, subject, description, depend_tasks, member_chain_list, ' +
         'chain_cursor, status, current_member, retry_count, status_note, contract_md, ' +
-        'idempotency_note, blocked_from, work_dir, completed_time, ' +
+        'idempotency_note, blocked_from, work_dir, main_session_id, completed_time, ' +
         'created_time, update_time FROM task WHERE team_id = ? ORDER BY task_id',
     )
     .all(teamId) as Array<{
@@ -473,6 +503,7 @@ function loadTasks(
     idempotency_note: string | null;
     blocked_from: string | null;
     work_dir: string | null;
+    main_session_id: string | null;
     completed_time: number | null;
     created_time: number;
     update_time: number;
@@ -509,6 +540,7 @@ function loadTasks(
       ...(row.blocked_from !== null ? { blockedFrom: row.blocked_from as TaskStatus } : {}),
       ...(row.status_note !== null ? { statusNote: row.status_note } : {}),
       ...(row.work_dir !== null ? { workDir: row.work_dir } : {}),
+      ...(row.main_session_id !== null ? { mainSessionId: row.main_session_id } : {}),
       createdAt: row.created_time,
       updatedAt: row.update_time,
       ...(row.completed_time !== null ? { completedAt: row.completed_time } : {}),
@@ -601,7 +633,8 @@ export function writeTeamInTx(tx: TeamTx, state: TeamState): void {
 
   // 班底模板：只重写本队行（team_members）；人设/工号/头像在 roles 角色行
   // 上（成员=角色，全局一份），不经快照重写——写端只保证 team_members 行
-  // 落库且 role_id 松引用可解析（同名角色行缺失时自愈补建）。
+  // 落库且 role_id 松引用可解析（同名角色行缺失时自愈补建）；role_name/
+  // persona_md/profile 副本列（v4）落库后按 roles 统一刷新。
   db.prepare('DELETE FROM team_members WHERE team_id = ?').run(teamId);
   const insMember = db.prepare(
     'INSERT INTO team_members (team_member_id, team_id, role_id, model, reasoning_effort, ' +
@@ -616,16 +649,17 @@ export function writeTeamInTx(tx: TeamTx, state: TeamState): void {
     m.roleId = roleId; // 内存同步：角色行重建/改名后内存引用随之对齐
     insMember.run(m.memberId, teamId, roleId, route.model, route.effort, m.createdAt, now);
   }
+  syncTeamMemberRoleMirrorInTx(tx, { teamId });
 
   // task：带原号重插（发号已由 wave-2 的分配步骤经 nextAutoincrementId 完成）；
   // current_member_id 暂不维护（内存模型无此字段，docs/27 松引用列）。
   db.prepare('DELETE FROM task WHERE team_id = ?').run(teamId);
   const insTask = db.prepare(
     'INSERT INTO task (task_id, team_id, parent_id, subject, description, depend_tasks, ' +
-      'member_chain_list, chain_cursor, status, current_member, current_member_id, retry_count, ' +
-      'status_note, contract_md, idempotency_note, ' +
+      'member_chain_list, chain_cursor, status, current_member, current_member_id, main_session_id, ' +
+      'retry_count, status_note, contract_md, idempotency_note, ' +
       'blocked_from, work_dir, completed_time, created_time, update_time) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   );
   for (const t of state.tasks) {
     insTask.run(
@@ -639,6 +673,7 @@ export function writeTeamInTx(tx: TeamTx, state: TeamState): void {
       t.chainCursor,
       t.status,
       t.assignee ?? null,
+      t.mainSessionId ?? null,
       t.retryCount,
       t.statusNote ?? null,
       t.contractMd ?? null,
@@ -750,19 +785,47 @@ export async function listTeams(stateRoot: string): Promise<TeamState[]> {
   return teams;
 }
 
-/** The team currently led by one captain session, if any. */
+/** The team holding tasks stamped with this captain session, if any（v6：主会话快照在任务行）。 */
 export async function findTeamByCaptain(
   stateRoot: string,
   captainSessionId: string,
 ): Promise<TeamState | undefined> {
   const db = getDb(stateRoot);
   ensureWorkspaceReady(stateRoot, db);
+  if (captainSessionId === '') return undefined;
+  // 主判据：任务行快照；兜底：建队事件留痕（无任务团队，v6 起建队事件带
+  // captainSession）。删队时 events 随 team_id 清除，不会命中已删团队。
   const row = db
     .prepare(
-      'SELECT team_id FROM task_members WHERE name = ? AND main_task_id IS NULL ' +
-        "AND main_session_id = ? AND status <> 'removed' LIMIT 1",
+      `SELECT team_id FROM task WHERE main_session_id = ?
+       UNION ALL
+       SELECT team_id FROM events WHERE type = 'team.created'
+         AND json_extract(payload, '$.captainSession') = ?
+       LIMIT 1`,
     )
-    .get(LEADER_NAME, captainSessionId) as { team_id: number } | undefined;
+    .get(captainSessionId, captainSessionId) as { team_id: number } | undefined;
   if (row === undefined) return undefined;
   return readTeamSync(stateRoot, row.team_id);
+}
+
+/**
+ * team.created 事件留痕核对：该会话是否创建过该团队（v6 无任务团队与建队
+ * 后首个任务落地之间，requireTeamById 的领队身份判据）。删队时 events 随
+ * team_id 清除，不会命中已删团队。
+ */
+export function teamCreatedBy(
+  stateRoot: string,
+  teamId: number,
+  captainSessionId: string,
+): boolean {
+  const db = getDb(stateRoot);
+  ensureWorkspaceReady(stateRoot, db);
+  if (captainSessionId === '') return false;
+  const row = db
+    .prepare(
+      "SELECT event_id FROM events WHERE team_id = ? AND type = 'team.created' " +
+        "AND json_extract(payload, '$.captainSession') = ? LIMIT 1",
+    )
+    .get(teamId, captainSessionId);
+  return row !== undefined;
 }

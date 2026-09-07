@@ -2,8 +2,8 @@
  * Member lifecycle (docs/07.2, FR-14/FR-15): continuable spawning, persona
  * injection, per-child tool installation, and interruption. This is the only
  * module that starts subagents. docs/35 §5#12 之后成员是纯模板行（无状态无
- * 会话）：起会话只读模板行，状态与 child_session_id 的回填由调用方（首派
- * 路径，assignment.ts）随事务写回 task_members 实例行。
+ * 会话）：起会话只读模板行，状态与 session_id 的回填由调用方（首派路径，
+ * assignment.ts）随事务写回 task_members 实例行。
  *
  * @module dsh-eteams/runtime/members
  */
@@ -21,7 +21,8 @@ import {
   type RuntimeContext,
   type RuntimeEnv,
 } from './base.js';
-import { leaderRowOf, makeMail, type Wake, wakeMember } from './notifier.js';
+import { makeMail, type Wake, wakeMember } from './notifier.js';
+import { readBuildPresence } from './roleBuilder.js';
 import { assignmentMail } from '../prompts/handoff/mails.js';
 import { memberWelcome } from '../prompts/spawn/member.js';
 import { registerMemberSession } from './usage.js';
@@ -140,9 +141,9 @@ export async function spawnMember(
 
 /** Interrupt one live member's current turn (activation retained). */
 export function interruptMember(env: RuntimeEnv, row: TaskMemberRecord, captain: Agent): void {
-  if (row.childSessionId === '') return;
+  if (row.sessionId === '') return;
   try {
-    env.ctx.subagents.interrupt(row.childSessionId as unknown as SessionId, {
+    env.ctx.subagents.interrupt(row.sessionId as unknown as SessionId, {
       kind: 'ancestor',
       agent: captain,
     });
@@ -236,10 +237,17 @@ export function installMemberRuntime(
     const stateRoot = stateRootOf({ ctx: hostCtx as unknown as RuntimeContext, config, workspace });
     const team = readTeamSync(stateRoot, identity.teamId);
     if (!team) return () => undefined;
-    // 领队锚点校验（docs/36 建议 3）：子代理的父会话必须是该队领队行登记
-    // 的会话——team 表不再存 captainSessionId。
-    const leader = leaderRowOf(team);
-    if (!leader || leader.mainSessionId !== String(child.session?.header?.parentSession ?? '')) {
+    // 父会话校验（docs/36 建议 3；v6 派生判据 docs/51）：子代理的父会话必须
+    // 登记在本队任务的 main_session_id 快照里，或正是心跳锚定的主会话（DA38
+    // 派发可能用心跳锚起人；任务快照首派补章未提交时由它兜）。
+    const parents = new Set(
+      team.tasks
+        .map((t) => t.mainSessionId)
+        .filter((id): id is string => typeof id === 'string' && id !== ''),
+    );
+    const presence = readBuildPresence(stateRoot);
+    if (presence !== null) parents.add(presence.sessionId);
+    if (!parents.has(String(child.session?.header?.parentSession ?? ''))) {
       return () => undefined;
     }
     const row = team.taskMembers.find(
@@ -253,9 +261,10 @@ export function installMemberRuntime(
     registerMemberSession(String(child.id), {
       teamId: String(team.id),
       memberName: identity.memberName,
-      // 19.18：直接父（领队主会话 id）随登记落表——访谈投递冷恢复按它定位
-      // 领队代理（运行时按 lineage 授权，parent 必须是真实直接父）。
-      parentSessionId: leader.mainSessionId,
+      // 19.18：直接父随登记落表（v6 记子代理头里的真实父会话 id）——访谈
+      // 投递冷恢复按它定位领队代理（运行时按 lineage 授权，parent 必须是
+      // 真实直接父）。
+      parentSessionId: String(child.session?.header?.parentSession ?? ''),
     });
     return () => undefined;
   });

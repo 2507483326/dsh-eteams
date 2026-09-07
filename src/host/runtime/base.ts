@@ -76,7 +76,20 @@ export interface RuntimeContext {
     listDescendants?(rootSessionId: SessionId, signal?: AbortSignal): Promise<SubagentChildEntry[]>;
   };
   /** Live agent registry (inject `agents`): wake the captain. */
-  agents: { get(sessionId: string): Agent | undefined };
+  agents: {
+    get(sessionId: string): Agent | undefined;
+    /**
+     * 冷恢复（可选能力，运行时版本门控——旧运行时缺此 API，调用方
+     * feature-detect）：按持久化会话 ID 加载会话回活代理（AgentRegistry.resume
+     * 的结构子集，真实 ResumeAgentOptions 字段更宽）。返回 AgentHandle 的
+     * `dispose` 能力只留给运行时回收——复活的主会话当派发父锚常驻，绝不调
+     * dispose（create 语义里 dispose 会拆会话）。
+     */
+    resume?(options: {
+      resumeSessionId: SessionId;
+      signal?: AbortSignal;
+    }): Promise<{ agent: Agent; dispose(): Promise<void> }>;
+  };
   /** Live subagent listing — used to detect stranded mailboxes. */
   listAgents?: () => { id: string; label?: string; status: string }[];
 }
@@ -87,6 +100,12 @@ export interface RuntimeEnv {
   config: ETeamsResolvedConfig;
   /** Workspace root (the captain/member session cwd). */
   workspace: string;
+  /**
+   * 调用方会话 id（envForAgent 注入；面板 envFor / 迁移等无会话构造不落）。
+   * v6 建任务快照的兜底源：工具建任务按它登记主会话 ID（面板路由显式透传
+   * body.sessionId；导入传旧值）。
+   */
+  sessionId?: string;
   signal?: AbortSignal;
 }
 

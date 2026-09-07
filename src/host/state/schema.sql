@@ -1,8 +1,11 @@
 -- =====================================================================
--- ETeams SQLite schema v3（db_schema_version = 3；成员=角色合并：member 表
--- 精简改名成 roles 角色库表（去 team_id/role_id/model/reasoning_effort，
+-- ETeams SQLite schema v6（db_schema_version = 6；v3 成员=角色合并：member
+-- 表精简改名成 roles 角色库表（去 team_id/role_id/model/reasoning_effort，
 -- 新增 profile），班底另起 team_members 表，旧 roles 标签登记表删除；
--- v2 旧库经 getDb 迁移回填）
+-- v4 班底行补 role_name/persona_md/profile 角色信息副本列；v5 任务行补主
+-- 会话快照列（session_id）；v6 会话列归位：task.session_id 改名
+-- main_session_id，task_members 两列会话合并成 session_id（本行自己的子
+-- 代理会话），team 行不存会话；v2/v3/v4/v5 旧库经 getDb 迁移回填）
 -- 主键 = 每张表自己的编号列，统一 INTEGER 自增（schema_meta 例外：key 即主键）
 -- 时间列一律 *_time 结尾（Unix 毫秒）；每张表末尾 created_time / update_time
 -- 枚举 = TEXT（合法值写在列注释里）；JSON = TEXT 存 JSON 字符串
@@ -29,7 +32,7 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 CREATE TABLE IF NOT EXISTS team (
   team_id        INTEGER PRIMARY KEY AUTOINCREMENT,  -- 团队 ID，自增（展示名见 team_name）
   team_name      TEXT NOT NULL,                -- 展示名（原文本团队 ID 转为普通列，由写入代码查重）
-  has_leader     INTEGER NOT NULL DEFAULT 0,   -- 是否包含领队（0/1）；领队会话锚点在 task_members 的领队行上
+  has_leader     INTEGER NOT NULL DEFAULT 0,   -- 是否包含领队（0/1）；主会话快照在 task 行（main_session_id），领队子代理会话在 task_members 领队行
   created_time   INTEGER NOT NULL,             -- 创建时间
   update_time    INTEGER NOT NULL              -- 更新时间
 );
@@ -54,13 +57,17 @@ CREATE TABLE IF NOT EXISTS roles (
 
 -- ---------------------------------------------------------------------
 -- 3. team_members —— 班底（团队 × 角色：一行一个在队成员 + 该队派发路线；
---    人设/工号/头像经 role_id 松引用解析自 roles；执行实例（状态/会话/
+--    工号/头像经 role_id 松引用解析自 roles；role_name/persona_md/profile
+--    是随角色行同步刷新的副本列（v4，真相在 roles）；执行实例（状态/会话/
 --    当前任务）在 task_members）
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS team_members (
   team_member_id   INTEGER PRIMARY KEY AUTOINCREMENT,  -- 自增主键（内存新建行 0 落库发号）
   team_id          INTEGER NOT NULL,    -- 属于哪个团队（team.team_id）
   role_id          INTEGER,             -- 角色 ID（roles.role_id，松引用；人设/工号/头像都在角色行上）
+  role_name        TEXT,                -- 角色名副本（写入时随 roles.role_name 同步刷新；悬空行 NULL；直查/展示用）
+  persona_md       TEXT,                -- 角色手册副本（写入时随 roles.persona_md 同步刷新；真相在 roles）
+  profile          TEXT,                -- 一句话简介副本（写入时随 roles.profile 同步刷新；真相在 roles）
   model            TEXT,                -- 该队派发路线；NULL=会话默认（settings agent-default-model），有值=覆盖（provider 派发时按配置解析）
   reasoning_effort TEXT,                -- 模型思考强度
   created_time     INTEGER NOT NULL,    -- 创建时间
@@ -86,6 +93,7 @@ CREATE TABLE IF NOT EXISTS task (
                     -- wait_decision / wait_user / completed / failed / cancelled
   current_member    TEXT,                -- 当前执行成员名（松引用：成员移除也不影响这列）
   current_member_id INTEGER,             -- 当前执行成员 ID（v2 的 member.member_id 口径随 v3 合并废弃；写入代码恒置 NULL，物理残留列）
+  main_session_id   TEXT,                -- 主会话 ID 快照（v5 落列 v6 改名：建任务时登记的主会话 ID，落库后不变；直查/展示用）
   retry_count       INTEGER NOT NULL DEFAULT 0,  -- 当前执行人连续失败次数（换人清零）
   status_note       TEXT,                -- 当前状态说明（挂起原因等也并在这列）
   contract_md       TEXT,                -- 任务合同全文（Markdown，十六轮 DA29：原 acceptance/in_scope/out_of_scope/deliverables 四数组列合并——验收标准/允许改动/禁止改动/交付物统一写在这篇 MD 里；旧库由 getDb 迁移 ALTER + 回填，旧四列物理残留不再读写）
@@ -115,8 +123,7 @@ CREATE TABLE IF NOT EXISTS task_members (
   now_task_id      INTEGER,             -- 当前执行任务 ID（task.task_id）
   name             TEXT NOT NULL,       -- 成员名（与 roles.role_name 同名，写入代码查重）
   employee_id      INTEGER,             -- 工号副本（引用 roles.employee_id，松引用）
-  main_session_id  TEXT NOT NULL DEFAULT '',  -- 主代理会话 ID；还没启动时是空串（领队行存领队会话）
-  child_session_id TEXT NOT NULL DEFAULT '',  -- 子代理会话 ID；还没启动时是空串
+  session_id       TEXT NOT NULL DEFAULT '',  -- 本行自己的子代理会话 ID（v6：成员行=成员子会话，领队行=领队子代理会话）；还没启动时是空串
   status           TEXT NOT NULL DEFAULT 'staged',
                    -- 成员状态：staged / ready / working / paused / removed
   persona_md       TEXT,                -- 执行时的人设手册（沿用 roles 角色行的手册，可按任务微调）

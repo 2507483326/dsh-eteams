@@ -13,6 +13,7 @@
 import { existsSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Agent } from '@deepseek-ai/dsh-agent';
+import type { SessionId } from '@deepseek-ai/dsh-session';
 import type {
   Actor,
   AttemptKind,
@@ -53,6 +54,7 @@ import {
   readBox,
   requireMember,
   rootTaskIdOf,
+  teamMainSessionOf,
   wakeMember,
   type Wake,
 } from './notifier.js';
@@ -104,26 +106,55 @@ async function runWakes(wakes: Wake[]): Promise<void> {
 }
 
 /**
- * 领队/主会话锚点（起会话/唤醒用）。二十五轮 DA38（用户拍板「需要判断
- * 团队是否含有领队，如果没有领队，主会话窗口就是领队，如果有领队，则从
- * 领队开始正式开始执行任务」）。二十七轮 DA40（用户拍板「不存在领队会话
- * 离线啊」）：不再区分「有领队就硬绑领队会话」——统一一条梯度：领队行
- * 登记的主会话仍在册就用它（零迁移，setLeaderRemoved 不改锚点）；不在册
- * 则用客户端活跃会话心跳（POST /presence 落盘，60s 内有效）定位用户正在
- * 看的对话——用领队视角看，主会话窗口永远在线，不存在「领队会话离线」
- * 这个需要报错的状态。两锚都不在册返回 undefined（ensureSpawned 报错提
- * 示）。返回的可能是「非领队」的主会话锚点——调用方（ensureSpawned）在用
- * 它起人前先重锚领队行，保证成员子代理的父会话校验（installMemberRuntime
- * 按领队行判父）成立。
+ * 领队/主会话锚点（起会话/唤醒用）。三级梯度（二十五轮 DA38 / 二十七轮
+ * DA40 / 三十七轮 DA50；v6 锚点派生自任务行快照，docs/51）：
+ * ① 本任务登记的主会话（缺时退同队首个任务快照，teamMainSessionOf）仍在
+ *    册就用它；
+ * ② 不在册则用客户端活跃会话心跳（POST /presence 落盘，60s 内有效）定位
+ *    用户正在看的对话——用领队视角看，主会话窗口永远在线，不存在「领队会
+ *    话离线」这个需要报错的状态；
+ * ③ 快照记得主会话 ID 但两锚都不在册时冷恢复（DA50，用户拍板「直接跳到
+ *    这个会话启动任务」）：agents.resume 按持久化会话 ID 无窗复活主会话
+ *    （不跑任何回合，只当派发父锚；句柄不 dispose——复活会话像用户开着的
+ *    窗口一样常驻到进程回收），起人/接力不再要求用户先开窗口。运行时版本
+ *    门控与恢复失败都落回 undefined（ensureSpawned 报错提示）。
+ * 返回的可能是「非快照」的主会话锚点（②心跳锚点）——调用方（ensureSpawned）
+ * 在用它起人前补章未登记的任务行快照；①③ 与快照同 ID，补章是 no-op。
  */
-function captainFor(env: RuntimeEnv, team: TeamState): Agent | undefined {
-  const mainSession = leaderRowOf(team)?.mainSessionId ?? '';
+async function captainFor(
+  env: RuntimeEnv,
+  team: TeamState,
+  task: TaskRecord,
+): Promise<Agent | undefined> {
+  const mainSession = (task.mainSessionId ?? '') || teamMainSessionOf(team);
   if (mainSession !== '') {
     const live = env.ctx.agents.get(mainSession);
     if (live !== undefined) return live;
   }
   const presence = readBuildPresence(stateRootOf(env));
-  return presence !== null ? env.ctx.agents.get(presence.sessionId) : undefined;
+  if (presence !== null) {
+    const live = env.ctx.agents.get(presence.sessionId);
+    if (live !== undefined) return live;
+  }
+  // 三十七轮 DA50（用户「直接跳到这个会话启动任务」）：快照与心跳都不在册
+  // 但任务行记得主会话 ID 时冷恢复——agents.resume 按持久化会话 ID 无窗复活
+  // 主会话（不跑回合只当父锚；句柄不 dispose）。运行时版本门控（resume 缺
+  // 失）与恢复失败（会话记录被回收）都落 undefined 走原报错。
+  if (mainSession !== '') {
+    try {
+      const handle = await env.ctx.agents.resume?.({
+        resumeSessionId: mainSession as unknown as SessionId,
+        signal: env.signal,
+      });
+      if (handle !== undefined) {
+        env.ctx.logger.warn(`eteams: 主会话锚点离线，已按任务行快照冷恢复主会话（${mainSession}）`);
+        return handle.agent;
+      }
+    } catch (error) {
+      env.ctx.logger.warn(`eteams: 主会话冷恢复失败（${mainSession}）：${String(error)}`);
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -148,6 +179,8 @@ export async function createTask(
     idempotencyNote?: string;
     dependencies?: number[];
     chain?: { member: string; stageBrief: string }[];
+    /** v6 主会话快照显式源（面板路由透传 body.sessionId；导入传旧值）。 */
+    mainSessionId?: string;
   },
 ): Promise<TaskRecord> {
   const { subject } = params;
@@ -208,6 +241,9 @@ export async function createTask(
       chain,
       chainCursor: -1,
       status: 'ready',
+      // v6 主会话快照：建任务调用方会话（工具路径 = envForAgent 注入的
+      // env.sessionId；面板路由显式透传；导入传旧值），落库后不变。
+      mainSessionId: params.mainSessionId ?? env.sessionId,
       attempts: [],
       retryCount: 0,
       createdAt: tx.now,
@@ -424,6 +460,8 @@ async function dispatchCore(
   env: RuntimeEnv,
   teamId: TeamKey,
   actor: Actor,
+  /** 派发锚任务：captainFor 按本任务行快照解析主会话（v6，docs/51）。 */
+  anchorTaskId: number,
   prepare: (team: TeamState, captain: Agent | undefined) => Promise<AssignmentPlan>,
   apply: (
     team: TeamState,
@@ -444,7 +482,11 @@ async function dispatchCore(
         '用 eteams_team_status 查看当前团队，或先 eteams_create_team',
       );
     }
-    const plan = await prepare(team, captainFor(env, team));
+    const anchorTask = team.tasks.find((t) => t.id === anchorTaskId);
+    const plan = await prepare(
+      team,
+      anchorTask === undefined ? undefined : await captainFor(env, team, anchorTask),
+    );
     const wakes: Wake[] = [];
     const result = withTeamTx(root, team.id, (tx) => {
       const out = apply(team, tx, plan, wakes);
@@ -467,6 +509,7 @@ export async function assignTask(
     env,
     who.teamId,
     who.actor,
+    params.taskId,
     (team, captain) => prepareAssignment(env, team, captain, params),
     (team, tx, plan, wakes) =>
       applyAssignment(env, tx, team, who.actor, plan, { handoff: params.handoff }, wakes),
@@ -544,7 +587,10 @@ export async function startGroupTask(
   }
   const result: GroupStartResult = { started: 0, skipped: [] };
   for (const sub of subExecutionOrder(team.tasks.filter((t) => t.parentId === group.id))) {
-    if (sub.status !== 'ready') continue;
+    // 三十六轮 DA49（用户「任务点击开始没有反应」）：draft 小任务同进发棒
+    // 序（DA37 待开始语义闭环——派发核会把 draft 晋升 ready 后派发，旧库
+    // draft 小任务此前被静默跳过，点开始零反馈）。
+    if (!['draft', 'ready'].includes(sub.status)) continue;
     const next = sub.chain[sub.chainCursor + 1];
     if (next === undefined) {
       result.skipped.push({
@@ -579,8 +625,8 @@ export async function startGroupTask(
 
 /**
  * 派发前置（docs/35 §5#3 首派按链起人）：校验任务状态/依赖/占用/链纪律，
- * staged（child_session_id 空）实例行先起子会话；成功置 working、锚定到
- * 大任务、回填 child_session_id，随本次写事务落库。只改内存快照，失败即
+ * staged（session_id 空）实例行先起子会话；成功置 working、锚定到
+ * 大任务、回填 session_id，随本次写事务落库。只改内存快照，失败即
  * 整帧作废。改派路径（forReassign）目标任务可以在 wait/start/paused 等
  * 非 ready 态——合法性由调用方（reassignTask）校验。
  */
@@ -599,6 +645,11 @@ async function prepareAssignment(
   const task = requireTask(team, params.taskId);
   const isStation = task.chain.length > 0;
   if (params.forReassign !== true) {
+    // 三十六轮 DA49（用户「任务点击开始没有反应」）：draft 小任务派发即就绪
+    // （draft→ready 合法边，依赖/占用校验随下方原样兜）——DA37 起 draft/ready
+    // 面板同显「待开始」，旧库导入的 draft 小任务面板又没有晋升钮，状态闸
+    // 再挡 ready 就是永久开不了、整体开始还零反馈。
+    if (task.status === 'draft') applyTransition(task, 'ready', Date.now());
     if (task.status !== 'ready') {
       throw new ETeamsError(
         `任务 ${task.id} 处于 ${task.status}，只能指派 ready 任务`,
@@ -660,8 +711,7 @@ function resolveAssigneeRow(team: TeamState, task: TaskRecord, name: string): Ta
     nowTaskId: task.id,
     name,
     employeeId: template.employeeId ?? null,
-    mainSessionId: '',
-    childSessionId: '',
+    sessionId: '',
     status: 'staged',
     createdAt: Date.now(),
   };
@@ -698,7 +748,7 @@ function assertNotBusy(team: TeamState, name: string, exceptTaskId?: number): vo
 }
 
 /**
- * 首派起会话（docs/35 §5#3）：实例行 child_session_id 为空时由领队代理起
+ * 首派起会话（docs/35 §5#3）：实例行 session_id 为空时由领队代理起
  * 持续子会话——异步 I/O，只能在写事务之前；成功后该行置 working、锚定到
  * 大任务并回填会话 id，随本次写事务落库。spawn 失败整帧作废（快照丢弃，
  * 库无半步残留）。
@@ -712,26 +762,28 @@ async function ensureSpawned(
 ): Promise<void> {
   row.nowTaskId = task.id;
   if (row.mainTaskId === null) row.mainTaskId = rootTaskIdOf(task);
-  if (row.childSessionId !== '') {
+  if (row.sessionId !== '') {
     row.status = 'working';
     return;
   }
   if (captain === undefined) {
+    // 三十七轮 DA50：到这里的只剩「无锚可恢复」（任务行未登记主会话）、
+    // 旧运行时无 resume、恢复失败（会话记录被回收）三种——文案对齐三级
+    // 梯度（快照/心跳/冷恢复都落空）。
     throw new ETeamsError(
-      `成员「${row.name}」尚未起会话，且主会话窗口不在线无法起会话`,
-      '把团队对话开着（客户端心跳会定位主会话窗口），或打开团队主会话后重试指派',
+      `成员「${row.name}」尚未起会话，主会话锚点不可用（不在线且无法冷恢复）`,
+      '打开团队主会话窗口（在线即锚点回线），或把团队对话开着让客户端心跳定位主会话',
     );
   }
-  // 二十五轮 DA38「主会话窗口就是领队」：锚点会话与领队行登记不一致时改锚
-  // 领队行——成员子代理的父会话校验（installMemberRuntime 按领队行判父，
-  // 父会话必须与行一致才装成员工具）。只改内存快照，随本次派发写事务一并
-  // 落库（帧内 spawn 失败即整帧作废，锚点不动）。
-  const leader = leaderRowOf(team);
-  if (leader !== undefined && leader.mainSessionId !== String(captain.id)) {
-    leader.mainSessionId = String(captain.id);
+  // v6 补章（二十七轮 DA40 重锚的替身）：任务行未登记主会话时以本次派发
+  // 锚点补登（面板旧客户端/无心跳建卡的场景）——已登记不改写（快照语义：
+  // 落库后不变），①③ 与快照同 ID 时 no-op。只改内存快照，随本次派发写
+  // 事务一并落库（帧内 spawn 失败即整帧作废）。
+  if ((task.mainSessionId ?? '') === '') {
+    task.mainSessionId = String(captain.id);
   }
   try {
-    row.childSessionId = await spawnMember(env, team, row, captain);
+    row.sessionId = await spawnMember(env, team, row, captain);
   } catch (error) {
     throw new ETeamsError(
       `成员「${row.name}」启动失败：${String(error)}`,
@@ -794,6 +846,7 @@ export async function advanceTask(
     env,
     who.teamId,
     who.actor,
+    taskId,
     (team, captain) => {
       const task = requireTask(team, taskId);
       if (task.chain.length === 0) {
@@ -828,6 +881,7 @@ export async function reassignTask(
     env,
     who.teamId,
     who.actor,
+    params.taskId,
     (team, captain) => {
       const task = requireTask(team, params.taskId);
       const current = liveAttemptOf(task) ?? task.attempts.find((a) => a.status === 'paused');
@@ -973,7 +1027,7 @@ export async function resumeTask(
     const last = task.attempts[task.attempts.length - 1];
     const memberName = task.assignee ?? last?.member ?? thrower('挂起任务缺少执行成员记录');
     const row = resolveAssigneeRow(team, task, memberName);
-    await ensureSpawned(env, team, row, task, captainFor(env, team));
+    await ensureSpawned(env, team, row, task, await captainFor(env, team, task));
     const wakes: Wake[] = [];
     const attempt = withTeamTx(root, team.id, (tx) => {
       const fresh = makeAttempt(tx, task, {

@@ -30,8 +30,10 @@ import {
   insertTaskMemberRow,
   ensureRolesRowInTx,
   rolesRowByName,
+  syncTeamMemberRoleMirrorInTx,
   withTeamTx,
   findTeamByCaptain,
+  teamCreatedBy,
   type TeamKey,
   type TeamTx,
 } from '../state/store.js';
@@ -39,10 +41,11 @@ import { hashName, LEADER_NAME, nextAutoincrementId, nextEmployeeId, personaFrom
 import { insertEventInTx, insertMailInTx } from '../state/events.js';
 import { applyTransition, sanitizeKey, taskSlug } from '../model/taskMachine.js';
 import { ETeamsError, captainActor, memberActor, stateRootOf, type RuntimeEnv } from './base.js';
-import { clearSessionTeam } from './sessionTeam.js';
+import { clearSessionTeam, getSessionTeamId } from './sessionTeam.js';
 import { renderTeamDocs, teamWorkDirRel } from './docs.js';
 import { findRosterMember, ROLE_BUILDER_NAME, upsertRosterMember } from './roster.js';
 import { interruptMember, drainMembers } from './members.js';
+import { readBuildPresence } from './roleBuilder.js';
 import {
   leaderRowOf,
   latestInstanceRow,
@@ -51,6 +54,7 @@ import {
   notifyCaptain,
   readBox,
   requireMember,
+  teamMainSessionOf,
   wakeMember,
 } from './notifier.js';
 
@@ -115,9 +119,9 @@ export async function createTeam(
     let teamId: number | undefined;
     withTeamTx(root, undefined, (tx) => {
       teamId = insertTeamRow(tx, name, true, now);
-      // 领队行（docs/35 §5#12 / docs/36 建议 3）：领队锚点在 task_members——
-      // name=项目牧羊人、main_task_id 为空、main_session_id=本会话；工号与
-      // 手册沿角色库行（项目牧羊人预设，import.ts 播种）。
+      // 领队行（docs/35 §5#12）：团队级主持行只记自己的子代理会话（v6 领队
+      // 行 session_id = 领队子代理，未派发时空串）；主会话快照归 task 行。
+      // 工号与手册沿角色库行（项目牧羊人预设，import.ts 播种）。
       const template = tx.db
         .prepare('SELECT employee_id, persona_md FROM roles WHERE role_name = ? LIMIT 1')
         .get(LEADER_NAME) as { employee_id: number | null; persona_md: string | null } | undefined;
@@ -128,8 +132,7 @@ export async function createTeam(
         nowTaskId: null,
         name: LEADER_NAME,
         employeeId: template?.employee_id ?? null,
-        mainSessionId: captainId,
-        childSessionId: '',
+        sessionId: '',
         status: 'ready',
         ...(template?.persona_md ? { personaMd: template.persona_md } : {}),
         createdAt: now,
@@ -140,7 +143,13 @@ export async function createTeam(
         at: now,
         actor: captainActor(),
         type: 'team.created',
-        payload: { name, ...(params.via !== undefined ? { via: params.via } : {}) },
+        payload: {
+          name,
+          // v6 建队会话留痕（审计 + findTeamByCaptain 事件兜底：无任务团队
+          // 的建队去重/身份解析用它，主表不存会话列）。
+          captainSession: captainId,
+          ...(params.via !== undefined ? { via: params.via } : {}),
+        },
       });
       if (params.questionnaire && params.questionnaire.length > 0) {
         insertEventInTx(tx, teamId, {
@@ -224,7 +233,9 @@ export async function addMember(
       : await requireCaptainTeam(env, captain);
   const { team: fresh, member } = await withTeam(env, team.id, (teamNow, _root, tx) => {
     const leader = leaderRowOf(teamNow);
-    if (!leader || leader.status === 'removed' || leader.mainSessionId !== String(captain.id)) {
+    // 调用者身份已由 requireTeamById/requireCaptainTeam 校验（v6 判据）；这
+    // 里只拦领队不在册/已移除。
+    if (!leader || leader.status === 'removed') {
       throw new ETeamsError('只有该团队的领队可以添加成员');
     }
     const name = params.name.trim();
@@ -321,8 +332,7 @@ export async function addMember(
       nowTaskId: null,
       name,
       employeeId: member.employeeId ?? null,
-      mainSessionId: '',
-      childSessionId: '',
+      sessionId: '',
       status: 'staged',
       ...(member.persona.personaMd !== undefined && member.persona.personaMd !== ''
         ? { personaMd: member.persona.personaMd }
@@ -411,6 +421,8 @@ export async function updateMember(
     tx.db
       .prepare('UPDATE roles SET persona_md = ?, update_time = ? WHERE role_name = ?')
       .run(personaToMd(member.persona, member.name), tx.now, member.name);
+    // v4 副本列刷新：角色行刚改写，班底行镜像随之同步（全局生效的落库面）。
+    syncTeamMemberRoleMirrorInTx(tx, { roleId: rolesRowByName(tx.db, member.name)?.role_id });
     // 模板手册变化同步到该成员未锚定的 staged 实例行（执行时的人设副本）。
     const row = teamNow.taskMembers.find(
       (r) => r.name === params.name && r.status === 'staged' && r.mainTaskId === null,
@@ -600,8 +612,8 @@ export async function syncMemberToRoster(
  * Move the leader (Project Shepherd) out of / back into the team's member
  * roster (user iteration 2026-09: the leader is deletable)。docs/35 §5#12
  * 之后领队状态落在领队行 status（removed↔ready）+ team.has_leader；领队
- * 会话本身不动。restore 时行已删除则重建（保留原 main_session_id 缺省填
- * 本会话）。
+ * 会话本身不动。restore 时行已删除则重建（v6 领队行只记自己的子代理会话，
+ * 重建时 session_id 留空——主会话锚点归任务行快照）。
  */
 export async function setLeaderRemoved(
   env: RuntimeEnv,
@@ -615,7 +627,8 @@ export async function setLeaderRemoved(
   const fresh = await withTeam(env, team.id, (teamNow, _root, tx) => {
     let leader = leaderRowOf(teamNow);
     if (leader === undefined) {
-      // 领队行缺失（异常路径/旧数据）：重建，主会话填本队长会话。
+      // 领队行缺失（异常路径/旧数据）：重建；session_id 留空（领队子代理
+      // 未派发），主会话锚点由任务行快照/心跳派生。
       leader = {
         id: 0,
         teamId: teamNow.id,
@@ -623,8 +636,7 @@ export async function setLeaderRemoved(
         nowTaskId: null,
         name: LEADER_NAME,
         employeeId: null,
-        mainSessionId: String(captain.id),
-        childSessionId: '',
+        sessionId: '',
         status: params.removed ? 'removed' : 'ready',
         createdAt: tx.now,
       };
@@ -723,12 +735,13 @@ export async function removeMember(
     return teamNow;
   });
   // 提交后：中断并回收该成员全部子会话（回收驻留 Activation，docs/20.4 P2）。
-  const leader = leaderRowOf(fresh);
-  const captainAgent = (leader ? env.ctx.agents.get(leader.mainSessionId) : undefined) ?? captain;
+  // 锚点按 v6 派生（任务行快照 + 心跳兜底）；都不在线退回调用的 captain。
+  const anchorId = teamMainSessionOf(fresh) || readBuildPresence(stateRootOf(env))?.sessionId || '';
+  const captainAgent = (anchorId !== '' ? env.ctx.agents.get(anchorId) : undefined) ?? captain;
   for (const row of fresh.taskMembers) {
-    if (row.name !== name || row.childSessionId === '') continue;
+    if (row.name !== name || row.sessionId === '') continue;
     interruptMember(env, row, captainAgent);
-    await drainMembers(env, captainAgent, [row.childSessionId]);
+    await drainMembers(env, captainAgent, [row.sessionId]);
   }
   renderTeamDocs(env.workspace, fresh, (msg) => env.ctx.logger.warn(msg));
   return fresh;
@@ -741,13 +754,24 @@ async function requireTeamById(
 ): Promise<TeamState> {
   const team = await readTeam(stateRootOf(env), teamId);
   if (!team) throw new ETeamsError(`团队「${String(teamId)}」不存在`);
-  const leader = leaderRowOf(team);
-  // removed 行也放行（领队 remove 后「加回领队」/restore 要能走通，身份
-  // 仍按 main_session_id 锚定）；需要活跃领队的具体操作自带更严守卫。
-  if (!leader || leader.mainSessionId !== String(captain.id)) {
-    throw new ETeamsError('只有该团队的领队可以执行此操作');
+  // v6 身份判据：面板合成代理（captainId 为空串，路由已按 teamId 定位）直接
+  // 放行；工具路径按 ①任务行主会话快照 ②领队行子代理会话（宿主重启后领队
+  // 子代理身份）③会话→团队绑定 匹配。removed 行不拦（领队 remove/restore
+  // 要能走通），需要活跃领队的具体操作自带更严守卫。
+  const captainId = String(captain.id ?? '');
+  if (captainId === '') return team;
+  const leaderSession = leaderRowOf(team)?.sessionId ?? '';
+  const bound = getSessionTeamId(captainId);
+  if (
+    team.tasks.some((t) => t.mainSessionId === captainId) ||
+    (leaderSession !== '' && leaderSession === captainId) ||
+    (bound !== undefined && String(team.id) === bound) ||
+    // 建队事件留痕（v6）：无任务团队在首个任务落地前，建队会话仍是领队。
+    teamCreatedBy(stateRootOf(env), team.id, captainId)
+  ) {
+    return team;
   }
-  return team;
+  throw new ETeamsError('只有该团队的领队可以执行此操作');
 }
 
 /** Captain → member or member → captain/member message (docs/09.1). */
@@ -760,7 +784,7 @@ export async function sendMessage(
   refs: { taskId?: number } = {},
 ): Promise<void> {
   const wakes: Array<() => Promise<boolean>> = [];
-  await withTeam(env, team.id, (fresh, _root, tx) => {
+  await withTeam(env, team.id, (fresh, root, tx) => {
     if (to === 'captain') {
       insertMailInTx(
         tx,
@@ -774,8 +798,9 @@ export async function sendMessage(
           refs,
         ),
       );
-      const leader = leaderRowOf(fresh);
-      const captainAgent = leader ? env.ctx.agents.get(leader.mainSessionId) : undefined;
+      // 领队锚点（v6 派生）：任务行快照 + 心跳兜底。
+      const anchorId = teamMainSessionOf(fresh) || readBuildPresence(root)?.sessionId || '';
+      const captainAgent = anchorId !== '' ? env.ctx.agents.get(anchorId) : undefined;
       if (captainAgent) {
         try {
           captainAgent.followup(
@@ -911,7 +936,7 @@ export async function deleteTeam(env: RuntimeEnv, captain: Agent, teamId: TeamKe
     }
     const childIds = fresh.taskMembers
       .filter((r) => r.status !== 'removed')
-      .map((r) => r.childSessionId);
+      .map((r) => r.sessionId);
     withTeamTx(root, fresh.id, (tx) => {
       for (const table of [
         'task',
@@ -929,8 +954,9 @@ export async function deleteTeam(env: RuntimeEnv, captain: Agent, teamId: TeamKe
       tx.db.prepare('DELETE FROM team WHERE team_id = ?').run(fresh.id);
     });
     // 提交后：回收成员子代理驻留（子会话已随团队删除，只能尽量清场）。
-    const leader = leaderRowOf(fresh);
-    const captainAgent = (leader ? env.ctx.agents.get(leader.mainSessionId) : undefined) ?? captain;
+    // 锚点按 v6 派生（任务行快照）；无快照退回调用的 captain。
+    const anchorId = teamMainSessionOf(fresh);
+    const captainAgent = (anchorId !== '' ? env.ctx.agents.get(anchorId) : undefined) ?? captain;
     await drainMembers(env, captainAgent, childIds);
   });
 }

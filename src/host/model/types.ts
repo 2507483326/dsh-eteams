@@ -143,10 +143,8 @@ export interface TaskMemberRecord {
   name: string;
   /** 工号副本（引用 roles.employee_id，松引用）。 */
   employeeId: number | null;
-  /** 主代理会话 id；未启动时是空串（领队行存领队会话 id）。 */
-  mainSessionId: string;
-  /** 持续子代理会话 id；spawn 后回填，空串 = 尚未启动。 */
-  childSessionId: string;
+  /** 本行自己的子代理会话 id（v6：成员行=成员子会话，领队行=领队子代理会话）；未启动时是空串。 */
+  sessionId: string;
   status: MemberStatus;
   /** 执行时的人设手册（沿用角色行手册，可按任务微调；库内 persona_md 列）。 */
   personaMd?: string;
@@ -214,6 +212,13 @@ export interface TaskRecord {
   statusNote?: string;
   /** 任务工作目录（相对工作区；分配后固定，旧任务按字面路径导入）。 */
   workDir?: string;
+  /**
+   * 主会话 ID 快照（task.main_session_id，v5 落列 v6 改名）：建任务时登记
+   * 的主会话 ID（对话工具=调用方会话；面板=绑定会话透传；导入=旧
+   * captainSessionId），落库后不变——重锚/补章不回改已登记行；旧库任务行由
+   * v5 迁移按领队行回填；未登记为空（不落键）。
+   */
+  mainSessionId?: string;
   createdAt: number;
   updatedAt: number;
   completedAt?: number;

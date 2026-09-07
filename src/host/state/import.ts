@@ -39,7 +39,12 @@ import {
   writeSchemaVersion,
 } from './db.js';
 import { insertEventInTx, insertMailInTx, parseJsonl } from './events.js';
-import { ensureRolesRowInTx, insertTaskMemberRow, rolesRowByName } from './store.js';
+import {
+  ensureRolesRowInTx,
+  insertTaskMemberRow,
+  rolesRowByName,
+  syncTeamMemberRoleMirrorInTx,
+} from './store.js';
 import type { TeamTx } from './store.js';
 import { defaultCaptainPersona } from '../prompts/personas/captain.js';
 import { fallbackExecutionPrompt, PERSONA_FRAMEWORK_VERSION } from '../prompts/personas/framework.js';
@@ -678,6 +683,8 @@ function importLegacyTeam(
     insertTeamMember.run(teamId, roleId, route.model, route.effort, m.createdAt ?? now, now);
     employeeByMember.set(name, employeeId);
   }
+  // v4 副本列刷新：本队班底行刚落库，镜像按角色行统一回填
+  syncTeamMemberRoleMirrorInTx(tx, { teamId });
 
   // ---- 领队实例行（docs/35 §5#2：captainSessionId/captainChildId 落这里）----
   const leaderTemplate = roster.find((r) => r.name === LEADER_NAME);
@@ -696,8 +703,8 @@ function importLegacyTeam(
     nowTaskId: null,
     name: LEADER_NAME,
     employeeId: leaderRow?.employee_id ?? null,
-    mainSessionId: old.captainSessionId ?? '',
-    childSessionId: old.captainChildId ?? '',
+    // v6 领队行 session_id = 领队子代理会话；主会话快照归任务行（下方盖章）。
+    sessionId: old.captainChildId ?? '',
     status: hasLeader ? 'ready' : 'removed',
     personaMd: leaderRow?.persona_md ?? personaToMd(leaderPersona, LEADER_NAME),
     createdAt: old.createdAt ?? now,
@@ -718,8 +725,7 @@ function importLegacyTeam(
       nowTaskId: anchor?.taskId ?? null,
       name: m.name,
       employeeId: employeeByMember.get(m.name) ?? null,
-      mainSessionId: '',
-      childSessionId,
+      sessionId: childSessionId,
       status: mapMemberStatus(m.status),
       personaMd: personaToMd(persona, m.name),
       ...(route.model !== null ? { model: route.model } : {}),
@@ -733,10 +739,10 @@ function importLegacyTeam(
   // ---- 任务 / 尝试（t1/a1 → 整数；work_dir 存字面旧目录）----
   const insertTask = db.prepare(
     'INSERT INTO task (task_id, team_id, parent_id, subject, description, depend_tasks, ' +
-      'member_chain_list, chain_cursor, status, current_member, current_member_id, retry_count, ' +
-      'status_note, contract_md, idempotency_note, ' +
+      'member_chain_list, chain_cursor, status, current_member, current_member_id, ' +
+      'main_session_id, retry_count, status_note, contract_md, idempotency_note, ' +
       'blocked_from, work_dir, completed_time, created_time, update_time) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   );
   const insertAttempt = db.prepare(
     'INSERT INTO attempts (attempt_id, team_id, task_id, kind, member, status, token, ' +
@@ -768,6 +774,9 @@ function importLegacyTeam(
       t.chainCursor ?? -1,
       mapLegacyStatus(t.status, 'draft'),
       t.assignee ?? null,
+      // 主会话快照：旧版任务盖章建队会话（task.main_session_id，v5 落列
+      // v6 改名；导入直盖，落库后不变）
+      old.captainSessionId || null,
       t.retryCount ?? 0,
       t.suspendNote ?? null,
       // 合同 MD（十六轮 DA29）：新格式直取 contractMd；旧格式由四数组合成。

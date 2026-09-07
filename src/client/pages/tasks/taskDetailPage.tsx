@@ -663,9 +663,10 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
         )}
         {parent !== null && subMutable && (
           /* 二十四轮 DA37：行首加开始按钮（与组详情页小任务卡同判据——
-          ready 且有链渲染、ready 无链渲染「需要选择成员」提示）。二十八轮
-          DA41：「修改」钮撤除——头部卡「编辑」钮就地编辑接管。M3：状态
-          窗口收拢 isStartable 谓词（判定逐位等价）。 */
+          待开始且有链渲染、无链渲染「需要选择成员」提示；三十六轮 DA49
+          draft 并入待开始窗口）。二十八轮 DA41：「修改」钮撤除——头部卡
+          「编辑」钮就地编辑接管。M3：状态窗口收拢 isStartable 谓词
+          （判定逐位等价）。 */
           <div className="mt-1.5 flex items-center gap-1.5">
             {isStartable(selected.status) && selected.chain.length > 0 && (
               <Button

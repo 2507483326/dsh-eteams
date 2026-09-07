@@ -61,8 +61,8 @@ function team(overrides: Partial<TeamState> = {}): TeamState {
   };
 }
 
-/** 领队实例行（task_members 领队行 mainSessionId 即领队会话锚点）。 */
-function leaderRow(teamId: number, mainSessionId: string): TaskMemberRecord {
+/** 领队实例行（v6：领队行 session_id 只记领队子代理会话；主会话锚点在任务行）。 */
+function leaderRow(teamId: number): TaskMemberRecord {
   return {
     id: 0,
     teamId,
@@ -70,8 +70,7 @@ function leaderRow(teamId: number, mainSessionId: string): TaskMemberRecord {
     nowTaskId: null,
     name: LEADER_NAME,
     employeeId: null,
-    mainSessionId,
-    childSessionId: '',
+    sessionId: '',
     roleId: null,
     status: 'ready',
     createdAt: 1,
@@ -171,7 +170,7 @@ describe('resolveCaller 绑定优先 (binding-first identity)', () => {
     return { id } as unknown as Agent;
   }
 
-  /** SQLite 契约建队：team 行 + 领队实例行（mainSessionId 即领队锚点）。 */
+  /** SQLite 契约建队：team 行 + 领队实例行；领队身份锚点盖章在任务行快照（v6）。 */
   async function seedTeam(name: string, leaderSession?: string): Promise<TeamState> {
     let teamId = 0;
     withTeamTx(root, undefined, (tx) => {
@@ -183,9 +182,27 @@ describe('resolveCaller 绑定优先 (binding-first identity)', () => {
       hasLeader: leaderSession !== undefined,
       createdAt: 1,
       updatedAt: 1,
-      taskMembers: leaderSession !== undefined ? [leaderRow(teamId, leaderSession)] : [],
+      taskMembers: leaderSession !== undefined ? [leaderRow(teamId)] : [],
       members: [],
-      tasks: [],
+      tasks:
+        leaderSession !== undefined
+          ? [
+              {
+                id: 1,
+                subject: '演示任务',
+                parentId: null,
+                dependencies: [],
+                chain: [],
+                chainCursor: -1,
+                status: 'ready',
+                attempts: [],
+                retryCount: 0,
+                mainSessionId: leaderSession,
+                createdAt: 1,
+                updatedAt: 1,
+              },
+            ]
+          : [],
       pendingDecisions: [],
     };
     await writeTeam(root, state);

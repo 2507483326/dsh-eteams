@@ -1,6 +1,7 @@
 # 49 成员=角色合并：member 表并入 roles + 新增 team_members 班底表（DB v2→v3）
 
-> 状态：**定案（2026-09-06 用户定稿）——已实施，typecheck 与 380 用例全绿**。
+> 状态：**定案（2026-09-06 用户定稿）——已实施，typecheck 与 382 用例全绿**。
+> 同日 v4 增补（team_members 补角色信息副本列，用户：团队成员表补上 role_name、persona_md 和 profile）见 §49.6。
 > 一句话：旧 `member` 表身兼「全局角色库」与「团队班底」两职，与旧 `roles` 标签登记表内容大量重复、人设存两份；v3 把 member 精简改名成 **roles 角色库表**（成员=角色，全局一份），班底另起 **team_members** 表，旧 roles 标签登记表删除，`DB_SCHEMA_VERSION` 2→3。
 
 ## 49.1 动机
@@ -96,3 +97,37 @@ CREATE INDEX IF NOT EXISTS idx_team_members_team ON team_members (team_id);
 - **行为锁**：captainDispatch 用例改断言 v3 自愈式角色入库（不再预插 roles 行）；webui 用例断言直加成员进名册（加成员即入库）且显式工号改写角色行、同名复制拿新号。
 - **面板手工链路未验证声明**：名册页增删改（profile 列生效）→ 建队加成员 → 成员详情改手册同步角色库 → 改模型路线重启读回 → 在队角色删除被拒/移出后可删 → 删队后 team_members 清空——待装机 GUI 冒烟。
 - **本轮不动**：`src/host/tools/captainTools.ts` 与 `src/host/index.ts`（其调用方收口由并行修复线程承担）。
+
+## 49.6 v4 增补（2026-09-06 同日）：班底行补角色信息副本列
+
+用户追加需求：**团队成员表（team_members）补上 role_name、persona_md、profile**。定案口径：三列是**随 roles 角色行同步刷新的副本**，真相仍在 roles——不回退到 v2 的「人设存两份」，改角色依旧全局生效；副本列只服务**直查/展示**（不 JOIN 就能拿角色名/手册/简介），`DB_SCHEMA_VERSION` 3→4。
+
+```sql
+-- v4 的 team_members（真相在 roles；三列副本写入时随角色行同步刷新）
+CREATE TABLE IF NOT EXISTS team_members (
+  team_member_id   INTEGER PRIMARY KEY AUTOINCREMENT,  -- 自增主键（内存新建行 0 落库发号）
+  team_id          INTEGER NOT NULL,    -- 属于哪个团队（team.team_id）
+  role_id          INTEGER,             -- 角色 ID（roles.role_id，松引用；人设/工号/头像都在角色行上）
+  role_name        TEXT,                -- 角色名副本（写入时随 roles.role_name 同步刷新；悬空行 NULL；直查/展示用）
+  persona_md       TEXT,                -- 角色手册副本（写入时随 roles.persona_md 同步刷新；真相在 roles）
+  profile          TEXT,                -- 一句话简介副本（写入时随 roles.profile 同步刷新；真相在 roles）
+  model            TEXT,                -- 该队派发路线；NULL=会话默认（settings agent-default-model），有值=覆盖（provider 派发时按配置解析）
+  reasoning_effort TEXT,                -- 模型思考强度
+  created_time     INTEGER NOT NULL,
+  update_time      INTEGER NOT NULL
+);
+```
+
+**同步口径（写路径落库后统一从 roles 反查回填，不从内存 persona 取值——同源语义：已有角色行优先，避免把内存快照烘进库）**：
+
+| 写路径 | 副本刷新动作 |
+|---|---|
+| 快照落库（writeTeamInTx，含加成员） | 本队班底行插入后按 team_id 全量刷新 |
+| 名册 upsert / 预设手册升级（roster.ts） | 按 roles.role_id 刷新引用行 |
+| 成员详情改手册（teamOps.updateMember） | 按 roles.role_id 刷新 |
+| 角色删除（removeRosterMember） | 删行后引用它的班底行三列置 NULL（悬空行） |
+| 旧版团队导入（import.ts） | 本队班底行落库后按 team_id 刷新 |
+
+- 副本刷新不碰 `update_time`（镜像同步不算行变更）；悬空行刷 NULL 与 loadMembers 防御性跳过同口径；读端（loadMembers）仍走 LEFT JOIN roles 以角色行为准，副本列不参与判定。
+- **迁移（v3→v4）**：`getDb` 首次连接时 `migrateTeamMemberRoleColumnsV4`——形状检测（PRAGMA table_info 缺哪列补哪列）ALTER 三列 + 相关子查询从 roles 回填（悬空 role_id 行刷 NULL）；v3 迁移（v2→v3）事务内新落的班底行也在 COMMIT 前跑同一条回填。幂等：已补列的库重开只重复回填（自愈，不报错）。
+- **验收**：typecheck 全绿；vitest 28 文件 / **382 用例**全过——新增 v3→v4 迁移用例（补列 + 引用行回填 + 悬空行 NULL + 重开幂等）、v2→v3 迁移用例追加镜像断言、快照用例追加「写路径回填 + 同名角色行不被内存 persona 覆盖」断言；schema.sql 与 db.ts 内嵌 SCHEMA_SQL 程序化 diff 逐字一致。旧 v3 库（含用户现库）重启宿主后自动 ALTER + 回填，无需手工操作。

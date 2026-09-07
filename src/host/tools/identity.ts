@@ -7,7 +7,7 @@
  */
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { TaskMemberRecord, TeamState } from '../model/types.js';
-import { listTeams } from '../state/store.js';
+import { listTeams, findTeamByCaptain } from '../state/store.js';
 import { getSessionTeamId } from '../runtime/sessionTeam.js';
 import { captainChildTeamOf } from '../runtime/captainAgent.js';
 import { locateAgentTeam } from '../runtime/workspaces.js';
@@ -61,24 +61,30 @@ export function envForAgent(
     cwd,
     getSessionTeamId(sessionId) ?? captainChildTeamOf(sessionId),
   );
-  return { ctx, config, workspace: located?.workspacePath ?? cwd, signal };
+  return {
+    ctx,
+    config,
+    workspace: located?.workspacePath ?? cwd,
+    sessionId,
+    signal,
+  };
 }
 
 /**
  * Resolve the calling agent into a team identity. Members are matched by
- * their durable child session id (`task_members.child_session_id ===
- * agent.id`，实例行执行会话即身份凭证).
+ * their durable child session id (`task_members.session_id === agent.id`，
+ * 实例行执行会话即身份凭证).
  *
  * 绑定优先（docs/26 用户迭代 2026-09-03）：输入栏「团队」弹层的显式选择
  * 是用户最近的意图——凡绑定了团队的会话，按该团队的领队身份行动，团队
- * 建在哪个对话不再重要（原「他队」死路已撤）。绑定先于创建者
- * 领队行匹配：一个会话既领队 A 队又绑定 B 队时，工具作用于
- * B（弹层选择即最新意图）。
+ * 建在哪个对话不再重要（原「他队」死路已撤）。绑定先于任务快照匹配：
+ * 一个会话既领队 A 队又绑定 B 队时，工具作用于 B（弹层选择即最新意图）。
  *
  * 领队子代理（docs/26 用户迭代 2026-09-03）：dispatch 派发的持续子代理
  * 经 `captainChildTeamOf` 注册表命中——它的 eteams_* 调用一律按该团队
- * 领队解析（含跨工作区重指，envForAgent 同一 fallback）。注册先于创建者
- * 匹配：子代理 id 永不等于领队行 main_session_id，此分支只命中真子代理。
+ * 领队解析（含跨工作区重指，envForAgent 同一 fallback）。注册先于任务
+ * 快照匹配：注册表命中的是真子代理；宿主重启后注册表丢失，退回领队行
+ * session_id 匹配（领队子代理会话即身份，v6 落列）。
  */
 export async function resolveCaller(env: RuntimeEnv, agent: Agent): Promise<Caller> {
   const sessionId = String(agent.id ?? '');
@@ -95,16 +101,19 @@ export async function resolveCaller(env: RuntimeEnv, agent: Agent): Promise<Call
     const childTeam = teams.find((t) => String(t.id) === childTeamId);
     if (childTeam) return { kind: 'captain', team: childTeam, actor: captainActor(childTeam) };
   }
-  // 领队身份走领队锚点（task_members 领队行 main_session_id）。
-  const asCaptain = teams.find((t) => {
-    const leader = leaderRowOf(t);
-    return leader !== undefined && leader.mainSessionId === sessionId;
-  });
+  // 领队主会话身份（v6 派生）：任一任务行 main_session_id 快照命中；无任务
+  // 团队退建队事件留痕（findTeamByCaptain，建队后首个任务落地前）。
+  const asCaptain = await findTeamByCaptain(root, sessionId);
   if (asCaptain) return { kind: 'captain', team: asCaptain, actor: captainActor(asCaptain) };
-  // 成员身份走实例行（child_session_id 即成员子会话 id）。
+  // 领队子代理会话（领队行 session_id）：注册表丢失后的冷恢复身份。
+  const asLeaderChild = teams.find((t) => leaderRowOf(t)?.sessionId === sessionId);
+  if (asLeaderChild) {
+    return { kind: 'captain', team: asLeaderChild, actor: captainActor(asLeaderChild) };
+  }
+  // 成员身份走实例行（session_id 即成员子会话 id）。
   for (const team of teams) {
     const row = team.taskMembers.find(
-      (r) => r.childSessionId === sessionId && r.status !== 'removed',
+      (r) => r.sessionId === sessionId && r.status !== 'removed',
     );
     if (row) return { kind: 'member', team, member: row, actor: memberActor(row) };
   }

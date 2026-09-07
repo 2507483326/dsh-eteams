@@ -56,7 +56,7 @@ import {
   taskOutcome,
   updateTask,
 } from './assignment.js';
-import { leaderRowOf, latestInstanceRow, memberStatusOf } from './notifier.js';
+import { leaderRowOf, latestInstanceRow, memberStatusOf, teamMainSessionOf } from './notifier.js';
 import {
   answerBuildInterview,
   cancelBuildSession,
@@ -145,7 +145,7 @@ function memberView(team: TeamState, m: MemberRecord) {
     model: m.modelRoute.model,
     reasoningEffort: m.modelRoute.reasoningEffort ?? null,
     currentTaskId: currentTask?.id ?? null,
-    childId: row?.childSessionId ? row.childSessionId : null,
+    childId: row?.sessionId ? row.sessionId : null,
     removed: false,
     avatar: m.avatar ?? null,
   };
@@ -178,6 +178,9 @@ function taskView(t: TaskRecord, team: TeamState, groupOutcomes?: Map<number, st
     blockedFrom: t.blockedFrom ?? null,
     statusNote: t.statusNote ?? null,
     workDir: t.workDir ?? null,
+    // 主会话 ID 快照（task.main_session_id，v5 落列 v6 改名）：建任务时登记
+    // 的主会话（增量字段，客户端可选消费）。
+    sessionId: t.mainSessionId ?? null,
     status: t.status,
     assignee: t.assignee ?? null,
     dependencies: t.dependencies,
@@ -235,7 +238,7 @@ export function teamSnapshot(
   return {
     teamId: team.id,
     name: team.name,
-    // 领队锚点（docs/35 §3）：领队行 main_session_id；移出/回团即行 status。
+    // 领队移出/回团即行 status；主会话快照在任务行（v6，不在领队行）。
     leaderRemoved: leader?.status === 'removed',
     // docs/27 §27.9#4：goal / phase / planReviewState / version / workDir /
     // leaderModelRoute 已随审批重构与成员模型收敛砍掉——面板不再消费。
@@ -785,6 +788,9 @@ export function installWebSurface(
               let result;
               try {
                 result = await addMember(envFor(ctx, config, workspacePath), captainAgentOf(team), {
+                  // 面板路由已按 id 定位团队：显式传 teamId 走 requireTeamById
+                  // （无任务团队锚点为空串时按合成代理放行，docs/51）。
+                  teamId: team.id,
                   name,
                   role: str(body.role, entry?.role ?? 'member'),
                   ...(body.executionPrompt !== undefined
@@ -1096,6 +1102,9 @@ export function installWebSurface(
               // 二十七轮 DA40：建卡补收 dependencies（与 update 路由同参数
               // 口径——小任务执行顺序 = 兄弟依赖链，链式接力按它排发棒序）。
               const dependencies = readDependenciesParam(body.dependencies);
+              // v6 主会话快照：客户端从活跃对话上报 sessionId（与心跳
+              // buildPresence 同源），面板建任务即登记主会话——落库后不变。
+              const mainSessionId = typeof body.sessionId === 'string' ? body.sessionId : '';
               try {
                 const task = await createTask(
                   envFor(ctx, config, workspacePath),
@@ -1108,6 +1117,7 @@ export function installWebSurface(
                     ...(parentTaskId !== undefined ? { parentTaskId } : {}),
                     ...(chain !== undefined ? { chain } : {}),
                     ...(dependencies !== undefined ? { dependencies } : {}),
+                    ...(mainSessionId !== '' ? { mainSessionId } : {}),
                   },
                 );
                 sendJson(res, 200, { ok: true, taskId: task.id, status: task.status });
@@ -1725,11 +1735,11 @@ export function installWebSurface(
               }
               // GET /team/<id>/agentactivity — member subagent activity dots
               // (docs/20.4 P4): feature-detected listChildren; empty on older
-              // runtimes (panel renders no dots then). 锚点是领队行
-              // main_session_id（docs/35 §3）——领队不在线时无活动可报。
+              // runtimes (panel renders no dots then). 锚点是任务行主会话
+              // 快照（v6 派生）——领队不在线时无活动可报。
               if (segments[2] === 'agentactivity') {
                 const list = (ctx as unknown as RuntimeContext).subagents?.listChildren;
-                const leaderSessionId = leaderRowOf(team)?.mainSessionId ?? '';
+                const leaderSessionId = teamMainSessionOf(team);
                 if (list === undefined || leaderSessionId === '') {
                   sendJson(res, 200, { activity: {} });
                   return;
@@ -1863,9 +1873,9 @@ function agentFor(sessionId: string): Agent {
   return { id: sessionId } as unknown as Agent;
 }
 
-/** 领队身份锚点（docs/35 §3）：面板写操作统一以领队行 main_session_id 充当队长代理。 */
+/** 领队身份锚点（v6 派生）：面板写操作以任务行主会话快照充当队长代理；无快照（无任务/未盖章）合成空 id，requireTeamById 按 '' 放行。 */
 function captainAgentOf(team: TeamState): Agent {
-  return agentFor(leaderRowOf(team)?.mainSessionId ?? '');
+  return agentFor(teamMainSessionOf(team));
 }
 
 /**

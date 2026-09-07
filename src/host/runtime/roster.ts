@@ -21,7 +21,8 @@ import {
   personaToMd,
 } from '../state/db.js';
 import { ensureWorkspaceReady, seedPresetRows } from '../state/import.js';
-import { withTeamTx } from '../state/store.js';
+import { rolesRowByName, syncTeamMemberRoleMirrorInTx, withTeamTx } from '../state/store.js';
+import type { TeamTx } from '../state/store.js';
 import { defaultCaptainPersona } from '../prompts/personas/captain.js';
 import { fallbackExecutionPrompt, PERSONA_FRAMEWORK_VERSION } from '../prompts/personas/framework.js';
 import { PRESET_MEMBER_ROLES, ROLE_TEMPLATES } from '../prompts/personas/presets.js';
@@ -231,6 +232,9 @@ export async function upsertRosterMember(
           'WHERE role_name = ?',
       ).run(employeeId, personaMd, profile, avatarJson, now, name);
     }
+    // v4 副本列刷新：角色行刚落库，team_members 里引用它的班底行镜像随之同步
+    const roleId = rolesRowByName(db, name)?.role_id;
+    syncTeamMemberRoleMirrorInTx(tx, roleId !== undefined ? { roleId } : undefined);
     return stored;
   });
   return stored;
@@ -282,7 +286,7 @@ export async function ensurePresetMembers(stateRoot: string): Promise<void> {
       leader.style === captain.style &&
       leader.skills === captain.skills
     ) {
-      upgradePresetHandbook(db, {
+      upgradePresetHandbook(tx, {
         name: LEADER_NAME,
         personaMd: captain.personaMd,
         now,
@@ -303,7 +307,7 @@ export async function ensurePresetMembers(stateRoot: string): Promise<void> {
         existing.style === template.style &&
         existing.skills === template.skills
       ) {
-        upgradePresetHandbook(db, {
+        upgradePresetHandbook(tx, {
           name: role,
           personaMd: template.personaMd,
           now,
@@ -334,16 +338,16 @@ function staleDistilledDoc(md: string | undefined): boolean {
   return md !== undefined && md.includes('## 交付标准') && !md.includes('核心使命');
 }
 
-/** 事务内按名写 roles 角色行手册（陈旧手册升级用，不碰工号/头像）。 */
+/** 事务内按名写 roles 角色行手册（陈旧手册升级用，不碰工号/头像）；
+ * 写完顺手刷新 team_members 里该角色的副本列（v4 镜像随角色行走）。 */
 function upgradePresetHandbook(
-  db: DatabaseSync,
+  tx: TeamTx,
   patch: { name: string; personaMd: string; now: number },
 ): void {
-  db.prepare('UPDATE roles SET persona_md = ?, update_time = ? WHERE role_name = ?').run(
-    patch.personaMd,
-    patch.now,
-    patch.name,
-  );
+  tx.db
+    .prepare('UPDATE roles SET persona_md = ?, update_time = ? WHERE role_name = ?')
+    .run(patch.personaMd, patch.now, patch.name);
+  syncTeamMemberRoleMirrorInTx(tx, { roleId: rolesRowByName(tx.db, patch.name)?.role_id });
 }
 
 /**
@@ -367,7 +371,17 @@ export async function removeRosterMember(stateRoot: string, name: string): Promi
     if (active.n > 0) {
       throw new Error(`角色「${trimmed}」仍在团队中担任成员，先从团队移除再删除`);
     }
+    const roleId = rolesRowByName(tx.db, trimmed)?.role_id;
     const info = tx.db.prepare('DELETE FROM roles WHERE role_name = ?').run(trimmed);
     if (Number(info.changes) === 0) throw new Error(`成员「${trimmed}」不存在`);
+    // v4 副本列清空：角色行已删，引用它的班底行镜像置 NULL（悬空行口径，
+    // 与 loadMembers 防御性跳过同源）
+    if (roleId !== undefined) {
+      tx.db
+        .prepare(
+          'UPDATE team_members SET role_name = NULL, persona_md = NULL, profile = NULL WHERE role_id = ?',
+        )
+        .run(roleId);
+    }
   });
 }

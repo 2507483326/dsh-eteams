@@ -21,7 +21,6 @@ import { readTeamSync } from '../state/store.js';
 import { findRosterMember, type RosterMember } from './roster.js';
 import type { TeamState } from '../model/types.js';
 import type { ETeamsResolvedConfig } from '../config.js';
-import { leaderRowOf } from './notifier.js';
 
 /** Workspace registry service key candidates, newest first (mirror webui). */
 const WORKSPACE_KEYS = ['workspaceRegistry', 'workspace'] as const;
@@ -154,8 +153,8 @@ export function findRosterMemberAcrossWorkspaces(
 /**
  * Resolve one agent's team identity across workspaces, keeping the tool
  * layer's documented priority (resolveCaller / docs/05.8):
- * 绑定团队 → 领队（task_members 领队行 main_session_id，docs/36 建议 3）→
- * 成员（task_members 实例行 child_session_id）。
+ * 绑定团队 → 领队（任务行 main_session_id 快照，v6 派生）→ 成员（实例行
+ * session_id）。
  * The caller's own workspace probes first so same-workspace teams resolve
  * without touching the registry; other registered workspaces follow.
  */
@@ -174,15 +173,14 @@ export function locateAgentTeam(
     const bound = teamByIdIn(workspaces, config, boundTeamId);
     if (bound) return bound;
   }
-  // 2. 领队身份：领队行 main_session_id 即建队/主持会话（removed 行同样
-  //    是该会话的归属，身份判定不看你行状态）。
-  const asCaptain = teamMatchingIn(workspaces, config, (team) => {
-    const leader = leaderRowOf(team);
-    return leader !== undefined && leader.mainSessionId === agentId;
-  });
+  // 2. 领队身份：任一任务行 main_session_id 快照命中（同队任务由同一领队
+  //    会话创建；removed 行同样归属，身份判定不看你行状态）。
+  const asCaptain = teamMatchingIn(workspaces, config, (team) =>
+    team.tasks.some((task) => task.mainSessionId === agentId),
+  );
   if (asCaptain) return asCaptain;
-  // 3. 成员身份（实例行 child_session_id === 本会话，跨工作区同样成立）。
+  // 3. 成员身份（实例行 session_id === 本会话，跨工作区同样成立）。
   return teamMatchingIn(workspaces, config, (team) =>
-    team.taskMembers.some((r) => r.childSessionId === agentId && r.status !== 'removed'),
+    team.taskMembers.some((r) => r.sessionId === agentId && r.status !== 'removed'),
   );
 }
