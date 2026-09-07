@@ -1,6 +1,0 @@
-design/design-brand-guardian.md	设计部
-design/design-image-prompt-engineer.md	设计部
-design/design-inclusive-visuals-specialist.md	设计部
-design/design-ux-architect.md	设计部
-design/design-ux-researcher.md	设计部
-design/design-visual-storyteller.md	设计部

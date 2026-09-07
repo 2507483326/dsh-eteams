@@ -1,6 +1,0 @@
-academic/academic-anthropologist.md	学术部
-academic/academic-geographer.md	学术部
-academic/academic-historian.md	学术部
-academic/academic-narratologist.md	学术部
-academic/academic-psychologist.md	学术部
-academic/academic-study-planner.md	学术部

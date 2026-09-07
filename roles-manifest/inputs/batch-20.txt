@@ -1,9 +1,0 @@
-testing/testing-accessibility-auditor.md	测试部
-testing/testing-api-tester.md	测试部
-testing/testing-embedded-qa-engineer.md	测试部
-testing/testing-evidence-collector.md	测试部
-testing/testing-performance-benchmarker.md	测试部
-testing/testing-reality-checker.md	测试部
-testing/testing-test-results-analyzer.md	测试部
-testing/testing-tool-evaluator.md	测试部
-testing/testing-workflow-optimizer.md	测试部

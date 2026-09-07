@@ -1,6 +1,0 @@
-spatial-computing/macos-spatial-metal-engineer.md	空间计算部
-spatial-computing/terminal-integration-specialist.md	空间计算部
-spatial-computing/visionos-spatial-engineer.md	空间计算部
-spatial-computing/xr-cockpit-interaction-specialist.md	空间计算部
-spatial-computing/xr-immersive-developer.md	空间计算部
-spatial-computing/xr-interface-architect.md	空间计算部

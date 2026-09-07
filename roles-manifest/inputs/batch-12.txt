@@ -1,5 +1,0 @@
-product/product-behavioral-nudge-engine.md	产品部
-product/product-feedback-synthesizer.md	产品部
-product/product-manager.md	产品部
-product/product-sprint-prioritizer.md	产品部
-product/product-trend-researcher.md	产品部

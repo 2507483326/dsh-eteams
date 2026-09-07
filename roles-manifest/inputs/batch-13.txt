@@ -1,5 +1,0 @@
-project-management/project-management-experiment-tracker.md	项目管理部
-project-management/project-management-jira-workflow-steward.md	项目管理部
-project-management/project-management-studio-operations.md	项目管理部
-project-management/project-management-studio-producer.md	项目管理部
-project-management/project-manager-senior.md	项目管理部

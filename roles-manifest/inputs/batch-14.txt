@@ -1,8 +1,0 @@
-sales/sales-account-strategist.md	销售部
-sales/sales-coach.md	销售部
-sales/sales-deal-strategist.md	销售部
-sales/sales-discovery-coach.md	销售部
-sales/sales-engineer.md	销售部
-sales/sales-outbound-strategist.md	销售部
-sales/sales-pipeline-analyst.md	销售部
-sales/sales-proposal-strategist.md	销售部

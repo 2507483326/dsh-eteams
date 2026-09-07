@@ -1,7 +1,0 @@
-paid-media/paid-media-auditor.md	付费媒体部
-paid-media/paid-media-creative-strategist.md	付费媒体部
-paid-media/paid-media-paid-social-strategist.md	付费媒体部
-paid-media/paid-media-ppc-strategist.md	付费媒体部
-paid-media/paid-media-programmatic-buyer.md	付费媒体部
-paid-media/paid-media-search-query-analyst.md	付费媒体部
-paid-media/paid-media-tracking-specialist.md	付费媒体部
