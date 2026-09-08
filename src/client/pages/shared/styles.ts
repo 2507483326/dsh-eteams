@@ -17,8 +17,15 @@ export const LEADER_NAME = '项目牧羊人';
 /** The role-builder persona is a system member as well: undeletable,
  * listed right under the leader (用户反馈：角色构建师不能删除). */
 export const ROLE_BUILDER_NAME = '角色构建师';
+/** 主对话注入角色（v12）：保留角色 system——手册(MD)注入主对话 system
+ * 提示词，不能加入团队；undeletable，名称锁死。 */
+export const ROOT_ROLE_NAME = 'system';
 /** Members the panel never offers a delete button for (host enforces too). */
-export const PROTECTED_MEMBERS: readonly string[] = [LEADER_NAME, ROLE_BUILDER_NAME];
+export const PROTECTED_MEMBERS: readonly string[] = [
+  LEADER_NAME,
+  ROLE_BUILDER_NAME,
+  ROOT_ROLE_NAME,
+];
 
 /**
  * S12：Tone→工具类映射表（完整字面量，content 扫描可检出——禁 `tone-${x}`

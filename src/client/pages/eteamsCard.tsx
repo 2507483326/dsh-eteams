@@ -234,6 +234,14 @@ function ETeamsCardBody({ node }: { node: { data: unknown } }): ReactNode {
               {team.pendingDecisions.length} 项待决策
             </Badge>
           )}
+          {team !== undefined && team.pendingAsks.length > 0 && (
+            <Badge
+              variant="outline"
+              className="rounded-full border-solid border-[color:color-mix(in_srgb,var(--warning)_40%,transparent)] px-2 py-px text-xs font-normal text-warning"
+            >
+              {team.pendingAsks.length} 项待问答
+            </Badge>
+          )}
         </div>
         {team !== undefined ? (
           <>

@@ -24,6 +24,7 @@ import type {
   TeamState,
 } from '../model/types.js';
 import { memberBoxKey, readEventsSync, readMailboxSync, recordEvent } from '../state/events.js';
+import { readPendingAsksSync } from '../state/asks.js';
 import { boardOverview } from '../state/queries.js';
 import { listTeamIds, readTeamSync } from '../state/store.js';
 import { joinPath, stateRootFor, type RuntimeContext, type RuntimeEnv } from './base.js';
@@ -396,6 +397,14 @@ export function teamSnapshot(
         retryCount: d.retryCount,
         createdAt: d.createdAt,
       })),
+    // 子代理待问答（v11 ask_questions）：转交主会话弹出、等提问方回收的问答单。
+    pendingAsks: readPendingAsksSync(stateRoot, team.id).map((a) => ({
+      askId: a.askId,
+      askingName: a.askingName,
+      askingKind: a.askingKind,
+      questionCount: a.questions.length,
+      createdAt: a.createdAt,
+    })),
     latestEvents: events.slice(-30).map((e) => ({
       seq: e.seq,
       at: e.at,
@@ -848,7 +857,7 @@ export function installWebSurface(
                   ...(body.personaMd !== undefined ? { personaMd: str(body.personaMd) } : {}),
                   ...(bodyAvatar !== undefined ? { avatar: bodyAvatar } : {}),
                 },
-                { allowLeader: true },
+                { allowLeader: true, allowRoot: true },
               );
               sendJson(res, 200, { ok: true, member: stored });
               return;

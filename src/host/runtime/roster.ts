@@ -10,7 +10,7 @@
  * @module dsh-eteams/runtime/roster
  */
 import type { PersonaRecord } from '../model/types.js';
-import { avatarFromJson, avatarToJson, getDb, hashName, leaderFlagOf, LEADER_NAME, personaFromMd, personaToMd } from '../state/db.js';
+import { avatarFromJson, avatarToJson, getDb, hashName, leaderFlagOf, LEADER_NAME, personaFromMd, personaToMd, ROOT_ROLE_NAME, rootFlagOf } from '../state/db.js';
 import { ensureWorkspaceReady, seedPresetRows } from '../state/import.js';
 import { rolesRowByName, syncTeamMemberRoleMirrorInTx, withTeamTx } from '../state/store.js';
 import type { TeamTx } from '../state/store.js';
@@ -41,6 +41,12 @@ export interface RosterMember {
   profile?: string;
   /** 领队标识（v8 roles.is_leader）：项目牧羊人=1 其余=0；领队条目按它识别不按名。 */
   isLeader?: boolean;
+  /**
+   * 主对话注入角色标识（v12 roles.is_root）：保留角色 system=1 其余=0。
+   * 它的 personaMd 是注入主对话 system 提示词的原文（默认空），按标识识别
+   * 不按名；该角色不可入团/删除/改名。
+   */
+  isRoot?: boolean;
   /** Persona framework fields (D13) — content is copied on team adoption. */
   duty?: string;
   style?: string;
@@ -93,16 +99,31 @@ function rosterPersona(m: RosterMember, name: string): PersonaRecord {
 
 /** roles 角色行 → RosterMember（手册全文解析回六字段；profile 列值优先）。
  * v7：roles.employee_id 弃用不读——工号在班底（team_members.employee_id）。
- * v8：is_leader 标识随行读出（项目牧羊人=1）。 */
+ * v8：is_leader 标识随行读出（项目牧羊人=1）。
+ * v12：is_root 行特判——persona_md 是注入主对话的原文（默认空），不经
+ * personaFromMd 解析（解析会把无结构标记的原文丢弃、空文回退成烘制脚手架，
+ * 编辑回显与再保存都会污染原文），逐字透传。 */
 function rowToRosterMember(row: {
   role_name: string;
   persona_md: string | null;
   profile: string | null;
   avatar: string | null;
   is_leader: number;
+  is_root: number;
   update_time: number;
 }): RosterMember {
   const name = row.role_name;
+  if (row.is_root === 1) {
+    return {
+      name,
+      role: name,
+      ...(row.profile !== null && row.profile !== '' ? { profile: row.profile } : {}),
+      isRoot: true,
+      personaMd: row.persona_md ?? '',
+      ...(row.avatar !== null ? { avatar: avatarFromJson(row.avatar) } : {}),
+      updatedAt: row.update_time,
+    };
+  }
   const persona = personaFromMd(row.persona_md ?? '', name, name);
   return {
     name,
@@ -126,9 +147,9 @@ function rowToRosterMember(row: {
 }
 
 /** roles 角色库行的公共 SELECT（成员=角色，全局一份；v7 不读弃用的
- * employee_id 列，v8 读 is_leader 领队标识）。 */
+ * employee_id 列，v8 读 is_leader 领队标识，v12 读 is_root 注入标识）。 */
 const ROSTER_ROW_SQL =
-  'SELECT role_name, persona_md, profile, avatar, is_leader, update_time FROM roles';
+  'SELECT role_name, persona_md, profile, avatar, is_leader, is_root, update_time FROM roles';
 
 /** Read the workspace roster（角色库全表，role_id 升序）. */
 export function readRoster(stateRoot: string): RosterMember[] {
@@ -164,7 +185,7 @@ export function avatarSeedFor(name: string): number {
 export async function upsertRosterMember(
   stateRoot: string,
   member: Omit<RosterMember, 'updatedAt'>,
-  options?: { allowLeader?: boolean },
+  options?: { allowLeader?: boolean; allowRoot?: boolean },
 ): Promise<RosterMember> {
   const name = member.name.trim();
   const role = member.role.trim();
@@ -176,6 +197,12 @@ export async function upsertRosterMember(
   // 主动保存与成员详情「同步到该角色」走这条路，代理侧写路径保持拒绝。
   if (name === LEADER_NAME && options?.allowLeader !== true) {
     throw new Error('领队成员为保留名，不可通过 upsert 覆盖');
+  }
+  // 主对话注入角色（v12）：同理默认拒绝——system 的 persona_md 是注入主
+  // 对话的原文，对话流/构建器（eteams_member_save）不许碰；面板显式保存
+  // 经 allowRoot 放行（POST /roster）。
+  if (name === ROOT_ROLE_NAME && options?.allowRoot !== true) {
+    throw new Error('「system」为主对话注入的保留角色，不可通过 upsert 覆盖');
   }
   const stored: RosterMember = await withTeamTx(stateRoot, undefined, (tx) => {
     const db = tx.db;
@@ -203,14 +230,16 @@ export async function upsertRosterMember(
       updatedAt: now,
     };
     const persona = rosterPersona(stored, name);
-    const personaMd = personaToMd(persona, name);
+    // v12：主对话注入角色的 persona_md 存用户编辑的原文（注入内容逐字等
+    // 于编辑文本），不烘 personaToMd 结构脚手架。
+    const personaMd = name === ROOT_ROLE_NAME ? (member.personaMd ?? '').trim() : personaToMd(persona, name);
     const avatarJson = avatarToJson(stored.avatar);
     const profile = persona.profile ?? null;
     if (previous === undefined) {
       db.prepare(
-        'INSERT INTO roles (role_name, persona_md, profile, avatar, is_leader, created_time, update_time) ' +
-          'VALUES (?, ?, ?, ?, ?, ?, ?)',
-      ).run(name, personaMd, profile, avatarJson, leaderFlagOf(name), now, now);
+        'INSERT INTO roles (role_name, persona_md, profile, avatar, is_leader, is_root, created_time, update_time) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      ).run(name, personaMd, profile, avatarJson, leaderFlagOf(name), rootFlagOf(name), now, now);
     } else {
       db.prepare(
         'UPDATE roles SET persona_md = ?, profile = ?, avatar = ?, update_time = ? ' +
@@ -233,6 +262,13 @@ export async function upsertRosterMember(
 export { LEADER_NAME };
 
 /**
+ * 主对话注入角色（v12）：同为系统保留成员——按 is_root 标识识别的保留行，
+ * 手册(MD)注入主对话 system 提示词；面板可编辑原文（allowRoot），不可入团
+ * （teamOps.addMember 拒收）、不可删除、不可改名（保留名）。
+ */
+export { ROOT_ROLE_NAME };
+
+/**
  * The role-builder persona is a system member too: listed under the leader,
  * protected from deletion (用户反馈：角色构建师不能删除). Unlike the leader
  * it may be edited via upsert (its handbook can evolve).
@@ -240,7 +276,7 @@ export { LEADER_NAME };
 export const ROLE_BUILDER_NAME = '角色构建师';
 
 /** Names removeRosterMember always rejects (host-side guard). */
-const PROTECTED_FROM_DELETE: readonly string[] = [LEADER_NAME, ROLE_BUILDER_NAME];
+const PROTECTED_FROM_DELETE: readonly string[] = [LEADER_NAME, ROLE_BUILDER_NAME, ROOT_ROLE_NAME];
 
 /**
  * Seed the preset members (agency-agents-zh roles, name = role; 2026-09 起

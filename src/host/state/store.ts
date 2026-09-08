@@ -31,6 +31,7 @@ import {
   leaderFlagOf,
   personaFromMd,
   personaToMd,
+  rootFlagOf,
   routeFromColumns,
   routeToColumns,
 } from './db.js';
@@ -140,20 +141,50 @@ export function withTeamTx<T>(
   }
 }
 
-/** roles 角色行的读取形状（松引用读端助手；成员=角色，全局一份）。 */
+/** roles 角色行的读取形状（松引用读端助手；成员=角色，全局一份）。
+ * v12：is_root 随行读出（主对话注入角色 system=1）。 */
 export interface RolesRow {
   role_id: number;
   role_name: string;
   persona_md: string | null;
   profile: string | null;
   avatar: string | null;
+  is_root: number;
 }
 
 /** roles 表按角色名取一行（缺行返回 undefined；读端助手）。 */
 export function rolesRowByName(db: DatabaseSync, name: string): RolesRow | undefined {
   return db
-    .prepare('SELECT role_id, role_name, persona_md, profile, avatar FROM roles WHERE role_name = ?')
+    .prepare(
+      'SELECT role_id, role_name, persona_md, profile, avatar, is_root FROM roles WHERE role_name = ?',
+    )
     .get(name) as RolesRow | undefined;
+}
+
+/**
+ * 主对话注入角色行（v12 读端）：按 is_root 标识取行（不按名），缺行返回
+ * undefined。persona_md 即注入主对话 system 提示词的原文（system 角色
+ * 不烘结构脚手架，读回即用户编辑的原文）。
+ */
+export function rootRoleRow(
+  db: DatabaseSync,
+): { role_name: string; persona_md: string | null } | undefined {
+  return db
+    .prepare('SELECT role_name, persona_md FROM roles WHERE is_root = 1 ORDER BY role_id LIMIT 1')
+    .get() as { role_name: string; persona_md: string | null } | undefined;
+}
+
+/**
+ * 会话是否绑定着任务成员副本行（v12 注入过滤读端）：task_members.session_id
+ * 持久命中 = 该会话是成员/领队子代理（领队副本行同表同列），主对话注入段
+ * 对其静默。removed 行不算——离职截断后子会话残留装配不再算子代理。
+ */
+export function hasTaskMemberSession(db: DatabaseSync, sessionId: string): boolean {
+  return (
+    db
+      .prepare("SELECT 1 FROM task_members WHERE session_id = ? AND status != 'removed' LIMIT 1")
+      .get(sessionId) !== undefined
+  );
 }
 
 /**
@@ -173,10 +204,10 @@ export function ensureRolesRowInTx(
   if (existing !== undefined) return existing.role_id;
   const info = tx.db
     .prepare(
-      'INSERT INTO roles (role_name, persona_md, profile, avatar, is_leader, created_time, update_time) ' +
-        'VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO roles (role_name, persona_md, profile, avatar, is_leader, is_root, created_time, update_time) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     )
-    .run(name, personaToMd(persona, name), persona.profile ?? null, avatarToJson(opts?.avatar), leaderFlagOf(name), tx.now, tx.now);
+    .run(name, personaToMd(persona, name), persona.profile ?? null, avatarToJson(opts?.avatar), leaderFlagOf(name), rootFlagOf(name), tx.now, tx.now);
   return Number(info.lastInsertRowid);
 }
 

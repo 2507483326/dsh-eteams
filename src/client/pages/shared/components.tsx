@@ -17,6 +17,7 @@ import {
   type GroupSummary,
   type Tone,
 } from '../../features/tasks/taskDisplayStatus';
+import { BackButton } from '../../components/backButton';
 import { Alert } from '../../components/ui/alert';
 import { Badge } from '../../components/ui/badge';
 import { dotClass, MUTED_CLASS, pillClass, STATUS_PILL_CLASS } from './styles';
@@ -67,13 +68,20 @@ export function FormErrorNote({
 }
 
 /** 页签标题（S24-2 新增，官网 h2 签名）：五 tab 内容区顶部的页头行——
- * 20px bold tracking-tight + mb-4；右侧动作位（团队页放「＋ 新增团队」
- * 主按钮 → 创建弹窗）。标题字即 tab 名，不发明副标题。 */
+ * 20px bold tracking-tight + mb-4；页头行最右端返回钮（用户迭代 2026-09-08：
+ * 页面返回统一收口 components/backButton 图标钮——原 BackBar 文案钮各页
+ * 漂移撤除，详情/新增页经 onBack 传入、压轴渲染 + 内建 ml-auto 贴行最右，
+ * 列表页不传不渲染）；右侧动作位（团队页放「＋ 新增团队」主按钮 → 创建
+ * 弹窗）。标题字即 tab 名，不发明副标题。 */
 export function PageHeader({
   label,
+  onBack,
   children,
 }: {
   label: string;
+  /** 页头行最右端返回钮（components/backButton 唯一样式）：详情/新增页传
+   * 导航回调，列表页省略。 */
+  onBack?: () => void;
   children?: ReactNode;
 }): ReactNode {
   return (
@@ -81,6 +89,8 @@ export function PageHeader({
       <h2 className="m-0 text-xl font-bold tracking-tight text-foreground">{label}</h2>
       {children !== undefined && <span className="flex-1" />}
       {children}
+      {/* 返回钮压轴 + BackButton 内建 ml-auto：无动作位的页也贴行最右。 */}
+      {onBack !== undefined && <BackButton onClick={onBack} />}
     </div>
   );
 }

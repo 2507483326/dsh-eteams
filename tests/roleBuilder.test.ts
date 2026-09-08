@@ -177,6 +177,24 @@ describe('D18 对话式新增成员', () => {
     expect(fresh.startedAt).toBeGreaterThanOrEqual(s1.startedAt);
   });
 
+  it('derives stepsDone from the canonical timeline (2026-09-08 蓝点乱序反馈)', async () => {
+    // 受理即完成「收到需求」（时间线第一项，受理即建会话、无中间态）
+    const s1 = await reportBuildProgress(stateRoot, { request: 'r4', step: '收到需求' });
+    expect(s1.step).toBe('收到需求');
+    expect(s1.stepsDone).toEqual(['收到需求']);
+    // 旧提示词的「查重成员库」按别名归一到时间线第二项（面板逐字匹配点亮）
+    const s2 = await reportBuildProgress(stateRoot, { step: '查重成员库' });
+    expect(s2.step).toBe('查重角色库');
+    expect(s2.stepsDone).toEqual(['收到需求']);
+    // 报「意图访谈」时前两步必已完成——模型自报的 stepsDone 不再整体替换
+    const s3 = await reportBuildProgress(stateRoot, { step: '意图访谈', stepsDone: ['意图访谈'] });
+    expect(s3.stepsDone).toEqual(['收到需求', '查重角色库']);
+    // 非时间线步骤（重启核查）不推导：显式 stepsDone 照旧整体替换
+    const s4 = await reportBuildProgress(stateRoot, { step: '重启核查', stepsDone: [] });
+    expect(s4.step).toBe('重启核查');
+    expect(s4.stepsDone).toEqual([]);
+  });
+
   it('cancel works from active, not from terminal', async () => {
     await reportBuildProgress(stateRoot, { request: 'r' });
     const c = await cancelBuildSession(stateRoot);

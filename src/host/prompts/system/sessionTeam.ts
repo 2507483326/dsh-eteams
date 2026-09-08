@@ -61,7 +61,8 @@ export function sessionTeamBand(team: SessionTeamBandInput): string {
       '分工：本团队未设领队——团队工作流（提交任务单、问询、拆解、汇报）由本会话直接主持：',
       '1. 用户提出任何任务/工作请求 → 直接 eteams_submit_task 建主任务（任务单：subject 把用户原话简化成一句话标题），再问询明确目标（结论 eteams_update_task 写回）、eteams_create_task（带 parentTaskId）拆解小任务；',
       '2. 问询用 ask_user_question 弹窗直接弹给用户；每轮进展简短汇报给用户；',
-      '3. 红线：只做计划与拆解，不自批开跑——指派（eteams_assign_task）等用户批准后再做；写代码/改文件/跑命令等执行动作由小任务派发给成员，本会话不动手执行。',
+      '3. 子代理问答转交：成员子代理需要用户决策时会把问答转交到本会话弹出——收到【eteams 用户问答转交】消息后立即按消息指引弹 ask_user_question（或文字问答），用户作答后用 eteams_ask_answer 提交（askId 随消息给出），提交后无需再做其它事；',
+      '4. 红线：只做计划与拆解，不自批开跑——指派（eteams_assign_task）等用户批准后再做；写代码/改文件/跑命令等执行动作由小任务派发给成员，本会话不动手执行。',
     ].join('\n');
   }
   return [
@@ -80,6 +81,7 @@ export function sessionTeamBand(team: SessionTeamBandInput): string {
     '2. 第二步·转交：建好主任务后立即 eteams_dispatch_captain（taskId=主任务号，message=用户原话）转交持续领队子代理（以领队的名字命名）——问询、拆解（eteams_create_task 挂主任务，chain 站点即成员卡槽，拆解时按工号为卡槽填人）与指派（eteams_assign_task，等你批准开跑后才做）全部由领队子代理主持，本会话不自己动手执行；',
     '3. 领队的后续互动照旧经本对话转交：用户答复领队的问询、或收到团队邮件/面板通知 → 同样 eteams_dispatch_captain（taskId=对应主任务号，message=答复原文或通知要点），不要再建新任务；',
     '4. dispatch 立即返回受理确认；领队的问询（ask_user_question 弹窗）与汇报（「Background subagent … reported:」子代理消息）随后直接到达本对话——原样展示给用户即可（或一句简短确认），不要复述全文、不要替领队补充或回答；',
-    '5. 红线：除 eteams_submit_task 与 eteams_dispatch_captain 外，不要直接调用其它 eteams_* 工具；纯问答、闲聊由本会话直接回应，不要为它们建任务。',
+    '5. 子代理问答转交：成员/领队子代理需要用户决策时会把问答转交到本会话弹出——收到【eteams 用户问答转交】消息后立即按消息指引弹 ask_user_question（或文字问答），用户作答后用 eteams_ask_answer 提交（askId 随消息给出），提交后无需再做其它事，也不要替成员补充或回答；',
+    '6. 红线：除 eteams_submit_task 与 eteams_dispatch_captain 外，不要直接调用其它 eteams_* 工具（eteams_ask_answer 例外——问答转交的回收入口）；纯问答、闲聊由本会话直接回应，不要为它们建任务。',
   ].join('\n');
 }

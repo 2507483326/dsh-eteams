@@ -292,10 +292,24 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
         <div className={CONTENT_CLASS}>
           {/* 页签标题（S24-2，官网 h2 签名）：每 tab 内容区顶部一行页头。
             团队域页头由 team/ 页自渲染（列表页与成员详情页保留「＋ 新增团队」
-            ——团队详情页页头按钮撤，用户迭代 2026-09-07）。 */}
+            ——团队详情页页头按钮撤，用户迭代 2026-09-07）。返回钮（用户迭代
+            2026-09-08：页面返回统一收口 PageHeader onBack 槽，components/
+            backButton 图标钮）：角色/任务域拆分子路由（/roster/add、
+            /roster/:name、/tasks/:taskId）时在页头行最右渲染返回钮，落回本
+            域列表路由——列表页本身（/roster、/tasks）不渲染。 */}
           {activeTab === 'board' && <PageHeader label="看板" />}
-          {activeTab === 'roster' && <PageHeader label="角色" />}
-          {activeTab === 'tasks' && <PageHeader label="任务" />}
+          {activeTab === 'roster' && (
+            <PageHeader
+              label="角色"
+              onBack={location.pathname !== '/roster' ? () => navigate('/roster') : undefined}
+            />
+          )}
+          {activeTab === 'tasks' && (
+            <PageHeader
+              label="任务"
+              onBack={location.pathname !== '/tasks' ? () => navigate('/tasks') : undefined}
+            />
+          )}
           {activeTab === 'reports' && <PageHeader label="汇报" />}
           {/* 顶栏（用户反馈）：团队切换改为「团队」页的卡片栅格，这里只保留
             状态加载失败的就地提示；空态兜底在 BoardTab。 */}

@@ -15,6 +15,49 @@ ETeams for DeepSeek Harness（DSH）：领队（captain）把目标拆解为任�
 - **Web 面板（浏览器端）**：宿主回环路由 `/eteams-api` 前缀下读端（全量快照 / 事件增量 / 执行线路 / 成员对话框 / 用量日历）+ 写端（session-team、session-persona、client-log 等）；面板壳内 MemoryRouter 五页签：看板 /team /roster /tasks /reports；轮询 1s 活跃 / 5s 空闲 / 页面隐藏暂停 / 恢复即刷。
 - **对话卡片**：从 `eteams_create_team` 工具事件折叠的 ETeamsCard，轮询快照实时渲染阶段徽标、成员行、进度条。
 
+## 命令总览
+
+### 会话命令
+
+- `/eteam [需求描述]`：新增成员 · 角色构建师的命令面入口（`--add-people` 前缀可选，参数可省略、落到模板句「我需要创建一个成员 【成员名称】，它的职责是【职责】」）。斜杠输入本身不到达模型，handler 把激活消息显式 steer 到主代理：面试问询经 `eteams_build_report / build_wait / interview_answer` 往返，确认后常驻构建子代理产角色手册、落全局角色库。无 commands 服务的部署（UI-less）退化为纯文本前缀路径，仍有效。
+- `eteams_ping`：连通性冒烟工具，安装后首选验证。
+
+### 领队工具（root 作用域；成员子作用域被 `toolFilter.deny` 屏蔽）
+
+| 分组     | 工具                                                                                                                                        |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| 团队     | `eteams_create_team` · `eteams_list_teams` · `eteams_delete_team`                                                                           |
+| 成员     | `eteams_add_member` · `eteams_remove_member` · `eteams_update_member` · `eteams_member_save` · `eteams_member_list`                         |
+| 角色构建 | `eteams_build_report` · `eteams_build_wait` · `eteams_build_dispatch` · `eteams_interview_answer`                                           |
+| 任务编排 | `eteams_create_task` · `eteams_submit_task` · `eteams_update_task` · `eteams_delete_task`                                                   |
+| 派发执行 | `eteams_assign_task` · `eteams_advance_task` · `eteams_reassign_task` · `eteams_suspend_task` · `eteams_resume_task` · `eteams_cancel_task` |
+| 协同     | `eteams_send_message` · `eteams_team_status` · `eteams_task_board` · `eteams_mailbox` · `eteams_dispatch_captain`                           |
+
+### 问答工具（根作用域注册、不进 deny 列表，领队/成员子代理统一可用）
+
+- `eteams_ask_user`：向用户弹问答——用户正在看提问会话就就地弹（答案同步返回）；不在则转交主会话弹出并立即返回（提问方结束回合）。
+- `eteams_ask_answer`：转交弹窗所在对话的答案回收入口（主会话/被中转会话均可提交）；构建访谈问答单也经它桥接回收。
+
+### 成员工具（spawn 时注入成员子作用域）
+
+- 执行面：`eteams_claim_task`（接活签发一次性 attempt token）· `eteams_decline_task` · `eteams_append_progress` · `eteams_complete_task` · `eteams_fail_task`
+- 视图与协同：`eteams_task_board` · `eteams_send_message` · `eteams_team_status`
+
+### 开发命令（pnpm）
+
+`build` / `typecheck` / `lint` / `lint:fix` / `format` / `format:check` / `test` / `verify` / `prepublishOnly`——逐条说明见 [开发](#开发)。
+
+### 工具脚本（`node scripts/…`）
+
+- 构建链零件（由 `pnpm build` / `pnpm verify` 串联，一般不单独跑）：`clean` · `buildTailwind` · `wrapClient` · `smokeEnvelope` · `verifyM0`
+- 资产再生成：`genAvatarWidgets.mjs`（vendored SVG → `avatarWidgets.ts`，换素材后重跑）· `gen-role-docs.cjs`（一次性：拉取 agency-agents-zh 角色手册 → `roleDocs.ts`）
+- 预览与诊断（排障用）：`avatarPreview.mjs`（头像画廊浏览器预览）· `scanSlots.cjs` / `list-routes.cjs` / `list-primitives.cjs`（从 DSH asar 枚举槽位/路由/原语）· `bisect-client.mjs`（客户端信封 A/B 二分）
+
+### dsh CLI
+
+- `dsh plugin --profile desktop add C:\eTeam`：live link 安装到 profile
+- `dsh --profile desktop --dump-config`：核对插件装配结果
+
 ## 项目结构
 
 ```

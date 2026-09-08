@@ -1,5 +1,5 @@
 -- =====================================================================
--- ETeams SQLite schema v10（db_schema_version = 10；v3 成员=角色合并：member
+-- ETeams SQLite schema v12（db_schema_version = 12；v3 成员=角色合并：member
 -- 表精简改名成 roles 角色库表（去 team_id/role_id/model/reasoning_effort，
 -- 新增 profile），班底另起 team_members 表，旧 roles 标签登记表删除；
 -- v4 班底行补 role_name/persona_md/profile 角色信息副本列；v5 任务行补主
@@ -12,7 +12,12 @@
 -- 补 is_leader（项目牧羊人=1 其余=0，领队行查找按标识不按名；旧库经 getDb
 -- 迁移回填）；v9 班底/任务成员补 provider 路线列；v10 班底行补 avatar 头像
 -- 副本列（角色修改保存后随 roles.avatar 按 role_id 同步刷新，角色删除不
--- 进行同步；旧库经 getDb 迁移回填）
+-- 进行同步；旧库经 getDb 迁移回填）；v11 子代理用户问答单：新增
+-- ask_questions 表（子代理向用户弹问答的路由状态——用户在本会话就地弹/
+-- 不在则转交主会话弹出；独立行 CRUD，不随 TeamState 整存整取重写；纯新表
+-- 由 DDL IF NOT EXISTS 直接建，无需 ALTER/回填）；v12 主对话注入角色：
+-- roles 补 is_root（保留角色 system=1 其余=0——system 的 persona_md 存注入
+-- 主对话 system 提示词的原文，默认空；旧库经 getDb 迁移回填）
 -- 主键 = 每张表自己的编号列，统一 INTEGER 自增（schema_meta 例外：key 即主键）
 -- 时间列一律 *_time 结尾（Unix 毫秒）；每张表末尾 created_time / update_time
 -- 枚举 = TEXT（合法值写在列注释里）；JSON = TEXT 存 JSON 字符串
@@ -58,6 +63,7 @@ CREATE TABLE IF NOT EXISTS roles (
   role_name      TEXT NOT NULL,                -- 角色名（成员名=角色名；全库唯一，写入代码查重）
   employee_id    INTEGER,                      -- 【v7 弃用】工号已挪到 team_members（表自增主键即工号）；列保留不读写，旧库回滚兼容
   is_leader      INTEGER NOT NULL DEFAULT 0,   -- 领队标识（v8）：项目牧羊人=1 其余=0；写入层由保留名派生，读端按标识取领队
+  is_root        INTEGER NOT NULL DEFAULT 0,   -- 主对话注入角色标识（v12）：保留角色 system=1 其余=0；写入层由保留名派生，读端按标识取行
   persona_md     TEXT,                         -- 完整角色手册（Markdown 全文；duty/style/skills 等结构字段写入时烘进手册）
   profile        TEXT,                         -- 一句话简介（列表卡片/详情头展示；独立成列，不再烘进 persona_md）
   avatar         TEXT,                         -- 头像
@@ -319,3 +325,29 @@ CREATE TABLE IF NOT EXISTS usage_daily_total (
   created_time       INTEGER NOT NULL,  -- 首次写入该日行
   update_time        INTEGER NOT NULL   -- 最近一次增量
 );
+
+-- ---------------------------------------------------------------------
+-- 13. ask_questions —— 子代理用户问答单（v11；eteams_ask_user 的路由状态）
+--     提问子代理（领队/成员）需要用户决策时：用户正在看本会话（presence
+--     心跳）就地弹；否则转交主会话弹出，提问方阻塞轮询本表等答案。ask_id
+--     由调用方生成（uuid），不走自增——主键即幂等键，重复提交按 id 去重。
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ask_questions (
+  ask_id         TEXT PRIMARY KEY,     -- 问答单 ID（uuid，调用方生成）
+  team_id        INTEGER NOT NULL,     -- 属于哪个团队（team.team_id）
+  asking_session_id TEXT NOT NULL,     -- 提问子代理会话 ID（答案回流对账）
+  asking_name    TEXT NOT NULL,        -- 提问者展示名（成员名 / '领队'；主会话转弹时向用户说明来源）
+  asking_kind    TEXT NOT NULL,        -- 提问者类型：captain / member / conversation（绑定主会话）
+  main_task_id   INTEGER,              -- 相关大任务 ID（task.task_id，松引用）
+  questions      TEXT NOT NULL,        -- 问题列表（JSON：[{id, question, header?, options:[{label, description?}], multiSelect?}]）
+  answers        TEXT,                 -- 答案列表（JSON：[{id, selected, custom?}]）；NULL=未答
+  status         TEXT NOT NULL DEFAULT 'pending',
+                 -- pending=待作答 / answered=已答 / expired=超时 / cancelled=中断
+  relay_session_id TEXT,                -- 转交目标主会话 ID（就地弹=提问会话自身，审计用）
+  created_time   INTEGER NOT NULL,     -- 创建时间
+  answered_time  INTEGER,              -- 作答时刻；NULL=未答
+  update_time    INTEGER NOT NULL      -- 更新时间
+);
+
+CREATE INDEX IF NOT EXISTS idx_ask_questions_status ON ask_questions (status);
+CREATE INDEX IF NOT EXISTS idx_ask_questions_team   ON ask_questions (team_id, status);

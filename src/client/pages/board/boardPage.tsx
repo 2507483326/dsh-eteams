@@ -107,6 +107,18 @@ export function BoardTab({
           到对话里让领队处理，或等待 M5 的代答操作。
         </Alert>
       )}
+      {team.pendingAsks.length > 0 && (
+        <Alert
+          variant="warning"
+          className="mb-3 rounded-xl bg-[color:var(--dsw-static-amber-100,#fef5e7)] px-4 py-3 text-sm leading-6 text-foreground"
+        >
+          {team.pendingAsks.length} 项待问答：
+          {team.pendingAsks
+            .map((a) => `${a.askingName}（${a.questionCount} 问）`)
+            .join('；')}
+          {' '}—— 已转交主会话弹出，到主会话作答。
+        </Alert>
+      )}
       {/* docs/28 看板 · 每日 Token 消耗日历（全年格子 + 悬浮明细；用户迭代
       2026-09-05 数据源改全应用口径——GET /usage/calendar，卡自取数不依赖
       teamId）。取数 hooks 都在子组件内部——子组件只在有团队时挂载，早退

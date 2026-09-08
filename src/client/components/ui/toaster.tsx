@@ -13,11 +13,23 @@ import { Toast, ToastClose, ToastDescription, ToastProvider, ToastTitle, ToastVi
 import { useToast } from '../../hooks/useToast';
 
 export function Toaster(): React.ReactNode {
-  const { toasts } = useToast();
+  const { toasts, dismiss } = useToast();
   return (
     <ToastProvider>
       {toasts.map(({ id, title, description, action, ...props }) => (
-        <Toast key={id} {...props}>
+        // open/onOpenChange 接线（上游 shadcn 同款，用户反馈 2026-09-08「反复
+        // 弹出已复制」）：不接线时 Radix duration 到点的视觉关闭不回写 store
+        // ——僵尸 toast 留在模块级单例里，面板重挂载即以非受控 defaultOpen
+        // 复活，每次进页重新弹一遍。这里把关闭事件收口回 store（open=false
+        // + 入移除队列），重挂载不再复现。
+        <Toast
+          key={id}
+          {...props}
+          open={props.open}
+          onOpenChange={(open) => {
+            if (!open) dismiss(id);
+          }}
+        >
           <div className="grid gap-1">
             {title !== undefined && <ToastTitle>{title}</ToastTitle>}
             {description !== undefined && <ToastDescription>{description}</ToastDescription>}

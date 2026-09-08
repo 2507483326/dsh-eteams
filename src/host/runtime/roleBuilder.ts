@@ -100,6 +100,46 @@ const TRANSITIONS: Record<BuildStatus, BuildStatus[]> = {
   cancelled: [],
 };
 
+/**
+ * 构建时间线的规范步骤序（与客户端面板 buildDraft BUILD_STEPS 逐字对齐，
+ * docs/19.6.2）：播报步骤名必须用这里的字面量，面板蓝点才点得亮。
+ * stepsDone 由宿主按当前步骤推导——不信任模型自报的已完成列表（用户反馈
+ * 2026-09-08：模型把 stepsDone 报成 ['意图访谈'] 整体替换，前两步蓝点丢失、
+ * 时间线乱序）。
+ */
+export const BUILD_STEP_ORDER: readonly string[] = [
+  '收到需求',
+  '查重角色库',
+  '意图访谈',
+  '起草统一手册',
+  '深化领域章节',
+  '完成草稿',
+];
+
+/** 旧提示词/旧会话用过的步骤名 → 规范名（播报名漂移容忍）。 */
+const STEP_ALIASES: Record<string, string> = {
+  查重成员库: '查重角色库',
+};
+
+/**
+ * 归一播报步骤名到规范名（别名映射，其余原样）——落盘会话统一用规范名，
+ * 客户端时间线按字面匹配才能点亮。
+ */
+function canonicalStep(step: string): string {
+  return STEP_ALIASES[step] ?? step;
+}
+
+/**
+ * 按当前步骤推导已完成前缀：当前步之前的全部视为完成，「收到需求」随受理
+ * 即时完成（受理即建会话，该步不存在中间态）；不在时间线上的步骤（重启
+ * 核查/继续构建等）返回 null = 不推导、沿用原列表。
+ */
+function deriveStepsDone(step: string): string[] | null {
+  const idx = BUILD_STEP_ORDER.indexOf(canonicalStep(step));
+  if (idx < 0) return null;
+  return BUILD_STEP_ORDER.slice(0, Math.max(idx, 1)) as string[];
+}
+
 /** Absolute build-session file path for a state root. */
 export function roleBuilderFile(stateRoot: string): string {
   return join(stateRoot, 'rolebuilder.json');
@@ -216,7 +256,7 @@ export interface BuildReport {
    * rejected — the host then steers the parent to pop the questionnaire
    * (event-driven fallback instead of a blind 45s timer).
    */
-  interview?: { questions: InterviewQuestion[]; popFailed?: boolean };
+  interview?: { questions: InterviewQuestion[]; popFailed?: boolean; routed?: boolean };
   /**
    * Marks a deliberate brand-new build (the /eteam handler opening over a
    * terminal session). Ordinary builder reports never set this — so a
@@ -260,6 +300,10 @@ export async function reportBuildProgress(
   report: BuildReport,
 ): Promise<BuildSession> {
   const now = Date.now();
+  // 播报步骤名归一 + 按规范时间线推导已完成前缀（canonical 步骤命中时推导
+  // 压过模型自报的 stepsDone——蓝点只由宿主判定，模型报错名也不再乱序）。
+  const step = report.step !== undefined ? canonicalStep(report.step) : undefined;
+  const derived = step !== undefined ? deriveStepsDone(step) : null;
   // 显式 newBuild = 开一个全新构建：无条件覆盖任何现有会话（含待确认——
   // 新请求让位旧草稿，与 /eteam 处理器语义一致）。后台构建代理被纪律禁止
   // 传该标记，其迟到播报仍走下方终态守卫（docs/19.16）。
@@ -269,8 +313,8 @@ export async function reportBuildProgress(
       schemaVersion: 1,
       startedAt: now,
       status: 'active',
-      step: report.step ?? '收到需求',
-      stepsDone: report.stepsDone ?? [],
+      step: step ?? '收到需求',
+      stepsDone: derived ?? report.stepsDone ?? [],
       request: report.request ?? '',
       draft: ensureDraftAvatar(report.draft ?? null),
       note: report.note ?? '',
@@ -303,8 +347,8 @@ export async function reportBuildProgress(
       schemaVersion: 1,
       startedAt: now,
       status: 'active',
-      step: report.step ?? '收到需求',
-      stepsDone: report.stepsDone ?? [],
+      step: step ?? '收到需求',
+      stepsDone: derived ?? report.stepsDone ?? [],
       request: report.request ?? '',
       draft: ensureDraftAvatar(report.draft ?? null),
       note: report.note ?? '',
@@ -325,8 +369,8 @@ export async function reportBuildProgress(
   const next: BuildSession = {
     ...current,
     status: requested,
-    step: report.step ?? current.step,
-    stepsDone: report.stepsDone ?? current.stepsDone,
+    step: step ?? current.step,
+    stepsDone: derived ?? report.stepsDone ?? current.stepsDone,
     request: report.request ?? current.request,
     draft,
     note: report.note ?? current.note,
@@ -339,14 +383,16 @@ export async function reportBuildProgress(
 }
 
 /** Project a report's interview payload onto the session shape (questions +
- * popFailed only — answers live exclusively in the answer paths). */
+ * popFailed/routed flags only — answers live exclusively in the answer paths). */
 function interviewOf(report: BuildReport): {
   questions: InterviewQuestion[];
   popFailed?: boolean;
+  routed?: boolean;
 } {
   return {
     questions: report.interview!.questions,
     ...(report.interview!.popFailed === true ? { popFailed: true } : {}),
+    ...(report.interview!.routed === true ? { routed: true } : {}),
   };
 }
 
@@ -426,6 +472,23 @@ export function phaseSpawnLocked(
 }
 
 /**
+ * Mark the current interview as routed/unrouted（统一路由去重痕迹，用户迭代
+ * 2026-09-08）：宿主按统一路由处理完本次发布（就地弹或已转交主会话）后置
+ * routed=true——同题复发（重启代理后重新发布相同问题）据此跳过重路由，
+ * 防止 self 路径（不留问答单）的同题双弹。新问题发布/popFailed 补转重置。
+ * 合并写不动 updatedAt（与 markBuilderWake 同口径，不驱动面板表单重置）。
+ */
+export async function markInterviewRouted(stateRoot: string, routed: boolean): Promise<void> {
+  const current = readBuildSession(stateRoot);
+  if (current === null || current.interview === undefined) return;
+  await writeSession(stateRoot, {
+    ...current,
+    interview: { ...current.interview, routed },
+    updatedAt: current.updatedAt,
+  });
+}
+
+/**
  * Store the user's interview answers (docs/19.16): the host route calls this
  * and then wakes the builder child with a formatted followup. Idempotent
  * re-answers overwrite (the panel allows correcting before the child resumes).
@@ -485,6 +548,12 @@ export interface InterviewState {
    * 下一次访谈发布（新 questions 报告）即重置。
    */
   popFailed?: boolean;
+  /**
+   * 统一路由已处理标记（用户迭代 2026-09-08）：宿主已按统一路由处理过本次
+   * 发布（就地弹或已转交主会话）。同题复发（重启代理后重新发布相同问题）
+   * 据此跳过重路由——否则 self 路径不留问答单，重发会同题双弹。
+   */
+  routed?: boolean;
 }
 
 /** One-time avatar assignment: stable face from first preview through confirm. */

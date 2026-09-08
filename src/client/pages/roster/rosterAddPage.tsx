@@ -27,12 +27,10 @@ import { errorMessageOf } from '../../lib/errors';
 import { MdEditor } from '../../features/mdEditor/mdEditor';
 import { Avatar } from '../../features/avatar/avatar';
 import { RandomAvatarButton, rollAvatarPair } from '../../components/avatarRing';
-import { BackBar } from '../../components/backBar';
 import { Alert } from '../../components/ui/alert';
 import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
 import { Input } from '../../components/ui/input';
-import { toast } from '../../hooks/useToast';
 import { CommandChip, PREFILL_STEPS } from './buildDraft';
 import { FormErrorNote, Pill } from '../shared/components';
 import {
@@ -126,20 +124,10 @@ export function RosterAddPage({
   const prefillAi = (): void => {
     setAiPrefill(onPrefillAddPeople());
   };
-  // 复制反馈（docs/43 十九轮）：writeClipboard 回传是否真的写进剪贴板——
-  // 结果迁 shadcn toast()（成功 ✓ 已复制 / 失败 destructive 档；原按钮
-  // 标签翻转「✓ 已复制 2 秒」随迁撤除，就地瞬时文案的组件化收口）。
-  const copyTemplate = async (): Promise<void> => {
-    const ok = await writeClipboard(ADD_PEOPLE_TEMPLATE).catch(() => false);
-    toast(
-      ok
-        ? { title: '✓ 已复制', description: '去对话输入框粘贴发送。' }
-        : {
-            title: '复制失败',
-            description: '剪贴板写入被拒绝——请手动选择命令文本复制。',
-            variant: 'destructive',
-          },
-    );
+  // 复制静默收口（用户反馈 2026-09-08「不需要弹」）：writeClipboard 写入
+  // 剪贴板即止，不再弹任何反馈——右下角弹框整体撤除。
+  const copyTemplate = (): void => {
+    void writeClipboard(ADD_PEOPLE_TEMPLATE).catch(() => undefined);
   };
 
   const saveManual = async (): Promise<void> => {
@@ -186,11 +174,9 @@ export function RosterAddPage({
   return (
     <div className="min-w-0 overflow-x-hidden">
       <style>{'@keyframes eteams-spin{to{transform:rotate(360deg)}}'}</style>
-      <div className="flex flex-wrap items-center gap-1.5">
-        {/* 返回条（M7-3 收口 components/backBar，secondary 档）。 */}
-        <BackBar variant="secondary" label="返回角色列表" onClick={() => navigate('/roster')} />
-      </div>
-      <Card className={cn(PANEL_CARD_CLASS, 'mt-2')}>
+      {/* 返回钮走壳层页头 onBack（用户迭代 2026-09-08：页面返回统一收口
+      PageHeader onBack 槽，页头行最右图标钮）——顶部返回条行撤，卡直接跟页头。 */}
+      <Card className={cn(PANEL_CARD_CLASS)}>
         <BuildWorkbench build={build} addMode={addMode} onConfirmed={confirmDone} />
         {(build === null || build.status === 'cancelled' || build.status === 'confirmed') &&
           (addMode === 'manual' ? (
@@ -299,13 +285,12 @@ export function RosterAddPage({
                 </div>
               ))}
               {/* 填充/复制两钮常驻（用户反馈 2026-09-05 第二批「点填充按
-              钮就都消失了」）：填充成功不再收走按钮行——复制仍随时可用；
-              复制反馈迁 shadcn toast()（docs/43 十九轮，按钮标签不再翻转）。 */}
+              钮就都消失了」）：填充成功不再收走按钮行——复制仍随时可用。 */}
               <div className="mt-2.5 flex items-center gap-2">
                 <Button size="sm" onClick={prefillAi}>
                   {aiPrefill === 'set' ? '重新填充' : '填充'}
                 </Button>
-                <Button size="sm" variant="secondary" onClick={() => void copyTemplate()}>
+                <Button size="sm" variant="secondary" onClick={copyTemplate}>
                   复制
                 </Button>
                 {aiPrefill !== 'set' && (

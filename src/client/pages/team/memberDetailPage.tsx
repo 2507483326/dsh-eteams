@@ -23,7 +23,6 @@ import { cn } from '../../lib/cn';
 import { runWithBusy } from '../../lib/errors';
 import { MEMBER_STATUS_LABELS, memberTone } from '../../features/tasks/taskDisplayStatus';
 import { Avatar } from '../../features/avatar/avatar';
-import { BackBar } from '../../components/backBar';
 import { FormDialog, FormFooterActions } from '../../components/formDialog';
 import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
@@ -130,9 +129,12 @@ export function MemberDetailPage({ sessionId, pool, onSelectTeam }: MemberDetail
   // 团队页头（S24-2，官网 h2 签名）：标题 + 右侧「＋ 新增团队」主按钮 + 创建
   // 弹窗——拆分前成员详情视图在 TeamTab 树内渲染，页头原样可见（列表/详情/
   // 成员详情三态共用，含下方 not-found 卡窗口）；弹窗开合是组件内瞬态。
+  // 返回钮（用户迭代 2026-09-08：页面返回统一收口 PageHeader onBack 槽，
+  // 页头行最右图标钮——原 BackBar 文案钮撤，成员/领队详情与 not-found 卡
+  // 窗口共用同一返回位）。
   const teamHeader = (
     <>
-      <PageHeader label="团队">
+      <PageHeader label="团队" onBack={onBack}>
         <Button type="button" size="sm" onClick={() => setCreateOpen(true)}>
           <Plus className="h-3.5 w-3.5" />
           新增团队
@@ -182,10 +184,10 @@ export function MemberDetailPage({ sessionId, pool, onSelectTeam }: MemberDetail
     return (
       <div>
         {teamHeader}
+        {/* 返回钮走上方页头 onBack（用户迭代 2026-09-08 统一收口）——
+        卡内原 BackBar 文案钮撤。 */}
         <Card className={cn(PANEL_CARD_CLASS, 'mt-2')}>
           <div className={MUTED_CLASS}>成员不在团队里——可能刚被移出。</div>
-          {/* 返回条（M7-3 收口 components/backBar，outline 默认档）。 */}
-          <BackBar className="mt-2" label="返回团队成员" onClick={onBack} />
         </Card>
       </div>
     );
@@ -240,8 +242,8 @@ export function MemberDetailPage({ sessionId, pool, onSelectTeam }: MemberDetail
     <div>
       {teamHeader}
       <div className="flex flex-wrap items-center gap-1.5">
-        {/* 返回条（M7-3 收口 components/backBar，outline 默认档）。 */}
-        <BackBar label="返回团队成员" onClick={onBack} />
+        {/* 返回钮走上方页头 onBack（用户迭代 2026-09-08 统一收口）——
+        标题行原 BackBar 文案钮撤，只留成员名 + 角色/状态徽标。 */}
         <span className="text-lg font-semibold tracking-tight text-foreground">{view.name}</span>
         {target.kind === 'captain' && <span className={ROLE_CHIP_CLASS}>领队</span>}
         {view.status !== null && (

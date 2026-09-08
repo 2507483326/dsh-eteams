@@ -443,8 +443,8 @@ describe('panel write routes (M5 first slice)', () => {
     const r = await h.get('/eteams-api/roster');
     expect(r.code).toBe(200);
     const parsed = json<{ members: { name: string; role: string }[] }>(r.body);
-    // 预置（领队 + 角色构建师）随首启播种在库，Alice 是第三个。
-    expect(parsed.members).toHaveLength(3);
+    // 预置（领队 + 角色构建师 + 主对话注入角色 system）随首启播种在库，Alice 是第四个。
+    expect(parsed.members).toHaveLength(4);
     expect(parsed.members.find((m) => m.name === 'Alice')!.role).toBe('writer');
   });
 
@@ -455,13 +455,13 @@ describe('panel write routes (M5 first slice)', () => {
       members: { name: string; role: string; avatar?: unknown }[];
     }>(first.body);
     expect(seeded.members.map((m) => m.name)).toEqual(
-      expect.arrayContaining(['角色构建师', '项目牧羊人']),
+      expect.arrayContaining(['角色构建师', '项目牧羊人', 'system']),
     );
-    expect(seeded.members).toHaveLength(2);
+    expect(seeded.members).toHaveLength(3);
     for (const p of seeded.members) expect(p.avatar).toBeDefined();
 
     const second = await h.get('/eteams-api/roster');
-    expect(json<{ members: unknown[] }>(second.body).members).toHaveLength(2);
+    expect(json<{ members: unknown[] }>(second.body).members).toHaveLength(3);
 
     await h.post('/eteams-api/roster', {
       name: '角色构建师',
@@ -470,7 +470,7 @@ describe('panel write routes (M5 first slice)', () => {
     });
     const third = await h.get('/eteams-api/roster');
     const roster = json<{ members: { name: string; duty?: string }[] }>(third.body);
-    expect(roster.members).toHaveLength(2);
+    expect(roster.members).toHaveLength(3);
     expect(roster.members.find((m) => m.name === '角色构建师')!.duty).toBe('自定义职责');
   });
 
@@ -661,6 +661,45 @@ describe('panel write routes (M5 first slice)', () => {
     const parsed = json<{ members: { name: string; employeeId?: number }[] }>(seeded.body);
     expect(parsed.members.find((m) => m.name === 'Later')).toBeDefined();
     for (const m of parsed.members) expect(m.employeeId).toBeUndefined();
+  });
+
+  it('seeds the 主对话注入角色 system and lets the panel edit its raw MD（v12）', async () => {
+    const h = await installFake();
+    // 播种（GET /roster 即 ensurePresetMembers）：is_root 行默认 MD 空 + 提示简介。
+    const seeded = await h.get('/eteams-api/roster');
+    expect(seeded.code).toBe(200);
+    const system = json<{ members: { name: string; isRoot?: boolean; personaMd?: string; profile?: string }[] }>(
+      seeded.body,
+    ).members.find((m) => m.name === 'system');
+    expect(system?.isRoot).toBe(true);
+    expect(system?.personaMd).toBe('');
+    expect(system?.profile).toContain('主对话注入');
+    // 面板显式保存（POST /roster → allowRoot）：原文落库，不烘结构脚手架。
+    const saved = await h.post('/eteams-api/roster', {
+      name: 'system',
+      role: 'system',
+      personaMd: '# 注入规则\n- 总用中文回复 {{任何占位}}',
+    });
+    expect(saved.code, saved.body).toBe(200);
+    const reread = await h.get('/eteams-api/roster');
+    const after = json<{ members: { personaMd?: string }[] }>(reread.body).members.find(
+      (m) => m.name === 'system',
+    );
+    expect(after?.personaMd).toBe('# 注入规则\n- 总用中文回复 {{任何占位}}');
+    // 保留行不可删除（与角色构建师同走 removeRosterMember 系统保留路径）。
+    const removed = await h.post('/eteams-api/roster/system/remove', {});
+    expect(removed.code, removed.body).toBe(404);
+    expect(removed.body).toContain('不可删除');
+  });
+
+  it('rejects adding the 主对话注入角色 system to a team（v12）', async () => {
+    const h = await installFake();
+    const created = await h.post('/eteams-api/team', { name: '注入团队', sessionId: 'sess-panel' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    const added = await h.post(`/eteams-api/team/${teamId}/member`, { name: 'system' });
+    expect(added.code, added.body).toBe(400);
+    expect(added.body).toContain('不能加入团队');
+    expect(readTeam(teamId).members.find((m) => m.name === 'system')).toBeUndefined();
   });
 
   it('projects 工号 through the team snapshot (members and captain)', async () => {

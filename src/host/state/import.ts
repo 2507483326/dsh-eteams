@@ -37,6 +37,8 @@ import {
   leaderFlagOf,
   LEADER_NAME,
   personaToMd,
+  ROOT_ROLE_NAME,
+  rootFlagOf,
   readSchemaVersion,
   writeSchemaVersion,
 } from './db.js';
@@ -312,6 +314,10 @@ export function presetMemberSeeds(): PresetMemberSeed[] {
   return seeds;
 }
 
+/** system 保留行的简介（v12 主对话注入角色的用户提示文案）。 */
+const ROOT_ROLE_PROFILE =
+  '主对话注入角色：这里的手册(MD)会注入主对话窗口的 system 提示词';
+
 /**
  * 首次建库/导入事务的收尾种子（幂等）：领队/预置角色的 roles 角色行
  * （缺则建，已有同名行不覆盖——成员=角色，全局一份）。v7：角色行不带工号
@@ -321,8 +327,8 @@ export function seedPresetRows(tx: TeamTx, now: number): void {
   const { db } = tx;
   const selectRole = db.prepare('SELECT role_id FROM roles WHERE role_name = ?');
   const insertRole = db.prepare(
-    'INSERT INTO roles (role_name, persona_md, profile, avatar, is_leader, created_time, update_time) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO roles (role_name, persona_md, profile, avatar, is_leader, is_root, created_time, update_time) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
   );
   for (const seed of presetMemberSeeds()) {
     if (selectRole.get(seed.name) !== undefined) continue;
@@ -332,6 +338,22 @@ export function seedPresetRows(tx: TeamTx, now: number): void {
       seed.persona.profile ?? null,
       avatarToJson(seed.avatar),
       leaderFlagOf(seed.name),
+      rootFlagOf(seed.name),
+      now,
+      now,
+    );
+  }
+  // 主对话注入角色（v12）：保留行按名幂等播种——persona_md 默认空（空 =
+  // 不注入），用户后续编辑的手册原文经 upsertRosterMember 的 root 分支
+  // 原样落库（不烘 personaToMd 结构脚手架，注入内容逐字等于编辑文本）。
+  if (selectRole.get(ROOT_ROLE_NAME) === undefined) {
+    insertRole.run(
+      ROOT_ROLE_NAME,
+      '',
+      ROOT_ROLE_PROFILE,
+      avatarToJson({ seed: hashName(ROOT_ROLE_NAME), salt: 0 }),
+      leaderFlagOf(ROOT_ROLE_NAME),
+      rootFlagOf(ROOT_ROLE_NAME),
       now,
       now,
     );
@@ -415,13 +437,15 @@ function importRosterFile(db: DatabaseSync, stateRoot: string, now: number): Leg
     // v7：角色行不带工号——旧 roster 工号只随返回值留给班底发号参考。
     if (rolesRowByName(db, name) !== undefined) continue;
     db.prepare(
-      'INSERT INTO roles (role_name, persona_md, profile, avatar, created_time, update_time) ' +
-        'VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT INTO roles (role_name, persona_md, profile, avatar, is_leader, is_root, created_time, update_time) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     ).run(
       name,
       personaToMd(persona, name),
       persona.profile ?? null,
       avatarToJson(m.avatar ?? { seed: hashName(name), salt: 0 }),
+      leaderFlagOf(name),
+      rootFlagOf(name),
       m.updatedAt ?? now,
       now,
     );

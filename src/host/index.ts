@@ -27,6 +27,7 @@ import type { ETeamsResolvedConfig } from './config.js';
 import { PLUGIN_ID, PLUGIN_VERSION, STATE_SCHEMA_VERSION, TOOL_PREFIX } from './version.js';
 import { createCaptainTools } from './tools/captainTools.js';
 import { createCaptainDispatchTool } from './tools/captainDispatch.js';
+import { createAskUserTools } from './tools/askUserTools.js';
 import { createMemberTools } from './tools/memberTools.js';
 import { installMemberRuntime } from './runtime/members.js';
 import { installUsageMeter } from './runtime/usage.js';
@@ -34,6 +35,7 @@ import { installWebSurface, locateTeam } from './runtime/webui.js';
 import { stateRootFor } from './runtime/base.js';
 import { leaderHandbookForChild } from './runtime/captainAgent.js';
 import { sessionPersonaSection, sessionIdOfScope } from './runtime/sessionPersona.js';
+import { rootPromptSection } from './runtime/rootPrompt.js';
 import {
   sessionTeamSection,
   consumeSessionTeamBinding,
@@ -62,6 +64,9 @@ export const inject = [
   // llm（dsh-llm 提供）供 /session-route 反查模型目录显示名（用户迭代
   // 2026-09-08「显示目录模型」：id 是限定串，座位显示的是目录 name）。
   'llm',
+  // userQuestions（dsh-user-questions 提供）供 eteams_ask_user 就地弹分支
+  // 直调 ctx.userQuestions.ask()（转交分支不依赖它）。
+  'userQuestions',
 ];
 
 /** Config schema consumed by the cordis loader (validated before apply). */
@@ -70,6 +75,7 @@ export { ETeamsConfig };
 /** Offline verification surface (verify script / integration tests). */
 export { createCaptainTools } from './tools/captainTools.js';
 export { createCaptainDispatchTool } from './tools/captainDispatch.js';
+export { createAskUserTools } from './tools/askUserTools.js';
 export { createMemberTools } from './tools/memberTools.js';
 // eteams_approve_plan 已随审批环节重构下线（docs/35 §5#1），导出面随之撤销。
 export {
@@ -114,6 +120,12 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
   // 任务转给一次性领队子代理主持。同一根作用域注册（子代理对 eteams_*
   // 可见的前提）；成员与领队子代理在 spawn 时 deny。
   ctx.tools.register(createCaptainDispatchTool(config, ctx));
+  // 1c) 子代理用户问答（用户迭代 2026-09-08）：eteams_ask_user / eteams_ask_answer。
+  // 根作用域注册且不进任何 deny 列表——领队子代理与成员都可见（问答自动
+  // 路由：用户在提问会话就地弹，不在则转交主会话弹出）。
+  for (const tool of createAskUserTools(config, ctx)) {
+    ctx.tools.register(tool);
+  }
   log.info('eteams: captain tools registered');
 
   // 2) Member runtime: per-child tool installation + route bookkeeping.
@@ -315,6 +327,48 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
     log.info('eteams: leader handbook prompt variable registered');
   } catch (error) {
     log.warn('eteams: leader handbook variable registration failed: %s', String(error));
+  }
+
+  // 3b4) 主对话注入（v12 用户迭代「system 角色」，dynamic）：角色库中
+  // is_root 保留角色「system」的手册(MD)注入主对话窗口的 system 提示词。
+  // 主对话判定与子代理过滤（领队/成员/构建器）在 runtime/rootPrompt.ts；
+  // MD 默认空 → '' 空段贡献语义（不注入）。每次装配现读 roles 表——面板
+  // 保存即热生效，无需重启。双通道注册同 3b2/3b3 先例（whichever channel
+  // a given composition renders, the injection survives）。
+  try {
+    ctx.systemPrompt.section({
+      name: 'eteams-root-md',
+      order: 109,
+      text: (context) => rootPromptSection(config, context.scope),
+    });
+    log.info('eteams: root md section registered');
+  } catch (error) {
+    log.warn('eteams: root md section registration failed: %s', String(error));
+  }
+  try {
+    type SystemPromptScope = {
+      systemPrompt: {
+        context(contribution: {
+          name: string;
+          order: number;
+          text: (context: { scope?: unknown }) => string;
+        }): unknown;
+      };
+    };
+    (
+      ctx as unknown as {
+        inject(deps: string[], fn: (scope: SystemPromptScope) => void): void;
+      }
+    ).inject(['systemPrompt'], (scope) => {
+      scope.systemPrompt.context({
+        name: 'eteams-root-md',
+        order: 902, // late in the snapshot: reads last, i.e. freshest
+        text: (context) => rootPromptSection(config, context.scope),
+      });
+      log.info('eteams: root md context registered');
+    });
+  } catch (error) {
+    log.warn('eteams: root md context registration failed: %s', String(error));
   }
 
   // 3c) /eteam slash command (docs/19.4, D18): 命令平面统一注册口——/eteam

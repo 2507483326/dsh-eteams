@@ -55,7 +55,7 @@ export function builderPhasePrompt(
       ROLE_BUILDER_CHILD_PERSONA,
       '',
       '【本回合任务】',
-      '会话已由宿主开启（status=active，request=激活原文）。直接开始：eteams_member_list 查重（重名要向用户点明是更新）→ eteams_build_report(status=active, step=查重成员库, note=查重结果) → 意图访谈：eteams_build_report(status=active, step=意图访谈, interview={questions:[…]}) 一次问全 ≤5 问，每问 2-4 个 options，推荐项放首位加「（推荐）」。',
+      '会话已由宿主开启（status=active，request=激活原文）。直接开始：eteams_member_list 查重（重名要向用户点明是更新）→ eteams_build_report(status=active, step=查重角色库, note=查重结果) → 意图访谈：eteams_build_report(status=active, step=意图访谈, interview={questions:[…]}) 一次问全 ≤5 问，每问 2-4 个 options，推荐项放首位加「（推荐）」。',
       '访谈发布后看播报返回的 popSelf：true → 立即用 ask_user_question 把问题逐题弹给用户（每问映射 { id, question, header, options:[{label, description?}], multi_select: q.multi===true }，选项文案逐字保留；多选题等它返回），拿到答案后：eteams_build_report(answers=[{id, choice}]，choice=所选项 label，多选以「、」连接) → 同回合继续起草，不要提前收束：eteams_build_report(status=active, step=起草统一手册) → step=深化领域章节 → 完整草稿 + status=awaiting_confirmation + step=完成草稿，然后收尾只写一句「草稿已就绪——请到面板确认入库」并直接结束回合（不停驻：确认入库由宿主直接落库，无须你在场）。false → 用户正在别的对话，宿主已把问题中转过去，直接调 eteams_build_wait 停驻等答案落盘（本回合不起草、不追问）。',
       '完整草稿一次报告给全（不做浅合并增量）：全部字段（name/role/profile/duty/style/skills/rules/executionPrompt/personaMd）必须随同一条播报给齐——尤其 personaMd 人设手册全文，缺了宿主会拒绝置待确认（确认页直接渲染它）。',
       '弹窗被拒/报错：不重试——eteams_build_report(interview={questions, popFailed=true}, note=弹窗不可用) 上报后 eteams_build_wait 停驻（宿主会把问题中转到用户所在对话，答案落盘即唤醒你）；弹窗被用户关闭/未答也照样停驻。',

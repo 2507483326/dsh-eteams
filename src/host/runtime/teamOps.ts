@@ -35,7 +35,7 @@ import {
   type TeamKey,
   type TeamTx,
 } from '../state/store.js';
-import { hashName, leaderFlagOf, LEADER_NAME, nextAutoincrementId, personaFromMd, personaToMd } from '../state/db.js';
+import { hashName, leaderFlagOf, LEADER_NAME, nextAutoincrementId, personaFromMd, personaToMd, ROOT_ROLE_NAME } from '../state/db.js';
 import { insertEventInTx, insertMailInTx } from '../state/events.js';
 import { defaultCaptainPersona } from '../prompts/personas/captain.js';
 import { applyTransition, sanitizeKey, taskSlug } from '../model/taskMachine.js';
@@ -241,6 +241,11 @@ export async function addMember(
     if (name === '') throw new ETeamsError('成员名不能为空');
     if (name === LEADER_NAME) {
       throw new ETeamsError('领队由建队自动入册，不能作为成员添加');
+    }
+    // 主对话注入角色（v12）：system 的手册是主对话 system 提示词的注入原文，
+    // 不是团队成员——面板弹窗已过滤，工具/HTTP 面在此硬拒（唯一收口）。
+    if (name === ROOT_ROLE_NAME) {
+      throw new ETeamsError('「system」为主对话注入的保留角色，不能加入团队');
     }
     // 团队上限（v7 按班底行数计，领队班底行占 1 个名额）：加一人 = 班底 +1。
     if (teamNow.members.length + 1 > env.config.maxMembers) {

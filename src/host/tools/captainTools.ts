@@ -7,7 +7,6 @@
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import type { ContentBlock } from '@deepseek-ai/dsh-llm';
-import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import type { Context } from '@deepseek-ai/cordis';
 import type { ETeamsResolvedConfig } from '../config.js';
 import { ETeamsError, stateRootOf, type RuntimeContext } from '../runtime/base.js';
@@ -41,16 +40,18 @@ import { readRoster, taskMemberBadge, upsertRosterMember } from '../runtime/rost
 import {
   answerBuildInterview,
   hasBuildSessionFile,
+  markInterviewRouted,
   readBuildParentSession,
-  readBuildPresence,
   readBuildSession,
   reportBuildProgress,
   cancelBuildSession,
   type BuildDraft,
 } from '../runtime/roleBuilder.js';
+import {
+  publishBuilderAsk,
+} from '../runtime/askUser.js';
+import { readPendingAsksBySessionSync, answerAskSync } from '../state/asks.js';
 import { startBuilderChild, wakeBuilderChild } from '../runtime/builderPhases.js';
-import { lookupMemberSession } from '../runtime/usage.js';
-import type { SessionId } from '@deepseek-ai/dsh-session';
 import { stationProgress } from '../model/taskMachine.js';
 import type { TaskRecord } from '../model/types.js';
 
@@ -84,11 +85,9 @@ const intArr = (description: string) => ({
 /**
  * 意图访谈弹窗失败中转（模块级，docs/19.16 持续构建子代理迭代）：中转的
  * 触发是事件驱动的——子代理亲报 interview.popFailed（边沿：播报前标记未
- * 置位）才 steer 父/在场会话补弹，弹窗成功路径（答案内联落盘）永不触发，
- * 见 eteams_build_report 的执行体。
+ * 置位）才由 publishBuilderAsk(forceParent) 强制转交构建父补弹，弹窗成功
+ * 路径（答案内联落盘）永不触发，见 eteams_build_report 的执行体。
  */
-
-import { interviewSteerText } from '../prompts/steering/interview.js';
 
 const chainParam = () => ({
   type: 'array' as const,
@@ -333,8 +332,9 @@ export function createCaptainTools(
         enum: ['active', 'awaiting_confirmation', 'confirmed', 'cancelled'],
         description: '会话状态（缺省=沿用当前状态）',
       },
-      step: str('当前步骤名（如：撰写角色手册）'),
-      stepsDone: strArr('已完成步骤列表（整体替换）'),
+      step: str(
+        '当前步骤名（时间线逐字用：收到需求 → 查重角色库 → 意图访谈 → 起草统一手册 → 深化领域章节 → 完成草稿）——已完成前缀由宿主按当前步骤推导，无需也不能自报',
+      ),
       request: str('用户需求原文（开启会话时传入）'),
       draft: {
         type: 'object' as const,
@@ -368,7 +368,7 @@ export function createCaptainTools(
       interview: {
         type: 'object' as const,
         description:
-          '意图访谈（docs/19.16/19.18/19.21）：把问题写入会话（发布前先播报步骤「意图访谈」）。看本次返回的 popSelf：true → 用户正看着本对话，立即用 ask_user_question 把问题逐题弹给用户，拿到答案 eteams_build_report(answers=[{id, choice}]) 落盘后同回合继续起草；false → 用户在别的对话（主对话或成员对话），宿主已把问题中转过去，直接调 eteams_build_wait 停驻等答案落盘（本回合不起草、不追问）。弹窗被拒/报错：不重试——再发一次本参数并带 popFailed=true 上报，然后 eteams_build_wait 停驻；弹窗被用户关闭/未答也照样停驻。',
+          '意图访谈（统一问答路由，用户迭代 2026-09-08）：把问题写入会话并按统一路由分发（发布前先播报步骤「意图访谈」）。看本次返回的 popSelf：true → 用户正看着本对话，立即用 ask_user_question 把问题逐题弹给用户，拿到答案 eteams_build_report(answers=[{id, choice}]) 落盘后同回合继续起草；false → 宿主已把问题转交主会话弹出，**立即结束本回合**（不要调 eteams_build_wait、不要追问）——用户作答后答案会以 followup 消息送达你，收到后继续起草。弹窗被拒/报错：不重试——再发一次本参数并带 popFailed=true 上报（宿主会强制转交主会话），然后结束回合；弹窗被用户关闭/未答也照样结束回合（答案稍后送达）。',
         properties: {
           questions: {
             type: 'array' as const,
@@ -401,7 +401,7 @@ export function createCaptainTools(
           popFailed: {
             type: 'boolean' as const,
             description:
-              '弹窗失败标记（docs/19.16 持续构建子代理）：ask_user_question 被拒/报错时置 true 上报——宿主把问题中转到用户所在对话（补弹选择框）；弹窗正常时不要传。',
+              '弹窗失败标记（docs/19.16 持续构建子代理）：ask_user_question 被拒/报错时置 true 上报——宿主把问题强制转交主会话补弹；弹窗正常时不要传。',
           },
         },
         additionalProperties: false,
@@ -434,7 +434,7 @@ export function createCaptainTools(
           step: str('当前步骤'),
           updatedAt: { type: 'integer' as const, description: '更新时间戳（毫秒）' },
           popSelf: bool(
-            '弹窗指引（19.18/19.21 弹窗跟随用户所在会话）：true=用户正看着本对话，由你本回合用 ask_user_question 就地弹；false=宿主已把问题中转到用户所在的对话（主对话或成员对话），直接 eteams_build_wait 停驻等答案落盘',
+            '弹窗指引（统一问答路由）：true=用户正看着本对话，由你本回合用 ask_user_question 就地弹；false=宿主已把问题转交主会话弹出，立即结束本回合（不要 eteams_build_wait）——答案会以 followup 消息送达你',
           ),
         },
         additionalProperties: false as const,
@@ -480,13 +480,27 @@ export function createCaptainTools(
           updatedAt: answered.updatedAt,
         };
       }
-      // 播报前的访谈态（用于 popFailed 边沿判定：只有「本次播报新标记
-      // 弹窗失败」才中转，重复播报不重复打扰）。
+      // 播报前的访谈态（用于 popFailed 边沿判定与同题复发去重）。
       const beforeReport = readBuildSession(root);
+      // 同题复发透传 routed 痕迹：重启代理后重新发布相同问题（未带 popFailed、
+      // 也未带答案）时，把上一次发布的 routed 标记原样带入本次写入——否则
+      // interviewOf 重置痕迹，第三次重发会漏过去重。
+      const interviewArgs = args.interview as
+        | { questions: unknown; popFailed?: boolean; routed?: boolean }
+        | undefined;
+      if (
+        interviewArgs !== undefined &&
+        beforeReport?.interview !== undefined &&
+        beforeReport.interview.answers === undefined &&
+        interviewArgs.popFailed !== true &&
+        JSON.stringify(interviewArgs.questions) ===
+          JSON.stringify(beforeReport.interview.questions)
+      ) {
+        interviewArgs.routed = beforeReport.interview.routed;
+      }
       const session = await reportBuildProgress(root, {
         ...(args.status !== undefined ? { status: args.status } : {}),
         ...(args.step !== undefined ? { step: args.step } : {}),
-        ...(args.stepsDone !== undefined ? { stepsDone: args.stepsDone } : {}),
         ...(args.request !== undefined ? { request: args.request } : {}),
         ...(args.draft !== undefined ? { draft: args.draft as BuildDraft } : {}),
         ...(args.note !== undefined ? { note: args.note } : {}),
@@ -495,199 +509,71 @@ export function createCaptainTools(
           : {}),
         ...(args.newBuild === true ? { newBuild: true } : {}),
       });
-      // 弹窗失败即中转（事件驱动兜底，docs/19.16 持续构建子代理迭代）：
-      // 子代理 ask_user_question 被拒/报错时经 interview.popFailed 上报——
-      // 宿主立即 steer（活父/在场会话）补弹选择框。替代原 45 秒盲定时器：
-      // 子代理阻塞在弹窗等答案时定时器分不清「在等答案」与「已失败」，会
-      // 双弹；事件驱动只在子代理亲报失败那一刻触发，无竞态。
+      // 弹窗失败即补转（事件驱动兜底，docs/19.16 持续构建子代理迭代）：
+      // 子代理就地自弹被拒/报错时经 interview.popFailed 上报——宿主强制转交
+      // 构建父（主对话）补弹（forceParent 跳过 presence：自弹刚被拒，再判
+      // self 只会原地重蹈）。投递走统一 deliverAskRelay（在线 steer / 离线
+      // 冷恢复）。事件驱动只在子代理亲报失败那一刻触发，无竞态。
       if (
         session.interview !== undefined &&
         session.interview.answers === undefined &&
         session.interview.popFailed === true &&
         beforeReport?.interview?.popFailed !== true
       ) {
-        // 活跃会话定位（用户迭代）：客户端心跳上报「用户正在看的对话」
-        // ——在线且新鲜就优先 steer 到那里；否则退回父会话。心跳只是
-        // 优化信号，缺失/过期/查不到活代理时父会话路径不受影响。
-        const agents = (env.ctx as unknown as RuntimeContext).agents;
-        const parentSessionId = readBuildParentSession(root);
-        let target = parentSessionId !== null ? agents?.get(parentSessionId) : undefined;
-        const presence = readBuildPresence(root);
-        if (presence !== null && presence.sessionId !== parentSessionId) {
-          const candidate = agents?.get(presence.sessionId);
-          if (candidate !== undefined) target = candidate;
-        }
-        if (target !== undefined && target.id !== exec.agent?.id) {
-          try {
-            target.steer(
-              createUserMessage({
-                content: [
-                  {
-                    type: 'text',
-                    text: interviewSteerText(
-                      session.step,
-                      session.request,
-                      session.interview.questions,
-                    ),
-                  },
-                ],
-                source: {
-                  kind: 'plugin',
-                  plugin: 'dsh-eteams',
-                  form: 'notice',
-                  summary: '意图访谈弹窗不可用——请用选择框补弹',
-                },
-              }),
-            );
-          } catch (error) {
-            env.ctx.logger.warn(
-              `eteams: interview steer to parent failed: ${
-                error instanceof Error ? error.message : String(error)
-              }`,
-            );
-          }
+        const relayed = await publishBuilderAsk(env, {
+          askingSessionId: String(exec.agent?.id ?? ''),
+          askingName: '角色构建师',
+          parentSessionId: readBuildParentSession(root) ?? '',
+          questions: session.interview.questions,
+          forceParent: true,
+        });
+        if (relayed.outcome === 'relayed') {
+          await markInterviewRouted(root, true);
         }
       }
-      // 访谈发布边沿就地判定（19.18 发布投递 + 19.21 弹窗跟随用户所在会话）：
-      // 构建子代理发布访谈那一刻读 presence——用户正在看成员对话框就把问题
-      // 投递到成员对话；用户正看着构建子会话对话框就 popSelf:true 让子代理
-      // 就地弹（弹窗落在用户眼前的子会话）；其余（构建父/过期/缺席/无关）
-      // ——用户不在子会话——steer 构建父（主对话）转弹：ask_user_question
-      // 的弹窗落在提问者自己的对话框（dsh-user-questions 单 provider 不做
-      // 路由，谁提问落谁对话框），子代理自弹只会落子会话而用户不在那里。
+      // 访谈发布边沿（统一问答路由，用户迭代 2026-09-08）：与 eteams_ask_user
+      // 同一套判定（runtime/askUser）——presence 命中构建子会话 → popSelf:true
+      // 就地弹；否则严格转交构建父（主对话）弹出并落统一问答单（ask_questions，
+      // 答案经 eteams_ask_answer 桥接回收 + wakeBuilderChild 唤醒）。发布即返回：
+      // 子代理结束回合等唤醒，不再 eteams_build_wait 停驻（回合边界才消费排队
+      // 消息，停驻会把 followup 饿死在队列里——用户实测 45 分钟无唤醒的根因）。
       // 只对构建子代理调用者生效（其它调用者不判、返回不带 popSelf 字段）；
-      // 同题复发（重启代理后重新发布相同问题）不重复中转——作答入口是已
-      // 中转弹窗或面板，去重优先于就地补弹（避免双弹，先提交者胜）。
+      // 同题复发（重启代理后重新发布相同问题）不重复中转——同会话已有同题
+      // pending 问答单时直接跳过（作答入口是已中转弹窗或面板，先提交者胜）。
       const buildCaller =
         exec.agent !== undefined && session.builderChildId === String(exec.agent.id);
       let popSelf: boolean | undefined;
+      const interview = session.interview;
       if (
         buildCaller &&
-        session.interview !== undefined &&
-        session.interview.answers === undefined &&
-        session.interview.popFailed !== true
+        interview !== undefined &&
+        interview.answers === undefined &&
+        interview.popFailed !== true
       ) {
-        const sameQuestions =
-          beforeReport?.interview?.questions !== undefined &&
-          JSON.stringify(session.interview.questions) ===
-            JSON.stringify(beforeReport.interview.questions);
-        if (sameQuestions) {
+        const askingSessionId = String(exec.agent!.id);
+        const samePending = readPendingAsksBySessionSync(root, askingSessionId).some(
+          (r) => JSON.stringify(r.questions) === JSON.stringify(interview.questions),
+        );
+        // routed 痕迹去重覆盖 self 路径（就地弹不留问答单）的同题复发；
+        // pending 问答单去重覆盖转交路径的同题复发。
+        const sameRouted =
+          beforeReport?.interview?.routed === true &&
+          beforeReport.interview.answers === undefined &&
+          JSON.stringify(interview.questions) === JSON.stringify(beforeReport.interview.questions);
+        if (samePending || sameRouted) {
           popSelf = false;
         } else {
-          const agents = (env.ctx as unknown as RuntimeContext).agents;
-          const parentSessionId = readBuildParentSession(root);
-          const targetChildId = readBuildPresence(root, 15_000)?.sessionId ?? '';
-          // 19.21 中转全文（成员投递与父中转共用一份）。
-          const relayBlocks = [
-            {
-              type: 'text' as const,
-              text: interviewSteerText(
-                session.step,
-                session.request,
-                session.interview.questions,
-              ),
-            },
-          ];
-          // 在册成员会话才向成员对话框投递（构建父/过期/无关会话不走成员
-          // 投递，不向陌生会话投递）；自守卫：presence 指向自己也不投。
-          const member =
-            targetChildId !== '' &&
-            targetChildId !== parentSessionId &&
-            targetChildId !== String(exec.agent.id)
-              ? lookupMemberSession(targetChildId)
-              : undefined;
-          if (targetChildId === String(exec.agent.id)) {
-            // 用户正看着构建子会话对话框：就地自弹（popSelf 语义成立）。
-            popSelf = true;
-          } else if (member !== undefined) {
-            const live = agents?.get(targetChildId);
-            if (live !== undefined) {
-              // 活成员代理：直接 steer（弹窗落在用户眼前的成员对话）。
-              try {
-                live.steer(
-                  createUserMessage({
-                    content: relayBlocks,
-                    source: {
-                      kind: 'plugin',
-                      plugin: 'dsh-eteams',
-                      form: 'notice',
-                      summary: '意图访谈——请在本对话作答',
-                    },
-                  }),
-                );
-                popSelf = false;
-              } catch (error) {
-                env.ctx.logger.warn(
-                  `eteams: interview relay to member failed: ${
-                    error instanceof Error ? error.message : String(error)
-                  }`,
-                );
-                popSelf = true;
-              }
-            } else {
-              // 闲置成员对话框（激活空闲已 dispose，ctx.agents 查不到——
-              // 用户反馈的确切场景）：经成员的真实直接父（领队主会话）冷恢复
-              // 投递。parent 必须是真实直接父（运行时按 lineage 授权，错父
-              // 会把成员子会话改挂到错误拓扑下）；投递失败回主对话快路径。
-              const leaderAgent =
-                member.parentSessionId !== ''
-                  ? agents?.get(member.parentSessionId)
-                  : undefined;
-              const followup = (env.ctx as unknown as RuntimeContext).subagents?.followup;
-              if (leaderAgent === undefined || followup === undefined) {
-                popSelf = true;
-              } else {
-                try {
-                  await followup(
-                    leaderAgent,
-                    targetChildId as unknown as SessionId,
-                    relayBlocks,
-                    {
-                      source: { kind: 'plugin' as const, plugin: 'dsh-eteams' },
-                      signal: new AbortController().signal,
-                    },
-                  );
-                  popSelf = false;
-                } catch (error) {
-                  env.ctx.logger.warn(
-                    `eteams: interview cold-resume relay to member failed: ${
-                      error instanceof Error ? error.message : String(error)
-                    }`,
-                  );
-                  popSelf = true;
-                }
-              }
-            }
-          } else {
-            // 用户不在子会话（presence 指向构建父/过期/缺席/无关会话）：问题改由构建父（主对话领队）提问——
-            // 弹窗落在提问者的对话框，父弹即落主对话；父离线/侧车缺失/steer 失败 → popSelf:true 降级回子代理自弹。
-            const parentAgent =
-              parentSessionId !== null ? agents?.get(parentSessionId) : undefined;
-            if (parentAgent === undefined || parentAgent.id === exec.agent.id) {
-              popSelf = true;
-            } else {
-              try {
-                parentAgent.steer(
-                  createUserMessage({
-                    content: relayBlocks,
-                    source: {
-                      kind: 'plugin',
-                      plugin: 'dsh-eteams',
-                      form: 'notice',
-                      summary: '意图访谈——请在本对话作答',
-                    },
-                  }),
-                );
-                popSelf = false;
-              } catch (error) {
-                env.ctx.logger.warn(
-                  `eteams: interview relay to parent failed: ${
-                    error instanceof Error ? error.message : String(error)
-                  }`,
-                );
-                popSelf = true;
-              }
-            }
+          const published = await publishBuilderAsk(env, {
+            askingSessionId,
+            askingName: '角色构建师',
+            parentSessionId: readBuildParentSession(root) ?? '',
+            questions: interview.questions,
+          });
+          // self=就地弹；degraded（无父侧车/投递失败）→ 就地弹兜底（弹窗再
+          // 被拒走 popFailed 补转）；relayed=已转交，子代理结束回合等唤醒。
+          popSelf = published.outcome !== 'relayed';
+          if (published.outcome !== 'degraded') {
+            await markInterviewRouted(root, true);
           }
         }
       }
@@ -704,7 +590,7 @@ export function createCaptainTools(
   const buildWaitTool = defineTool({
     name: 'eteams_build_wait',
     description:
-      '停驻等待（docs/19.17.1，持续构建子代理专用）：阻塞轮询构建会话文件，直到确认入库/放弃/访谈答案落盘/宿主唤醒标记/新覆写使会话变化，或到达最长等待；会话已终态（confirmed/cancelled）即时返回（changed=true），缺失则报错。等待用户动作期间用它保持回合开启（回合收束会向主对话投递结算通知，属噪音行）。返回 changed=false（纯超时）时再次调用即续驻；changed=true 时按状态与提示词停驻决策表决定去留（终态或非终态都静默结束回合让位给排队的续聊指令）。',
+      '停驻等待（遗留停驻原语）：阻塞轮询构建会话文件直到会话变化或超时。注意：访谈问答已改为「发布即结束回合等宿主唤醒」——正常构建流程不要调用本工具等答案（回合边界才消费排队消息，停驻会把唤醒饿死在队列里）；仅用于诊断/特殊场景的受控停驻。会话已终态（confirmed/cancelled）即时返回（changed=true），缺失则报错。',
     parameters: {
       maxWaitSeconds: int('最长等待秒数（缺省 1800，钳制 10-3600）'),
     },
@@ -869,6 +755,21 @@ export function createCaptainTools(
         );
       }
       const session = await answerBuildInterview(root, answers);
+      // 同步统一问答单（v11）：该访谈若经统一路由落了 ask_questions 行，一并
+      // 回收——面板「待问答」徽标不再悬挂；已被 eteams_ask_answer 先回收时
+      // 静默跳过（构建桥接/面板路由/对话工具三入口幂等，先提交者胜）。
+      try {
+        const pendingRow = readPendingAsksBySessionSync(root, session.builderChildId ?? '').at(-1);
+        if (pendingRow !== undefined) {
+          answerAskSync(
+            root,
+            pendingRow.askId,
+            answers.map((a) => ({ id: a.id, selected: a.choice })),
+          );
+        }
+      } catch {
+        // 已答过/无问答单（旧会话/面板旧路径）：忽略。
+      }
       // 唤醒同一持续构建子代理续聊（parent=侧车定位的构建父；followup 失败
       // 会冷恢复重建，见 builderPhases.wakeBuilderChild；同轮答案双入口竞态
       // 由会话落盘的 builderWakeKey 去重）。fire-and-forget：返回值不阻塞

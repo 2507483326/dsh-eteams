@@ -45,14 +45,15 @@ export const NAV_ITEMS: readonly NavItem[] = [
 export const NAV_FALLBACK: NavId = 'board';
 
 /**
- * 角色详情页头副注两态（M2 查表，44.2.2）：领队 / 系统保留——原 membersTab
- * 详情页头的嵌套三元文案收编；键由消费位按 (isLeader, nameLocked) 计算后
- * 查表（三元只算键名，21.5.1 同纪律）。「编辑中」副注随页头简介输入框
- * 上线撤除（用户迭代 2026-09-06）。
+ * 角色详情页头副注三态（M2 查表，44.2.2）：领队 / 主对话注入 / 系统保留
+ * ——原 membersTab 详情页头的嵌套三元文案收编；键由消费位按 (isLeader,
+ * isRoot, nameLocked) 计算后查表（三元只算键名，21.5.1 同纪律）。「编辑中」
+ * 副注随页头简介输入框上线撤除（用户迭代 2026-09-06）。
  */
-export type RosterDetailSubtitleKey = 'leader' | 'protected';
+export type RosterDetailSubtitleKey = 'leader' | 'root' | 'protected';
 export const ROSTER_DETAIL_SUBTITLE_META: Record<RosterDetailSubtitleKey, string> = {
   leader: '领队 · 手册与头像可编辑，名称为系统保留',
+  root: '主对话注入角色 · 手册注入主对话 system，不能加入团队',
   protected: '系统保留角色 · 名称不可改，其余可编辑',
 };
 

@@ -35,7 +35,6 @@ import {
 import { catalogRow, useModelCatalog } from '../../lib/modelCatalog';
 import { cn } from '../../lib/cn';
 import { errorMessageOf } from '../../lib/errors';
-import { BackBar } from '../../components/backBar';
 import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
 import { AddMembersDialog } from './addMembersDialog';
@@ -318,19 +317,13 @@ export function TeamDetailPage({
     // 不再纵滚（列表页满高纪律 docs/41 同链）。
     <div className="flex min-h-0 flex-1 flex-col">
       {/* 团队页头（S24-2，官网 h2 签名）：「＋ 新增团队」按钮撤（用户迭代
-      2026-09-07）——创建只从团队列表页进，页头只留标题。 */}
-      <PageHeader label="团队" />
+      2026-09-07）——创建只从团队列表页进，页头只留标题。返回钮（用户迭代
+      2026-09-08：页面返回统一收口 PageHeader onBack 槽，页头行最右图标钮——
+      原 BackBar 文案钮随拆页瞬态一并撤，navigate 回列表即可）。「任务 X/Y
+      完成」撤（用户迭代 2026-09-07——进度在任务页看）。 */}
+      <PageHeader label="团队" onBack={() => navigate('/team')} />
 
-      {/* 返回条（M7-3 收口 components/backBar，outline 默认档；原返回钮清
-      detailId/detailError/memberDetail 三态——拆页后瞬态随页面卸载即清，
-      navigate 回列表即可）。「任务 X/Y 完成」撤（用户迭代 2026-09-07——
-      进度在任务页看）。 */}
-      <div className="flex flex-wrap items-center gap-1.5">
-        <BackBar label="返回团队列表" onClick={() => navigate('/team')} />
-        <span className="text-lg font-semibold tracking-tight text-foreground">
-          {detailTeam.name}
-        </span>
-      </div>
+      <div className="text-lg font-semibold tracking-tight text-foreground">{detailTeam.name}</div>
 
       {/* 团队成员卡（S13/S14）：容器 shadcn Card（PANEL_CARD_CLASS 覆盖层，
       S12 先例）纵 flex 拉满（用户迭代 2026-09-07 内滚链，见根注记）；右上
@@ -338,7 +331,10 @@ export function TeamDetailPage({
       成员卡点击进成员详情（原 memberDetail 态改路由，M4 拆页）。 */}
       <Card className={cn(PANEL_CARD_CLASS, 'mt-2 flex min-h-0 flex-1 flex-col')}>
         <div className="mb-2.5 flex items-center gap-2">
-          <h3 className={LIST_TITLE_CLASS}>团队成员</h3>
+          {/* 计数紧贴标题靠左（用户迭代 2026-09-07「8/20 人的提示改到靠左
+          显示而不是居中」）：LIST_TITLE_CLASS 自带 flex-1 会把计数挤向右，
+          本页就地 flex-none 覆盖（共享常量不动）。 */}
+          <h3 className={cn(LIST_TITLE_CLASS, 'flex-none')}>团队成员</h3>
           <span className={LIST_COUNT_CLASS}>
             {detailTeam.members.length + (detailTeam.leaderRemoved ? 0 : 1)}/{memberCap} 人
           </span>

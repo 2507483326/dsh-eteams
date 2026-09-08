@@ -28,6 +28,9 @@ export interface RosterMember {
   avatar?: { seed: number; salt: number };
   /** Full Markdown role playbook (agency-agents-zh style). */
   personaMd?: string;
+  /** 主对话注入角色（v12 roles.is_root）：保留角色 system=1；手册注入主对话
+   * system 提示词，不能加入团队。 */
+  isRoot?: boolean;
   updatedAt: number;
 }
 

@@ -27,7 +27,7 @@ import { Avatar } from '../../features/avatar/avatar';
 import { FormDialog, FormFooterActions } from '../../components/formDialog';
 import { Button } from '../../components/ui/button';
 import { FormErrorNote } from '../shared/components';
-import { BORDER_L1_CLASS, LEADER_NAME, MUTED_CLASS, ROLE_BUILDER_NAME } from '../shared/styles';
+import { BORDER_L1_CLASS, LEADER_NAME, LIST_COUNT_CLASS, MUTED_CLASS, ROLE_BUILDER_NAME } from '../shared/styles';
 
 /** ================================== 类型 ================================== */
 
@@ -129,7 +129,11 @@ export function AddMembersDialog({
   const totalDelta = cart.reduce((n, c) => n + c.delta, 0);
   const leaderTaken = leaderPicked ? 1 : 0;
   const left = Math.max(0, memberCap - occupied - totalDelta - leaderTaken);
-  const menu = roster.filter((m) => m.name !== LEADER_NAME && m.name !== ROLE_BUILDER_NAME);
+  // 主对话注入角色（v12）不进选择菜单：system 的手册是主对话注入原文，
+  // 不是团队成员（host 侧 addMember 亦硬拒，双保险）。
+  const menu = roster.filter(
+    (m) => m.name !== LEADER_NAME && m.name !== ROLE_BUILDER_NAME && m.isRoot !== true,
+  );
 
   /** 该角色在团的成员行（同名 + -N 后缀副本，与出单命名同一约定）。 */
   const roleMembersOf = (roleName: string): MemberView[] =>
@@ -309,6 +313,14 @@ export function AddMembersDialog({
       {error !== null && <FormErrorNote>{error}</FormErrorNote>}
 
       <FormFooterActions
+        className="justify-between gap-2"
+        left={
+          // 名册计数（用户迭代 2026-09-07「还是要有 12人/20人显示出来」）：
+          // 在团人数 + 本次增减（加回领队计入）= 确认后的团队规模。
+          <span className={LIST_COUNT_CLASS}>
+            {occupied + totalDelta + leaderTaken}人/{memberCap}人
+          </span>
+        }
         cancelDisabled={busy}
         confirmDisabled={busy || (totalDelta === 0 && !leaderPicked)}
         confirmLabel="选择成员"

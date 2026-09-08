@@ -1,6 +1,7 @@
 /**
  * 任务详情页（docs/44 M3 自 tasksTab 拆出，行为零变更）：路由 /tasks/:taskId
- * ——返回条 + 头部卡（taskHeaderCard）+ 编排。:taskId 路由参数即选中的任务
+ * ——头部卡（taskHeaderCard）+ 编排（返回钮统一走壳层页头 onBack 槽，用户
+ * 迭代 2026-09-08）。:taskId 路由参数即选中的任务
  * id（语义 = 原 ui model drawerTaskId「详情页选中的任务 id」，八轮 DA21
  * 用户拍板「将任务做成任务详情页面和任务列表页面，点击到详情再编排整个
  * 任务」；store 持久层回写由 routes.tsx 的 location sync 承担——ui model
@@ -44,7 +45,6 @@ import {
   executionOrderOf,
 } from '../../features/tasks/taskAssignCore';
 import { groupDisplayOf, isGroupStartable, isStartable } from '../../features/tasks/taskDisplayStatus';
-import { BackBar } from '../../components/backBar';
 import { FormFooterActions } from '../../components/formDialog';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -78,7 +78,7 @@ export interface TaskDetailPageProps {
 
 /**
  * 任务详情页（原 tasksTab 详情两分支收编，编辑态/编排瞬态随页）：
- * - 主任务（group）详情 = **整个任务的编排面**：返回条 + 头部卡 + 新增小
+ * - 主任务（group）详情 = **整个任务的编排面**：头部卡 + 新增小
  *   任务 + 小任务卡片全套（执行序号/卡槽 TaskAssignDropBox/拖拽调执行顺序/
  *   修改删除）+ 成员罗列条（单条）；
  * - 任务/小任务详情 = 头部卡（含小任务的修改/删除）+ 挂靠行 + 详情正文
@@ -332,11 +332,10 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
     return null;
   }
 
-  // 返回列表条（详情页顶部；ArrowLeft + 可点击文字）。M3 拆页：原
-  // setSelectedTaskId(null) 改导航——drawerTaskId 由 routes.tsx 的
-  // location sync 回写（持久层终态与拆页前逐位一致）。（M7-3 收口
-  // components/backBar 文字钮档——裸 button + 大一号图标原样。）
-  const backBar = <BackBar variant="text" label="返回列表" onClick={() => navigate('/tasks')} />;
+  // 返回钮走壳层页头 onBack（用户迭代 2026-09-08：页面返回统一收口
+  // PageHeader onBack 槽，页头行最右图标钮）——原页顶文字返回条撤。M3 拆页：
+  // 导航回 /tasks——drawerTaskId 由 routes.tsx 的 location sync 回写（持久
+  // 层终态与拆页前逐位一致）。
   // 详情页成员罗列条（八轮 DA21：编排收进详情，罗列条随编排走——仅
   // 存在可放置任务（draft/ready）时渲染，作为卡槽的拖拽源）。二十四轮
   // DA37：指派提示拆出 StripAssignHint（与罗列条同判据另行渲染）。
@@ -395,8 +394,8 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
     />
   );
 
-  // ---- 主任务（group）详情页 = 整个任务的编排面（八轮 DA21）：返回条 +
-  // 头部卡 + 新增小任务 + 小任务卡片全套（执行序号/卡槽/把手拖拽调序（十轮
+  // ---- 主任务（group）详情页 = 整个任务的编排面（八轮 DA21）：头部卡 +
+  // 新增小任务 + 小任务卡片全套（执行序号/卡槽/把手拖拽调序（十轮
   // DA23）/改删）+ 成员罗列条。二十五轮 DA38：小任务卡点击 → 小任务详情页
   // 的口径撤除（用户拍板「小任务不需要再点击进入任务详情了」）；主任务卡
   // 加整体「开始」按钮（见下任务列表标题行）。
@@ -427,7 +426,6 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
     return (
       <TaskDndProvider>
         <div>
-          {backBar}
           {/* 二十轮 DA33：头部卡收三件（用户拍板「把团队成员放到上面去和
             任务标题放一起」）——①进度行改**任务卡片同款三计数**（共 x 个
             任务，已完成 x，未完成 x，数字着色 success/warning；原「· 小任务
@@ -615,7 +613,7 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
     );
   }
 
-  // ---- 任务/小任务详情页（八轮 DA21）：返回条 + 头部卡（小任务含修改/
+  // ---- 任务/小任务详情页（八轮 DA21）：头部卡（小任务含修改/
   // 删除）+ 挂靠行 + 详情正文（合同/时间线）+ 卡槽（小任务可拖拽指派）+
   // 站点行 + 依赖 chips + 成员罗列条。二十八轮 DA41：头部卡右端加「编辑」
   // 钮 + 就地编辑器（editor 槽，编辑时静态主题隐藏由 Input 承担）；按钮行
@@ -638,7 +636,6 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
   return (
     <TaskDndProvider>
       <div>
-        {backBar}
         <TaskHeaderCard
           task={selected}
           actions={

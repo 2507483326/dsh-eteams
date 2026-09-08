@@ -61,7 +61,7 @@ import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/clie
 // lucide 深层图标导入（dialog.tsx 先例：深层 .mjs 只进用到的图标）。
 import { activateETeamsTab, stageTeamSignals, teamsTabVisible } from '../lib/bridge';
 import { errorMessageOf } from '../lib/errors';
-import { BackBar } from '../components/backBar';
+import { BackButton } from '../components/backButton';
 import { ClientErrorBoundary, recordClientDiag } from '../lib/diagnostics';
 import { ETeamsView } from '../pages/teamsView/index';
 import { HERO_ROW_SELECTOR } from './heroTeamsButton';
@@ -223,12 +223,12 @@ function TeamsOverlay({ onClose }: { onClose: () => void }): ReactNode {
           style={{ left: pane.left, top: pane.top, width: pane.width, height: pane.height }}
         >
           {/* 官网顶栏（S24-2）：--border 细线 + 白底条；左标题（官网条内
-            14px semibold 签名）+ 右 ghost 返回钮（lucide ArrowLeft）。 */}
+            14px semibold 签名）+ 最右返回钮（用户迭代 2026-09-08：页面返回
+            统一收口 components/backButton 图标钮——原 ghost 文案钮撤文字，
+            位置保持顶栏右端不变）。 */}
           <header className={OVERLAY_HEADER_CLASS}>
             <span className="text-sm font-semibold text-foreground">团队</span>
-            {/* 返回条（M7-3 收口 components/backBar，ghost 档 + text-sm 拉正
-            字号原位透传）。 */}
-            <BackBar variant="ghost" className="text-sm" label="返回" onClick={onClose} />
+            <BackButton onClick={onClose} />
           </header>
           {/* Plain block wrapper: the view root is `height:100%` + flex row and
         has no width of its own — a block parent lets it fill the pane width

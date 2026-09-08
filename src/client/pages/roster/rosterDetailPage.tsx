@@ -24,7 +24,6 @@ import { ROSTER_DETAIL_SUBTITLE_META } from '../../lib/status';
 import { MdEditor } from '../../features/mdEditor/mdEditor';
 import { Avatar } from '../../features/avatar/avatar';
 import { RandomAvatarButton, rollAvatarPair } from '../../components/avatarRing';
-import { BackBar } from '../../components/backBar';
 import { FormFooterActions } from '../../components/formDialog';
 import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
@@ -55,6 +54,12 @@ export interface RosterDetailPageProps {
 }
 
 /** ================================== 主组件 ================================== */
+
+/** 详情手册文本（v12）：主对话注入角色用原文（注入内容逐字等于编辑文本），
+ * 普通角色走 handbookSeed 脚手架兜底——isRoot 不兜底，空文保持空。 */
+function detailHandbookText(detail: RosterMember): string {
+  return detail.isRoot === true ? (detail.personaMd ?? '') : handbookSeed(detail);
+}
 
 /**
  * 角色详情：页头卡（头像环 + 名称/副注 + 编辑/保存/取消）+ 手册卡（编辑器/
@@ -95,7 +100,7 @@ export function RosterDetailPage({ members, team, onDeleted }: RosterDetailPageP
     setDetailDraftName(detail.name);
     setDetailDraftProfile(detail.profile ?? '');
     setDetailDraftAvatar(detail.avatar ?? null);
-    setDetailDraftMd(handbookSeed(detail));
+    setDetailDraftMd(detailHandbookText(detail));
     setDetailError(null);
     setDetailEditing(true);
   };
@@ -186,10 +191,11 @@ export function RosterDetailPage({ members, team, onDeleted }: RosterDetailPageP
   return (
     // 版式：详情列不再限宽（用户要求解除固定宽度），面板全宽利用
     <div>
-      {/* 返回条（M7-3 收口 components/backBar，outline 默认档）：编辑中返回
-      列表即丢弃草稿（原 cancelDetailEdit 收尾——页面卸载即弃，无需显式清）。 */}
-      <BackBar label="返回角色列表" onClick={() => navigate('/roster')} />
-      <Card className={cn(PANEL_CARD_CLASS, 'mt-2')}>
+      {/* 返回钮走壳层页头 onBack（用户迭代 2026-09-08：页面返回统一收口
+      PageHeader onBack 槽，页头行最右图标钮）——原 BackBar 文案钮撤：编辑中
+      返回列表即丢弃草稿（原 cancelDetailEdit 收尾——页面卸载即弃，无需显
+      式清），导航语义不变。 */}
+      <Card className={cn(PANEL_CARD_CLASS)}>
         <div className="flex items-center gap-3.5">
           {/* 头像（描边环已撤——用户迭代 2026-09-07，描边统一走 Avatar
           默认 1px 深灰框、白底、无间隔）；编辑态头像下挂「随机头像」钮
@@ -232,7 +238,9 @@ export function RosterDetailPage({ members, team, onDeleted }: RosterDetailPageP
               <>
                 {(isLeader || nameLocked) && (
                   <div className={cn(MUTED_CLASS, 'mt-0.5')}>
-                    {ROSTER_DETAIL_SUBTITLE_META[isLeader ? 'leader' : 'protected']}
+                    {ROSTER_DETAIL_SUBTITLE_META[
+                      isLeader ? 'leader' : detail.isRoot === true ? 'root' : 'protected'
+                    ]}
                   </div>
                 )}
                 {detail.profile !== undefined && detail.profile.trim() !== '' && (
@@ -273,10 +281,15 @@ export function RosterDetailPage({ members, team, onDeleted }: RosterDetailPageP
         <div className={cn(SECTION_TITLE_CLASS, 'flex items-center gap-2')}>
           <span>角色手册（Markdown）</span>
         </div>
+        {detail.isRoot === true && (
+          <div className={cn(MUTED_CLASS, 'mb-2 text-sm')}>
+            这是注入主对话的特殊角色：保存的手册(MD)会注入主对话窗口的 system 提示词；该角色不能加入团队。
+          </div>
+        )}
         {detailEditing ? (
           <MdEditor value={detailDraftMd} onChange={setDetailDraftMd} minHeight={220} />
         ) : (
-          <MarkdownDoc text={handbookSeed(detail)} />
+          <MarkdownDoc text={detailHandbookText(detail)} />
         )}
       </Card>
       {team !== undefined && detailMemberView !== null && (
