@@ -180,11 +180,13 @@ export const ROLE_LIST_CSS = `
 
 /** ================================== 工具函数 ================================== */
 
-/** Sort rank: leader first, role builder second, everyone else after. */
+/** Sort rank: 主对话注入角色 system first（用户迭代 2026-09-08「把 system
+ * 排到第一个去」），leader second, role builder third, everyone else after. */
 export function memberRank(name: string): number {
-  if (name === LEADER_NAME) return 0;
-  if (name === ROLE_BUILDER_NAME) return 1;
-  return 2;
+  if (name === ROOT_ROLE_NAME) return 0;
+  if (name === LEADER_NAME) return 1;
+  if (name === ROLE_BUILDER_NAME) return 2;
+  return 3;
 }
 
 /** tone 徽标族的类名组装（模块级纯函数，调用时点在渲染期）：pillClass 拼
