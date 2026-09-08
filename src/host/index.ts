@@ -333,8 +333,9 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
   // is_root 保留角色「system」的手册(MD)注入主对话窗口的 system 提示词。
   // 主对话判定与子代理过滤（领队/成员/构建器）在 runtime/rootPrompt.ts；
   // MD 默认空 → '' 空段贡献语义（不注入）。每次装配现读 roles 表——面板
-  // 保存即热生效，无需重启。双通道注册同 3b2/3b3 先例（whichever channel
-  // a given composition renders, the injection survives）。
+  // 保存即热生效，无需重启。只走 system section 单通道（用户拍板 2026-09-08
+  // 「不走上下文了，只走 system 本体」——不复制 3b2/3b3 的 context 快照
+  // 通道，MD 只进 system 提示词本体）。
   try {
     ctx.systemPrompt.section({
       name: 'eteams-root-md',
@@ -344,31 +345,6 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
     log.info('eteams: root md section registered');
   } catch (error) {
     log.warn('eteams: root md section registration failed: %s', String(error));
-  }
-  try {
-    type SystemPromptScope = {
-      systemPrompt: {
-        context(contribution: {
-          name: string;
-          order: number;
-          text: (context: { scope?: unknown }) => string;
-        }): unknown;
-      };
-    };
-    (
-      ctx as unknown as {
-        inject(deps: string[], fn: (scope: SystemPromptScope) => void): void;
-      }
-    ).inject(['systemPrompt'], (scope) => {
-      scope.systemPrompt.context({
-        name: 'eteams-root-md',
-        order: 902, // late in the snapshot: reads last, i.e. freshest
-        text: (context) => rootPromptSection(config, context.scope),
-      });
-      log.info('eteams: root md context registered');
-    });
-  } catch (error) {
-    log.warn('eteams: root md context registration failed: %s', String(error));
   }
 
   // 3c) /eteam slash command (docs/19.4, D18): 命令平面统一注册口——/eteam

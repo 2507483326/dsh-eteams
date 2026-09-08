@@ -17,8 +17,9 @@
  *    the 团队 tab page (full-screen 团队页 while the view ring is not
  *    rendered);
  * 4. the ETeams conversation card — folded from `eteams_create_team`
- *    tool events via the optional `conversationEvents` service (absent
- *    service degrades to tab+button only).
+ *    tool events via the `uiConversation` service (dsh 0.1.2 renamed the
+ *    former `conversationEvents` service; absent service degrades to
+ *    tab+button only).
  *
  * apply() 最先幂等注入 Tailwind 产物样式（`<style data-dsh-eteams-tw>`，
  * tailwind.ts / docs/21 D19a）：先于 diagnostics 与一切槽位注册，保证任何
@@ -49,10 +50,11 @@ import { SessionModelBadge } from './pages/sessionModelBadge';
  * `ctx.<service>` property read against this declaration — touching an
  * undeclared service throws ("service X is not declared by your plugin"),
  * so this list must name every service the client plane touches:
- * `slots` (all registrations), `conversationEvents` (card folding, optional)
- * and `modelDirectories` (session model catalog, optional — 模型选择与对话
- * 一致，用户迭代 2026-09；缺服务的运行时退回静态选项). */
-export const inject = ['slots', 'conversationEvents', 'modelDirectories'];
+ * `slots` (all registrations), `uiConversation` (card folding — dsh 0.1.2
+ * renamed the former `conversationEvents`; fiber 级硬依赖，服务缺失即永不
+ * 激活 → 渲染面 boot 失败) and `modelDirectories` (session model catalog,
+ * optional — 模型选择与对话一致，用户迭代 2026-09；缺服务的运行时退回静态选项). */
+export const inject = ['slots', 'uiConversation', 'modelDirectories'];
 
 /** Run one registration step; a failure is recorded, never fatal. */
 function guard(step: string, run: () => void): void {

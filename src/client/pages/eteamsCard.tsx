@@ -177,14 +177,19 @@ function findTeam(
 
 /**
  * Register the card definition and its chat-node renderer seat. The
- * `conversationEvents` service is optional: when the running client runtime
- * does not provide it, only the card degrades — tab and button stay up.
+ * `uiConversation` service carries the card registry (dsh 0.1.2 renamed the
+ * former `conversationEvents` — dsh-client-ui-conversation's `Service(ctx,
+ * "uiConversation")` exposes `.events.register()` with the same Definition
+ * contract): when the running client runtime does not provide it, only the
+ * card degrades — tab and button stay up.
  * @param ctx - client root context (cordis).
  */
 export function installCard(ctx: Context): void {
   const events = (
-    ctx as unknown as { conversationEvents?: { register: (d: unknown) => () => void } }
-  ).conversationEvents;
+    ctx as unknown as {
+      uiConversation?: { events?: { register: (d: unknown) => () => void } };
+    }
+  ).uiConversation?.events;
   if (typeof events?.register !== 'function') return;
   events.register(eteamsCardDefinition);
   (

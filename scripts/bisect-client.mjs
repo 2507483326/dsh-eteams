@@ -56,9 +56,9 @@ const slots = envelope(
 
 const card = envelope(
   [
-    '\t\texports.inject = ["slots", "conversationEvents"];',
+    '\t\texports.inject = ["slots", "uiConversation"];',
     '\t\texports.apply = function apply(ctx) {',
-    '\t\t\tctx.conversationEvents.register({',
+    '\t\t\tctx.uiConversation.events.register({',
     '\t\t\t\tkind: "eteams", target: "chat",',
     '\t\t\t\tmatch: function (event) { return null; },',
     '\t\t\t\tstart: function () {},',
