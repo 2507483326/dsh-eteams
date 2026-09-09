@@ -89,7 +89,7 @@ lib/                    构建产物（gitignore）：index.js（宿主 CJS）�
 
 ## 项目流程
 
-1. **安装挂载**：`dsh plugin --profile <name> add <本包>` → cordis.patch.yml 把插件行插入 profile bundle → 宿主启动时 `apply()` 装配：领队工具注册在 root 作用域、成员运行时经 `registerContinuableSetup` 在每个子代理作用域注入成员工具、用量计监听 root 事件流、web 面懒绑定（webless profile 自动跳过，不阻塞启动）。
+1. **安装挂载**：`dsh plugin --profile <name> add <本包>` → cordis.patch.yml 把插件行插入 profile bundle → 宿主启动时 `apply()` 装配：领队工具与成员工具都注册在 root 作用域（harness 0.1.2 起 `registerContinuableSetup` 被宿主移除，子代理可见性由 spawn 的 `toolFilter.deny` 收口）、用量计监听 root 事件流、web 面懒绑定（webless profile 自动跳过，不阻塞启动）。
 2. **建队拆解**：用户说「用 AgentTeams 做 X」（或面板「＋ 新增团队」）→ 领队 `eteams_create_team` → 问询补齐 → 拆解为大任务（容器，`parent_id` 为空）与小任务（挂靠父任务，带依赖列表与成员链）→ 等用户批准 → `submit_task` 就绪。
 3. **派发执行**：`eteams_assign_task` 派发 → 成员子代理 `eteams_claim_task` 接活（签发 attempt token）→ 按执行链站点接力：站点完成即通知领队「下一站 + 续派」，`advance_task` 推进游标 → 末站完成任务 completed。成员进度经 `eteams_append_progress` 落 attempt 记录。
 4. **失败与升级**：同成员失败自动重试（`maxRetries` 预算内），换人/重试即作废旧 token；超限任务进 `wait_decision` 并生成决策记录，等领队/用户拍板：挂起（可恢复到阻塞前状态）、换人（reassign）、或通知用户。

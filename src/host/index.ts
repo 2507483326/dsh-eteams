@@ -6,7 +6,7 @@
  * - captain tools (`eteams_create_team … eteams_mailbox`) and member tools
  *   (`eteams_claim_task … eteams_team_status`) with per-caller identity;
  * - continuable member spawning with persona injection and per-child tool
- *   installation (`registerContinuableSetup`), captain tools denied at spawn;
+ *   installation (root-scope member tools since harness 0.1.2), captain tools denied at spawn;
  * - execution chains (D11) with deviation notes, attempt tokens, 完成即续派
  *   notifications, and immediate same-member retry (M1; backoff in M2);
  * - task work documents under `<workspace>/teams/<team-slug>/` (D12).
@@ -29,7 +29,6 @@ import { createCaptainTools } from './tools/captainTools.js';
 import { createCaptainDispatchTool } from './tools/captainDispatch.js';
 import { createAskUserTools } from './tools/askUserTools.js';
 import { createMemberTools } from './tools/memberTools.js';
-import { installMemberRuntime } from './runtime/members.js';
 import { installUsageMeter } from './runtime/usage.js';
 import { installWebSurface, locateTeam } from './runtime/webui.js';
 import { stateRootFor } from './runtime/base.js';
@@ -128,20 +127,16 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
   }
   log.info('eteams: captain tools registered');
 
-  // 2) Member runtime: per-child tool installation + route bookkeeping.
-  installMemberRuntime(
-    ctx as unknown as {
-      logger: { info(m: string): void; warn(m: string): void };
-      subagents?: { registerContinuableSetup(c: (childCtx: Context) => () => void): () => void };
-    },
-    config,
-    (childCtx, _env) => {
-      for (const tool of createMemberTools(config, childCtx as Context)) {
-        (childCtx as unknown as { tools: { register(t: unknown): unknown } }).tools.register(tool);
-      }
-    },
-  );
-  log.info('eteams: member runtime installed');
+  // 2) Member tools: harness 0.1.2 起 registerContinuableSetup（per-child
+  //    工具装配钩子）被宿主移除——成员工具改随根作用域注册，子代理对它们
+  //    的可见性由各 spawn 的 toolFilter deny 收口（领队子代理
+  //    CAPTAIN_CHILD_DENIED_TOOLS、构建器 builderToolFilter、成员默认全见）。
+  //    成员身份授权不变：工具执行体经 resolveCaller 按任务副本行解析，
+  //    非成员调用一律拒绝。
+  for (const tool of createMemberTools(config, ctx)) {
+    ctx.tools.register(tool);
+  }
+  log.info('eteams: member tools registered');
 
   // 2b) Usage meter（docs/28.2.3 方案 A / E18 同型先例）：root-scope firehose
   //     监听 session/event 采集 assistant/message 的 usage，写

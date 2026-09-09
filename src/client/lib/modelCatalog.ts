@@ -94,6 +94,12 @@ export interface ModelCatalogState {
   reload: () => void;
 }
 
+/** 目录加载限时（毫秒，用户迭代 2026-09-08）：宿主逐提供方拉取目录，个别
+ * 提供方挂起时底层 RPC 可能长期不结算——超时按加载失败处理（错误条 + 重试
+ * + 静态回退），不让「正在刷新模型列表」无限常挂。仅放弃等待，不取消底层
+ * RPC（迟到的成功仍写进共享目录 store，下次打开/重试即命中）。 */
+const CATALOG_LOAD_TIMEOUT_MS = 15000;
+
 /** The client root context (structurally probed — the service is optional). */
 let catalogCtx: unknown = null;
 
@@ -135,15 +141,30 @@ function resolverOf(): ResolverFace | null {
 export async function loadModelCatalog(sessionId: string): Promise<ModelCatalog | null> {
   const resolver = resolverOf();
   if (resolver === null) return null;
-  const models = (await resolver.directoryFor(sessionId).load()) as {
-    groups?: unknown;
-    failures?: unknown;
-  };
-  if (!Array.isArray(models?.groups)) return null;
-  return {
-    groups: models.groups as CatalogGroup[],
-    failures: Array.isArray(models.failures) ? (models.failures as CatalogFailure[]) : [],
-  };
+  // 限时等待（见 CATALOG_LOAD_TIMEOUT_MS 注记）：Promise.race 只放弃等待，
+  // 底层 RPC 与共享目录 store 不受影响。
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const models = (await Promise.race([
+      resolver.directoryFor(sessionId).load(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`model catalog load timed out after ${CATALOG_LOAD_TIMEOUT_MS}ms`)),
+          CATALOG_LOAD_TIMEOUT_MS,
+        );
+      }),
+    ])) as {
+      groups?: unknown;
+      failures?: unknown;
+    };
+    if (!Array.isArray(models?.groups)) return null;
+    return {
+      groups: models.groups as CatalogGroup[],
+      failures: Array.isArray(models.failures) ? (models.failures as CatalogFailure[]) : [],
+    };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**

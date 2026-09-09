@@ -27,12 +27,14 @@ import { SessionId } from '@deepseek-ai/dsh-session';
 import { randomUUID } from 'node:crypto';
 import type { ETeamsResolvedConfig } from '../config.js';
 import {
+  deliverToChild,
   ETeamsError,
   sessionDefaultRouteOf,
   stateRootFor,
   stateRootOf,
   type RuntimeEnv,
 } from './base.js';
+import { recordSessionRoute } from './sessionRoutes.js';
 import { insertTaskMemberRow, readTeamSync, withTeamTx } from '../state/store.js';
 import { getDb } from '../state/db.js';
 import { locks, teamLockKey } from '../state/lock.js';
@@ -122,6 +124,16 @@ export const CAPTAIN_CHILD_DENIED_TOOLS: readonly string[] = [
   'eteams_build_dispatch',
   'eteams_build_report',
   'eteams_interview_answer',
+  // 成员工具（harness 0.1.2 起 registerContinuableSetup 被移除，成员工具随
+  // 根作用域注册——领队子代理拒见，守住「领队不干成员的活」的可见性纪律）。
+  // task_board/team_status/send_message 不在列：它们已合并为身份感知单工具
+  // （caller.kind 分支），领队子代理看到的是领队视角。名字与
+  // tools/memberTools 的 createMemberTools 保持同步（tests 有断言）。
+  'eteams_claim_task',
+  'eteams_decline_task',
+  'eteams_append_progress',
+  'eteams_complete_task',
+  'eteams_fail_task',
 ];
 
 /** ================================== 派发核（docs/panelTaskCommission 自 tools/captainDispatch 下沉） ================================== */
@@ -130,9 +142,6 @@ export const CAPTAIN_CHILD_DENIED_TOOLS: readonly string[] = [
 const textTurn = (value: string): { type: 'text'; text: string }[] => [
   { type: 'text', text: value },
 ];
-
-/** 领队子代理 followup 的消息来源（与 notifier 的队长唤醒保持一致）。 */
-const CAPTAIN_SOURCE = { kind: 'plugin' as const, plugin: 'dsh-eteams' };
 
 /**
  * 领队手册缓存 + 插槽（2026-09-08 定案「读团队成员表中的缓存MD，角色新修改
@@ -255,7 +264,11 @@ export async function dispatchCaptainCore(
   signal?: AbortSignal,
 ): Promise<{ ok: boolean; relayed: string }> {
   const subagents = env.ctx.subagents;
-  if (subagents?.startContinuable === undefined || subagents?.followup === undefined) {
+  // 唤醒入口能力探测（harness 0.1.2 起 followup 被 sendMessage 取代）。
+  if (
+    subagents?.startContinuable === undefined ||
+    (subagents?.sendMessage === undefined && subagents?.followup === undefined)
+  ) {
     throw new ETeamsError('子代理服务不可用，无法派发领队子代理');
   }
   const sig = signal ?? new AbortController().signal;
@@ -332,10 +345,7 @@ export async function dispatchCaptainCore(
   if (previous !== '') {
     registerCaptainChild(previous, teamId, root, taskKey);
     try {
-      await subagents.followup(parent, previous as unknown as SessionId, textTurn(prompt), {
-        source: { ...CAPTAIN_SOURCE },
-        signal: sig,
-      });
+      await deliverToChild(subagents, parent, previous as unknown as SessionId, textTurn(prompt), sig);
       return { ok: true, relayed: dispatchAck(previous) };
     } catch {
       unregisterCaptainChild(previous);
@@ -369,6 +379,12 @@ export async function dispatchCaptainCore(
   }
   // 子代理的 eteams_* 调用按该团队领队解析（identity.ts / 跨工作区重指）。
   registerCaptainChild(String(start.childId), teamId, root, taskKey);
+  // 声明路线登记（0.1.2 起 continuable setup hook 被宿主移除——spawn 时直记，
+  // 面板 /session-route 的目录级 model 显示随之可用；空段由 recordSessionRoute 跳过）。
+  recordSessionRoute(String(start.childId), {
+    provider: agentOptions?.provider ?? '',
+    model: agentOptions?.model ?? '',
+  });
   if (String(start.childId) !== previous) {
     await persistReplicaSession(env, team.id, replica.id, String(start.childId));
   }

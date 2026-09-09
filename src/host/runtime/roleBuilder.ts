@@ -7,7 +7,7 @@
  *
  * @module dsh-eteams/runtime/roleBuilder
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { atomicWriteText } from '../state/store.js';
 import { avatarSeedFor, upsertRosterMember } from './roster.js';
@@ -668,4 +668,31 @@ export async function resumeBuildSession(stateRoot: string): Promise<BuildSessio
 async function writeSession(stateRoot: string, session: BuildSession): Promise<void> {
   const file: BuildFile = { schemaVersion: 1, session };
   await atomicWriteText(roleBuilderFile(stateRoot), `${JSON.stringify(file, null, 2)}\n`);
+}
+
+/**
+ * 诊断用：往当前构建会话的 note 追加一段文字（不改状态机；会话不存在则
+ * 忽略）。桌面宿主的 logger.warn 不落盘——engage 投递结果经它落到
+ * rolebuilder.json,面板卡片可见（2026-09-08 排查「对话视图不出现」）。
+ */
+export function annotateBuildSession(stateRoot: string, text: string): void {
+  const session = readBuildSession(stateRoot);
+  if (session === null) return;
+  const note = `${session.note ?? ''} | ${text}`;
+  void writeSession(stateRoot, { ...session, note, updatedAt: Date.now() }).catch(() => undefined);
+}
+
+/**
+ * engage 投递诊断（独立追加日志,无读改写竞态）:<stateRoot>/logs/engage-diag.log
+ * JSON lines。桌面宿主的 logger.warn 不落盘、构建 note 有覆盖竞态——本文件
+ * 是 engage 投递问题的权威证据通道（2026-09-08 排查「对话视图不出现」）。
+ */
+export function appendEngageDiag(stateRoot: string, entry: Record<string, unknown>): void {
+  try {
+    const dir = join(stateRoot, 'logs');
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(join(dir, 'engage-diag.log'), `${JSON.stringify({ at: Date.now(), ...entry })}\n`);
+  } catch {
+    // 诊断绝不影响主流程
+  }
 }

@@ -1,29 +1,22 @@
 /**
  * Member lifecycle (docs/07.2, FR-14/FR-15): continuable spawning, persona
- * injection, per-child tool installation, and interruption. This is the only
- * module that starts subagents. docs/35 §5#12 之后成员是纯模板行（无状态无
- * 会话）：起会话只读模板行，状态与 session_id 的回填由调用方（首派路径，
- * assignment.ts）随事务写回 task_members 实例行。
+ * injection, and interruption. This is the only module that starts subagents.
+ * docs/35 §5#12 之后成员是纯模板行（无状态无会话）：起会话只读模板行，状态
+ * 与 session_id 的回填由调用方（首派路径，assignment.ts）随事务写回
+ * task_members 实例行。harness 0.1.2 起 registerContinuableSetup 被宿主移除
+ * ——成员工具改随根作用域注册（index.ts），归属/声明路线登记点前移到
+ * spawn 与唤醒。
  *
  * @module dsh-eteams/runtime/members
  */
-import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { SessionId } from '@deepseek-ai/dsh-session';
-import { foldSubagentDescriptor } from '@deepseek-ai/dsh-subagent';
 import { recordSessionRoute } from './sessionRoutes.js';
-import type { ETeamsResolvedConfig } from '../config.js';
 import type { MemberRecord, TaskMemberRecord, TaskRecord, TeamState } from '../model/types.js';
 import { insertMailInTx } from '../state/events.js';
-import { readTeamSync, type TeamTx } from '../state/store.js';
-import {
-  sessionDefaultRouteOf,
-  stateRootOf,
-  type RuntimeContext,
-  type RuntimeEnv,
-} from './base.js';
+import type { TeamTx } from '../state/store.js';
+import { sessionDefaultRouteOf, type RuntimeEnv } from './base.js';
 import { makeMail, memberBoxOf, memberRefId, type Wake, wakeMember } from './notifier.js';
-import { readBuildPresence } from './roleBuilder.js';
 import { assignmentMail } from '../prompts/handoff/mails.js';
 import { memberWelcome } from '../prompts/spawn/member.js';
 import { neutralizeInterpolation } from './sessionPersona.js';
@@ -34,37 +27,27 @@ export const MEMBER_LABEL_PREFIX = 'eteams-member:';
 
 /**
  * `eteams-member:<teamId>:<mainTaskId>:<employeeId>`（v7：标签带任务作用域
- * ——同一成员每个大任务各一套副本行/子会话，setup hook 按 (mainTaskId,
- * employeeId) 定位到精确副本行）。
+ * ——同一成员每个大任务各一套副本行/子会话）。
  */
 export function buildMemberLabel(teamId: string, mainTaskId: number, employeeId: number): string {
   return `${MEMBER_LABEL_PREFIX}${teamId}:${mainTaskId}:${employeeId}`;
 }
 
 /**
- * Inverse of {@link buildMemberLabel}：新格式解析出 (teamId, mainTaskId,
- * employeeId)；旧格式（`…:<memberName>`，升级前的存量子会话）退 memberName。
+ * Member tool names（createMemberTools 的注册面）。harness 0.1.2 起成员工具
+ * 随根作用域注册（宿主移除了 registerContinuableSetup，per-child 装配只剩
+ * persona/toolFilter）——领队子代理的拒见清单（CAPTAIN_CHILD_DENIED_TOOLS）
+ * 与构建器子代理的过滤（builderToolFilter）按本表派生。task_board/
+ * team_status/send_message 的成员视角已并入 captainTools 同名工具（身份分
+ * 支），不在本表。与 tools/memberTools 保持同步（tests 有断言）。
  */
-export function parseMemberLabel(
-  label: string | undefined,
-): { teamId: string; mainTaskId: number; employeeId: number; memberName?: string } | undefined {
-  if (!label || !label.startsWith(MEMBER_LABEL_PREFIX)) return undefined;
-  const rest = label.slice(MEMBER_LABEL_PREFIX.length);
-  const parts = rest.split(':');
-  if (parts.length === 3) {
-    const [teamId, mainTaskId, employeeId] = parts as [string, string, string];
-    const taskNum = Number.parseInt(mainTaskId, 10);
-    const empNum = Number.parseInt(employeeId, 10);
-    if (teamId === '' || !Number.isFinite(taskNum) || !Number.isFinite(empNum)) return undefined;
-    return { teamId, mainTaskId: taskNum, employeeId: empNum };
-  }
-  if (parts.length === 2) {
-    const [teamId, memberName] = parts as [string, string];
-    if (teamId === '' || memberName === '') return undefined;
-    return { teamId, mainTaskId: -1, employeeId: -1, memberName };
-  }
-  return undefined;
-}
+export const MEMBER_TOOL_NAMES: readonly string[] = [
+  'eteams_claim_task',
+  'eteams_decline_task',
+  'eteams_append_progress',
+  'eteams_complete_task',
+  'eteams_fail_task',
+];
 
 /**
  * Captain tool names denied to members (one visibility, loud deny).
@@ -136,38 +119,47 @@ export async function spawnMember(
       : (persona?.executionPrompt ?? `你是「${row.name}」，以团队成员身份为团队交付。`),
   );
   const route = template?.modelRoute;
+  // 路线解析（模板覆盖 / 会话默认）提取成变量：spawn 成功后随归属注册表与
+  // 声明路线登记表一并落账（harness 0.1.2 起 continuable setup hook 被宿主
+  // 移除，登记点前移到 spawn；冷恢复会话的归属随唤醒补齐）。
+  const agentOptions =
+    route !== undefined && route.model !== ''
+      ? {
+          // v9 provider 回归：覆盖路线带目录 provider（同 id 模型跨提供方
+          // 消歧）；旧数据未记录时省略——运行时按会话默认解析（此前填
+          // config.memberProvider 是 'spawn'/'fork' 传输名，不是 LLM
+          // provider，实测 2026-09-08 修复）。
+          ...(route.provider !== undefined && route.provider !== ''
+            ? { provider: route.provider }
+            : {}),
+          model: route.model,
+          ...(route.reasoningEffort ? { reasoningEffort: route.reasoningEffort } : {}),
+        }
+      : sessionDefaultRouteOf(env.ctx);
   const start = await env.ctx.subagents.startContinuable({
     provider: env.config.memberProvider,
-    // v7 标签带任务作用域：副本行 = (工号, 大任务)，setup hook 据此精确定位。
+    // v7 标签带任务作用域：副本行 = (工号, 大任务)，各是各的子会话。
     label: buildMemberLabel(String(team.id), row.mainTaskId ?? 0, row.employeeId ?? 0),
     request: {
       prompt: [{ type: 'text', text: memberWelcome(team, row.name, template) }],
       parent: captain,
       persona: personaText,
       toolFilter: { deny: [...MEMBER_DENIED_TOOLS] },
-      ...(route !== undefined && route.model !== ''
-        ? {
-            agentOptions: {
-              // v9 provider 回归：覆盖路线带目录 provider（同 id 模型跨提供方
-              // 消歧）；旧数据未记录时省略 provider——运行时按会话默认解析
-              // （此前填 config.memberProvider 是 'spawn'/'fork' 传输名，不是
-              // LLM provider，实测 2026-09-08 修复）。
-              ...(route.provider !== undefined && route.provider !== ''
-                ? { provider: route.provider }
-                : {}),
-              model: route.model,
-              ...(route.reasoningEffort ? { reasoningEffort: route.reasoningEffort } : {}),
-            },
-          }
-        : sessionDefaultRouteOf(env.ctx) !== undefined
-          ? {
-              // 会话默认（用户迭代 2026-09-04）：宿主 agent-default-model
-              // 即时快照——provider/model/reasoningEffort 都是真实路线值。
-              agentOptions: sessionDefaultRouteOf(env.ctx),
-            }
-          : {}),
+      ...(agentOptions !== undefined ? { agentOptions } : {}),
     },
-    signal: env.signal,
+    // 0.1.2 的入口对 signal 无保护调用 throwIfAborted()——env 缺 signal
+    // （面板路径）时兜底成永不中止的信号。
+    signal: env.signal ?? new AbortController().signal,
+  });
+  registerMemberSession(String(start.childId), {
+    teamId: String(team.id),
+    memberName: row.name,
+    employeeId: row.employeeId,
+    parentSessionId: String(captain.id),
+  });
+  recordSessionRoute(String(start.childId), {
+    provider: agentOptions?.provider ?? '',
+    model: agentOptions?.model ?? '',
   });
   return String(start.childId);
 }
@@ -238,87 +230,4 @@ export function sendAssignmentInTx(
     box.employeeId,
   );
   return () => wakeMember(env, team, row, content);
-}
-
-/**
- * Install the per-child member runtime: identifies eteams member children
- * by their descriptor label, verifies the durable team record, and registers
- * the member tool face into the child scope (captain tools stay denied via
- * the spawn toolFilter). Safe on non-member children (no-op contribution).
- */
-export function installMemberRuntime(
-  hostCtx: { logger: RuntimeLogger2; subagents?: SubagentInstallFace },
-  config: ETeamsResolvedConfig,
-  registerMemberTools: (childCtx: Context, env: RuntimeEnv) => void,
-): void {
-  const subagents = hostCtx.subagents;
-  if (!subagents?.registerContinuableSetup) {
-    hostCtx.logger.warn(
-      'eteams: subagents service unavailable; member tools will not be installed',
-    );
-    return;
-  }
-  subagents.registerContinuableSetup((childCtx: Context) => {
-    const child = (childCtx as unknown as { agent?: Agent }).agent;
-    if (!child) return () => undefined;
-    const seedLength =
-      (child.session?.header as { seedLength?: number } | undefined)?.seedLength ?? 0;
-    const suffix = child.session?.events?.slice(seedLength) ?? [];
-    const descriptor = foldSubagentDescriptor(suffix);
-    if (descriptor?.mode !== 'continuable') return () => undefined;
-    // 声明路线登记（用户迭代 2026-09-07）：所有 continuable 子代理（成员/
-    // 领队/构建师）一律记——观测路线的 model 是解析后的上游限定 id，面板
-    // 显示以声明的目录级 id 为准（见 runtime/sessionRoutes 模块头）。
-    recordSessionRoute(String(child.id), {
-      provider: descriptor.agentProvider ?? '',
-      model: descriptor.agentModel ?? '',
-    });
-    const identity = parseMemberLabel(descriptor.label);
-    if (!identity) return () => undefined;
-    const workspace = child.session?.header?.cwd ?? process.cwd();
-    const stateRoot = stateRootOf({ ctx: hostCtx as unknown as RuntimeContext, config, workspace });
-    const team = readTeamSync(stateRoot, identity.teamId);
-    if (!team) return () => undefined;
-    // 父会话校验（docs/36 建议 3；v6 派生判据 docs/51）：子代理的父会话必须
-    // 登记在本队任务的 main_session_id 快照里，或正是心跳锚定的主会话（DA38
-    // 派发可能用心跳锚起人；任务快照首派补章未提交时由它兜）。
-    const parents = new Set(
-      team.tasks
-        .map((t) => t.mainSessionId)
-        .filter((id): id is string => typeof id === 'string' && id !== ''),
-    );
-    const presence = readBuildPresence(stateRoot);
-    if (presence !== null) parents.add(presence.sessionId);
-    if (!parents.has(String(child.session?.header?.parentSession ?? ''))) {
-      return () => undefined;
-    }
-    // v7 副本行定位：新标签按 (mainTaskId, employeeId) 精确到任务副本行
-    // （同名成员各是各的会话）；旧标签（升级前存量）退按名选行。
-    const row = team.taskMembers.find((r) => {
-      if (identity.memberName !== undefined) {
-        return r.name === identity.memberName && r.status !== 'removed';
-      }
-      return r.employeeId === identity.employeeId && r.mainTaskId === identity.mainTaskId;
-    });
-    if (!row) return () => undefined;
-    const env: RuntimeEnv = { ctx: hostCtx as unknown as RuntimeContext, config, workspace };
-    registerMemberTools(childCtx, env);
-    // docs/28 归属注册表：成员子代理会话 → 团队/成员（usage 计量按此解析
-    // roleKind='member'；每次 Activation 重跑，冷恢复的会话身份随之重建）。
-    registerMemberSession(String(child.id), {
-      teamId: String(team.id),
-      memberName: row.name,
-      employeeId: row.employeeId,
-      // 19.18：直接父随登记落表（v6 记子代理头里的真实父会话 id）——访谈
-      // 投递冷恢复按它定位领队代理（运行时按 lineage 授权，parent 必须是
-      // 真实直接父）。
-      parentSessionId: String(child.session?.header?.parentSession ?? ''),
-    });
-    return () => undefined;
-  });
-}
-
-type RuntimeLogger2 = { info(message: string): void; warn(message: string): void };
-interface SubagentInstallFace {
-  registerContinuableSetup(contribution: (childCtx: Context) => () => void): () => void;
 }

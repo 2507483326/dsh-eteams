@@ -30,7 +30,9 @@ const PICKER_OPTION_CLASS =
  * 面板两行（「模型」「推理等级」：label + 当前值 + 右箭头），各自钻入列表。
  * 模型列表首行 inherit（会话默认——面板路线语义，对话没有此项），
  * 其后按提供方分组列出会话模型目录（与对话 /model 弹层同一份 groups：
- * 行 id=`provider/model`、名称=目录显示名、sticky 组头、title 带描述），
+ * 行 id=`provider/model`、名称=目录显示名、sticky 组头；模型描述（fast 等
+ * 速度提示）不展示——推理等级已有专属子面板，用户迭代 2026-09-08，title 只
+ * 留提供方名），
  * 加载失败的提供方以警示条列出（对话同款，不可选）；推理等级列表 = 该模型
  * reasoning.efforts（适配器命名），模型无目录默认值时前置「Default」= 提供
  * 方默认（提交 null，整路由省略 reasoningEffort）。对话组件不可直接复用
@@ -242,7 +244,11 @@ export function ModelRoutePicker({
                 {!override && <Check className="h-3.5 w-3.5" />}
               </span>
             </button>
-            {catalogState.loading && (
+            {/* 刷新条只挂首载（用户迭代 2026-09-08「一直显示正在刷新」）：
+              目录由宿主逐提供方拉取、较慢，每次打开都刷新（对话同款）——
+              已有目录时静默后台刷新，旧分组照常可点（stale-while-revalidate）；
+              只有还没有目录时才显示提示条。 */}
+            {catalogState.loading && catalog === null && (
               <div className="px-2 py-2 text-xs text-muted-foreground">正在刷新模型列表…</div>
             )}
             {catalogState.failed && (
@@ -275,18 +281,14 @@ export function ModelRoutePicker({
                           aria-checked={selected}
                           className={PICKER_OPTION_CLASS}
                           disabled={disabled === true}
-                          title={
-                            m.description !== undefined ? `${g.name} · ${m.description}` : g.name
-                          }
+                          title={g.name}
                           onClick={() => pickModel(`${g.id}/${m.id}`)}
                         >
-                          <span className="flex min-w-0 flex-1 flex-col">
-                            <span className="truncate text-[13px] font-medium">{m.name}</span>
-                            {m.description !== undefined && (
-                              <span className="truncate text-[11px] text-muted-foreground">
-                                {m.description}
-                              </span>
-                            )}
+                          {/* 模型描述（fast/快速响应等速度提示）不展示——推理
+                          等级已有专属子面板（用户迭代 2026-09-08），行内只留
+                          模型名；title 只留提供方名。 */}
+                          <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
+                            {m.name}
                           </span>
                           <span className="grid h-4 w-4 flex-none place-items-center">
                             {selected && <Check className="h-3.5 w-3.5" />}

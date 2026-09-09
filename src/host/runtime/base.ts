@@ -5,7 +5,8 @@
  * @module dsh-eteams/runtime/base
  */
 import type { Agent } from '@deepseek-ai/dsh-agent';
-import type { SessionId } from '@deepseek-ai/dsh-session';
+import type { ContentBlock } from '@deepseek-ai/dsh-llm';
+import type { SessionId, UserMessage } from '@deepseek-ai/dsh-session';
 import type { ETeamsResolvedConfig } from '../config.js';
 import type { Actor, TeamState } from '../model/types.js';
 import { locks } from '../state/lock.js';
@@ -56,6 +57,17 @@ export interface RuntimeContext {
       childId: SessionId,
       content: { type: 'text'; text: string }[],
       options: { source: { kind: 'plugin'; plugin: string }; signal?: AbortSignal },
+    ): Promise<unknown>;
+    /**
+     * harness 0.1.2+ 的子代理唤醒入口（取代 followup，steer 语义：running
+     * 目标在最近 step 边界入列 / idle 开新回合 / 不在场的直接子代理冷恢复）。
+     * 可选能力：旧运行时缺此方法，deliverToChild 按能力探测退回 followup。
+     */
+    sendMessage?(
+      sender: Agent,
+      targetId: SessionId,
+      content: ContentBlock[],
+      options: { signal: AbortSignal },
     ): Promise<unknown>;
     interrupt(
       target: SessionId,
@@ -176,12 +188,93 @@ export function sessionDefaultRouteOf(
   }
 }
 
+/**
+ * 向一个活会话投递 plugin notice（form: 'notice' 的折叠行）。
+ *
+ * harness 0.1.2 实测（2026-09-08）：`agent.steer` 对**从未开过回合的空白
+ * 会话**不再启动驱动器（notice 被 splice 进 inbox 却永远停在未开始屏）。
+ * 按 target 分发：
+ * - `next-turn`（空白/空闲会话的 engage）：优先 `agent.followup`——宿主自家
+ *   schedule 插件的唤醒原语（"Queue an ordinary follow-up turn and wake
+ *   the driver"，空会话同样开回合）；
+ * - `next-step`（运行中会话的就近插话 / 转交）：优先 `send(msg,'next-step',
+ *   true)`（wakeup 对 running/idle/blank 都正确），旧宿主退回 steer。
+ * 全部缺失则静默放弃。
+ */
+export function deliverNotice(
+  agent: Agent,
+  message: UserMessage,
+  target: 'next-turn' | 'next-step' = 'next-turn',
+): void {
+  const face = agent as {
+    followup?: (message: UserMessage) => void;
+    send?: (message: UserMessage, target: 'next-turn' | 'next-step', wakeup: boolean) => void;
+    steer?: (message: UserMessage) => void;
+  };
+  if (target === 'next-step') {
+    if (typeof face.send === 'function') {
+      face.send(message, 'next-step', true);
+      return;
+    }
+    face.steer?.(message);
+    return;
+  }
+  if (typeof face.followup === 'function') {
+    face.followup(message);
+    return;
+  }
+  if (typeof face.send === 'function') {
+    face.send(message, 'next-turn', true);
+    return;
+  }
+  face.steer?.(message);
+}
+
 /** Tiny join helper (avoids importing node:path twice in hot paths). */
 export function joinPath(...parts: string[]): string {
   return parts
     .map((p, i) => (i === 0 ? p.replace(/[\\/]+$/, '') : p.replace(/^[\\/]+|[\\/]+$/g, '')))
     .filter((p) => p !== '')
     .join('/');
+}
+
+/**
+ * 向一个 continuable 子代理投递下一条消息并唤醒（harness 0.1.2 起 followup
+ * 被 sendMessage 取代——steer 语义：running 目标在最近 step 边界入列 / idle
+ * 开新回合 / 不在场的直接子代理冷恢复）。按宿主能力探测分发：0.1.2+ 走
+ * sendMessage，旧宿主退回 followup。signal 缺省兜底成永不中止的信号——
+ * 0.1.2 两个入口都对 signal 无保护调用 `throwIfAborted()`，undefined 直接
+ * TypeError（成员 spawn/唤醒路径的 env.signal 可为缺省）。
+ */
+export async function deliverToChild(
+  subagents: RuntimeContext['subagents'],
+  parent: Agent,
+  childId: SessionId,
+  content: ContentBlock[],
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const sig = signal ?? new AbortController().signal;
+  const face = subagents as {
+    sendMessage?: (
+      sender: Agent,
+      targetId: SessionId,
+      content: ContentBlock[],
+      options: { signal: AbortSignal },
+    ) => Promise<unknown>;
+    followup?: (
+      parent: Agent,
+      childId: SessionId,
+      content: ContentBlock[],
+      options: { source: unknown; signal?: AbortSignal },
+    ) => Promise<unknown>;
+  };
+  if (typeof face.sendMessage === 'function') {
+    return face.sendMessage(parent, childId, content, { signal: sig });
+  }
+  return face.followup?.(parent, childId, content, {
+    source: { kind: 'plugin', plugin: 'dsh-eteams' },
+    signal: sig,
+  });
 }
 
 /** Tool-layer error carrying an actionable Chinese hint. */

@@ -241,7 +241,7 @@ export function TeamPage({ sessionId, pool, team, onSelectTeam }: TeamPageProps)
                         {t.name}
                       </div>
                     </div>
-                    <p className={cn('m-0 mt-0.5', LIST_COUNT_CLASS)}>{headcount} 人</p>
+                    <p className={cn('m-0 mt-1.5', LIST_COUNT_CLASS)}>{headcount} 人</p>
                   </div>
                   {/* 头部放名称 + 人数（用户迭代：去掉「任务 X/Y 完成」进度行
                   ——进度在任务页/详情页看；人数从头行挪到名称下方）。 */}

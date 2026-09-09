@@ -20,7 +20,8 @@ import type {
   TaskRecord,
   TeamState,
 } from '../model/types.js';
-import { ETeamsError, PLUGIN_ACTOR, stateRootOf, type RuntimeEnv } from './base.js';
+import { deliverToChild, ETeamsError, PLUGIN_ACTOR, stateRootOf, type RuntimeEnv } from './base.js';
+import { registerMemberSession } from './usage.js';
 import { readBuildPresence } from './roleBuilder.js';
 
 /** 提交后的最佳努力唤醒动作（事务内登记、COMMIT 后执行）。 */
@@ -255,15 +256,24 @@ export async function wakeMember(
     return false;
   }
   try {
-    await env.ctx.subagents.followup(
+    // 归属重登记（harness 0.1.2 起 continuable setup hook 被移除——成员身份
+    // 注册表改由 spawn/唤醒两个点维护，冷恢复的会话随唤醒补齐）。
+    registerMemberSession(row.sessionId, {
+      teamId: String(row.teamId),
+      memberName: row.name,
+      employeeId: row.employeeId,
+      parentSessionId: String(captain.id),
+    });
+    await deliverToChild(
+      env.ctx.subagents,
       captain,
       row.sessionId as unknown as SessionId,
       [{ type: 'text', text }],
-      { source: { kind: 'plugin', plugin: 'dsh-eteams' }, signal: env.signal },
+      env.signal,
     );
     return true;
   } catch (error) {
-    env.ctx.logger.warn(`eteams: followup to member ${row.name} failed: ${String(error)}`);
+    env.ctx.logger.warn(`eteams: wake to member ${row.name} failed: ${String(error)}`);
     return false;
   }
 }

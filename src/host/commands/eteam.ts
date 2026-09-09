@@ -12,7 +12,10 @@ import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { CommandDefinition } from '@deepseek-ai/dsh-commands';
 import type { Context } from '@deepseek-ai/cordis';
 import type { ETeamsResolvedConfig } from '../config.js';
-import type { RuntimeContext } from '../runtime/base.js';
+import {
+  deliverNotice,
+  type RuntimeContext,
+} from '../runtime/base.js';
 import {
   hasBuildSessionFile,
   readBuildSession,
@@ -21,6 +24,7 @@ import {
 } from '../runtime/roleBuilder.js';
 import { rootForWrites } from '../runtime/webui.js';
 import { startBuilderChild } from '../runtime/builderPhases.js';
+import { annotateBuildSession, appendEngageDiag } from '../runtime/roleBuilder.js';
 import { ACTIVATION_PREFIX } from '../prompts/system/roleBuilder.js';
 
 /** The /eteam slash command name (DSH command names are lowercase, docs/19.4). */
@@ -56,37 +60,130 @@ export function buildActivationMessage(rawInput: string): string {
  * → 命令节点渲染 → 构建卡片挂载并接管落地（20s 窗口自动跳转照常生效）。
  * 开过 turn 的会话不加这一回合——避免每次 /eteam 多出一段应答噪音。
  */
-export function steerEngageNotice(
+export async function steerEngageNotice(
+  ctx: Context,
   agent: Agent,
+  stateRoot: string,
   log: { info(m: string, ...args: unknown[]): void; warn(m: string, ...args: unknown[]): void },
-): void {
+): Promise<string> {
+  const diag = (entry: Record<string, unknown>): void => {
+    appendEngageDiag(stateRoot, entry);
+  };
   try {
+    // 空白桌面会话在首条 prompt 之前**没有活 agent**(注册表里查不到,
+    // 0.1.2 实测 engage-result: agent-session-missing)——先用 agents.resume
+    // 把活 agent 物化出来(askUser 离线投递同款冷恢复;句柄不 dispose,
+    // 锚定会话),再投递 engage 通知。
+    const id = String((agent as { id?: unknown }).id ?? '');
+    let live =
+      (ctx.agents?.get?.(id as never) as Agent | undefined) ?? undefined;
+    let resumed = false;
+    if (live === undefined) {
+      const resume = (ctx.agents as {
+        resume?: (o: {
+          resumeSessionId: never;
+          signal?: AbortSignal;
+        }) => Promise<{ agent: Agent }>;
+      }).resume;
+      if (typeof resume !== 'function') {
+        diag({ step: 'no-resume-capability', id });
+        return 'no-resume-capability';
+      }
+      const handle = await resume({
+        resumeSessionId: id as never,
+        signal: new AbortController().signal,
+      });
+      live = handle.agent;
+      resumed = true;
+    }
+    const face = live as unknown as {
+      id?: unknown;
+      session?: { events?: ReadonlyArray<{ type?: unknown }> };
+      followup?: unknown;
+      send?: unknown;
+      steer?: unknown;
+    };
     // 空白判定与宿主 sessionBlank 同口径：无 turn/start 事件 = 会话从未开
     // 过回合（Session.events 只读快照，同步可读）。
-    const engaged = agent.session.events.some((event) => event.type === 'turn/start');
-    if (engaged) return;
-    agent.steer(
+    const engaged = face.session?.events?.some((event) => event.type === 'turn/start') ?? false;
+    if (engaged) {
+      diag({ step: 'engaged', id, resumed });
+      return 'engaged';
+    }
+    const primitive =
+      typeof face.followup === 'function'
+        ? 'followup'
+        : typeof face.send === 'function'
+          ? 'send'
+          : typeof face.steer === 'function'
+            ? 'steer'
+            : 'none';
+    // 零 token engage（0.1.2 agent/pre-step 契约）：在活 agent 上注册一次性
+    // pre-step 监听,engage 消息领取后被 {kind:'reject'} 拒收——回合开启并
+    // 关闭、不开步骤、**不调模型**（零 token）,turn/start 照常提交,
+    // sessionListMetadata.blank 照常清除 → 对话视图出现。一次性后放行后续
+    // step（不影响用户真实消息）。
+    const ENGAGE_MARKER = '（成员构建请求已受理';
+    const liveCtx = (live as unknown as {
+      ctx?: {
+        on?: (
+          ev: string,
+          cb: (payload: unknown, next: () => unknown) => unknown,
+        ) => (() => void) | void;
+      };
+    }).ctx;
+    let rejected = false;
+    if (typeof liveCtx?.on === 'function') {
+      liveCtx.on('agent/pre-step', (payload: unknown, next: () => unknown) => {
+        if (rejected) return next();
+        rejected = true;
+        const messages =
+          (payload as { messages?: Array<{ content?: Array<{ text?: string }> }> }).messages ?? [];
+        const texts = messages.map((m) => (m.content ?? []).map((b) => b.text ?? '').join(' '));
+        diag({ step: 'pre-step', claimed: texts.length });
+        if (!texts.some((t) => t.includes(ENGAGE_MARKER))) return next();
+        diag({ step: 'pre-step-rejected' });
+        return { kind: 'reject' };
+      });
+    }
+    // engage 通知以用户身份注入（harness 子代理初始 prompt 同款 source）：
+    // 0.1.2 桌面壳的转场看 sessionListMetadata——lastPromptAt 只认
+    // source.kind==='user' 的消息，plugin 来源的 notice 永远不清 blankBit、
+    // 对话视图不出现（2026-09-08 用户实测「卡在探索未至之境」）。内容精简:
+    // 它被 pre-step 拒收,不会真正进入对话（零 token）。
+    deliverNotice(
+      live,
       createUserMessage({
         content: [
           {
             type: 'text',
-            text: '成员构建请求已受理——角色构建师已在后台开工，进度见对话内构建卡片与团队面板的新增工作台。本会话无需处理这条请求：不要创建成员，也不要调用构建相关工具；如无其他待办，用一句话确认即可。',
+            text: '（成员构建请求已受理——角色构建师在后台进行中，进度见构建卡片。本会话无须创建成员或调用构建工具；如无其他待办，一句话确认即可。）',
           },
         ],
-        source: {
-          kind: 'plugin',
-          plugin: 'dsh-eteams',
-          form: 'notice',
-          summary: '成员构建已受理——本会话无需操作',
-        },
+        source: { kind: 'user' },
       }),
     );
     log.info('eteams: /eteam steered an engage notice onto a blank session');
+    // 诊断落独立日志（桌面宿主 logger 不落盘;构建 note 有子代理报告写竞态）:
+    // agent 对象的方法清单 + 所用原语,engage 投递问题的权威证据。
+    diag({
+      step: 'delivered',
+      id,
+      primitive,
+      resumed,
+      inventory: {
+        followup: typeof face.followup,
+        send: typeof face.send,
+        steer: typeof face.steer,
+        session: typeof face.session,
+      },
+    });
+    return `primitive=${primitive}${resumed ? '+resumed' : ''}`;
   } catch (error) {
-    log.warn(
-      'eteams: engage steer failed (build continues in background): %s',
-      error instanceof Error ? error.message : String(error),
-    );
+    const reason = error instanceof Error ? error.message : String(error);
+    log.warn('eteams: engage steer failed (build continues in background): %s', reason);
+    diag({ step: 'error', error: reason });
+    return 'error:' + reason;
   }
 }
 
@@ -115,14 +212,21 @@ export function createEteamCommand(
       // commandId 写入会话供对话内卡片按构建归属。派发失败退回 steer 主
       // 会话，保证流程永不哑火。
       let root: string | null = null;
+      const diag = (step: string, extra: Record<string, unknown> = {}): void => {
+        appendEngageDiag(root ?? rootForWrites(ctx, config), { step, ...extra });
+      };
+      diag('handler-enter');
       try {
         root = rootForWrites(ctx, config);
+        diag('gate-read', { root });
         const current = readBuildSession(root);
         if (
           current !== null &&
           (current.status === 'active' || current.status === 'awaiting_confirmation')
         ) {
-          agent.steer(
+          diag('gate-blocked-active-build');
+          deliverNotice(
+            agent,
             createUserMessage({
               content: [
                 {
@@ -170,37 +274,48 @@ export function createEteamCommand(
           note: '构建请求已受理——角色构建师启动中',
           ...(commandId !== undefined ? { commandId } : {}),
         });
+        diag('accepted');
         startBuilderChild({
           ctx: { subagents },
           config,
           parent: agent,
           stateRoot,
           logger: log,
-          onSpawnFailure: () => {
+          onSpawnFailure: (error) => {
             // 派发被拒 → 回滚成 cancelled，别让无子代理的 active 会话
-            // 卡住下一次 /eteam 的门禁。
-            void cancelBuildSession(stateRoot, '构建派发失败——请重新发起 /eteam').catch(
-              () => undefined,
-            );
+            // 卡住下一次 /eteam 的门禁。真实原因进 note——桌面宿主的
+            // logger.warn 不落盘，卡片是用户唯一能看到失败的表面。
+            const reason = error instanceof Error ? error.message : String(error);
+            void cancelBuildSession(
+              stateRoot,
+              `构建派发失败——请重新发起 /eteam（原因：${reason}）`,
+            ).catch(() => undefined);
           },
         });
         // 空会话唤醒（docs/19.16）：受理后若会话从未开过 turn（空白会话上
         // 斜杠命令只落 log-only 记录，主窗口仍停在未开始屏），steer 一条
         // notice 让 idle driver 立即开 turn——对话视图出现后命令节点与构建
         // 卡片才挂载，卡片的「发送即跳转」才接管落地。
-        steerEngageNotice(agent, log);
+        diag('child-dispatched');
+        const engage = await steerEngageNotice(ctx, agent, stateRoot, log);
+        diag('engage-result', { result: engage });
+        annotateBuildSession(stateRoot, `engage=${engage}`);
         return {
           kind: 'success' as const,
           text: '成员构建已受理——创建卡片与新增页已显示构建状态，意图访谈将在其上出现。',
         };
-      } catch {
-        // 受理已落盘的场合一并回滚（pre-write 成功但同步段炸了）。
+      } catch (error) {
+        // 受理已落盘的场合一并回滚（pre-write 成功但同步段炸了）。真实原因
+        // 进 note——桌面宿主的 logger.warn 不落盘，卡片是可见的失败表面。
         if (root !== null) {
-          void cancelBuildSession(root, '构建派发失败——请重新发起 /eteam').catch(
-            () => undefined,
-          );
+          const reason = error instanceof Error ? error.message : String(error);
+          void cancelBuildSession(
+            root,
+            `构建派发失败——请重新发起 /eteam（原因：${reason}）`,
+          ).catch(() => undefined);
         }
-        agent.steer(
+        deliverNotice(
+          agent,
           createUserMessage({
             content: [{ type: 'text', text: buildActivationMessage(rawInput) }],
             // Plugin-sourced notice: the conversation folds this user-role

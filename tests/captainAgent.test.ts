@@ -16,6 +16,9 @@ import {
 } from '../src/host/runtime/captainAgent';
 import { createCaptainTools } from '../src/host/tools/captainTools';
 import { createCaptainDispatchTool } from '../src/host/tools/captainDispatch';
+import { createMemberTools } from '../src/host/tools/memberTools';
+import { MEMBER_TOOL_NAMES } from '../src/host/runtime/members';
+import { builderToolFilter } from '../src/host/runtime/builderPhases';
 
 describe('captain child label', () => {
   it('round-trips build/parse（以领队的名字命名）', () => {
@@ -54,8 +57,11 @@ describe('CAPTAIN_CHILD_DENIED_TOOLS loud-deny contract', () => {
   // The spawn window applies `tools.restrict({ deny })`, which fails loudly
   // on names that are not registered global tools — a bad entry aborts every
   // captain dispatch (members.ts MEMBER_DENIED_TOOLS carries the same note).
+  // harness 0.1.2 起成员工具也随根作用域注册（registerContinuableSetup 被宿
+  // 主移除），注册面 = 领队工具 + 成员工具 + 派发工具。
   const registered = new Set([
     ...createCaptainTools({} as never, {} as never).map((tool) => (tool as { name: string }).name),
+    ...createMemberTools({} as never, {} as never).map((tool) => (tool as { name: string }).name),
     'eteams_dispatch_captain',
   ]);
 
@@ -64,6 +70,12 @@ describe('CAPTAIN_CHILD_DENIED_TOOLS loud-deny contract', () => {
     // deny 名单里每一条都必须是注册工具名（MEMBER_DENIED_TOOLS 同口径）。
     for (const name of CAPTAIN_CHILD_DENIED_TOOLS) {
       expect(registered.has(name), `deny entry not registered: ${name}`).toBe(true);
+    }
+  });
+
+  it('denies every member tool（0.1.2 根作用域注册后的可见性纪律）', () => {
+    for (const name of MEMBER_TOOL_NAMES) {
+      expect(CAPTAIN_CHILD_DENIED_TOOLS, `member tool not denied: ${name}`).toContain(name);
     }
   });
 
@@ -77,6 +89,29 @@ describe('CAPTAIN_CHILD_DENIED_TOOLS loud-deny contract', () => {
 
   it('includes the recursion guard (子代理不得再转交)', () => {
     expect(CAPTAIN_CHILD_DENIED_TOOLS).toContain('eteams_dispatch_captain');
+  });
+});
+
+describe('builder tool filter (构建子代理可见性)', () => {
+  const BUILDER_FOUR = [
+    'eteams_build_report',
+    'eteams_build_wait',
+    'eteams_member_list',
+    'eteams_member_save',
+  ];
+
+  it('never denies the builder four (2026-09-08 用户实测回归：禁了自己就没法构建)', () => {
+    const deny = builderToolFilter().deny;
+    for (const name of BUILDER_FOUR) {
+      expect(deny, `builder tool denied: ${name}`).not.toContain(name);
+    }
+  });
+
+  it('denies the member five (构建面之外的工具不可见)', () => {
+    const deny = builderToolFilter().deny;
+    for (const name of MEMBER_TOOL_NAMES) {
+      expect(deny, `member tool not denied: ${name}`).toContain(name);
+    }
   });
 });
 

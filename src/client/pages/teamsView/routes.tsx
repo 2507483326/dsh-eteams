@@ -2,11 +2,11 @@
  * 路由表（docs/44 44.2.1，M1 新增）：面板壳内一棵 MemoryRouter——本插件是
  * DSH 宿主插件，不拥有浏览器 URL，且同屏可能有两个面板表面（整页覆盖层
  * teamsPanel + 槽位面板）各自渲染 ETeamsView，内存历史随表面挂载生、卸载
- * 灭，表面间零冲突。M1 挂五条基础路径（/board /team /roster /tasks
- * /reports）；M2 起逐域拆页：角色域 /roster 列表 + /roster/add 新增 +
- * /roster/:name 详情（见 roster/），M3 任务域 /tasks 列表 + /tasks/:taskId
- * 详情（见 tasks/），M4 团队域 /team 列表 + /team/:teamId 团队详情 +
- * /team/:teamId/member/:name 成员详情（见 team/）。
+ * 灭，表面间零冲突。M1 挂四条基础路径（/board /team /roster /tasks；用户
+ * 迭代 2026-09-08 撤除 /reports）；M2 起逐域拆页：角色域 /roster 列表 +
+ * /roster/add 新增 + /roster/:name 详情（见 roster/），M3 任务域 /tasks 列表
+ * + /tasks/:taskId 详情（见 tasks/），M4 团队域 /team 列表 + /team/:teamId
+ * 团队详情 + /team/:teamId/member/:name 成员详情（见 team/）。
  *
  * ui model 保留为持久层与观察面：initialEntries 挂载时由 ui.activeNav 推导
  * （宿主换页/刷新重挂后回到上次页签——刷新恢复；M3 起任务页签 +
@@ -25,10 +25,9 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import type { PrefillOutcome } from '../../lib/addPeople';
 import type { RosterMember } from '../../lib/api';
 import { navIdOfPath, navPathOfId } from '../../lib/status';
-import type { MemberView, TeamSnapshot } from '../../lib/monitor';
+import type { TeamSnapshot } from '../../lib/monitor';
 import { getApp } from '../../store/app';
 import { BoardTab } from '../board/boardPage';
-import { ReportsTab } from '../reports/reportsPage';
 import { MemberDetailPage } from '../team/memberDetailPage';
 import { TeamDetailPage } from '../team/teamDetailPage';
 import { TeamPage } from '../team/teamPage';
@@ -73,12 +72,6 @@ export interface ETeamsRoutesProps {
   openAddTick: number;
   /** 角色：信号消费回执（壳清零 openAddTick）。 */
   onAddTickConsumed: () => void;
-  /** 汇报：成员选择（ui.dialogMember）。 */
-  dialogMember: string | null;
-  /** 汇报：成员选择回写。 */
-  setDialogMember: (name: string | null) => void;
-  /** 汇报：解析后的成员视图（消失的成员不崩渲染）。 */
-  dialogMemberView: MemberView | null;
 }
 
 /** ================================== 子组件 ================================== */
@@ -244,21 +237,8 @@ export function ETeamsViewRoutes(props: ETeamsRoutesProps): ReactNode {
           ) : null
         }
       />
-      <Route
-        path="/reports"
-        element={
-          props.team !== undefined ? (
-            <ReportsTab
-              team={props.team}
-              dialogMember={props.dialogMember}
-              setDialogMember={props.setDialogMember}
-              member={props.dialogMemberView}
-            />
-          ) : null
-        }
-      />
       {/* 未知路径兜底：落看板（原 activeTab 畸形兜底 'board' 同口径；正常
-          流只在五条基础路径间导航，本条是防御位）。 */}
+          流只在各基础路径间导航，本条是防御位）。 */}
       <Route
         path="*"
         element={

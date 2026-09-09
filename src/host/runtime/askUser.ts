@@ -33,7 +33,12 @@ import {
   type AskQuestion,
 } from '../state/asks.js';
 import { recordEvent } from '../state/events.js';
-import { stateRootOf, type RuntimeEnv } from './base.js';
+import {
+  deliverNotice,
+  deliverToChild,
+  stateRootOf,
+  type RuntimeEnv,
+} from './base.js';
 import { teamMainSessionOf } from './notifier.js';
 import { readBuildPresence } from './roleBuilder.js';
 
@@ -224,7 +229,11 @@ async function deliverAskRelay(
   const live = env.ctx.agents.get(targetSessionId);
   if (live !== undefined) {
     try {
-      live.steer(
+      // 0.1.2 起 steer 不唤醒空白会话——转交全文走 send('next-step', wakeup)：
+      // running 目标在最近 step 边界入列，idle/空白目标开新回合（wakeup 对
+      // 三种状态都正确）；旧宿主退回 steer。
+      deliverNotice(
+        live,
         createUserMessage({
           content: blocks,
           source: {
@@ -234,6 +243,7 @@ async function deliverAskRelay(
             summary: '子代理问答转交——请在本对话作答',
           },
         }),
+        'next-step',
       );
       return true;
     } catch (error) {
@@ -294,15 +304,16 @@ export async function wakeAskingChild(
   }
   if (anchor === undefined) return false;
   try {
-    await env.ctx.subagents.followup(
+    await deliverToChild(
+      env.ctx.subagents,
       anchor,
       askingSessionId as unknown as SessionId,
       [{ type: 'text', text }],
-      { source: { kind: 'plugin', plugin: 'dsh-eteams' }, signal: env.signal },
+      env.signal,
     );
     return true;
   } catch (error) {
-    env.ctx.logger.warn(`eteams: 问答唤醒 followup 失败（${askingSessionId}）：${String(error)}`);
+    env.ctx.logger.warn(`eteams: 问答唤醒投递失败（${askingSessionId}）：${String(error)}`);
     return false;
   }
 }

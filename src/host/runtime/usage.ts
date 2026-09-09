@@ -57,11 +57,12 @@ export interface SessionIdentity {
 }
 
 /**
- * 成员子代理注册表：childId → 团队/成员/直接父。由 installMemberRuntime 的
- * setup hook 在每次 Activation（含 cold resume）登记（members.ts 先例：重启
- * 后重登记）。parentSessionId = 成员的真实直接父（领队主会话 id）——19.18
- * 访谈投递按它冷恢复，模块级 Map 跨 dispose 存活所以闲置成员对话框也查得到。
- * employeeId 是 v7 成员身份键（同名成员按号区分）；null = legacy 无号行。
+ * 成员子代理注册表：childId → 团队/成员/直接父。登记点为成员 spawn
+ * （members.spawnMember）与每次唤醒（notifier.wakeMember）——harness 0.1.2
+ * 起 continuable setup hook 被宿主移除，冷恢复会话的归属随唤醒补齐。
+ * parentSessionId = 成员的真实直接父（领队主会话 id）——19.18 访谈投递按它
+ * 冷恢复，模块级 Map 跨 dispose 存活所以闲置成员对话框也查得到。employeeId
+ * 是 v7 成员身份键（同名成员按号区分）；null = legacy 无号行。
  */
 export interface MemberSessionRecord {
   readonly teamId: string;

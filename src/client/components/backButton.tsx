@@ -15,10 +15,12 @@ import { Button } from './ui/button';
 /** ================================== 主组件 ================================== */
 
 /**
- * 返回钮：ghost Button 图标档——size=icon 的 h-9 w-9 以 h-8 w-8 压低（贴
- * 20px 页头标题行），muted 前景悬停提亮（原文字钮档观感）；图标尺寸走
- * Button 基座 [&_svg]:size-4，不再逐处传。ml-auto 内建——flex 行内自动
- * 推到最右（与 PageHeader 的 flex-1 动作位共存时为无操作）。
+ * 返回钮：白底描边图标钮（用户迭代 2026-09-08：背景改白、边框加深）——
+ * outline Button 图标档，size=icon 的 h-9 w-9 以 h-8 w-8 压低（贴 20px 页头
+ * 标题行）；覆盖层显式 border-solid + slate-300 深档边框 + bg-white 面
+ * （outline hover 的 bg-accent 压回白底，悬停反馈走文字提亮），阴影撤平。
+ * 图标尺寸走 Button 基座 [&_svg]:size-4，不再逐处传。ml-auto 内建——
+ * flex 行内自动推到最右（与 PageHeader 的 flex-1 动作位共存时为无操作）。
  */
 export function BackButton({
   onClick,
@@ -30,9 +32,12 @@ export function BackButton({
   return (
     <Button
       type="button"
-      variant="ghost"
+      variant="outline"
       size="icon"
-      className={cn('ml-auto h-8 w-8 text-muted-foreground hover:text-foreground', className)}
+      className={cn(
+        'ml-auto h-8 w-8 border border-solid border-slate-300 bg-white text-muted-foreground shadow-none hover:bg-white hover:text-foreground',
+        className,
+      )}
       aria-label="返回"
       title="返回"
       onClick={onClick}

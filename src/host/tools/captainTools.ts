@@ -52,7 +52,8 @@ import {
 } from '../runtime/askUser.js';
 import { readPendingAsksBySessionSync, answerAskSync } from '../state/asks.js';
 import { startBuilderChild, wakeBuilderChild } from '../runtime/builderPhases.js';
-import { stationProgress } from '../model/taskMachine.js';
+import { stationPointsTo, stationProgress } from '../model/taskMachine.js';
+import { renderContract } from '../prompts/handoff/mails.js';
 import type { TaskRecord } from '../model/types.js';
 
 /** JSON-schema snippet helpers (literal types required by the spec union). */
@@ -850,8 +851,13 @@ export function createCaptainTools(
         parent: exec.agent,
         stateRoot: root,
         logger: env.ctx.logger,
-        onSpawnFailure: () => {
-          void cancelBuildSession(root, '构建派发失败——可重新派发').catch(() => undefined);
+        onSpawnFailure: (error) => {
+          // 真实原因进 note——桌面宿主的 logger.warn 不落盘，卡片是用户
+          // 唯一能看到派发失败的表面。
+          const reason = error instanceof Error ? error.message : String(error);
+          void cancelBuildSession(root, `构建派发失败——可重新派发（原因：${reason}）`).catch(
+            () => undefined,
+          );
         },
       });
       return {
@@ -1269,7 +1275,8 @@ export function createCaptainTools(
 
   const sendMessageTool = defineTool({
     name: 'eteams_send_message',
-    description: '私信团队成员（to=成员名）。对用户的状态汇报直接写在你的回复里，不走此工具。',
+    description:
+      '私信团队成员（to=成员名/工号）。成员侧 to="captain" 发给领队（求助/决策/汇报），不能给自己发。对用户的状态汇报直接写在你的回复里，不走此工具。',
     parameters: {
       to: strR('收件成员名'),
       content: strR('消息内容'),
@@ -1286,7 +1293,11 @@ export function createCaptainTools(
     execute: async (args, exec) => {
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
       const caller = await resolveCaller(env, exec.agent!);
-      if (caller.kind !== 'captain') throw new ETeamsError('成员请用成员版 eteams_send_message');
+      if (caller.kind === 'member') {
+        // 成员分支（原 memberTools 成员变体——harness 0.1.2 起同名工具在
+        // root 只能有 一个，成员/领队行为按 caller.kind 合一到本工具）。
+        if (args.to.trim() === caller.member.name) throw new ETeamsError('不能给自己发消息');
+      }
       await sendMessage(env, caller.team, caller.actor, args.to, args.content, {
         taskId: args.taskId,
       });
@@ -1326,7 +1337,8 @@ export function createCaptainTools(
 
   const taskBoardTool = defineTool({
     name: 'eteams_task_board',
-    description: '任务看板：全部任务的合同摘要与执行记录；status 过滤可选。',
+    description:
+      '任务看板：领队看全部任务的合同摘要与执行记录（status 过滤可选）；成员看自己名下的任务与执行链进度。',
     parameters: { status: str('按状态过滤（如 ready/wait/start/paused/wait_decision/completed）') },
     output: {
       schema: {
@@ -1337,14 +1349,58 @@ export function createCaptainTools(
             type: 'array' as const,
             items: { type: 'object' as const, properties: {}, additionalProperties: true },
           },
+          view: { type: 'object' as const, properties: {}, additionalProperties: true },
         },
         additionalProperties: false as const,
       },
-      render: (_a, v) => text(JSON.stringify(v.tasks, null, 2)),
+      render: (_a, v) =>
+        text(JSON.stringify('view' in (v as Record<string, unknown>) ? v.view : v.tasks, null, 2)),
     },
     execute: async (args, exec) => {
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
       const caller = await resolveCaller(env, exec.agent!);
+      if (caller.kind === 'member') {
+        // 成员视角看板（原 memberTools 成员变体——0.1.2 起同名工具合一）：
+        // 我名下的任务 = assignee 或执行链余下站点指向我的工号（v7 链站点写
+        // 工号；旧名字站点退按名比对）。
+        const me = caller.member;
+        const mine = caller.team.tasks.filter(
+          (t) =>
+            t.assignee === me.name ||
+            t.chain.some((s, i) => i > t.chainCursor && stationPointsTo(s, me)),
+        );
+        // 角色/路线读班底行（docs/35 §3#5：人设/路线在班底，task_members=副本行）。
+        const template = caller.team.members.find((m) => m.employeeId === me.employeeId);
+        // 当前任务口径（docs/36 建议 2）：wait/start/paused 三态；终态不算当前。
+        const current = mine.find((t) => ['wait', 'start', 'paused'].includes(t.status));
+        const view = {
+          member: me.name,
+          employeeId: me.employeeId,
+          role: template?.role ?? me.name,
+          currentTask: current?.id ?? null,
+          tasks: mine
+            .filter((t) => !args.status || t.status === args.status)
+            .map((t) => ({
+              id: t.id,
+              subject: t.subject,
+              status: t.status,
+              assignee: t.assignee ?? null,
+              station:
+                t.chain.length > 0
+                  ? {
+                      // 末站完成即 completed——完成态按满进度口径显示。
+                      done: t.status === 'completed' ? t.chain.length : t.chainCursor + 1,
+                      total: t.chain.length,
+                      mine: t.chain.findIndex(
+                        (s, i) => i > t.chainCursor && stationPointsTo(s, me),
+                      ),
+                    }
+                  : null,
+              contract: renderContract(t),
+            })),
+        };
+        return { ok: true as const, view };
+      }
       const tasks = caller.team.tasks
         .filter((t) => !args.status || t.status === args.status)
         .map((t) => ({

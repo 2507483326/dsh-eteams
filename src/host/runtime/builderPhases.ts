@@ -17,10 +17,10 @@
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { SessionId } from '@deepseek-ai/dsh-session';
 import { randomUUID } from 'node:crypto';
-import type { RuntimeContext } from './base.js';
+import { deliverToChild, type RuntimeContext } from './base.js';
 import type { ETeamsResolvedConfig } from '../config.js';
 import { locks } from '../state/lock.js';
-import { MEMBER_DENIED_TOOLS } from './members.js';
+import { MEMBER_DENIED_TOOLS, MEMBER_TOOL_NAMES } from './members.js';
 import {
   markBuilderChild,
   markBuilderWake,
@@ -47,9 +47,6 @@ const BUILDER_TOOLS = [
   'eteams_member_save',
   'ask_user_question',
 ];
-
-/** followup/interrupt 消息来源（与 notifier/captainDispatch 保持一致）。 */
-const BUILDER_SOURCE = { kind: 'plugin' as const, plugin: 'dsh-eteams' };
 
 /** 单构建串行锁 key：resume/restart/访谈唤醒的读改写临界区互斥。 */
 const builderLockKey = (stateRoot: string): string => `rolebuilder:${stateRoot}`;
@@ -82,10 +79,21 @@ const failMessage = (stage: string, error: unknown): string =>
     error instanceof Error ? error.message : String(error)
   }`;
 
-/** 子代理 toolFilter（与一次性时代一致：成员禁刀里留出构建四件套）。 */
-const builderToolFilter = (): { deny: string[] } => ({
-  deny: MEMBER_DENIED_TOOLS.filter((tool) => !BUILDER_TOOLS.includes(tool)),
-});
+/** 子代理 toolFilter（与一次性时代一致：成员禁刀里留出构建四件套）。
+ * harness 0.1.2 起成员工具随根作用域注册（registerContinuableSetup 被宿主
+ * 移除）——构建器子代理拒见构建面之外的全部成员工具（member_list/save
+ * 是构建四件套的一部分，保持可见）。**MEMBER_DENIED_TOOLS 必须先滤掉
+ * BUILDER_TOOLS**：构建四件套（build_report/build_wait/member_list/
+ * member_save）在成员禁刀里，不过滤会把构建子代理自己的工具禁掉
+ * （2026-09-08 用户实测：子代理推理「build_report 不在我的工具集」）。 */
+export function builderToolFilter(): { deny: string[] } {
+  return {
+    deny: [
+      ...MEMBER_DENIED_TOOLS.filter((tool) => !BUILDER_TOOLS.includes(tool)),
+      ...MEMBER_TOOL_NAMES.filter((tool) => !BUILDER_TOOLS.includes(tool)),
+    ],
+  };
+}
 
 /** 会话快照投影（读盘 → prompts 平面自含快照）。 */
 function snapshotOf(stateRoot: string): BuilderPhaseSnapshot | null {
@@ -100,10 +108,15 @@ function snapshotOf(stateRoot: string): BuilderPhaseSnapshot | null {
       };
 }
 
-/** subagents 服务能力探测：continuable 派发需要 startContinuable + followup。 */
+/** subagents 服务能力探测：continuable 派发需要 startContinuable + 唤醒
+ * 入口（harness 0.1.2 起 followup 被 sendMessage 取代——两者按宿主能力
+ * 二选一，deliverToChild 兼容分发）。 */
 function subagentsReady(ctx: BuilderDispatchArgs['ctx']): boolean {
   const subagents = ctx.subagents;
-  return subagents?.startContinuable !== undefined && subagents?.followup !== undefined;
+  return (
+    subagents?.startContinuable !== undefined &&
+    (subagents?.sendMessage !== undefined || subagents?.followup !== undefined)
+  );
 }
 
 /**
@@ -222,15 +235,16 @@ export function wakeBuilderChild(args: {
       const childId = session?.builderChildId ?? '';
       if (childId !== '') {
         try {
-          await subagents.followup!(
+          await deliverToChild(
+            subagents,
             parent,
             childId as unknown as SessionId,
             prompt,
-            { source: { ...BUILDER_SOURCE }, signal: new AbortController().signal },
+            new AbortController().signal,
           );
           return;
         } catch (error) {
-          logger?.warn(failMessage(`followup(${kind}) failed — cold-recovery rebuild`, error));
+          logger?.warn(failMessage(`wake(${kind}) failed — cold-recovery rebuild`, error));
         }
       }
       // 冷恢复重建：新持有者接手同一构建，覆盖落盘 childId。

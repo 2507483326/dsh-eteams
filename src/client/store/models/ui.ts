@@ -1,10 +1,11 @@
 /**
  * ui model（docs/21-client-ui-stack.md S8/S9）：面板全局 UI 状态——第一批
- * 导航与选择（S8：activeNav/selectedTeamId），第二批抽屉与对话框（S9：
- * drawerTaskId/dialogMember）。原 eteamsView（已拆分至 pages/teamsView/）
+ * 导航与选择（S8：activeNav/selectedTeamId），第二批抽屉（S9：
+ * drawerTaskId；同批的 dialogMember 已随汇报页撤除，用户迭代 2026-09-08）。
+ * 原 eteamsView（已拆分至 pages/teamsView/）
  * 的对应 useState 已删除：Provider
  * 包在表面根（ETeamsView），面板体经 useSelector 读、useDispatch 发
- * `ui/setNav` / `ui/setSelectedTeam` / `ui/setDrawerTask` / `ui/setDialogMember`；
+ * `ui/setNav` / `ui/setSelectedTeam` / `ui/setDrawerTask`；
  * goto 桥（consumePendingGoto* / SELECT_TEAM_EVENT）触发的目标状态同样走
  * 这些 action，桥本身（bridge.ts 的 pending 标记/窗口事件）不动。输入草稿、
  * 悬停、openAddTick 信号等组件内瞬态仍留 useState。
@@ -21,18 +22,16 @@ import type { DvaModel } from 'dva-core';
 
 /** 面板全局 UI 状态（21.5.3）：纯 reducers；组件内瞬态仍留 useState。 */
 export interface UiState {
-  /** 侧栏当前 tab（五值与 lib/status.ts NAV_ITEMS 的 id 对齐）。M1 起为
+  /** 侧栏当前 tab（四值与 lib/status.ts NAV_ITEMS 的 id 对齐）。M1 起为
    * 路由的持久层/观察面：由 routes.tsx 的 location sync 回写，壳渲染不读它
    * （activeTab 由 location 派生），重挂时经 initialEntries 恢复。 */
-  activeNav: 'board' | 'team' | 'roster' | 'tasks' | 'reports';
+  activeNav: 'board' | 'team' | 'roster' | 'tasks';
   /** 当前选中团队（board 联动与弹层跳转共用；null=未选）。 */
   selectedTeamId: string | null;
   /** 任务详情抽屉当前展开的任务 id（docs/27：库内整数号；null=全部收起）。
    * M3 起由 routes.tsx 的 location sync 回写（/tasks/:taskId 写 id、/tasks
    * 写 null、其余路径不触碰），重挂经 initialEntries 恢复详情。 */
   drawerTaskId: number | null;
-  /** 成员对话框当前选中的成员名（null=未选，即「— 选择 —」空态）。 */
-  dialogMember: string | null;
 }
 
 export const uiModel: DvaModel<UiState> = {
@@ -41,7 +40,6 @@ export const uiModel: DvaModel<UiState> = {
     activeNav: 'board',
     selectedTeamId: null,
     drawerTaskId: null,
-    dialogMember: null,
   },
   reducers: {
     // payload 语义与迁移前 setTab 对齐：五值 tab id 原样落 state；畸形值由
@@ -58,23 +56,15 @@ export const uiModel: DvaModel<UiState> = {
       ...state,
       selectedTeamId: (payload ?? state.selectedTeamId) as UiState['selectedTeamId'],
     }),
-    // S9 抽屉/对话框开关（payload 语义与迁移前 setExpandedTask / setDialogMember
-    // 对齐）：显式 null 是明确的「收起/未选」信号（八轮 DA21 后 drawerTaskId
-    // 语义 = 任务详情页选中的任务 id，「返回列表」与「— 选择 —」都靠 null
-    // 关闭），payload 缺省不能像上面那样沿用当前值——那会让 null
-    // 关不掉抽屉/对话框，破坏迁移前行为。故 payload 只认 number（任务号已随
-    // docs/27 编号数字化，docs/35 §5#11），非 number（含缺省 undefined）一律
-    // 归一 null，防御畸形 dispatch 不留悬挂展开态。
-    // 互斥保持迁移前现状：两键相互独立、互不清空对方——任务详情页在任务 tab、
-    // 对话框在汇报 tab 渲染，tab 切换天然互斥（onOpenReports 仍只派发
-    // setDialogMember + setNav，不额外动 drawerTaskId）。
+    // S9 抽屉开关（payload 语义与迁移前 setExpandedTask 对齐）：显式 null 是
+    // 明确的「收起」信号（八轮 DA21 后 drawerTaskId 语义 = 任务详情页选中
+    // 的任务 id，「返回列表」靠 null 关闭），payload 缺省不能像上面那样
+    // 沿用当前值——那会让 null 关不掉抽屉，破坏迁移前行为。故 payload 只认
+    // number（任务号已随 docs/27 编号数字化，docs/35 §5#11），非 number
+    // （含缺省 undefined）一律归一 null，防御畸形 dispatch 不留悬挂展开态。
     setDrawerTask: (state, { payload }) => ({
       ...state,
       drawerTaskId: typeof payload === 'number' ? payload : null,
-    }),
-    setDialogMember: (state, { payload }) => ({
-      ...state,
-      dialogMember: typeof payload === 'string' ? payload : null,
     }),
   },
 };

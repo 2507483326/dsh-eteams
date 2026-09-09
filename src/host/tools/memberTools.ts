@@ -1,7 +1,8 @@
 /**
  * Member tool face (docs/11 member column): claim/decline/progress/
- * complete/fail + board/message/status. Registered per member child scope
- * (runtime/members installMemberRuntime); the captain never sees these.
+ * complete/fail + board/message/status. harness 0.1.2 起随 root 作用域注册
+ * （宿主移除了 registerContinuableSetup per-child 装配）——领队/构建器子代理
+ * 经 spawn toolFilter deny 拒见，非成员调用由 resolveCaller 拒绝。
  *
  * @module dsh-eteams/tools/memberTools
  */
@@ -17,10 +18,8 @@ import {
   completeTask,
   failTask,
 } from '../runtime/assignment.js';
-import { sendMessage, teamView } from '../runtime/teamOps.js';
 import { envForAgent, resolveCaller } from './identity.js';
 import { renderContract } from '../prompts/handoff/mails.js';
-import { stationPointsTo } from '../model/taskMachine.js';
 
 function text(value: string): ContentBlock[] {
   return [{ type: 'text', text: value }];
@@ -213,124 +212,9 @@ export function createMemberTools(
     },
   });
 
-  const boardTool = defineTool({
-    name: 'eteams_task_board',
-    description: '查看你的任务看板：被指派任务、当前 attempt、执行链进度。',
-    parameters: {},
-    output: {
-      schema: {
-        type: 'object' as const,
-        properties: {
-          ok: { type: 'boolean' as const, description: '是否成功' },
-          view: { type: 'object' as const, properties: {}, additionalProperties: true },
-        },
-        additionalProperties: false as const,
-      },
-      render: (_a, v) => text(JSON.stringify(v.view, null, 2)),
-    },
-    execute: async (_args, exec) => {
-      const { caller } = await memberOf(exec);
-      const me = caller.member;
-      // 我名下的任务：assignee 或执行链余下站点指向我的工号（v7 链站点写
-      // 工号；旧名字站点退按名比对）。
-      const mine = caller.team.tasks.filter(
-        (t) =>
-          t.assignee === me.name ||
-          t.chain.some((s, i) => i > t.chainCursor && stationPointsTo(s, me)),
-      );
-      // 角色/路线读班底行（docs/35 §3#5：人设/路线在班底，task_members=副本行）。
-      const template = caller.team.members.find((m) => m.employeeId === me.employeeId);
-      // 当前任务口径（docs/36 建议 2）：wait(已派待接取)/start(执行中)/paused
-      // 三态之一；completed/failed 等终态任务不再是「当前任务」。
-      const current = mine.find((t) => ['wait', 'start', 'paused'].includes(t.status));
-      const view = {
-        member: me.name,
-        employeeId: me.employeeId,
-        role: template?.role ?? me.name,
-        currentTask: current?.id ?? null,
-        tasks: mine.map((t) => ({
-          id: t.id,
-          subject: t.subject,
-          status: t.status,
-          assignee: t.assignee ?? null,
-          station:
-            t.chain.length > 0
-              ? {
-                  // 末站完成即 completed（chainCursor 不再推进）——完成态直接
-                  // 按满进度口径显示（docs/35 §5#10 观察项）。
-                  done: t.status === 'completed' ? t.chain.length : t.chainCursor + 1,
-                  total: t.chain.length,
-                  mine: t.chain.findIndex(
-                    (s, i) => i > t.chainCursor && stationPointsTo(s, me),
-                  ),
-                }
-              : null,
-          contract: renderContract(t),
-        })),
-      };
-      return { ok: true as const, view };
-    },
-  });
+  // eteams_task_board / eteams_team_status / eteams_send_message 的成员视角
+  // 已并入 captainTools 的同名工具（harness 0.1.2 起同名工具在 root 只能有
+  // 一个，成员/领队行为按 caller.kind 分支）——本工厂只剩成员专属的五件套。
 
-  const messageTool = defineTool({
-    name: 'eteams_send_message',
-    description:
-      '私信：to="captain" 发给领队（求助/决策/汇报），或 to=成员工号（面板「ET-xxxx」的数字，同名成员各收各箱）。不直接打扰用户。',
-    parameters: {
-      to: strR('收件人（captain 或成员工号/成员名）'),
-      content: strR('消息内容'),
-      taskId: int('相关任务号（可选）'),
-    },
-    output: {
-      schema: {
-        type: 'object' as const,
-        properties: {
-          ok: { type: 'boolean' as const, description: '是否成功' },
-          to: str('收件人'),
-        },
-        additionalProperties: false as const,
-      },
-      render: (_a, v) => text(`已发送给 ${v.to}`),
-    },
-    execute: async (args, exec) => {
-      const { env, caller } = await memberOf(exec);
-      if (args.to.trim() === caller.member.name) throw new ETeamsError('不能给自己发消息');
-      await sendMessage(env, caller.team, caller.actor, args.to, args.content, {
-        taskId: args.taskId,
-      });
-      return { ok: true as const, to: args.to };
-    },
-  });
-
-  const statusTool = defineTool({
-    name: 'eteams_team_status',
-    description: '团队概览（只读）：成员、任务进度。',
-    parameters: {},
-    output: {
-      schema: {
-        type: 'object' as const,
-        properties: {
-          ok: { type: 'boolean' as const, description: '是否成功' },
-          view: { type: 'object' as const, properties: {}, additionalProperties: true },
-        },
-        additionalProperties: false as const,
-      },
-      render: (_a, v) => text(JSON.stringify(v.view, null, 2)),
-    },
-    execute: async (_args, exec) => {
-      const { env, caller } = await memberOf(exec);
-      return { ok: true as const, view: teamView(env, caller.team) };
-    },
-  });
-
-  return [
-    claimTool,
-    declineTool,
-    progressTool,
-    completeTool,
-    failTool,
-    boardTool,
-    messageTool,
-    statusTool,
-  ];
+  return [claimTool, declineTool, progressTool, completeTool, failTool];
 }

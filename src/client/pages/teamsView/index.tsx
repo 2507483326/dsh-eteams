@@ -1,6 +1,6 @@
 /**
  * The 团队 activity panel (docs/13.3, M4.5 IA): left rail with 看板/团队/角色/
- * 任务/汇报, members-first flow (D16), team creation by name only.
+ * 任务, members-first flow (D16), team creation by name only.
  * Renders over host theme variables so light/dark follows the GUI.
  *
  * S12 样式迁移批次一（docs/21-client-ui-stack.md 21.6 / D19b/D19c/D19g）：
@@ -119,10 +119,9 @@ const CONTENT_CLASS = 'flex min-w-0 flex-1 flex-col overflow-x-hidden overflow-y
 /**
  * Panel body — mounted inside the Provider and the panel MemoryRouter
  * (see {@link ETeamsView}).
- * S8/S9（docs/21-client-ui-stack.md）：团队选择与对话框开关迁入
- * ui model——activeId/dialogMember 经 useSelector 读取
- * （ui.selectedTeamId / ui.dialogMember），变更走 useDispatch 发
- * `ui/setSelectedTeam` / `ui/setDialogMember`；drawerTaskId 同为 ui model
+ * S8/S9（docs/21-client-ui-stack.md）：团队选择迁入 ui model——activeId 经
+ * useSelector 读取（ui.selectedTeamId），变更走 useDispatch 发
+ * `ui/setSelectedTeam`；drawerTaskId 同为 ui model
  * 持久键（八轮 DA21 后语义 = 任务详情页选中的任务 id），M3 起由 routes.tsx
  * 的 location sync 回写（/tasks/:taskId ↔ 详情选中），壳不再读取。
  * M1 起**面板导航改路由驱动**：location 是唯一导航驱动源
@@ -140,7 +139,6 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
   const navigate = useNavigate();
   // 变量名沿用迁移前语义：activeId=当前选中团队。
   const activeId = useSelector((s: RootState) => s.ui.selectedTeamId);
-  const dialogMember = useSelector((s: RootState) => s.ui.dialogMember);
   // S10：成员库列表迁入 roster model——useSelector 读、refreshRoster 发
   // `roster/fetchRoster`（takeLatest 防叠）。
   const roster = useSelector((s: RootState) => s.roster.list);
@@ -221,11 +219,6 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
   // 畸形 activeNav 兜底同口径）；rail 高亮的 activeTab 由 PanelRail 自查
   // （同源同值，见 rail.tsx）。
   const activeTab = navIdOfPath(location.pathname);
-  // Dialog target resolved defensively: a vanished member must not crash render.
-  const dialogMemberView =
-    dialogMember === null || team === undefined
-      ? null
-      : (team.members.find((m) => m.name === dialogMember) ?? null);
 
   const refreshRoster = useCallback((): void => {
     // S10：直接 await api 的调用点改 dispatch。失败由 effect 落
@@ -310,7 +303,6 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
               onBack={location.pathname !== '/tasks' ? () => navigate('/tasks') : undefined}
             />
           )}
-          {activeTab === 'reports' && <PageHeader label="汇报" />}
           {/* 顶栏（用户反馈）：团队切换改为「团队」页的卡片栅格，这里只保留
             状态加载失败的就地提示；空态兜底在 BoardTab。 */}
           {state.error !== null && (
@@ -319,7 +311,7 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
 
           {/* M1 路由出口（routes.tsx）：基础路径渲染各 tab，M2/M3 起角色/
             任务域为拆页路由——路由切换的挂载/卸载语义与迁移前条件渲染
-            逐位一致（离开即卸载，瞬态不复存在）；tasks/reports 的 team
+            逐位一致（离开即卸载，瞬态不复存在）；tasks 的 team
             undefined 守卫原样保留。 */}
           <ETeamsViewRoutes
             team={team}
@@ -336,9 +328,6 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
             onPrefillAddPeople={prefillAddPeople}
             openAddTick={openAddTick}
             onAddTickConsumed={() => setOpenAddTick(0)}
-            dialogMember={dialogMember}
-            setDialogMember={(name) => dispatch({ type: 'ui/setDialogMember', payload: name })}
-            dialogMemberView={dialogMemberView}
           />
         </div>
       </div>

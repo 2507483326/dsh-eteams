@@ -1,23 +1,18 @@
 /**
  * 面板侧栏（docs/44 M8 自 index.tsx 拆出，46 清单）：宽栏（官网 docs 侧栏
- * 签名——搜索框 + 分组标题 + 连续左细线列表 + 链接自带左边线三态）与窄栏
+ * 签名——分组标题 + 连续左细线列表 + 链接自带左边线三态）与窄栏
  * （84px 按钮纵列）两套渲染，由壳按作用域根实测宽度切换（railWide 经
  * props 传入——测量锚点是壳的作用域根元素，测量留驻 index.tsx）。M1 起
  * 导航路由驱动：本组件自消费 useLocation/useNavigate，activeTab 由路径查表
- * 派生（navIdOfPath 与壳同口径的纯函数，读同一棵 MemoryRouter 的 location）；
- * 宽栏筛选框是本组件内瞬态（railQuery，宽窄切换不卸载本组件、筛选词保留）。
+ * 派生（navIdOfPath 与壳同口径的纯函数，读同一棵 MemoryRouter 的 location）。
+ * 宽栏筛选框已随用户迭代 2026-09-08 撤除。
  *
  * @module dsh-eteams/client/pages/teamsView/rail
  */
-import { useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-// lucide 深层图标导入（index.tsx 文件头注记同款：主入口 icons 命名空间再
-// 导出会让 rolldown 拖全量图标进 envelope，深层 .mjs 路径只进用到的图标）。
-import Search from 'lucide-react/dist/esm/icons/search.mjs';
 import { cn } from '../../lib/cn';
-import { matchesQuery } from '../../lib/text';
 import { NAV_ITEMS, navIdOfPath } from '../../lib/status';
-import { Input } from '../../components/ui/input';
 import { BORDER_L1_CLASS } from '../shared/styles';
 
 /** ================================== 类型 ================================== */
@@ -109,44 +104,18 @@ const railLinkClass = (active: boolean): string =>
 export function PanelRail({ railWide }: PanelRailProps): ReactNode {
   const location = useLocation();
   const navigate = useNavigate();
-  // 宽栏侧栏筛选框（S24-2 官网 Quick search 签名）：对五个页签名做大小写
-  // 不敏感子串过滤，空串全显；纯前端视觉态，不触碰导航数据。
-  const [railQuery, setRailQuery] = useState('');
   // M1：导航五项收编 lib/status.ts NAV_ITEMS（rail 与路由表共用，44.2.2）；
   // activeTab 由 location 查表派生（navIdOfPath 未知值兜底 board——原畸形
   // activeNav 兜底同口径）。
   const activeTab = navIdOfPath(location.pathname);
-  // 侧栏筛选（S24-2）：大小写不敏感子串匹配页签名；空串全显（M7-9 判据
-  // 收口 lib/text.matchesQuery——原两处同款三行合一）。
-  const railFilter = railQuery.trim().toLowerCase();
-  const visibleTabs =
-    railFilter === '' ? NAV_ITEMS : NAV_ITEMS.filter((t) => matchesQuery(t.label, railFilter));
   return railWide ? (
-    /* docs/22 S22-2 宽栏：官网 docs 侧栏签名——搜索框 + 分组标题 + 连续
-      左细线列表 + 链接自带左边线三态（激活 = sky 文字 + 同色左线 +
-      semibold）。 */
+    /* docs/22 S22-2 宽栏：官网 docs 侧栏签名——分组标题 + 连续左细线列表 +
+      链接自带左边线三态（激活 = sky 文字 + 同色左线 + semibold）；宽栏筛选
+      框已随用户迭代 2026-09-08 撤除。 */
     <div className={RAIL_WIDE_CLASS}>
-      {/* 官网 Quick search 签名（S24-2）：ring 代替边框、shadow-sm；
-        环色走 --eteams-pill-bg——官网的 ring-slate-900/10 字面量在暗色
-        底上是黑环，pill 底 token 亮=浅灰/暗=深灰两侧都成立。 */}
-      <div className="relative mb-3">
-        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        {/* 官网 Quick search 签名（S24-2）迁 shadcn Input（docs/43 扫描
-          整改）：覆盖层去边框改 ring、补 8 档左内边距给放大镜让位、
-          焦点环压成官网 sky 档；环色走 --eteams-pill-bg——官网的
-          ring-slate-900/10 字面量在暗色底上是黑环，pill 底 token
-          亮=浅灰/暗=深灰两侧都成立。 */}
-        <Input
-          type="text"
-          value={railQuery}
-          placeholder="筛选"
-          onChange={(e) => setRailQuery(e.target.value)}
-          className="h-9 rounded-md border-0 pr-3 pl-8 text-sm leading-6 text-foreground outline-none [font-family:inherit] ring-1 ring-[color:var(--eteams-pill-bg)] focus-visible:ring-2 focus-visible:ring-sky-500/60"
-        />
-      </div>
       <h5 className={RAIL_TITLE_CLASS}>团队面板</h5>
       <div className={RAIL_LIST_CLASS}>
-        {visibleTabs.map((t) => (
+        {NAV_ITEMS.map((t) => (
           <button
             key={t.id}
             type="button"

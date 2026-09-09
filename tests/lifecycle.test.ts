@@ -730,8 +730,13 @@ describe('v7 删除成员（工牌作废 + 会话工面截断 + 发号不回退�
     await cap('eteams_assign_task', { taskId: t1.taskId, member: String(dave.employeeId) });
     const daveChild = childByEmployee(dave.employeeId);
     const daveAgent = memberAgent(daveChild.childId);
-    // 在册时工面正常（看板可读）。
-    await mem(daveAgent, 'eteams_task_board', {});
+    // 在册时工面正常（看板可读）。task_board 已并入 captain 工具（0.1.2 起
+    // 同名工具合一）：成员 caller 走成员分支，用 captain 工具查找 + 成员
+    // exec 调用。
+    await captainTool('eteams_task_board').execute(
+      {} as never,
+      { agent: daveAgent, signal: undefined } as never,
+    );
 
     // 移出：班底行硬删（号作废）；任务回池；副本行不动（会话锚保留冷恢复价值）。
     await cap<{ ok: true }>('eteams_remove_member', { name: 'Dave', teamId });
@@ -740,9 +745,12 @@ describe('v7 删除成员（工牌作废 + 会话工面截断 + 发号不回退�
     expect(fresh.tasks.find((t) => t.id === t1.taskId)!.status).toBe('ready');
 
     // R1 离职截断：工牌已不在班底 → 存活子会话解析不出成员身份，工面就地失效。
-    await expect(mem(daveAgent, 'eteams_task_board', {}) as Promise<unknown>).rejects.toThrow(
-      /不在任何 eteams 团队中/,
-    );
+    await expect(
+      captainTool('eteams_task_board').execute(
+        {} as never,
+        { agent: daveAgent, signal: undefined } as never,
+      ) as Promise<unknown>,
+    ).rejects.toThrow(/不在任何 eteams 团队中/);
 
     // 发号不回退：新成员拿到计数器下一个号（3），不复用 Dave 的 2。
     const later = await cap<{ employeeId: number }>('eteams_add_member', {

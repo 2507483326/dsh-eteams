@@ -62,7 +62,7 @@ dsh plugin --profile desktop add C:\eTeam   # 安装到 DSH profile（live link�
 ### 宿主端装配（`src/host/index.ts` apply）
 
 1. 领队工具注册在 **root 作用域**；成员子代理 spawn 时经 `toolFilter.deny` 屏蔽全部领队工具。
-2. 成员运行时 `installMemberRuntime`：经宿主 `subagents.registerContinuableSetup`，在每个子代理作用域注入成员工具（`eteams_claim_task … eteams_team_status`）。
+2. 成员工具 `createMemberTools`：harness 0.1.2 起 `registerContinuableSetup` 被宿主移除，成员工具（`eteams_claim_task … eteams_team_status`）改随 root 作用域注册；领队/构建器子代理经各自 spawn 的 toolFilter deny 拒见，成员身份由 resolveCaller 按任务副本行解析。
 3. `eteams_dispatch_captain`：把对话任务转交一次性领队子代理主持（同一 root 作用域注册——子代理对 `eteams_*` 可见的前提）。
 4. 用量计 `installUsageMeter`：root 作用域监听会话事件采集 usage，写 `usage_detail` + `usage_daily_total`（单事务，失败不外抛——计量绝不影响会话）。
 5. Web 面 `installWebSurface`：**懒绑定**——web server / workspace registry 是兄弟服务可能晚于本插件挂载，靠 `ctx.on('internal/service')` 重试；webless profile 里插件退化为纯工具，绝不阻塞启动。

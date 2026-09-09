@@ -1,8 +1,8 @@
 /**
  * 成员汇报时间线（docs/13.3 汇报）：成员对话框记录只读列表（M5 开放直发）。
  * 符号自 eteamsView.tsx 原样搬出（docs/32 32.5.1 纯移动、零行为变更），
- * 供 roster/rosterDetailPage 与 reports/reportsPage 消费（依赖方向：
- * rosterDetailPage/reportsPage → memberDialog → shared）。
+ * 供 roster/rosterDetailPage 消费（依赖方向：rosterDetailPage → memberDialog
+ * → shared；reports/reportsPage 已随汇报页撤除，用户迭代 2026-09-08）。
  *
  * @module dsh-eteams/client/pages/team/memberDialog
  */

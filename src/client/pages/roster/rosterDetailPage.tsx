@@ -236,11 +236,12 @@ export function RosterDetailPage({ members, team, onDeleted }: RosterDetailPageP
               />
             ) : (
               <>
-                {(isLeader || nameLocked) && (
+                {/* root 不走硬编码副注（用户反馈：与建库播种进 roles.profile
+                的简介同义重复）——system 的页头说明只显示库内简介，「不能加入
+                团队」仍由下方手册卡的 root 提示行交代。 */}
+                {(isLeader || (nameLocked && detail.isRoot !== true)) && (
                   <div className={cn(MUTED_CLASS, 'mt-0.5')}>
-                    {ROSTER_DETAIL_SUBTITLE_META[
-                      isLeader ? 'leader' : detail.isRoot === true ? 'root' : 'protected'
-                    ]}
+                    {ROSTER_DETAIL_SUBTITLE_META[isLeader ? 'leader' : 'protected']}
                   </div>
                 )}
                 {detail.profile !== undefined && detail.profile.trim() !== '' && (
@@ -281,7 +282,10 @@ export function RosterDetailPage({ members, team, onDeleted }: RosterDetailPageP
         <div className={cn(SECTION_TITLE_CLASS, 'flex items-center gap-2')}>
           <span>角色手册（Markdown）</span>
         </div>
-        {detail.isRoot === true && (
+        {/* root 提示行只在手册为空时显示（用户反馈：有内容后撤）——注入说明
+        由页头库内简介交代，这句只在空手册的引导场景出现；以已保存的
+        persona_md 为准，编辑中不打断。 */}
+        {detail.isRoot === true && (detail.personaMd ?? '').trim() === '' && (
           <div className={cn(MUTED_CLASS, 'mb-2 text-sm')}>
             这是注入主对话的特殊角色：保存的手册(MD)会注入主对话窗口的 system 提示词；该角色不能加入团队。
           </div>
