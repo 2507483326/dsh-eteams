@@ -592,29 +592,63 @@ export function createCaptainTools(
   const buildGuideTool = defineTool({
     name: 'eteams_build_guide',
     description:
-      '领取角色构建师完整规程（构建子代理每回合第一步先调本工具）：返回构建纪律全文——播报规范与时间线、意图访谈与统一问答路由（popSelf）、回合收束纪律、人设手册规格。只读幂等，可重复领取。',
+      '领取角色构建师规程与本回合任务（构建子代理每回合第一步先调本工具）：返回 guide=构建纪律全文（含按 turn 的回合决策表——播报规范、意图访谈与统一问答路由、回合收束纪律、人设手册规格）、turn=本回合种类、snapshot=会话快照（原需求/已完成步骤/当前草稿/意图访谈）。只读幂等，可重复领取。',
     parameters: {},
     output: {
       schema: {
         type: 'object' as const,
         properties: {
           ok: bool('是否成功'),
-          guide: str('构建纪律全文'),
+          guide: str('构建纪律全文（含回合决策表）'),
+          turn: str(
+            '本回合种类：start=受理开局 / continue=访谈答案已送达 / resume=放弃后恢复 / restart=手动重启 / none=无进行中会话',
+          ),
+          snapshot: str(
+            '会话快照 JSON（request 原需求 / stepsDone 已完成步骤 / draft 当前草稿 / interview 意图访谈{questions,answers}；无会话为 null）',
+          ),
         },
         additionalProperties: false as const,
       },
-      render: () => text('已领取构建规程（全文随结果返回，照此执行）'),
+      render: () => text('已领取构建规程与本回合任务（全文随结果返回，照此执行）'),
     },
-    // 静默呈现（用户迭代 2026-09-10）：规程全文只进模型上下文——默认卡会把
-    // 整包渲染成大 JSON 行铺进对话，这里收敛为一行。
+    // 静默呈现（用户迭代 2026-09-10）：规程与快照只进模型上下文——默认卡
+    // 会把整包渲染成大 JSON 行铺进对话，这里收敛为一行。
     presentCall: () => ({ card: 'generic' as const, title: '领取构建规程' }),
     presentResult: (_args, result) => {
       if (result.isError) return undefined;
       return { card: 'generic' as const, title: '已领取构建规程', content: [] };
     },
-    // 无状态只读：纪律单一来源 = persona 常量（与子代理系统段同文），每次
-    // 领取原样返回——不改盘、不依赖调用者身份（成员被拒见本工具）。
-    execute: async () => ({ ok: true as const, guide: ROLE_BUILDER_CHILD_PERSONA }),
+    // 无状态只读：纪律单一来源 = persona 常量（与子代理系统段同文）；turn
+    // 来自宿主派发/唤醒时写的 wakeKind（旧会话无字段回退 start 受理语义）；
+    // snapshot 只投影 request/stepsDone/draft/interview（popFailed/routed 等
+    // 路由痕迹不外溢）。成员被拒见本工具。
+    execute: async (_args, exec) => {
+      const env = envForAgent(config, runtime, exec.agent, exec.signal);
+      const session = readBuildSession(stateRootOf(env));
+      return {
+        ok: true as const,
+        guide: ROLE_BUILDER_CHILD_PERSONA,
+        turn: session === null ? 'none' : (session.wakeKind ?? 'start'),
+        snapshot: JSON.stringify(
+          session === null
+            ? null
+            : {
+                request: session.request ?? '',
+                stepsDone: session.stepsDone ?? [],
+                draft: session.draft,
+                interview:
+                  session.interview === undefined
+                    ? null
+                    : {
+                        questions: session.interview.questions ?? [],
+                        ...(session.interview.answers !== undefined
+                          ? { answers: session.interview.answers }
+                          : {}),
+                      },
+              },
+        ),
+      };
+    },
   });
 
   const buildWaitTool = defineTool({

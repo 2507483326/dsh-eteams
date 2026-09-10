@@ -14,8 +14,11 @@ import { CAPTAIN_SECTION_SHORT } from '../src/host/prompts/system/captain';
 import { buildActivationMessage, steerEngageNotice } from '../src/host/commands/eteam';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { Context } from '@deepseek-ai/cordis';
-import type { ETeamsResolvedConfig } from '../src/host/config';
-import { ROLE_BUILDER_PRESET, ROLE_BUILDER_CHILD_PERSONA } from '../src/host/prompts/personas/builder';
+import { ETeamsConfig, type ETeamsResolvedConfig } from '../src/host/config';
+import {
+  ROLE_BUILDER_PRESET,
+  ROLE_BUILDER_CHILD_PERSONA,
+} from '../src/host/prompts/personas/builder';
 import { builderPhasePrompt } from '../src/host/prompts/spawn/builderPhases';
 import { createCaptainTools } from '../src/host/tools/captainTools';
 import { ROLE_BUILDER_SECTION } from '../src/host/prompts/system/roleBuilder';
@@ -24,6 +27,7 @@ import {
   answerBuildInterview,
   cancelBuildSession,
   confirmBuildSession,
+  markBuilderTurn,
   readBuildParentSession,
   readBuildSession,
   reportBuildProgress,
@@ -151,41 +155,68 @@ describe('D18 对话式新增成员', () => {
     expect(ROLE_BUILDER_SECTION).toContain('项目牧羊人');
   });
 
-  it('build child prompts stay brief and fetch the guide first (用户迭代 2026-09-10)', () => {
-    const start = builderPhasePrompt('start', { request: 'eTeam --add-people 建一个数据工程师' });
-    const wake = builderPhasePrompt('continue', {
-      request: 'eTeam --add-people 建一个数据工程师',
-      interview: {
-        questions: [{ id: 'q1', question: '使用场景？', options: [{ label: 'A' }] }],
-        answers: [{ id: 'q1', choice: 'A' }],
-      },
-    });
-    for (const text of [start, wake]) {
-      // 可见回合提示词不再整墙复述纪律：persona 正文不进 prompt，第一步
-      // 自己调 eteams_build_guide 领取
-      expect(text).not.toContain('持久记忆是');
-      expect(text).not.toContain('agency-agents-zh');
-      expect(text).toContain('eteams_build_guide');
-      expect(text).toContain('【本回合任务】');
-    }
-    // 数据快照保留（激活原文 / 访谈作答是模型干活的原材料）
-    expect(start).toContain('【激活原文】');
-    expect(wake).toContain('【意图访谈逐题作答】');
-    // 纪律全在 persona 系统段（eteams_build_guide 返回同一常量，双通道同文）
+  it('build child prompt is a fetch-first brief — task and snapshot ride the guide tool (用户迭代 2026-09-10)', () => {
+    // 全相位同一文本：激活原文/本回合任务/会话快照都不进提示词，模型第一步自己领
+    const prompt = builderPhasePrompt();
+    expect(prompt).toContain('eteams_build_guide');
+    expect(prompt).toContain('eteams_build_report');
+    expect(prompt).not.toContain('【激活原文】');
+    expect(prompt).not.toContain('【本回合任务】');
+    expect(prompt).not.toContain('【原需求】');
+    expect(prompt).not.toContain('【当前草稿】');
+    expect(prompt).not.toContain('agency-agents-zh');
+    expect(prompt).not.toContain('持久记忆是');
+    // 纪律全文（含按 turn 的回合决策表）在 persona 常量里：系统段常驻 + 工具返回同文
+    expect(ROLE_BUILDER_CHILD_PERSONA).toContain('eteams_build_guide');
+    expect(ROLE_BUILDER_CHILD_PERSONA).toContain('回合决策表');
     expect(ROLE_BUILDER_CHILD_PERSONA).toContain('eteams_build_wait');
     expect(ROLE_BUILDER_CHILD_PERSONA).toContain('awaiting_confirmation');
     expect(ROLE_BUILDER_CHILD_PERSONA).toContain('multi_select');
     expect(ROLE_BUILDER_CHILD_PERSONA).toContain('一次报全');
   });
 
-  it('eteams_build_guide hands the builder discipline to the caller (用户迭代 2026-09-10)', async () => {
-    const tools = createCaptainTools({} as ETeamsResolvedConfig, {} as Context);
-    const guide = tools.find((t) => t.name === 'eteams_build_guide');
-    expect(guide).toBeDefined();
-    const out = (await guide!.execute({}, {} as never)) as { ok: boolean; guide: string };
-    expect(out.ok).toBe(true);
-    // 单一来源：工具返回与 persona 系统段同一段纪律全文
-    expect(out.guide).toBe(ROLE_BUILDER_CHILD_PERSONA);
+  it('eteams_build_guide returns the guide, turn and session snapshot (用户迭代 2026-09-10)', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'eteams-build-guide-'));
+    const root = join(workspace, '.eteams');
+    try {
+      await reportBuildProgress(root, {
+        request: 'eTeam --add-people 建一个数据工程师',
+        step: '收到需求',
+      });
+      await markBuilderTurn(root, 'continue');
+      const tools = createCaptainTools(ETeamsConfig({}) as ETeamsResolvedConfig, {} as Context);
+      const guide = tools.find((t) => t.name === 'eteams_build_guide');
+      expect(guide).toBeDefined();
+      const call = (agent: unknown): Promise<Record<string, unknown>> =>
+        guide!.execute({}, { agent } as never) as Promise<Record<string, unknown>>;
+      // 有会话：turn 取宿主写的 wakeKind，快照带原需求（草稿/访谈为空值）
+      const out = (await call({ session: { header: { cwd: workspace } } })) as {
+        ok: boolean;
+        guide: string;
+        turn: string;
+        snapshot: string;
+      };
+      expect(out.ok).toBe(true);
+      expect(out.guide).toBe(ROLE_BUILDER_CHILD_PERSONA);
+      expect(out.turn).toBe('continue');
+      const snap = JSON.parse(out.snapshot) as {
+        request: string;
+        stepsDone: string[];
+        draft: unknown;
+        interview: { questions: unknown[]; answers?: unknown } | null;
+      };
+      expect(snap.request).toBe('eTeam --add-people 建一个数据工程师');
+      expect(snap.draft).toBeNull();
+      expect(snap.interview).toBeNull();
+      // 无会话：turn=none、快照 null——领了规程也不会误判成受理开局
+      const empty = (await call({
+        session: { header: { cwd: join(workspace, 'empty-ws') } },
+      })) as { turn: string; snapshot: string };
+      expect(empty.turn).toBe('none');
+      expect(empty.snapshot).toBe('null');
+    } finally {
+      cleanupTempWorkspace(workspace);
+    }
   });
 
   it('preset is the single source for the role template (D18-3)', () => {

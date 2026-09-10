@@ -205,7 +205,8 @@ export function RosterAddPage({
 
   return (
     <div className="min-w-0 overflow-x-hidden">
-      <style>{'@keyframes eteams-spin{to{transform:rotate(360deg)}}'}</style>
+      {/* eteams-spin keyframes 注入已撤（用户迭代 2026-09-10）：最后一个消费方
+      （构建台 sparkle 转圈）换成 StepDot 的 SVG 内建动画后无人再用。 */}
       {/* 返回钮走壳层页头 onBack（用户迭代 2026-09-08：页面返回统一收口
       PageHeader onBack 槽，页头行最右图标钮）——顶部返回条行撤，卡直接跟页头。 */}
       <Card className={cn(PANEL_CARD_CLASS)}>
@@ -214,17 +215,14 @@ export function RosterAddPage({
           (addMode === 'manual' ? (
             // 手动创建（用户迭代 2026-09-03）：直接进入角色手册编辑页，
             // 保存即入库（`roster/saveRoster` 直连），不经对话命令中转。
+            // 状态 pill 与卡内返回钮已撤（用户迭代 2026-09-10）——返回统一
+            // 走壳层页头 onBack，页头只留图标 + 标题。
             <div>
               <div className="flex items-center gap-2">
                 <span className="inline-flex text-primary">
                   <PenLine className="h-4 w-4" />
                 </span>
                 <div className={cn(LINE_CLASS, 'font-semibold')}>手动创建</div>
-                <Pill tone="muted">直接填写手册</Pill>
-                <span className="min-w-0 flex-1" />
-                <Button size="sm" variant="ghost" onClick={() => setAddMode('choose')}>
-                  返回
-                </Button>
               </div>
               {/* 头像行（用户迭代 2026-09-04）：进页即随机一枚预览，
               「随机头像」随时再换——保存时随 payload 落库。 */}
@@ -267,18 +265,16 @@ export function RosterAddPage({
                 <MdEditor value={personaMd} onChange={setPersonaMd} minHeight={300} />
               </div>
               {manualError !== null && <FormErrorNote>保存失败：{manualError}</FormErrorNote>}
-              <div className="mt-2 flex items-center gap-2">
+              {/* 保存钮右置（用户迭代 2026-09-10）：标签简化为「保存」，提示
+              文案撤——保存后去哪用是流程常识，不再占一行。 */}
+              <div className="mt-2 flex justify-end">
                 <Button
                   size="sm"
                   disabled={manualSaving || name.trim() === ''}
                   onClick={() => void saveManual()}
                 >
-                  <IconPlusOutline16 />
-                  保存入库
+                  保存
                 </Button>
-                <span className={MUTED_CLASS}>
-                  保存后角色进入角色列表，到「团队」页拉进团队即可使用。
-                </span>
               </div>
             </div>
           ) : addMode === 'ai' ? (

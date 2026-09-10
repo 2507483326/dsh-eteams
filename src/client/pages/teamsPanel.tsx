@@ -257,8 +257,12 @@ function TeamsOverlay({ onClose }: { onClose: () => void }): ReactNode {
           <div className="min-h-0 flex-1 overflow-hidden">
             {/* The panel only reads sessionId/inputActions off its slot props; the
           page has neither (no session on the not-started screen), so a minimal
-          share is cast in — the panel degrades to the all-teams pool and
-          clipboard prefill, both sanctioned fallbacks. */}
+          share is cast in. Prefill still lands: prefillComposer falls back to
+          the capture bridge (TeamsButton registers the session kit's
+          inputActions on mount) and writes the canonical template straight
+          into the machine draft via the official setDraft — sendable on plain
+          enter（未开始 hero 的锁定 composer 不响应合成事件，claim 舞蹈在此
+          不可用，见 addPeople）. */}
             <ETeamsView {...({ sessionId: undefined } as unknown as ConvViewProps)} />
           </div>
         </div>

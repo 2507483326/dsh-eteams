@@ -28,7 +28,7 @@
 | system/sessionPersona.ts | 角色接管 band 文本组装、neutralizeInterpolation | runtime/sessionPersona.ts 薄壳 |
 | system/sessionTeam.ts | 团队绑定 band 文本组装 | runtime/sessionTeam.ts 薄壳 |
 | spawn/captainChild.ts | 领队子代理人格 + 手册拼装 | tools/captainDispatch.ts |
-| spawn/builderPhases.ts | 构建回合提示词（受理/续聊/恢复/重启，docs/19.16 持续构建子代理） | runtime/builderPhases.ts |
+| spawn/builderPhases.ts | 构建回合提示词（全相位同一「第一步领规程」简短文本——任务与快照经 eteams_build_guide 获取，docs/19.16 持续构建子代理） | runtime/builderPhases.ts |
 | spawn/member.ts | 成员欢迎包（规则 + 工具表） | runtime/members.ts |
 | handoff/mails.ts | 指派 / 汇报 / 婉拒 / 挂起 / 取消模板 | runtime/assignment.ts、runtime/members.ts、runtime/docs.ts、tools/memberTools.ts |
 | personas/framework.ts | 人设框架（字段渲染 / 合并 / 摘要 / 回退执行提示） | state/、runtime/、prompts 内部 |

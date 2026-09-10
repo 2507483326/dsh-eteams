@@ -37,7 +37,6 @@ import { usePoll } from '../../hooks/usePoll';
 import type { RootState } from '../../store/app';
 import {
   BUILD_STEPS,
-  DraftPreview,
   EMPTY_EDIT,
   fromBuildDraft,
   type DraftEdit,
@@ -393,11 +392,9 @@ export function BuildWorkbench({ build, addMode, onConfirmed }: BuildWorkbenchPr
               );
             })}
           </div>
-          {build.note !== '' && <div className={MUTED_CLASS}>{build.note}</div>}
-          {build.request !== '' && (
-            <div className={cn(MUTED_CLASS, 'mt-1')}>需求：{build.request}</div>
-          )}
-          {build.draft !== null && <DraftPreview draft={build.draft} />}
+          {/* 需求回显 / 构建师播报 note / 草稿只读预览卡均已撤（用户迭代
+          2026-09-10）：构建过程看步骤时间线就够，草稿细节等就绪后在确认表单
+          里直接改。 */}
         </div>
       )}
       {build !== null && build.status === 'awaiting_confirmation' && build.draft !== null && (

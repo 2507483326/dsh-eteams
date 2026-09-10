@@ -11,6 +11,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { atomicWriteText } from '../state/store.js';
 import { avatarSeedFor, upsertRosterMember } from './roster.js';
+import type { BuildPhaseKind } from '../prompts/spawn/builderPhases.js';
 
 export type BuildStatus = 'active' | 'awaiting_confirmation' | 'confirmed' | 'cancelled';
 
@@ -81,6 +82,12 @@ export interface BuildSession {
    * 跨构建互不踩、宿主重启后仍有效。
    */
   builderWakeKey?: string;
+  /**
+   * 最近一次派发/唤醒的回合种类（markBuilderTurn 写入）：eteams_build_guide
+   * 据此返回 turn——可见提示词不带回合任务，模型领规程时取决策表分支。
+   * 旧会话无此字段时工具回退 'start'（受理开局语义）。
+   */
+  wakeKind?: BuildPhaseKind;
 }
 
 interface BuildFile {
@@ -495,6 +502,22 @@ export async function markBuilderWake(
     builderWakeKey: wakeKey,
     updatedAt: current.updatedAt,
   });
+}
+
+/**
+ * 记录最近一次派发/唤醒的回合种类（用户迭代 2026-09-10：可见提示词不再带
+ * 回合任务——eteams_build_guide 以本字段决定返回的 turn，模型领规程时取
+ * 决策表分支）。受理（startBuilderChild）与每次唤醒（wakeBuilderChild）各
+ * 写一次，都在派发动作之前——子代理首个工具调用时凭据已在盘上。合并写不
+ * 动 updatedAt（与 markBuilderWake 同口径，不驱动面板表单重置）。
+ */
+export async function markBuilderTurn(
+  stateRoot: string,
+  kind: BuildPhaseKind,
+): Promise<void> {
+  const current = readBuildSession(stateRoot);
+  if (current === null) return;
+  await writeSession(stateRoot, { ...current, wakeKind: kind, updatedAt: current.updatedAt });
 }
 
 /**

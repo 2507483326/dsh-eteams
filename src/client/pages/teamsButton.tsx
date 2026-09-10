@@ -76,7 +76,7 @@ import { writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives';
 import Check from 'lucide-react/dist/esm/icons/check.mjs';
 import Plus from 'lucide-react/dist/esm/icons/plus.mjs';
 import Search from 'lucide-react/dist/esm/icons/search.mjs';
-import { ADD_PEOPLE_TEMPLATE, prefillComposer } from '../lib/addPeople';
+import { ADD_PEOPLE_TEMPLATE, captureInputActions, prefillComposer } from '../lib/addPeople';
 import { ClientErrorBoundary, recordClientDiag } from '../lib/diagnostics';
 import { enterTeamsPanel } from './teamsPanel';
 import {
@@ -651,6 +651,11 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
   // latency, but its outcome lands here — a stale host (app not restarted
   // since the feature shipped) must be VISIBLE, not silently swallowed.
   const [personaError, setPersonaError] = useState<string | null>(null);
+  // inputActions 捕获桥（addPeople）：本组件随 composer 工具行挂载（hero 与
+  // 对话内都在）且拿得到会话标准 kit 的官方写路——整页团队页弹窗里的
+  // ETeamsView 是独立 React 根、没有 kit prop，其「填充」回落用这里登记的
+  // 一份。actions 身份按会话稳定（kit 契约），effect 只在换会话时重登记。
+  useEffect(() => captureInputActions(props.inputActions), [props.inputActions]);
   useEffect(() => {
     const restore = (): void => {
       const member = loadSelectedMember(sessionId);

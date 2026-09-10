@@ -6,11 +6,13 @@
  * 子代理经 eteams_build_wait 停驻（回合不收束，docs/19.17.1）；放弃时
  * `interrupt` 中断（durable 会话保留，恢复经 followup 或冷恢复重建续聊）。
  * followup 失败（lineage 不符/会话
- * 记录被回收）→ 以快照提示词重建并覆盖落盘 childId（captainDispatch 同款
- * 先续聊后重建）。机制镜像 captainDispatch.ts（docs/26）与 members.ts。
+ * 记录被回收）→ 以简短提示词重建并覆盖落盘 childId（captainDispatch 同款
+ * 先续聊后重建；任务与快照由子代理调 eteams_build_guide 自取）。机制镜像
+ * captainDispatch.ts（docs/26）与 members.ts。
  *
  * Phase prompt text lives in prompts/spawn/builderPhases (纯文本函数)——本
- * 文件只做派发编排：读会话快照 → startContinuable/followup → 落盘 childId。
+ * 文件只做派发编排：写回合种类（markBuilderTurn）→ startContinuable/
+ * followup → 落盘 childId。
  *
  * @module dsh-eteams/runtime/builderPhases
  */
@@ -23,6 +25,7 @@ import { locks } from '../state/lock.js';
 import { MEMBER_DENIED_TOOLS, MEMBER_TOOL_NAMES } from './members.js';
 import {
   markBuilderChild,
+  markBuilderTurn,
   markBuilderWake,
   markPhaseSpawn,
   phaseSpawnLocked,
@@ -32,11 +35,7 @@ import {
   setBuildParentSession,
 } from './roleBuilder.js';
 import { ROLE_BUILDER_CHILD_PERSONA } from '../prompts/personas/builder.js';
-import {
-  builderPhasePrompt,
-  type BuilderPhaseSnapshot,
-  type BuildPhaseKind,
-} from '../prompts/spawn/builderPhases.js';
+import { builderPhasePrompt, type BuildPhaseKind } from '../prompts/spawn/builderPhases.js';
 
 export type { BuildPhaseKind } from '../prompts/spawn/builderPhases.js';
 
@@ -96,19 +95,6 @@ export function builderToolFilter(): { deny: string[] } {
   };
 }
 
-/** 会话快照投影（读盘 → prompts 平面自含快照）。 */
-function snapshotOf(stateRoot: string): BuilderPhaseSnapshot | null {
-  const session = readBuildSession(stateRoot);
-  return session === null
-    ? null
-    : {
-        request: session.request,
-        stepsDone: session.stepsDone,
-        draft: session.draft,
-        interview: session.interview,
-      };
-}
-
 /** subagents 服务能力探测：continuable 派发需要 startContinuable + 唤醒
  * 入口（harness 0.1.2 起 followup 被 sendMessage 取代——两者按宿主能力
  * 二选一，deliverToChild 兼容分发）。 */
@@ -165,14 +151,20 @@ export function startBuilderChild(args: BuilderDispatchArgs): void {
         logger?.warn(failMessage('child-id pre-write failed', error));
       });
       // persona 系统段承载全部构建纪律（ROLE_BUILDER_CHILD_PERSONA，用户
-      // 不可见）；prompt 只带简短任务行 + 数据快照（用户迭代 2026-09-10：
-      // 构建对话视图里不再出现整墙规程）。
+      // 不可见）；prompt 只剩「身份 + 第一步领规程」——回合任务（wakeKind）
+      // 与会话快照由子代理调 eteams_build_guide 自取（用户迭代 2026-09-10：
+      // 构建对话视图里不再出现规程墙与数据块）。
+      // 回合种类先落盘（eteams_build_guide 的 turn 凭据）：派发动作之前
+      // 写入——子代理首个工具调用时已在盘上。
+      await markBuilderTurn(stateRoot, 'start').catch((error) => {
+        logger?.warn(failMessage('wake-kind write failed', error));
+      });
       const start = await subagents.startContinuable!({
         provider: config.memberProvider,
         label: BUILDER_LABEL,
         childId,
         request: {
-          prompt: textTurn(builderPhasePrompt('start', snapshotOf(stateRoot))),
+          prompt: textTurn(builderPhasePrompt()),
           parent,
           persona: ROLE_BUILDER_CHILD_PERSONA,
           toolFilter: builderToolFilter(),
@@ -224,7 +216,6 @@ export function wakeBuilderChild(args: {
         }
         await resumeBuildSession(stateRoot);
       }
-      const snapshot = snapshotOf(stateRoot);
       // 唤醒去重（continue）：同一轮答案只续聊一次——两个入口竞态时第二个
       // 在锁内看到相同键，直接跳过（避免两次 followup 两次起草）。
       if (kind === 'continue' && session !== null) {
@@ -235,7 +226,12 @@ export function wakeBuilderChild(args: {
         }
         await markBuilderWake(stateRoot, key);
       }
-      const prompt = textTurn(builderPhasePrompt(kind, snapshot));
+      // 回合种类先落盘（eteams_build_guide 的 turn 凭据）：唤醒投递之前
+      // 写入——子代理收到 followup 后领规程即取到本回合分支。
+      await markBuilderTurn(stateRoot, kind).catch((error) => {
+        logger?.warn(failMessage('wake-kind write failed', error));
+      });
+      const prompt = textTurn(builderPhasePrompt());
       const childId = session?.builderChildId ?? '';
       if (childId !== '') {
         try {

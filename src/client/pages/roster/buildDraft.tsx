@@ -1,7 +1,8 @@
 /**
  * 构建工作台的草稿数据层（docs/19.6.2 角色构建师）：构建步骤时间线、
  * 可编辑草稿表单态（DraftEdit/EMPTY_EDIT/fromBuildDraft）、预填命令芯片
- * 与构建中草稿只读预览、手册骨架合成（handbookSeed/HandbookSource）。
+ * 与手册骨架合成（handbookSeed/HandbookSource）。构建中草稿只读预览卡已撤
+ * （用户迭代 2026-09-10——过程看步骤时间线，细节等确认表单直接改）。
  * 符号自 eteamsView.tsx 原样搬出（docs/32 32.5.1 纯移动、零行为变更），
  * 供 roster/rosterAddPage、roster/buildWorkbench、roster/rosterDetailPage
  * 与 team/memberDetailPage 消费（R1 类型边：HandbookSource/DraftEdit 一律
@@ -11,14 +12,8 @@
  */
 import type { ReactNode } from 'react';
 import type { BuildDraft } from '../../lib/api';
-import { cn } from '../../lib/cn';
-import { Card } from '../../components/ui/card';
-import { BORDER_L1_CLASS, MUTED_CLASS, PANEL_CARD_CLASS, SECTION_TITLE_CLASS } from '../shared/styles';
+import { BORDER_L1_CLASS } from '../shared/styles';
 
-/** 原 styles.detailRow / detailLabel（构建中草稿预览行；--border 下边线；
- * D22d 数据行 14px/24）。 */
-const DETAIL_ROW_CLASS = `flex gap-2.5 border-b border-solid py-2 text-sm leading-6 ${BORDER_L1_CLASS}`;
-const DETAIL_LABEL_CLASS = 'w-16 shrink-0 pt-px text-xs font-semibold text-muted-foreground';
 /** 原 styles.cmdChip（预填命令芯片：等宽字体 + --border 边框 + --muted 底；
  * D22d mono 芯片 13px 档）。 */
 const CMD_CHIP_CLASS = `mt-2 break-all rounded-md border border-solid bg-muted px-3 py-2.5 text-[13px] leading-[1.7] font-mono text-muted-foreground ${BORDER_L1_CLASS}`;
@@ -124,31 +119,6 @@ export const PREFILL_STEPS = [
   '回车发送，角色构建师立刻接手（预填行直接回车同样生效）',
   '回到这里实时看构建；草稿就绪后可修改，点「确认入库」完成',
 ] as const;
-
-/** 构建中草稿只读预览（docs/19.6.2）：字段渐次呈现，不可编辑。 */
-export function DraftPreview({ draft }: { draft: BuildDraft }): ReactNode {
-  // 构建中草稿 name/role 可能尚未上报（浅合并渐次呈现）——缺省按空值渲染
-  // 占位「…」，不设防会在 value.trim() 处崩掉整块面板。
-  const rows: [string, string][] = [
-    ['角色名', draft.name ?? ''],
-    ['角色', draft.role ?? ''],
-    ['简介', draft.profile ?? ''],
-  ];
-  return (
-    <Card className={cn(PANEL_CARD_CLASS, 'mt-2 p-2.5')}>
-      <div className={SECTION_TITLE_CLASS}>草稿预览（构建中，待确认后可编辑）</div>
-      {rows.map(([label, value]) => (
-        <div key={label} className={DETAIL_ROW_CLASS}>
-          <span className={DETAIL_LABEL_CLASS}>{label}</span>
-          {/* D22d：正文主 = foreground（有值）/ meta = muted（空占位）。 */}
-          <span className={cn(MUTED_CLASS, value.trim() !== '' && 'text-foreground')}>
-            {value.trim() !== '' ? value : '…'}
-          </span>
-        </div>
-      ))}
-    </Card>
-  );
-}
 
 /** 角色（用户反馈：成员更名角色，不再需要标签）：角色库全体条目（先有角色，再组建团队）——列表 / 构建工作台 / 详情。 */
 /**

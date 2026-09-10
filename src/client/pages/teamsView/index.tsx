@@ -69,7 +69,12 @@ import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/clie
 // 字符串载入，见 usageCalendarCss.d.ts / tsdown.config.ts usageTooltipsCssInline。
 import { Provider, useDispatch, useSelector } from 'react-redux';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { prefillComposer, type PrefillOutcome } from '../../lib/addPeople';
+import {
+  composerDraftProbe,
+  peekCapturedInputActions,
+  prefillComposer,
+  type PrefillOutcome,
+} from '../../lib/addPeople';
 import {
   consumePendingGotoAdd,
   consumePendingGotoRoster,
@@ -312,10 +317,29 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
   usePoll(pullAgentActivity, 3000);
 
   // 一键预填（docs/19.7.1, D18-1）：共享 helper（addPeople.ts）把命令写入
-  // 对话输入框并聚焦；inputActions 不可用时退化为剪贴板复制。不自动发送。
+  // 对话输入框并聚焦；写路解析「槽位实参 → 捕获桥 → 模拟键入」，两路皆空才
+  // 退化剪贴板。不自动发送。诊断落 client.log（2026-09-10 用户报告填充不落
+  // 地）：记写路来源 + 结果位，200ms 后探一次草稿——claim/修复窗是否生效
+  // 一目了然，下一轮反馈直接看日志定位。
   const prefillAddPeople = useCallback((): PrefillOutcome => {
-    const actions = (props as { inputActions?: { setDraft: (text: string) => void } }).inputActions;
-    return prefillComposer(actions);
+    const slotActions = (
+      props as { inputActions?: { setDraft: (text: string) => void } | undefined }
+    ).inputActions;
+    const source =
+      slotActions !== undefined && typeof slotActions.setDraft === 'function'
+        ? 'slot'
+        : peekCapturedInputActions() !== undefined
+          ? 'captured'
+          : 'none';
+    const outcome = prefillComposer(slotActions);
+    window.setTimeout(() => {
+      recordClientDiag(
+        'prefill-add',
+        `source=${source} outcome=${outcome} draft=${composerDraftProbe()}`,
+        'rosterAdd',
+      );
+    }, 200);
+    return outcome;
   }, [props]);
 
   // 表面根（D19b/S12/S14）：宿主 conversation.view 槽位渲染本面板，视图区

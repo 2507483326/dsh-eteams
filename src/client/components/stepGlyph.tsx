@@ -40,32 +40,55 @@ export function StepGlyph({ state, className }: { state: string; className?: str
 /** ================================== 圆点字形（构建工作台专用） ================================== */
 
 /**
- * 三态圆点调色表（用户迭代 2026-09-10）：构建工作台的步骤时间线从 ✔●◌
- * 字形换成统一圆点——完成 business 蓝点（灰勾撤除）、进行中 warning 橙黄
- * 转圈（border-t-transparent 缺口环 + eteams-spin 自转）、未到灰色空心环。
- * 完整字面量映射表（21.5.1）；eteams-spin keyframes 由消费页（rosterAddPage）
- * 注入，与构建台原 sparkle 转圈同一动画源——他处复用须先带上这段注入。
- */
-export const STEP_DOT_STATE_CLASS: Record<string, string> = {
-  done: 'bg-business',
-  current:
-    'border-2 border-warning border-t-transparent [animation:eteams-spin_1s_linear_infinite]',
-  pending: 'border border-muted-foreground',
-};
-
-/**
- * 步骤圆点：三态统一 10px 圆元素（原字形档大一号——用户「圆点变大一些」）。
- * state 未知值回落 pending 空心环（同 StepGlyph 口径）；className 透传给
+ * 步骤圆点（用户迭代 2026-09-10）：构建工作台的步骤时间线从 ✔●◌ 字形换成
+ * 统一圆点——完成 business 蓝点（灰勾撤除）、进行中 warning 橙黄转圈、
+ * 未到灰色空心环。
+ *
+ * 为什么是 SVG：首版用 border/rounded 工具类实现，宿主（DeepSeek Harness）
+ * 侧样式压过圆角与边框属性，圆点渲染成方角——`<circle>` 是矢量形状，不经过
+ * CSS border-radius 通道，宿主样式无从干扰；转圈动画用 SVG 内建的
+ * `<animateTransform>`，也不再依赖消费页注入的 eteams-spin keyframes。
+ * 填色走内联 style 的 CSS 变量（亮暗主题照常跟随），内联样式再挡一层。
+ *
+ * 尺寸基线 10px（原字形档大一号——用户「圆点变大一些」）；className 透传给
  * tailwind-merge——构建台头部的进行中档传 h-3.5 w-3.5 覆盖尺寸。
  */
 export function StepDot({ state, className }: { state: string; className?: string }): ReactNode {
   return (
-    <span
-      className={cn(
-        'inline-block h-2.5 w-2.5 shrink-0 rounded-full border-solid',
-        STEP_DOT_STATE_CLASS[state] ?? STEP_DOT_STATE_CLASS.pending,
-        className,
+    <svg viewBox="0 0 10 10" className={cn('h-2.5 w-2.5 shrink-0', className)} aria-hidden>
+      {state === 'done' ? (
+        <circle cx="5" cy="5" r="4.5" style={{ fill: 'var(--business)' }} />
+      ) : state === 'current' ? (
+        // 缺口环（周长 ≈ 23.6，dash 15.5 + gap 8）+ 圆头线帽，自转一圈 1s。
+        <circle
+          cx="5"
+          cy="5"
+          r="3.75"
+          fill="none"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeDasharray="15.5 8"
+          style={{ stroke: 'var(--warning)' }}
+        >
+          <animateTransform
+            attributeName="transform"
+            type="rotate"
+            from="0 5 5"
+            to="360 5 5"
+            dur="1s"
+            repeatCount="indefinite"
+          />
+        </circle>
+      ) : (
+        <circle
+          cx="5"
+          cy="5"
+          r="4"
+          fill="none"
+          strokeWidth="1.5"
+          style={{ stroke: 'var(--muted-foreground)' }}
+        />
       )}
-    />
+    </svg>
   );
 }
