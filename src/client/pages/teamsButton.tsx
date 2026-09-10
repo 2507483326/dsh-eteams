@@ -102,15 +102,31 @@ import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs';
 
 /** ================================== 类型 ================================== */
 
+/** 会话快照里本按钮只关心的员（ConversationSnapshot.running 的结构化投影
+ * ——回合在途即 true；快照未就绪 → undefined）。 */
+interface SessionSnapshotFace {
+  readonly running?: unknown;
+}
+
+/** useSession 的在途 selector（模块级常量——引用稳定，行为纯函数）。 */
+const SESSION_RUNNING_SELECTOR = (snapshot: SessionSnapshotFace | undefined): boolean =>
+  snapshot?.running === true;
+
 /**
- * Owner share of the input-region slots (`InputZone`): the conversation
- * snapshot, the live input state, and the session-slot standard kit's
- * draft actions when the runtime injects them. Types stay structural to
- * avoid reaching into non-exported contract names.
+ * 标准座位入参（SessionStandardProps 契约的结构化投影）：框架随每个
+ * session 作用域槽位组件下发 `sessionId`（会话 id 直传 prop）、
+ * `useSession`（会话快照选择器）与 `useProjection`（keyed 投影读取），
+ * owner 不传任何东西——故全部可选。首版误读 `props.session` /
+ * `props.input`（框架从不传这两个 prop），绑定 POST、挂载恢复、心跳与
+ * 发送清空全部静默失效，2026-09-10 改正（实测 conversation 包：input.right
+ * 槽位 owner 传空包，InputBar 自身的输入状态 hook 不透传——发送清空改走
+ * 快照 `running` 位，见主组件注记）。类型保持结构化，不触及宿主未导出的
+ * 契约名。`inputActions` 是 conversation 输入域专属的既有 prop（草稿写入
+ * 动作，prefillComposer 用）。
  */
 interface TeamsButtonProps {
-  readonly session?: unknown;
-  readonly input?: unknown;
+  readonly sessionId?: string;
+  readonly useSession?: <S>(selector: (snapshot: SessionSnapshotFace | undefined) => S) => S;
   readonly inputActions?: { setDraft: (text: string) => void };
 }
 
@@ -592,8 +608,9 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
   // off a ref during render) so the portal can mount in the same commit the
   // popup opens.
   const [anchorEl, setAnchorEl] = useState<HTMLDivElement | null>(null);
-  // The wrapper is per session — the structural session face carries the id.
-  const sessionId = (props.session as { sessionId?: string } | undefined)?.sessionId;
+  // The wrapper is per session — the standard seat carries the framework-
+  // resolved id (渲染器注入的直传 prop，不是 owner prop)。
+  const sessionId = typeof props.sessionId === 'string' ? props.sessionId : undefined;
   // Selections (docs/13.8.2, docs/26): a selected MEMBER drives the
   // system-prompt persona band (the conversation speaks as that role); a
   // selected TEAM drives the 团队绑定 band (conversation task workflow +
@@ -606,22 +623,26 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
   const [selectedTeam, setSelectedTeam] = useState<{ teamId: string; name: string } | null>(() =>
     loadSelectedTeam(sessionId),
   );
-  // 一次性团队选择（用户迭代 2026-09-07「发送后清空选择」）：输入状态机
-  // 进入 submitting（真实提交在途；InputZone owner props 的 point-in-time
-  // 快照随骨架重渲染到达）即清团队面——按钮回「团队」+ localStorage 清除，
-  // 不调 clearSessionTeam（那条消息的宿主 band/派发身份还要靠绑定，宿主
-  // user/message 事件一次性消费，host runtime/sessionTeam）。转变沿检测走
-  // 渲染期调整（React 官方对「prop 变化派生状态」的替代——effect 同步
-  // setState 被 react-hooks/set-state-in-effect 禁止）：lastPhase 记上一帧
-  // 相位，仅在 plain→submitting 转变沿清空——挂载即 submitting（首帧同值）
-  // 与回合中段重选（相位未变）都不误清。removeItem 幂等，重复执行无副作用。
-  // 角色面不受发送影响（用户只要求团队选择）。
-  const rawPhase = (props.input as { phase?: unknown } | undefined)?.phase;
-  const inputPhase = typeof rawPhase === 'string' ? rawPhase : null;
-  const [lastPhase, setLastPhase] = useState<string | null>(inputPhase);
-  if (inputPhase !== lastPhase) {
-    setLastPhase(inputPhase);
-    if (inputPhase === 'submitting' && selectedTeam !== null) {
+  // 一次性团队选择（用户迭代 2026-09-07「发送后清空选择」）：消息发出并被
+  // 受理（快照 running false→true 沿——实测 conversation 包：input.right
+  // 槽位 owner 传空包，InputBar 自身的输入状态 hook 不透传，session 标准
+  // kit 的快照 running 位是本域内唯一的「回合在途」权威信号）即清团队面
+  // ——按钮回「团队」+ localStorage 清除，不调 clearSessionTeam（那条消息
+  // 的宿主 band/派发身份还要靠绑定，宿主 user/message 事件一次性消费，
+  // host runtime/sessionTeam）。转变沿检测走渲染期调整（React 官方对
+  // 「prop 变化派生状态」的替代——effect 同步 setState 被
+  // react-hooks/set-state-in-effect 禁止）：lastRunning 记上一帧在途位，
+  // 仅在 false→true 转变沿清空——挂载即在途（首帧同值）与回合中段重选
+  // （位未变）都不误清。removeItem 幂等，重复执行无副作用。角色面不受
+  // 发送影响（用户只要求团队选择）。hook prop 先取局部变量再调用（成员名
+  // 不以 use 开头，hook 判定不受影响；是否在场随 mounting 固定，顺序稳定），
+  // 缺席时恒 false（转变沿无从发生，清空静默退化）。
+  const sessionHook = typeof props.useSession === 'function' ? props.useSession : undefined;
+  const turnRunning = sessionHook?.(SESSION_RUNNING_SELECTOR) ?? false;
+  const [lastRunning, setLastRunning] = useState<boolean>(turnRunning);
+  if (turnRunning !== lastRunning) {
+    setLastRunning(turnRunning);
+    if (turnRunning && selectedTeam !== null) {
       setSelectedTeam(null);
       forgetSelectedTeam(sessionId);
     }

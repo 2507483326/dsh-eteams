@@ -80,15 +80,9 @@ import {
 import { stopBuilderChild, wakeBuilderChild } from './builderPhases.js';
 import { clearSessionPersona, setSessionPersona } from './sessionPersona.js';
 import { clearSessionTeam, getSessionTeamId, setSessionTeam } from './sessionTeam.js';
-import { dispatchCaptainCore, captainChildTeamOf } from './captainAgent.js';
+import { dispatchCaptainCore } from './captainAgent.js';
 import { captainCommissionPrompt } from '../prompts/steering/dispatch.js';
-import {
-  lookupMemberSession,
-  readUsageCalendar,
-  readAppUsageCalendar,
-  sessionRouteOf,
-} from './usage.js';
-import { declaredRouteOf } from './sessionRoutes.js';
+import { readUsageCalendar, readAppUsageCalendar } from './usage.js';
 import {
   findRosterMemberAcrossWorkspaces,
   locateTeamAcrossWorkspaces,
@@ -1984,83 +1978,9 @@ export function installWebSurface(
               });
               return;
             }
-            // GET /session-route?sessionId=<id> — 子代理会话的观测路线 + 身份
-            // （用户迭代 2026-09-07「子代理会话中显示实际的 provider/model」）：
-            // composer 模型座位对子代理会话有意不可用（ui-model-selection 按
-            // subagentAddress 门控），子会话徽章改查本路由。路线 = usage 旁路
-            // 观测值（request/header·context → routeCache，进程内存——重启后
-            // 该会话再发请求重填）；身份 = 成员/领队子代理登记表 + 当前构建
-            // 子会话 id。非 eteams 子代理（用户自己的对话）返回 subagent:false，
-            // 徽章不渲染、主会话模型座位照旧。
-            if (segments[0] === 'session-route' && segments.length === 1) {
-              const sessionId = (url.searchParams.get('sessionId') ?? '').trim();
-              if (sessionId === '') {
-                sendError(res, 400, 'sessionId 参数缺失');
-                return;
-              }
-              const member = lookupMemberSession(sessionId);
-              const captainTeam = captainChildTeamOf(sessionId);
-              const isBuilder = collectRoots(ctx, config).some(
-                (located) => readBuildSession(located.root)?.builderChildId === sessionId,
-              );
-              const kind = member !== undefined
-                ? 'member'
-                : captainTeam !== undefined
-                  ? 'captain'
-                  : isBuilder
-                    ? 'builder'
-                    : undefined;
-              // 显示组合（用户反馈 2026-09-07「主会话是 tokenrouter/glm-5.3-free，
-              // 徽章却显示 tokenrouter/z-ai/glm-5.3-free」）：观测 model 是解析
-              // 后的上游限定 id，与主会话模型座位的目录级 id 不一致——model 取
-              // 声明值（descriptor agentOptions），provider 取观测值（真实适配
-              // 名；覆盖路线误填传输名 'spawn'/'fork' 的声明 provider 不采信）。
-              // 只有一侧时整体用那一侧；冷恢复未观测即纯声明路线。
-              const declared = declaredRouteOf(sessionId);
-              const observed = sessionRouteOf(sessionId);
-              let route: { provider: string; model: string } | null = null;
-              if (declared !== undefined || observed !== undefined) {
-                const provider = observed?.provider ?? declared?.provider ?? '';
-                const model = declared?.model ?? observed?.model ?? '';
-                if (provider !== '' && model !== '') route = { provider, model };
-              }
-              // 目录显示名（用户迭代 2026-09-08「显示目录模型」）：自定义
-              // provider 的模型 id 本身可能是限定串（z-ai/glm-5.3-free），而
-              // 主会话模型座位显示的是目录项 name（glm1/glm-5.3-free）——经
-              // ctx.llm.listModels(provider) 反查。服务缺失（旧运行时/单测）
-              // 或查不到回退 null，客户端显示 provider/model 原值。
-              let modelLabel: string | null = null;
-              if (route !== null) {
-                try {
-                  const llm = (ctx as unknown as {
-                    llm?: { listModels?: (provider: string) => Promise<{ id: string; name: string }[]> };
-                  }).llm;
-                  if (llm?.listModels !== undefined) {
-                    const models = await llm.listModels(route.provider);
-                    modelLabel = models.find((m) => m.id === route!.model)?.name ?? null;
-                  }
-                } catch (error) {
-                  const logger = (ctx as unknown as { logger?: { warn?: (msg: string) => void } })
-                    .logger;
-                  logger?.warn?.(
-                    `eteams: /session-route 目录名反查失败（回退 id 显示）：${String(error)}`,
-                  );
-                  modelLabel = null;
-                }
-              }
-              sendJson(res, 200, {
-                subagent: kind !== undefined,
-                kind,
-                memberName: member?.memberName ?? null,
-                teamId: member?.teamId ?? captainTeam ?? null,
-                // 路线只对 eteams 子代理透出（非子代理即使碰巧有观测也回
-                // null——主会话的模型座位是显示的权威来源，徽章不掺和）。
-                route: kind !== undefined ? route : null,
-                modelLabel: kind !== undefined ? modelLabel : null,
-                serverTime: Date.now(),
-              });
-              return;
-            }
+            // GET /session-route 已随子会话模型徽章改读客户端会话投影一并
+            // 退役（用户迭代 2026-09-09 方案 A：modelSelection 持久投影 +
+            // subagentAddress 全在客户端会话绑定上，进程内存登记本机制撤销）。
             // /team/<id>/... scoped reads resolve the team on any workspace.
             if (segments[0] === 'team' && segments.length >= 2) {
               const teamId = segments[1]!;

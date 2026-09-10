@@ -42,6 +42,7 @@ export type { BuildPhaseKind } from '../prompts/spawn/builderPhases.js';
 
 const BUILDER_TOOLS = [
   'eteams_build_report',
+  'eteams_build_guide',
   'eteams_build_wait',
   'eteams_member_list',
   'eteams_member_save',
@@ -79,13 +80,13 @@ const failMessage = (stage: string, error: unknown): string =>
     error instanceof Error ? error.message : String(error)
   }`;
 
-/** 子代理 toolFilter（与一次性时代一致：成员禁刀里留出构建四件套）。
+/** 子代理 toolFilter（与一次性时代一致：成员禁刀里留出构建面工具）。
  * harness 0.1.2 起成员工具随根作用域注册（registerContinuableSetup 被宿主
  * 移除）——构建器子代理拒见构建面之外的全部成员工具（member_list/save
- * 是构建四件套的一部分，保持可见）。**MEMBER_DENIED_TOOLS 必须先滤掉
- * BUILDER_TOOLS**：构建四件套（build_report/build_wait/member_list/
- * member_save）在成员禁刀里，不过滤会把构建子代理自己的工具禁掉
- * （2026-09-08 用户实测：子代理推理「build_report 不在我的工具集」）。 */
+ * 是构建面的一部分，保持可见）。**MEMBER_DENIED_TOOLS 必须先滤掉
+ * BUILDER_TOOLS**：构建五件套（build_report/build_guide/build_wait/
+ * member_list/member_save）在成员禁刀里，不过滤会把构建子代理自己的工具
+ * 禁掉（2026-09-08 用户实测：子代理推理「build_report 不在我的工具集」）。 */
 export function builderToolFilter(): { deny: string[] } {
   return {
     deny: [
@@ -163,6 +164,9 @@ export function startBuilderChild(args: BuilderDispatchArgs): void {
       await markBuilderChild(stateRoot, childId).catch((error) => {
         logger?.warn(failMessage('child-id pre-write failed', error));
       });
+      // persona 系统段承载全部构建纪律（ROLE_BUILDER_CHILD_PERSONA，用户
+      // 不可见）；prompt 只带简短任务行 + 数据快照（用户迭代 2026-09-10：
+      // 构建对话视图里不再出现整墙规程）。
       const start = await subagents.startContinuable!({
         provider: config.memberProvider,
         label: BUILDER_LABEL,

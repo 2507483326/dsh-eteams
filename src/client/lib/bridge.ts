@@ -28,6 +28,9 @@ export const SELECT_TEAM_EVENT = 'eteams:select-team';
 /** Custom window event: a surface asks the panel to open the 成员 tab (roster page). */
 export const GOTO_ROSTER_EVENT = 'eteams:goto-roster';
 
+/** Custom window event: a surface asks the full-page 团队页 overlay to close. */
+export const CLOSE_TEAMS_PAGE_EVENT = 'eteams:close-page';
+
 /**
  * Pending jump signal (module level): openMemberBuilder fires BEFORE the
  * host tab switches, so ETeamsView is often not yet mounted and would miss
@@ -94,6 +97,18 @@ export function stageTeamSignals(
     pendingSelectTeam = opts.teamId;
     dispatchSignal(SELECT_TEAM_EVENT, opts.teamId);
   }
+}
+
+/**
+ * Ask the full-page 团队页 overlay（teamsPanel 的 dialog 层）to close — the
+ * counterpart of {@link stageTeamSignals} for the reverse direction. The
+ * overlay subscribes to {@link CLOSE_TEAMS_PAGE_EVENT}; when it is not open
+ * nobody is listening and the dispatch is a no-op（对话内 tab 场景零副作用）.
+ * 页内「新增角色→填充」成功后即发（用户迭代 2026-09-09）：命令已落对话
+ * 输入框，整页弹窗继续盖着输入框反而挡路——关页让用户直接看到输入框。
+ */
+export function requestCloseTeamsPage(): void {
+  dispatchSignal(CLOSE_TEAMS_PAGE_EVENT);
 }
 
 /**

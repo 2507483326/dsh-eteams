@@ -69,33 +69,6 @@ async function requestJson(url: string, init?: RequestInit): Promise<unknown> {
   return body;
 }
 
-/**
- * One subagent session's observed model route + identity
- * （用户迭代 2026-09-07「子代理会话中显示实际的 provider/model」）：
- * `GET /session-route` 的响应视图。字段全 optional/null 防旧宿主快照——
- * `route` 为 null = 尚未观测到该会话的请求（未发过/宿主刚重启）。
- */
-export interface SessionRouteView {
-  subagent?: boolean;
-  kind?: 'member' | 'captain' | 'builder';
-  memberName?: string | null;
-  teamId?: string | null;
-  route?: { provider: string; model: string } | null;
-  /** 目录项显示名（host 经 ctx.llm.listModels 反查）；null = 目录未命中，显示 provider/model 原值。 */
-  modelLabel?: string | null;
-}
-
-/**
- * 查询一个会话的观测路线与子代理身份（子会话徽章轮询用）。
- * 404/网络失败由调用方决定兜底——徽章轮询失败静默不渲染。
- */
-export async function fetchSessionRoute(sessionId: string): Promise<SessionRouteView> {
-  const body = await requestJson(
-    `${API_BASE}/session-route?sessionId=${encodeURIComponent(sessionId)}`,
-  );
-  return (body ?? {}) as SessionRouteView;
-}
-
 /** List the workspace roster (D16). */
 export async function fetchRoster(): Promise<RosterMember[]> {
   const body = (await requestJson(`${API_BASE}/roster`)) as { members?: unknown };

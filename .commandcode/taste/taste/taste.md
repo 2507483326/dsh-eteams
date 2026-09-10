@@ -11,7 +11,7 @@
 - 种子驱动的确定性视觉内容（按 (seed, salt) 生成的头像等）保持既有输出稳定：修视觉 bug 时不动随机池本身——池长度参与 pick 索引，增删一项会全量重排所有既有 (seed, salt) 的底色，全部成员头像变脸；兜底在渲染/消费点做值级替换（如 transparent → #ffffff）。 Confidence: 0.7
 - 视觉微调不改变元素占位：用户要求加边框/描边这类外观调整时直接在元素本体改样式，不用带 padding 的外壳包装（会撑大尺寸、破坏叠放/对齐）——用户原话「怎么超出了原来的大小了」；发现尺寸变了要恢复原尺寸。 Confidence: 0.8
 - 重复的样式/行为字面值收口成共享常量供各消费位复用（如壳样式收口 features/avatar 的 AVATAR_SHELL_CLASS，avatarRing/taskAssign/teamPage/avatarStack 复用），不逐字复制。 Confidence: 0.6
-- 界面上要求显示的「实际」值要与主会话模型座位的口径一致，不是纯运行时观测值（用户原话「实际的 provider/model」；修正实证 2026-09-07「我主会话是 tokenrouter/glm-5.3-free……实际显示的是 领队 · tokenrouter/z-ai/glm-5.3-free」）：观测到的 model 是解析后的上游限定 id（z-ai/glm-5.3-free），主会话座位显示的是目录级 id（glm-5.3-free）——显示组合取「观测 provider（真实适配器名）+ 声明 model（spawn descriptor agentOptions 的目录级 id，在成员运行时 setup hook 登记声明路线、冷恢复自愈）」；声明 provider 不采信（覆盖路线会误填传输名 spawn/fork）。观感同样对齐参照组件——用户原话「也没主会话一样有背景色」：徽章做成模型座位同款胶囊（bg-muted 圆角、28px 高、13px medium）而非纯 muted 小字；仍是非交互元素，不干扰既有交互（主会话模型座位照旧）。 Confidence: 0.75
+- 界面上要求显示的「实际」值要与主会话模型座位的口径一致，不是纯运行时观测值（用户原话「实际的 provider/model」；修正实证 2026-09-07「我主会话是 tokenrouter/glm-5.3-free……实际显示的是 领队 · tokenrouter/z-ai/glm-5.3-free」）：观测到的 model 是解析后的上游限定 id（z-ai/glm-5.3-free），主会话座位显示的是目录级 id（glm-5.3-free）——显示组合取「观测 provider（真实适配器名）+ 声明 model（spawn descriptor agentOptions 的目录级 id，在成员运行时 setup hook 登记声明路线、冷恢复自愈）」；声明 provider 不采信（覆盖路线会误填传输名 spawn/fork）。观感同样对齐参照组件——用户原话「也没主会话一样有背景色」：徽章做成模型座位同款胶囊（bg-muted 圆角、28px 高、13px medium）而非纯 muted 小字；仍是非交互元素，不干扰既有交互（主会话模型座位照旧）。2026-09-09 方案 A 修订：徽章改读 modelSelection 投影（与座位同源数据），显示口径由「观测 provider + 声明 model 组合修正」变为投影 next ?? lastUsed 实际路线 + 共享目录名反查——数据同源后不再需要组合修正，spawn descriptor 声明路线登记机制随之退役。 Confidence: 0.75
 - 弹窗/表单里的 textarea 不允许拖拽改大小（用户反馈 textarea 会被拖出弹窗）：加 `resize-none` 禁用 resize，不用 `rows` 而用固定 Tailwind 高度类。高度宁高勿矮：默认略高（h-28=112px）用户仍嫌矮，追加「高度再加100px」→ 固定 212px（用任意值类 `h-[212px]` 表达精确像素）；用户会以具体像素增量口头迭代尺寸，按当前值精确累加即可。 Confidence: 0.65
 - 任意代码改动收尾要主动跑构建并明确汇报编译状态：用户在运行中的面板/宿主里验收效果，只改源码不编译会「好像没更新」（用户原话「编译一下，好像没更新」）；宿主侧插件修复后用户又追问「编译了吗」——不只客户端 UI 改动，host 侧改动同样要跑 `npm run build`（tsc + tailwind + tsdown，宿主打到 lib/index.js、客户端打包到 lib/client.js），没说清编译状态时用户会主动追问；即便收尾汇总里已提过 build（SMOKE OK），用户仍会单独追问「编译了吗」要一句明确确认（再次实证：领队 md 修复后用户追问「编译了吗」；2026-09-08 同一轮长会话内再追问三次——「编译一下」「编译了吗」×2，均已编译过、按下行口径直接作答不重跑）。汇报口径：宿主和客户端两个 Build complete + 冒烟行 SMOKE OK，收尾提醒重启宿主/刷新客户端才能生效；被追问「编译了吗」时已编译过就不重跑，直接给证据作答（两个 Build complete + SMOKE OK、lib/ 即最新产物、重启宿主生效）。构建也不能交代给用户自己做：源码改完只跑测试/tsc 就写「重新构建插件后即可验收」，用户再测仍见旧行为（2026-09-07 徽章修复后「还是显示 领队 · tokenrouter/z-ai/glm-5.3-free」，根因是 lib/ 停在上一轮产物、缺本轮声明路线代码）——收尾要自己跑完整构建链（clean → tsc×2 → tailwind → tsdown → wrapClient → smokeEnvelope）并用特征串核验产物内容（node -e 查 lib/index.js / lib/client.js 是否包含本轮新增符号，如 recordDeclaredRouteFromChild），证实「产物确实含新代码」后再让用户重启验收。2026-09-09 再实证：build 跑完、产物 mtime 晚于全部 edit，bundle 仍可能缺本轮后半段 edit（appendEngageDiag 函数定义在 lib/index.js 里、steerEngageNotice 里的诊断调用 step: 'delivered' 却不在）——核验要逐编辑点查各自特征串、定义与调用点都查，只查一个符号会漏「半套产物」；发现缺失就重读源文件确认 edit 幸存（并发编辑可能在构建前吞掉已做的 edit），重 build 后复验再交用户重启，不能凭「build 已跑完」就认定改动在产物里。被追问时若确实没编译，如实区分 typecheck 与真构建并立即补跑，不把 tsc --noEmit 当编译交差（2026-09-08 再实证：本轮收尾只跑了全量 vitest + 双 tsconfig tsc --noEmit，用户追问「编译了吗」，如实答「类型检查过了，但还没跑真正的构建」并马上补跑 `npm run build` 后再汇报）。 Confidence: 0.9
 - 卡片网格偏好高密度排布：角色卡片一排放 5 个，宁可拉宽/拉长页面容器来容纳，而不是保持原宽减少每行数量（用户原话「角色卡片页面拉长，一排放5个就行」）。做卡片列表布局时按每行 5 个设定网格列数，容器尺寸随内容适配。卡片文字层级同样偏紧凑：卡上条目名即用户说的「title」（非页头标题），字号要求小一档（用户原话「title字体小一点」），层级靠字重（semibold）撑。 Confidence: 0.7
@@ -33,12 +33,14 @@
 - 依赖的类型定义/文档缺失时从 registry 拉包查类型：registry 是公网 npmmirror，直接 curl tarball 解包 grep .d.ts 即可确认上游形状（dsh-session 的 SessionEventMap/known-event-types、dsh-llm 的 UserMessage.source 都可这样查，不必等 npm install）；解包目录、拷到仓库根的类型文件等临时物用完即删，收尾用 git status 核对不留调试垃圾；运行时行为疑点同理直接读 node_modules 已安装包的 lib JS 源码求证再动手（2026-09-08 实证：读 dsh-subagent/dsh-system-prompt 的 index.js 查明 persona 段如何注册与渲染，不继续猜宿主行为）。 Confidence: 0.75
 - bug 修复在既有已上线语义框架内解决，不借机重设计：本例保留「发送后清空选择」一次性消费语义，只把消费/撤销的触发收窄为真人输入（source.kind === 'user'），插件注入的 user 消息（唤醒/邮件/steer/文件通知，同样走 user/message 事件）不再误清本回合凭证。再实证 2026-09-08：用户报「进入角色页面反复弹已复制，去掉这个弹框」，诉求指向反复弹出的异常而非既有交互——只修僵尸 toast 复发机制（补 onOpenChange 收口），点「复制」的一次性反馈照留（docs/43 既有设计），不按字面把整个功能撤掉。再实证 2026-09-08：修「setLeaderModel 漏赋 provider」时据用户「我修改的是team_members,你怎么修改到task_members中去了？」的质疑擅自把领队路线存储位从主持行统一到班底领队行（leaderRouteOf 助手+搬迁迁移），被用户并行加的 lifecycle 用例（明确断言主持行存储）打回后一度整套撤销、恢复既有主持行方案只留 provider 修复；同日用户再报「其它成员都正常，就领队还是null」——用户一直在 team_members 查库验收（成员行有值、领队行 NULL 即判 bug），按其预期二次统一并落定（见下条）。 Confidence: 0.7
 - 领队模型路线存储位终定（2026-09-08 同日三段反复后落定）：存班底领队行 team_members.is_leader=1 的 model/provider/reasoning_effort，与成员同表同列；task_members 主持行只留会话锚 session_id，模型列废弃不读写；v9 迁移一次性搬迁旧值（schema_meta 标记防重，只搬班底 model 为空的行、不覆盖用户后续重选）；setLeaderModel/captainAgent 派发/webui 快照全链改读写班底领队行，lifecycle/captainDispatch 用例同步改断言新存储位（seedTeam 默认 members 为空数组，播种覆盖路线需显式补一条班底领队行再 writeTeamInTx）。一般化教训：存储位取舍以用户实际查库/手改的那张表为准——用户拿表验收时，同类数据分表两处存会被当缺陷报（「就领队还是null」）；并行测试代码断言旧存储位不足以否定用户的直接预期与查库习惯，存储设计冲突时先确认用户的验收路径再定存储位，测试跟着定稿改。 Confidence: 0.8
-- 轻量操作（复制等）偏好静默完成，反馈类 toast 用户点名「去掉」就整撤、不留「单次反馈」折中变体（2026-09-08 定案，用户原话「还是弹出，不需要弹完全去掉」）：点「复制」改为 writeClipboard 写入即止、失败也静默吞掉，成功/失败 toast 全撤，`toast` import、按钮 `void` 包装与过时注释一并清理（对齐「撤功能做整链清理」既有纪律）；用户对弹框的诉求以「弹框消失」为验收标准——修弹框行为（如修掉反复复发）但保留弹框本身不算满足，撤不撤由用户发起。rosterAddPage 的 toast 复发机制修复（toaster.tsx open/onOpenChange 接线）保留，供仍在用 toast 的其它页面正常关闭。 Confidence: 0.85
+- 轻量操作（复制等）偏好静默完成，反馈类 toast 用户点名「去掉」就整撤、不留「单次反馈」折中变体（2026-09-08 定案，用户原话「还是弹出，不需要弹完全去掉」）：点「复制」改为 writeClipboard 写入即止、失败也静默吞掉，成功/失败 toast 全撤，`toast` import、按钮 `void` 包装与过时注释一并清理（对齐「撤功能做整链清理」既有纪律）；用户对弹框的诉求以「弹框消失」为验收标准——修弹框行为（如修掉反复复发）但保留弹框本身不算满足，撤不撤由用户发起。rosterAddPage 的 toast 复发机制修复（toaster.tsx open/onOpenChange 接线）保留，供仍在用 toast 的其它页面正常关闭。2026-09-09 修订：静默 ≠ 永不给反馈——用户点名要复制成功效果时（原话「复制需要有复制成功效果，就让复制按钮边框变绿，按钮里面加一个绿色的勾，过几秒再变回来」），反馈形态是就地收在触发按钮自身、仍不弹任何 toast/浮层：写入剪贴板成功后按钮变成功态（边框+勾转 --success 绿），约 2 秒自动回弹；两态边框常驻占位（透明↔绿只换色）避免布局跳动，重复点击重置计时、卸载清定时器。 Confidence: 0.85
+- 弹窗/覆盖层里的操作若产物落在被盖住的面上，操作成功落地后收掉弹窗让用户直接看到结果（用户迭代 2026-09-09 原话「新增角色的填充如果是弹窗，填充后隐藏弹窗」）：整页团队页（TeamsOverlay，role=dialog）里点「新增角色→填充」把命令落进对话输入框后即广播关页信号（沿用 lib/bridge 的 CustomEvent 跨面信号模式），用户直接看到已填充的输入框，弹窗继续盖着反而挡路；对话内 tab 场景弹窗未开时信号无接收方、零副作用，且只在命令确实落地（非 aborted）时发。 Confidence: 0.8
 - `npm run build` 输出里的 tsdown 配置弃用 WARN（`external`/`inlineDynamicImports`）是既有噪音、不影响产物，不必追查；构建成功的验收点看产物生成（宿主 `lib/index.js`、客户端 `lib/client.js`）与末尾冒烟行 `SMOKE OK: exports=[apply, inject]`，向用户汇报时顺带说明该 WARN 一直都在，免得被当成新问题。 Confidence: 0.65
 - 仓库 prettier 非强约束（2026-09-08 实证）：43 个存量 host 源文件本身 `--check` 不通过（多为换行偏好差异），新代码对齐相邻文件的手写风格即可，不为存量格式差异做全量重排、也不顺手 reformat 别人文件；全量 eslint 仅 `inspect-tmp.mjs`（shell 写入的临时探查脚本）报错，属既有问题不抢修、汇报时点明非本次引入即可。 Confidence: 0.6
 - 子代理/助手的进入提示词不内嵌状态快照，改为指令让代理用工具自取现状（如首轮必调 eteams_team_status，后续按需再调）：单一事实源、状态永远现读现新、上下文最瘦，代价只是首轮多一次工具调用（用户原话「我希望是让子agent去获取团队现状，而不是直接输出在子agent里面」）。 Confidence: 0.9
 - 设计类需求先讨论定稿再动手（用户原话「好好设计一下，跟我讨论」「请详细和我讨论」）：进计划模式摸清现状与根因，把关键设计取舍做成 ask_user_question 选项让用户拍板（如快照去留、profile 粒度、修复覆盖面），定稿后写计划文件再实施。定稿后用户仍会逐条追问计划步骤的「为什么」（如「为啥需要改角色库手册」「为啥从角色库取，团队成员里不是已经有了吗」）——回答要摆代码证据与数据流（用文本图区分 live 源与烘焙快照，逐点给文件/函数依据），并说清哪些步骤是必须、哪些只是验收建议（不把建议包装成必须项）；追问是在理解决策依据而非反对。定稿后用户还会要求把完整流程从头到尾复述一遍、核对与自己的想法一致（原话「再仔细说一遍现在的创建任务流程，我需要确保和我的想法一致」）——开工前给端到端流程叙述（分阶段：绑定→建任务→转交→执行→红线汇总），剩余待拍板点用显式标记逐项列出请用户确认，全部确认后再动手。实现落地后用户还会追问机制层面的概念问题（2026-09-08 实证「注入到系统提示段 和 上下文有啥区别？」；同日再实证「task_members 为什么会有一个 main_task_id 和 now_task_id 两个字段？」——追问范围扩到数据模型/表结构设计，答前先查 schema 定义与各读写点坐实字段语义，按「静态归属锚 vs 动态执行指针」分清各字段职责再作答）——同样是吃透设计依据、便于自己验收，不是质疑：用多维分节对比作答（位置与可见性、宿主加工程度、生命周期、权威性、可维护性逐项对比），每维落到实操含义，收尾给一句验收口径（打开哪、看哪一眼能确认生效）；对运行中的意外行为同样以「为啥」提问而非直接当 bug 报（再实证：「停止子 agent 的创建过程后，会话为啥会被自动唤醒」；再实证：「任务在创建过程中时，点开详情看不到团队成员、子任务的标题和创建按钮」——根因是创建窗口期的读时派生 kind 与状态闸门未覆盖 creating 中间态；再实证 2026-09-08：「怎么表里面老是会有一个 team_id=1 task_member_id=1 的项目牧羊人被创建出来」——根因是建队事务固定插领队班底行+主持行（v7 决策 2「领队入班底」，is_leader=1 行同时是身份解析/手册缓存的锚点），非 bug）——先沿代码把触发链查实再下结论，排查时先穷尽并排除备择来源（首启播种 seedPresetRows 只种 roles、删除后残留、旧数据导入）坐实「固定产物」归属，结论先行点明是既有设计还是缺陷，正文给带 file:line 的完整触发链，并附「若想改变该行为要动哪里」的指引；用户描述的现象本身有歧义（删了还在/每队一条/别处看到）时，用编号选项先让用户确认实际观察到的场景再定改动方向；这类只问「为啥」的回合收尾给最小修复方案（分点、对齐既有口径）后先询问用户是否按方案动手，不擅自改代码（再实证 2026-09-08 建构师模型路线：首轮答案给了三路 spawn 现状对照+修复选项但没把「为啥不跟/为啥被污染」的因果答透，用户以「我问的是为啥……」复述原题再追问——用户复述问题说明首轮没接住其真实关切，重答时正面直给该问题的完整因果链与运行时证据，不重复上一轮的选项清单）。 Confidence: 0.9
 - 子代理模型路线的用户预期与运行时机制（2026-09-08 讨论中、方向未拍板）：用户预期建构师等 spawn 子代理应跟随主会话当前模型，把实际行为定性为「被污染」（原话「我问的是为啥 建构师 没有跟着当前主会话的模型走？而是被污染了」）；因果已查实——dsh-subagent 的 resolveChildAgentOptions 在 spawn 请求未传 agentOptions 时继承父代理 options.model（会话创建/恢复时 = agentDefaultModel.currentSelection() 的全局默认快照），会话内切模型走 installModelSelection 的 mutable selection、不回写 agent.options，而 builderPhases.ts 两处 spawn 只传传输名 provider → 建构师跑在全局默认快照上、冷恢复时还会随全局默认漂移；成员/领队 2026-09-04 起是显式钉 sessionDefaultRouteOf（同为全局默认）。已摆三方向（钉死对齐成员口径 / 真跟主会话 selection / 建构师专属配置），用户尚未拍板，动手前先等用户选向。 Confidence: 0.65
+- 子代理模型徽章消失回归定案（2026-09-09 排障，修复方案已给、待用户拍板，不擅自动手）：「新版本迁移」提交 174a07e 删掉宿主 registerContinuableSetup 钩子后，kind 身份注册表与声明路线表（usage.ts，进程内存）只剩 spawn/唤醒两处登记（members.ts、captainAgent.ts；唤醒只补身份不补路线）——宿主重启后既有子代理会话两表全空，/session-route 返回 subagent:false/route:null，徽章（sessionModelBadge.tsx 渲染条件 subagent===true 且 route 非空）判不渲染；builder 走持久 rolebuilder.json 免疫，成员/领队不免疫；退化后徽章显示观测原值（上游限定 id），正是 09-07 用户要求修掉的「双重限定」显示，重启即回退。已实证排除：事件契约未变（request/header→data.header.config、request/context→data.provider/model）、firehose 活着（usage_detail boot 后有行、构建师会话 provider/model 齐全）、客户端徽章代码迁移零改动、宿主/客户端均为新 bundle。一般化教训：凡跨宿主重启要生效的判定不能只靠进程内存登记，须有落盘锚兜底（rootPrompt.ts:36-45 的 task_members.session_id 直查是仓库「重启免疫」先例）；修复方向＝/session-route 加落盘兜底（kind 兜底直查 task_members.session_id、captain 取 is_leader=1 副本行 session_id；declared route 兜底 join team_members 模型列；内存注册表保留覆盖 spawn 窗口竞态），同病副作用 usage 归属（resolveIdentity 成员/领队是内存优先级，重启后落 workspace 桶）一并修；测试补「重启后落盘兜底」分支。 Confidence: 0.7
 - 快照/数据结构去冗余、粒度取概览：身份已编码的信息不重复携带（成员名=角色名时 teamView 去掉 role 列），有用的概览信息补进来（角色一句话简介 profile）；用户确认「一句话简介」粒度，不把整份角色手册烘进快照。 Confidence: 0.65
 - 用户维护的手册/persona 要 live 生效：运行时现读角色库（跨工作区兜底），不读建队时烘死的行副本——副本改手册不回填，用户报「领队的 md 没注入进去」根因即静默回落；配套加来源日志标明 persona 取自哪份源，便于诊断。补一个关键陷阱：每个工作区首启都会播种一份默认「项目牧羊人」角色行——角色库查找必须以权威根（writeWorkspacePath，面板编辑落点）优先于本区根，本区过期的种子行会遮蔽用户编辑过的手册（收口为 workspaces.ts 的 rosterAuthoritativeRoot/findRosterMemberInRoots 供 webui 与 captainAgent 共用）。 Confidence: 0.7
 - 领队手册的数据源最终定为团队成员表里的冻结缓存，角色库后续修改不管（用户原话 2026-09-08「不是读角色库，而是读团队成员表中的缓存MD，角色新修改的不管」——同日反转上一条「live 现读角色库」的中间方案）：手册烘进每个大任务的领队副本行 persona_md（createTask 铺副本时烘开工当时的手册——2026-09-08 晚间定案「领队子会话随大任务生灭、主持行取消」后由主持行缓存改为按任务冻结，各任务各自定格；存量主持行只作老任务补铺时的搬运源），persona 系统段只含插槽引用 {{eteams_leader_handbook}}，index.ts 注册同名 prompt 变量、provider 按装配子会话直读该原始列（is_leader=1 且 main_task_id=本任务号——registry 携 team+task 直查，绕过 hydration 的 roles LEFT JOIN；镜像同步只刷 team_members 班底行、不碰 task_members，天然无人改写）；缓存为空退内置手册，绝不抛错。宿主对插槽替换值不做二次扫描，md 里真实 {{xxx}} 原样进系统提示。live 现读角色库只保留在确需实时的消费位（teamView 的 profile 列）。 Confidence: 0.85
@@ -57,7 +59,7 @@
 - dsh 全局 CLI 更新会弄坏 npm 全局安装（2026-09-08 实证「我更新了dsh，帮我把eTeam插件装上」）：症状是 shim（…\AppData\Roaming\npm\dsh.cmd）还在但指向的模块目录被删，`dsh --version` 直接失败；机器上另有 `dsh1024` 包装器（转发官方 CLI：优先沿用 PATH 上现成的 `dsh`——坏 shim 会被照常继承——否则 npx 拉官方包），不能替代重装；修复路径是 `npm install -g @deepseek-ai/dsh` 重装官方包恢复 shim，`dsh --version` 验证后再做插件安装，装完按 README 用 `dsh --profile desktop --dump-config` 核对装配结果。插件安装（`dsh plugin add`）会在 profile 目录用 pnpm 装依赖，pnpm 垫片坏了会卡安装。用户自行更新 dsh 后，先怀疑全局 shim/module 断链再装插件。 Confidence: 0.7
 - dsh 升级后客户端插件「Renderer boot failed for 1 plugin(s)」排障（2026-09-08 实证，dsh 0.1.2-rc.1）：该文案来自 DSH Desktop 主进程（resources/app.asar.unpacked/lib/main.js）的 generic 弹窗，report.error 为空、真实报错只在渲染端 console（agent-browser 未装、抓不到 console 时走静态分析）；运行时 client 包按 profile 装在 ~/.dsh/profiles/node_modules/@deepseek-ai/*（全局 dsh 包本体只是 CLI），渲染端模块系统在 dsh-client-modules/lib/client.js——inject 声明里缺服务只会静默跳过，factory 体顶层/apply 抛错才会炸 boot。本例根因是 harness 改名：0.1.2 把客户端服务 conversationEvents 重构为 uiConversation（事件注册表挪到 .events.register），插件 inject 硬依赖旧服务名 → cordis fiber 永不激活 → boot 失败。排障路径：全 .dsh 树 grep 失败文案定位来源 → 逐项核对新版 client 包的服务/导出面（ui-primitives 符号、conversation.chat.node 槽位、modelDirectories 均未变，唯一断点即服务改名）→ scripts/smokeEnvelope.mjs 冒烟排除 factory 体问题 → 对照仓库 node_modules 旧版 bundle 坐实改名。修复 = inject 与 ctx 服务访问同步改名 + 服务缺失仍优雅降级（tab+按钮照常），typecheck/完整 build/全量测试全绿后提醒重启 DSH Desktop（live link，lib/ 即最新产物）。dsh 更新后除装包断链，还要核对插件 inject 声明的服务名与新版 harness API 是否一致。 Confidence: 0.7
 - 宿主 harness 运行时 API 的真身看全局 dsh 安装的内嵌包，不信仓库 node_modules 与官方文档（2026-09-08 实证「新版本，调不起子agent了」，宿主实跑 0.1.2-rc.1）：插件 @deepseek-ai/* 依赖 build 时 external、运行时解析到宿主副本——host 侧 API 在 C:\Users\epat\AppData\Roaming\npm\node_modules\@deepseek-ai\dsh\node_modules\@deepseek-ai\* 的 .d.ts/lib 源码里（渲染端在 ~/.dsh/profiles/node_modules/@deepseek-ai/*），实装版本可远新于 package.json pin（仓库 pin rc.6/rc.8，仓库 node_modules 恰好可作旧版对照）；官方 quickstart 文档不含 API 变更说明，逐项核对新旧两份包的 API 面（服务名、方法表、值导出、必填参数）才是可靠路径。0.1.2 host 侧破坏面：subagents.followup→sendMessage(sender,targetId,content,{signal})、registerContinuableSetup（per-child 工具装配钩子）整体移除、signal 变必填（运行时无保护 throwIfAborted，undefined 即 TypeError）。 Confidence: 0.75
-- 宿主机制/语义类问题先查官方 reference 文档再逆向（用户 2026-09-08 原话「你看文档啊 https://deepseek-harness.github.io/deepseek-harness/reference/」——在助手扒 app.asar/内嵌包源码查唤醒原语时被用户直接贴文档链接纠正方向）：逆向宿主行为之前先 web_fetch 官方参考页，reference 文档覆盖机制语义（本例关键判据正出自文档：inbox 唤醒模型——「输入通过同一个 inbox 到达驱动器。有些消息会立即唤醒它；注入的上下文会留在 inbox 中，直到另一条消息将其唤醒」）。与上一条互补而非冲突：官方文档不含破坏性 API 变更说明（查 API 面仍以内嵌包 .d.ts/lib 为准），但机制/行为语义类问题文档是第一手来源，用户期望先查它而不是从二进制猜。 Confidence: 0.75
+- 宿主机制/语义类问题先查官方 reference 文档再逆向（用户 2026-09-08 原话「你看文档啊 https://deepseek-harness.github.io/deepseek-harness/reference/」——在助手扒 app.asar/内嵌包源码查唤醒原语时被用户直接贴文档链接纠正方向）：逆向宿主行为之前先 web_fetch 官方参考页，reference 文档覆盖机制语义（本例关键判据正出自文档：inbox 唤醒模型——「输入通过同一个 inbox 到达驱动器。有些消息会立即唤醒它；注入的上下文会留在 inbox 中，直到另一条消息将其唤醒」）。与上一条互补而非冲突：官方文档不含破坏性 API 变更说明（查 API 面仍以内嵌包 .d.ts/lib 为准），但机制/行为语义类问题文档是第一手来源，用户期望先查它而不是从二进制猜。再实证（2026-09-09，engage 方案被质疑费 token 时用户再贴 subsystems/subagent 文档原话「再仔细研读一下文档看看还有没有好的办法」——文档轮次流程给出 pre-step 拒收即空回合的机制线索，确切调用契约再 grep 内嵌包 dsh-agent-loop 源码坐实：文档找方向、内嵌包源码定契约）。2026-09-09 三度实证（原话「请再调研一下文档……请调研后和我讨论」）：用户对实现路径有疑问/质疑其必要性时，不等催促就把官方文档与机器实证（运行时缓存、内嵌包源码）查完再回来讨论。 Confidence: 0.85
 - 对宿主 harness API 的调用写新旧兼容（能力探测+回退），不 pin 单一版本——宿主会先于仓库升级（2026-09-08 修复实证）：方法存在性探测分发（typeof face.sendMessage === 'function' 优先、旧宿主回退 followup），收口成 deliverToChild 兼容助手供派发/成员唤醒/问答唤醒三处共用；可用性守卫同样按能力探测（sendMessage || followup 任一即可）；宿主新增必填参数在插件侧兜底（signal 缺省用 new AbortController().signal）；per-child 钩子被移除时注册收口改到 root 作用域、子代理可见性用 spawn toolFilter deny 收口（领队拒见清单并入成员工具、构建器过滤同步收口、deny 清单与工具注册面加一致性断言测试），成员归属/声明路线登记点前移到 spawn/唤醒；探测式写法让测试的最小 fake 对象不受影响。再实证（同日二度踩 0.1.2 破坏面，用户贴报错「plugin tree failed to load…tool eteams_task_board is already registered…register through that agent's agent.ctx」）：0.1.2 root 注册遇重名即抛、per-agent 变体须走 agent.ctx——把成员工具提到 root 时，captainTools 里同名的 task_board/send_message/team_status 会撞名炸掉整个插件树（插件树加载失败＝全部 eteams 工具消失，表现为「完全没反应」）；解法是把同名变体合并为身份感知单工具（execute 按 caller.kind 分支：成员 caller 走成员视角、领队走领队视角），成员工厂只留成员专属件，领队拒见清单同步移除已合并名（合并后领队子代理看到的就是领队视角，不能再拒见），MEMBER_TOOL_NAMES/deny 清单与注册面的一致性断言测试同步更新；涉及工具注册面/挂载面的改动，收尾用假 ctx 跑 apply 挂载冒烟（假 registry 遇重名即抛）核实「N 个工具、无重名」再交付，临时冒烟脚本跑完即删。 Confidence: 0.75
 - 空白/未开始会话的唤醒与 notice 投递原语（2026-09-08 LOGO 卡死实证）：插件调用宿主 API 静默不生效（无报错、notice 只进 inbox、回合永不开始）时，grep 宿主自家插件看它怎么做——dsh-schedule 0.1.2 的唤醒原语是 `agent.followup(message)`（「Queue an ordinary follow-up turn and wake the driver」，空会话同样开回合）；本轮实测 `agent.steer` 对从未开过回合的空白会话不再启动驱动器（/eteam 后主窗口停在 LOGO 屏的根因）、`agent.send` 在命令面的 agent 对象上也未生效。收口 deliverNotice 按 target 分发：`next-turn`（空白/空闲会话 engage）优先 followup，`next-step`（运行中插话/转交）优先 `send(msg,'next-step',true)`（wakeup 对 running/idle/blank 都正确），旧宿主逐级回退 steer；既有用例的最小 fake（只带 steer）锁定的语义（next-step 回退 steer）保持不动，按测试语义修分发、不改测试。再实证（同日换 followup 后 LOGO 屏依旧）：命令处理器拿到的 agent 对象可能是不带方法/不带 session 的 subject 引用——followup 在它身上静默无效（父会话日志连 inbox splice 都没有）；投递前先从注册表解析活 agent（`ctx.agents?.get?.(agent.id)`），解析失败/方法全缺不盲投，把投递诊断作为返回值交给调用点（engaged / agent-session-missing(id=…) / primitive=followup|send|steer|none / error:…）。判据分级：会话日志「连 inbox splice 都没有」＝投递根本没发生（agent 对象/解析层问题），「进了 inbox 但无回合」＝唤醒原语问题——两者归因方向不同，先分清再动手。2026-09-08 晚闭环实证：注册表解析活 agent + followup 投递后整条链路跑通（父会话日志坐实 turn/start、双消息入 inbox，对话视图翻转、构建子代理接管访谈映射）。教训：落 note 的诊断不可全信——rolebuilder.json 有受理→markBuilderChild→engage 多个异步写方并发写，markBuilderChild 的异步写会静默覆盖 engage 诊断 note；note 里读不到诊断/内容可疑时不要反复重写 note，直接改读父会话日志，「回合开没开」以会话日志为最终事实源。note 通道已彻底弃用为诊断面（2026-09-08 晚三度实证：engage 诊断 note 又被子代理 reportBuildProgress 的整文件写覆盖）；插件代码自身要落投递诊断时改用独立追加式日志文件——appendEngageDiag 写 <stateRoot>/logs/engage-diag.log（JSON lines，appendFileSync 只追加、无读改写竞态），记录投递结果与决策输入（agent 方法清单 typeof face.followup/send/steer/session、所选原语、异常原因），try/catch 包裹保证诊断绝不影响主流程。2026-09-09 决定性闭环（分步诊断版实测：engage-diag.log 吐出 `engage-result: "agent-session-missing(id=…)"`）：空白桌面会话在用户首条真实 prompt 之前，注册表里根本没有活 agent（`ctx.agents.get(id)` 返回 undefined——宿主只建了会话日志，驱动器实例要等首条 prompt 才物化）——这就是「三种原语全部静默无效」的最终根因：不是投递方法不对，而是根本没有可投递的对象；修复＝投递前注册表查不到活 agent 就 `ctx.agents.resume({resumeSessionId})` 把活 agent 物化出来再 followup（照搬 askUser 离线投递已验证的冷恢复模式，句柄不 dispose、锚定会话），steerEngageNotice 随之改 async、调用点 await；agent-session-missing 对空白会话不是异常分支而是预期态——处置动作是物化后照常投递，不是跳过、更不是盲投。 Confidence: 0.9
 - DSH Desktop「发送没反应」排障路径（2026-09-08 实证「还是发送没有反应」，插件修复后复发——本轮查明根因在宿主模型配置层而非插件）：插件加载成功 ≠ 消息能进会话，先确认「回合有没有开起来」再归因自家代码。判据链全部自查：`~/.eteams/logs/host.log` 尾部 boot 行（builtAt=构建时间）确认宿主加载哪份 bundle，`~/.eteams/logs/client.log` 确认面板加载；宿主自身运行日志不落盘（profile 目录无 log 文件），进程端口用 PowerShell `netstat -ano` 按 PID 过滤 LISTENING 探测，web API 直探被 403 鉴权挡住走不通；会话事实看 `~/.dsh/sessions/<工作区slug>/session-<id>/session.jsonl.zstd`（zstd 压缩 JSONL，Node 24 的 `zlib.zstdDecompressSync` 可解）与投影缓存 `~/.dsh/storages/session_projcache/sessions/<session-id>.json`——turns: 0、steps: 0、lastPromptAt: null、blank: true = 消息在模型调用前就失败、连回合都没开。此时查 `~/.dsh/settings.yaml`：provider 用 `apiKeyEnv` 从环境变量读 key，该变量只存在于启动 `dsh web` 的终端会话，DSH Desktop GUI 进程继承不到（系统/用户级也没有，PowerShell GetEnvironmentVariable 双级验证）→ 没 key → 发送静默无反应。修复给三选项（桌面版设置→模型直接填 key / setx 用户级环境变量后彻底重启 / 回原终端跑 dsh web），推荐项放最前，并附验证口径：先在主对话发一句话确认模型能回，再试插件派发。临时探查脚本（probe-host.mjs、read-session.cjs）照惯例落 scripts/ 用完即删。第二轮再实证：桌面宿主运行日志不落盘（只进内存，logger.warn 拿不到），插件派发层失败靠插件自身状态文件 ~/.eteams/rolebuilder.json 看（受理成功→回滚 note；10ms 内回滚 = provider 查找/持久化服务的快失败，用失败耗时收窄嫌疑面）；桌面部署配置烘在 app.asar 里（profile 的 cordis.yml 为空），可把 asar 按 latin1 读入 grep 特征串核实桌面部署里某模块是否存在——不止部署配置/provider 包名，渲染端 UI 逻辑同样可查（2026-09-08 晚实证：按中文界面文案「探索未至之境」与客户端状态字段名 lastPromptAt/sessionBlank/isBlank 定位「未开始屏→对话视图」的翻转逻辑）；翻转机制已从全局 dsh 内嵌包源码坐实（dsh-session-projection / dsh-api-session-controller 的 applySessionListMetadata）：blank 标记在 turn/start 时清除——任何回合开始都清（插件唤醒的回合、乃至模型调用失败的回合都会翻转进对话视图，用户实证原话「调用模型失败会进入会话页面」），lastPromptAt 只在 source.kind==='user' 的消息时更新；据此「停在 LOGO 屏」严格等价于「回合从未开始」，与模型调用成败无关——先按回合边界归因，不把「没翻转」误归因为模型调用问题。 Confidence: 0.8
@@ -150,6 +152,137 @@ nce: 0.7
 
 �主指示器已表达什么。 Confidence: 0.7
 nfidence: 0.7
+nce: 0.7
+idence: 0.7
+�主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+
+nfidence: 0.7
+��指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+�主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+nce: 0.7
+
+�主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+nce: 0.7
+��器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+
+nfidence: 0.7
+��指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+�主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+nce: 0.7
+
+�主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+nce: 0.7
+��指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+nce: 0.7
+
+�主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+nce: 0.7
+nce: 0.7
+��指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+�主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+nce: 0.7
+
+�主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+nce: 0.7
+��指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+nce: 0.7
+
+�主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+nce: 0.7
+」同一原则，设计状态/汇总展示时先核对主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+�主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+计状态/汇总展示时先核对主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+�主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+�什么。 Confidence: 0.7
+nfidence: 0.7
+�主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+计状态/汇总展示时先核对主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+�主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+
+nfidence: 0.7
+��指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+�主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+nce: 0.7
+
+�主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+nce: 0.7
+idence: 0.7
+�主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+
+nfidence: 0.7
+��指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+�主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+nce: 0.7
+
+�主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+nce: 0.7
+��器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+
+nfidence: 0.7
+��指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+�主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+nce: 0.7
+
+�主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+nce: 0.7
+��指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+nce: 0.7
+
+�主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+nce: 0.7
+nce: 0.7
+��指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+�主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+nce: 0.7
+
+�主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+nce: 0.7
+��指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+nce: 0.7
+
+�主指示器已表达什么。 Confidence: 0.7
+nfidence: 0.7
+nce: 0.7
+idence: 0.7
 nce: 0.7
 idence: 0.7
 �主指示器已表达什么。 Confidence: 0.7

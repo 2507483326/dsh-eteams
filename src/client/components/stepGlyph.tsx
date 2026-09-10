@@ -36,3 +36,36 @@ export function StepGlyph({ state, className }: { state: string; className?: str
     </span>
   );
 }
+
+/** ================================== 圆点字形（构建工作台专用） ================================== */
+
+/**
+ * 三态圆点调色表（用户迭代 2026-09-10）：构建工作台的步骤时间线从 ✔●◌
+ * 字形换成统一圆点——完成 business 蓝点（灰勾撤除）、进行中 warning 橙黄
+ * 转圈（border-t-transparent 缺口环 + eteams-spin 自转）、未到灰色空心环。
+ * 完整字面量映射表（21.5.1）；eteams-spin keyframes 由消费页（rosterAddPage）
+ * 注入，与构建台原 sparkle 转圈同一动画源——他处复用须先带上这段注入。
+ */
+export const STEP_DOT_STATE_CLASS: Record<string, string> = {
+  done: 'bg-business',
+  current:
+    'border-2 border-warning border-t-transparent [animation:eteams-spin_1s_linear_infinite]',
+  pending: 'border border-muted-foreground',
+};
+
+/**
+ * 步骤圆点：三态统一 10px 圆元素（原字形档大一号——用户「圆点变大一些」）。
+ * state 未知值回落 pending 空心环（同 StepGlyph 口径）；className 透传给
+ * tailwind-merge——构建台头部的进行中档传 h-3.5 w-3.5 覆盖尺寸。
+ */
+export function StepDot({ state, className }: { state: string; className?: string }): ReactNode {
+  return (
+    <span
+      className={cn(
+        'inline-block h-2.5 w-2.5 shrink-0 rounded-full border-solid',
+        STEP_DOT_STATE_CLASS[state] ?? STEP_DOT_STATE_CLASS.pending,
+        className,
+      )}
+    />
+  );
+}

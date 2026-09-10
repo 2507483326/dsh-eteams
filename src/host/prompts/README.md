@@ -34,7 +34,7 @@
 | personas/framework.ts | 人设框架（字段渲染 / 合并 / 摘要 / 回退执行提示） | state/、runtime/、prompts 内部 |
 | personas/presets.ts | ROLE_TEMPLATES、PRESET_MEMBER_ROLES、defaultPersonaFor | runtime/roster.ts、runtime/teamOps.ts、state/import.ts |
 | personas/captain.ts | 领队人设默认值 + 覆盖文件合成 | runtime/webui.ts、runtime/roster.ts、state/import.ts、tools/captainDispatch.ts、host/index.ts |
-| personas/builder.ts | 角色构建师预设 + 持续构建子代理人格 + 人设规格尾 | runtime/builderPhases.ts、spawn/builderPhases.ts、personas/presets.ts |
+| personas/builder.ts | 角色构建师预设 + 持续构建子代理人格（构建纪律全文，经 persona 系统段注入；回合提示词只指路不复述） | runtime/builderPhases.ts、personas/presets.ts |
 | personas/roleDocs.ts | ROLE_DOCS 逐字角色手册（scripts/gen-role-docs.cjs 生成） | personas/presets.ts、personas/builder.ts、personas/captain.ts |
 | steering/interview.ts | 访谈发布唤醒主对话的 steer 文本 | tools/captainTools.ts |
 | steering/dispatch.ts | dispatch 受理确认 + 领队子代理首轮 prompt 组装 | tools/captainDispatch.ts |

@@ -130,6 +130,40 @@ function resolverOf(): ResolverFace | null {
   return resolver;
 }
 
+/** 共享目录 store 的裸快照（dsh-client-store 家族：value/status/error）。 */
+export interface SharedCatalogSnapshot {
+  value?: { groups?: CatalogGroup[] } | null;
+}
+
+/**
+ * 共享模型目录 store（resolver 级、全体会话共用一份——官方 resolver 构造
+ * 即后台 load()，并在 adapters/settings 变化时自动刷新）。子会话模型徽章
+ * 的目录名反查用它：**不经** `directoryFor(...).load()`——后者对已寻址
+ * 子代理会话断言可用即抛（assertAvailable），且带 composer 阻塞块副作用，
+ * 只读反查不该走那条路。内部属性 `catalog.store` 结构化探测（2026-09-09
+ * 实测宿主内嵌包 resolver 形状）；未知结构 → null，徽章回退显示 id 原值。
+ */
+export function sharedCatalogStore(): {
+  getSnapshot: () => SharedCatalogSnapshot | undefined;
+  subscribe: (listener: () => void) => () => void;
+} | null {
+  const face = (catalogCtx as { modelDirectories?: unknown } | null)?.modelDirectories;
+  if (typeof face !== 'object' || face === null) return null;
+  const store = (face as { catalog?: { store?: unknown } }).catalog?.store;
+  if (typeof store !== 'object' || store === null) return null;
+  const candidate = store as {
+    getSnapshot?: () => SharedCatalogSnapshot | undefined;
+    subscribe?: (listener: () => void) => () => void;
+  };
+  if (typeof candidate.getSnapshot !== 'function' || typeof candidate.subscribe !== 'function') {
+    return null;
+  }
+  return candidate as {
+    getSnapshot: () => SharedCatalogSnapshot | undefined;
+    subscribe: (listener: () => void) => () => void;
+  };
+}
+
 /**
  * Load the session's shared model catalog (the same data the conversation
  * picker renders). Null when the resolver service is absent or the payload

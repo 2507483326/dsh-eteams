@@ -116,17 +116,6 @@ function rememberRoute(sessionId: string, provider: unknown, model: unknown): vo
   routeCache.set(sessionId, { provider, model });
 }
 
-/**
- * 只读查询一个会话的观测路线（webui `/session-route` 透出给面板/子会话徽章用）。
- * 观测口径：进程内存——宿主重启后该会话再次发出请求时由 firehose 重填；
- * 从未发过请求的会话返回 undefined（「实际」只显示观测值，不显示猜测值）。
- */
-export function sessionRouteOf(
-  sessionId: string,
-): { provider: string; model: string } | undefined {
-  return routeCache.get(sessionId);
-}
-
 // ---------- 会话身份解析（28.3.2 优先级表） ----------
 
 /**
@@ -193,15 +182,6 @@ export function resetUsageMeterForTests(): void {
   memberSessions.clear();
   routeCache.clear();
   identityCache.clear();
-}
-
-/** Tests-only：直填路线缓存（webui session-route 用例的隔离装配）。 */
-export function seedSessionRouteForTests(
-  sessionId: string,
-  provider: string,
-  model: string,
-): void {
-  routeCache.set(sessionId, { provider, model });
 }
 
 // ---------- 串行追加队列（28.3.1 写入纪律） ----------

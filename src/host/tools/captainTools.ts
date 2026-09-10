@@ -54,6 +54,7 @@ import { readPendingAsksBySessionSync, answerAskSync } from '../state/asks.js';
 import { startBuilderChild, wakeBuilderChild } from '../runtime/builderPhases.js';
 import { stationPointsTo, stationProgress } from '../model/taskMachine.js';
 import { renderContract } from '../prompts/handoff/mails.js';
+import { ROLE_BUILDER_CHILD_PERSONA } from '../prompts/personas/builder.js';
 import type { TaskRecord } from '../model/types.js';
 
 /** JSON-schema snippet helpers (literal types required by the spec union). */
@@ -586,6 +587,34 @@ export function createCaptainTools(
         ...(popSelf !== undefined ? { popSelf } : {}),
       };
     },
+  });
+
+  const buildGuideTool = defineTool({
+    name: 'eteams_build_guide',
+    description:
+      '领取角色构建师完整规程（构建子代理每回合第一步先调本工具）：返回构建纪律全文——播报规范与时间线、意图访谈与统一问答路由（popSelf）、回合收束纪律、人设手册规格。只读幂等，可重复领取。',
+    parameters: {},
+    output: {
+      schema: {
+        type: 'object' as const,
+        properties: {
+          ok: bool('是否成功'),
+          guide: str('构建纪律全文'),
+        },
+        additionalProperties: false as const,
+      },
+      render: () => text('已领取构建规程（全文随结果返回，照此执行）'),
+    },
+    // 静默呈现（用户迭代 2026-09-10）：规程全文只进模型上下文——默认卡会把
+    // 整包渲染成大 JSON 行铺进对话，这里收敛为一行。
+    presentCall: () => ({ card: 'generic' as const, title: '领取构建规程' }),
+    presentResult: (_args, result) => {
+      if (result.isError) return undefined;
+      return { card: 'generic' as const, title: '已领取构建规程', content: [] };
+    },
+    // 无状态只读：纪律单一来源 = persona 常量（与子代理系统段同文），每次
+    // 领取原样返回——不改盘、不依赖调用者身份（成员被拒见本工具）。
+    execute: async () => ({ ok: true as const, guide: ROLE_BUILDER_CHILD_PERSONA }),
   });
 
   const buildWaitTool = defineTool({
@@ -1514,6 +1543,7 @@ export function createCaptainTools(
     memberSaveTool,
     memberListTool,
     buildReportTool,
+    buildGuideTool,
     buildWaitTool,
     buildDispatchTool,
     interviewAnswerTool,

@@ -34,7 +34,6 @@ import {
   stateRootOf,
   type RuntimeEnv,
 } from './base.js';
-import { recordSessionRoute } from './sessionRoutes.js';
 import { insertTaskMemberRow, readTeamSync, withTeamTx } from '../state/store.js';
 import { getDb } from '../state/db.js';
 import { locks, teamLockKey } from '../state/lock.js';
@@ -379,12 +378,6 @@ export async function dispatchCaptainCore(
   }
   // 子代理的 eteams_* 调用按该团队领队解析（identity.ts / 跨工作区重指）。
   registerCaptainChild(String(start.childId), teamId, root, taskKey);
-  // 声明路线登记（0.1.2 起 continuable setup hook 被宿主移除——spawn 时直记，
-  // 面板 /session-route 的目录级 model 显示随之可用；空段由 recordSessionRoute 跳过）。
-  recordSessionRoute(String(start.childId), {
-    provider: agentOptions?.provider ?? '',
-    model: agentOptions?.model ?? '',
-  });
   if (String(start.childId) !== previous) {
     await persistReplicaSession(env, team.id, replica.id, String(start.childId));
   }

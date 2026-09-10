@@ -10,9 +10,10 @@
  *
  * @module dsh-eteams/client/pages/roster/rosterAddPage
  */
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useDispatch } from 'react-redux';
 import { useLocation, useNavigate } from 'react-router-dom';
+import Check from 'lucide-react/dist/esm/icons/check.mjs';
 import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right.mjs';
 import PenLine from 'lucide-react/dist/esm/icons/pen-line.mjs';
 import {
@@ -21,6 +22,7 @@ import {
   writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives';
 import { ADD_PEOPLE_TEMPLATE, type PrefillOutcome } from '../../lib/addPeople';
+import { requestCloseTeamsPage } from '../../lib/bridge';
 import type { RosterMember } from '../../lib/api';
 import { cn } from '../../lib/cn';
 import { errorMessageOf } from '../../lib/errors';
@@ -70,6 +72,11 @@ const ADD_MODE_ICON_CLASS =
 const STEP_ROW_CLASS = `mt-2 flex items-start gap-2 text-sm leading-6 ${TEXT2_CLASS}`;
 const STEP_NUM_CLASS =
   'mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-business-tint text-xs font-semibold text-[color:var(--eteams-brand-ink)]';
+/** 复制钮成功态（用户迭代 2026-09-09）：边框与文字/勾转 --success 绿。
+ * 两态都常驻边框占位（透明 ↔ 绿只换色，不引起 1px 布局跳动；preflight
+ * 已关，border-solid 显式补边框样式）。 */
+const COPY_IDLE_BUTTON_CLASS = 'border border-solid border-transparent';
+const COPY_OK_BUTTON_CLASS = 'border border-solid border-success text-success';
 
 /** ================================== 主组件 ================================== */
 
@@ -122,13 +129,38 @@ export function RosterAddPage({
     setAddMode('ai');
   };
   const prefillAi = (): void => {
-    setAiPrefill(onPrefillAddPeople());
+    const outcome = onPrefillAddPeople();
+    setAiPrefill(outcome);
+    // 填充落地即收掉整页团队页弹窗（用户迭代 2026-09-09「填充后隐藏弹窗」）：
+    // not-started 场景本页开在整页团队页（dialog 层）里，命令进了对话输入框
+    // 却被弹窗盖住——set/copied（非 aborted）即广播关页信号，用户直接看到
+    // 输入框回车发送。对话内 tab 场景弹窗未开，信号无接收方、零副作用。
+    if (outcome !== 'aborted') requestCloseTeamsPage();
   };
-  // 复制静默收口（用户反馈 2026-09-08「不需要弹」）：writeClipboard 写入
-  // 剪贴板即止，不再弹任何反馈——右下角弹框整体撤除。
+  // 复制成功态（用户迭代 2026-09-09）：写入剪贴板成功 → 复制钮就地亮成功
+  // 态（边框+勾转 --success 绿），2 秒后自动回弹——反馈收在按钮自身，任何
+  // 浮层都不弹（2026-09-08「不需要弹」口径维持）。重复点击重置计时；卸载
+  // 清定时器防跨挂载 setState。
+  const [copied, setCopied] = useState(false);
+  const copiedTimerRef = useRef<number | null>(null);
   const copyTemplate = (): void => {
-    void writeClipboard(ADD_PEOPLE_TEMPLATE).catch(() => undefined);
+    void writeClipboard(ADD_PEOPLE_TEMPLATE)
+      .then(() => {
+        setCopied(true);
+        if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current);
+        copiedTimerRef.current = window.setTimeout(() => {
+          copiedTimerRef.current = null;
+          setCopied(false);
+        }, 2000);
+      })
+      .catch(() => undefined);
   };
+  useEffect(
+    () => () => {
+      if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current);
+    },
+    [],
+  );
 
   const saveManual = async (): Promise<void> => {
     const trimmed = name.trim();
@@ -219,7 +251,9 @@ export function RosterAddPage({
                 />
               </div>
               <div className={FORM_ROW_CLASS}>
-                <span className={FORM_LABEL_CLASS}>简介（一句话，展示在角色列表卡片上，可留空）</span>
+                <span className={FORM_LABEL_CLASS}>
+                  简介（一句话，展示在角色列表卡片上，可留空）
+                </span>
                 <Input
                   value={profile}
                   placeholder="如：负责后端接口与数据库调优"
@@ -290,7 +324,15 @@ export function RosterAddPage({
                 <Button size="sm" onClick={prefillAi}>
                   {aiPrefill === 'set' ? '重新填充' : '填充'}
                 </Button>
-                <Button size="sm" variant="secondary" onClick={copyTemplate}>
+                {/* 复制成功态（用户迭代 2026-09-09）：边框+勾转 --success 绿，
+                2 秒回弹（见 copyTemplate）——勾随文字色 currentColor 继承。 */}
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className={cn(copied ? COPY_OK_BUTTON_CLASS : COPY_IDLE_BUTTON_CLASS)}
+                  onClick={copyTemplate}
+                >
+                  {copied && <Check aria-hidden={true} />}
                   复制
                 </Button>
                 {aiPrefill !== 'set' && (

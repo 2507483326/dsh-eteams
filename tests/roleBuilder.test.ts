@@ -13,7 +13,11 @@ import { ADD_PEOPLE_COMMAND, ADD_PEOPLE_TEMPLATE } from '../src/client/lib/addPe
 import { CAPTAIN_SECTION_SHORT } from '../src/host/prompts/system/captain';
 import { buildActivationMessage, steerEngageNotice } from '../src/host/commands/eteam';
 import type { Agent } from '@deepseek-ai/dsh-agent';
-import { ROLE_BUILDER_PRESET } from '../src/host/prompts/personas/builder';
+import type { Context } from '@deepseek-ai/cordis';
+import type { ETeamsResolvedConfig } from '../src/host/config';
+import { ROLE_BUILDER_PRESET, ROLE_BUILDER_CHILD_PERSONA } from '../src/host/prompts/personas/builder';
+import { builderPhasePrompt } from '../src/host/prompts/spawn/builderPhases';
+import { createCaptainTools } from '../src/host/tools/captainTools';
 import { ROLE_BUILDER_SECTION } from '../src/host/prompts/system/roleBuilder';
 import { PRESET_MEMBER_ROLES, ROLE_TEMPLATES } from '../src/host/prompts/personas/presets';
 import {
@@ -28,7 +32,11 @@ import {
   setBuildParentSession,
 } from '../src/host/runtime/roleBuilder';
 import { MEMBER_DENIED_TOOLS } from '../src/host/runtime/members';
-import { ensurePresetMembers, findRosterMember, upsertRosterMember } from '../src/host/runtime/roster';
+import {
+  ensurePresetMembers,
+  findRosterMember,
+  upsertRosterMember,
+} from '../src/host/runtime/roster';
 import { cleanupTempWorkspace } from './support/tmpWorkspace';
 
 let stateRoot: string;
@@ -66,30 +74,44 @@ describe('D18 对话式新增成员', () => {
     );
   });
 
-  it('engage notice steers only conversationally blank sessions (docs/19.16 空会话唤醒)', () => {
+  it('engage notice steers only conversationally blank sessions (docs/19.16 空会话唤醒)', async () => {
     const steer = vi.fn();
     const log = { info: vi.fn(), warn: vi.fn() };
-    // 空白会话（从未开过 turn）→ steer 一条 notice
-    steerEngageNotice(
-      { session: { events: [] }, steer } as unknown as Agent,
-      log as unknown as Parameters<typeof steerEngageNotice>[1],
-    );
+    // 新版本迁移后签名：steerEngageNotice(ctx, agent, stateRoot, log)——
+    // ctx.agents.get 命中活 agent 即不走到 resume；stateRoot 只落诊断日志。
+    const live = { id: 'engage-1', session: { events: [] }, steer } as unknown as Agent;
+    const ctx = { agents: { get: () => live } } as unknown as Parameters<
+      typeof steerEngageNotice
+    >[0];
+    // 空白会话（从未开过 turn）→ steer 一条 engage 通知
+    await steerEngageNotice(ctx, live, stateRoot, log);
     expect(steer).toHaveBeenCalledTimes(1);
     // 已开过 turn 的会话 → 不加应答回合（无噪音）
-    steerEngageNotice(
-      { session: { events: [{ type: 'turn/start' }] }, steer } as unknown as Agent,
-      log as unknown as Parameters<typeof steerEngageNotice>[1],
+    const engaged = {
+      id: 'engage-2',
+      session: { events: [{ type: 'turn/start' }] },
+      steer,
+    } as unknown as Agent;
+    await steerEngageNotice(
+      { agents: { get: () => engaged } } as unknown as Parameters<typeof steerEngageNotice>[0],
+      engaged,
+      stateRoot,
+      log,
     );
     expect(steer).toHaveBeenCalledTimes(1);
     // steer 抛错不外溢（构建照常在后台进行）
-    steerEngageNotice(
-      {
-        session: { events: [] },
-        steer: () => {
-          throw new Error('boom');
-        },
-      } as unknown as Agent,
-      log as unknown as Parameters<typeof steerEngageNotice>[1],
+    const failing = {
+      id: 'engage-3',
+      session: { events: [] },
+      steer: (): void => {
+        throw new Error('boom');
+      },
+    } as unknown as Agent;
+    await steerEngageNotice(
+      { agents: { get: () => failing } } as unknown as Parameters<typeof steerEngageNotice>[0],
+      failing,
+      stateRoot,
+      log,
     );
     expect(log.warn).toHaveBeenCalledTimes(1);
   });
@@ -128,6 +150,43 @@ describe('D18 对话式新增成员', () => {
     expect(ROLE_BUILDER_SECTION).toContain('项目牧羊人');
   });
 
+  it('build child prompts stay brief and fetch the guide first (用户迭代 2026-09-10)', () => {
+    const start = builderPhasePrompt('start', { request: 'eTeam --add-people 建一个数据工程师' });
+    const wake = builderPhasePrompt('continue', {
+      request: 'eTeam --add-people 建一个数据工程师',
+      interview: {
+        questions: [{ id: 'q1', question: '使用场景？', options: [{ label: 'A' }] }],
+        answers: [{ id: 'q1', choice: 'A' }],
+      },
+    });
+    for (const text of [start, wake]) {
+      // 可见回合提示词不再整墙复述纪律：persona 正文不进 prompt，第一步
+      // 自己调 eteams_build_guide 领取
+      expect(text).not.toContain('持久记忆是');
+      expect(text).not.toContain('agency-agents-zh');
+      expect(text).toContain('eteams_build_guide');
+      expect(text).toContain('【本回合任务】');
+    }
+    // 数据快照保留（激活原文 / 访谈作答是模型干活的原材料）
+    expect(start).toContain('【激活原文】');
+    expect(wake).toContain('【意图访谈逐题作答】');
+    // 纪律全在 persona 系统段（eteams_build_guide 返回同一常量，双通道同文）
+    expect(ROLE_BUILDER_CHILD_PERSONA).toContain('eteams_build_wait');
+    expect(ROLE_BUILDER_CHILD_PERSONA).toContain('awaiting_confirmation');
+    expect(ROLE_BUILDER_CHILD_PERSONA).toContain('multi_select');
+    expect(ROLE_BUILDER_CHILD_PERSONA).toContain('一次报全');
+  });
+
+  it('eteams_build_guide hands the builder discipline to the caller (用户迭代 2026-09-10)', async () => {
+    const tools = createCaptainTools({} as ETeamsResolvedConfig, {} as Context);
+    const guide = tools.find((t) => t.name === 'eteams_build_guide');
+    expect(guide).toBeDefined();
+    const out = (await guide!.execute({}, {} as never)) as { ok: boolean; guide: string };
+    expect(out.ok).toBe(true);
+    // 单一来源：工具返回与 persona 系统段同一段纪律全文
+    expect(out.guide).toBe(ROLE_BUILDER_CHILD_PERSONA);
+  });
+
   it('preset is the single source for the role template (D18-3)', () => {
     expect(PRESET_MEMBER_ROLES).toContain('角色构建师');
     const tpl = ROLE_TEMPLATES['角色构建师'];
@@ -138,8 +197,13 @@ describe('D18 对话式新增成员', () => {
 
   it('build-session state machine guards transitions (docs/19.9.1)', async () => {
     // 首轮必须以 active 开启会话
-    await expect(reportBuildProgress(stateRoot, { status: 'awaiting_confirmation' })).rejects.toThrow();
-    const s1 = await reportBuildProgress(stateRoot, { request: 'eTeam --add-people …', step: '收到需求' });
+    await expect(
+      reportBuildProgress(stateRoot, { status: 'awaiting_confirmation' }),
+    ).rejects.toThrow();
+    const s1 = await reportBuildProgress(stateRoot, {
+      request: 'eTeam --add-people …',
+      step: '收到需求',
+    });
     expect(s1.status).toBe('active');
     expect(s1.startedAt).toBeGreaterThan(0);
     // active 内步进更新 + draft 浅合并累积
@@ -149,10 +213,16 @@ describe('D18 对话式新增成员', () => {
       draft: { name: 'data-eng', role: '数据工程师' },
     });
     expect(s2.draft?.name).toBe('data-eng');
-    const s3 = await reportBuildProgress(stateRoot, { step: '撰写角色手册', draft: { personaMd: '# 手册', profile: '一句话简介' } });
+    const s3 = await reportBuildProgress(stateRoot, {
+      step: '撰写角色手册',
+      draft: { personaMd: '# 手册', profile: '一句话简介' },
+    });
     expect(s3.draft?.name).toBe('data-eng');
     expect(s3.draft?.personaMd).toBe('# 手册');
-    const s4 = await reportBuildProgress(stateRoot, { status: 'awaiting_confirmation', note: '等确认' });
+    const s4 = await reportBuildProgress(stateRoot, {
+      status: 'awaiting_confirmation',
+      note: '等确认',
+    });
     expect(s4.status).toBe('awaiting_confirmation');
     // 确认：roster 落库 + 会话翻转为 confirmed（D18-6 唯一写点）
     const { session, memberName } = await confirmBuildSession(stateRoot, {
@@ -291,8 +361,9 @@ describe('D18 对话式新增成员', () => {
     expect(readBuildParentSession(join(stateRoot, 'nonexistent-dir'))).toBeNull();
   });
 
-  it('eteams_build_report / eteams_build_wait are denied to team members (D18-4, docs/19.17.1)', () => {
+  it('eteams_build_report / eteams_build_wait / eteams_build_guide are denied to team members (D18-4, docs/19.17.1)', () => {
     expect(MEMBER_DENIED_TOOLS).toContain('eteams_build_report');
+    expect(MEMBER_DENIED_TOOLS).toContain('eteams_build_guide');
     expect(MEMBER_DENIED_TOOLS).toContain('eteams_build_wait');
   });
 

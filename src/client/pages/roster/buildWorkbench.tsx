@@ -22,14 +22,14 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useDispatch, useSelector } from 'react-redux';
 import { useLocation, useNavigate } from 'react-router-dom';
 import PenLine from 'lucide-react/dist/esm/icons/pen-line.mjs';
-import { IconPlusOutline16, IconSparkle16 } from '@deepseek-ai/dsh-client-ui-primitives';
+import { IconPlusOutline16 } from '@deepseek-ai/dsh-client-ui-primitives';
 import type { BuildSession } from '../../lib/api';
 import { cn } from '../../lib/cn';
 import { errorMessageOf } from '../../lib/errors';
 import { Avatar } from '../../features/avatar/avatar';
 import { MdEditor } from '../../features/mdEditor/mdEditor';
 import { RandomAvatarButton, rollAvatarPair } from '../../components/avatarRing';
-import { StepGlyph } from '../../components/stepGlyph';
+import { StepDot } from '../../components/stepGlyph';
 import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
 import { Input } from '../../components/ui/input';
@@ -76,7 +76,8 @@ export interface BuildWorkbenchProps {
 
 /** 原 styles.buildStep（构建工作台步骤行）；原 prefillBanner docs/23 S23-3
  * 迁移 shadcn Alert（default 变体 + 品牌淡底覆盖），常量删除。
- * D22d：步骤行 14px/24、序号圆牌 12px。 */
+ * D22d：步骤行 14px/24；行首字形（用户迭代 2026-09-10）换 StepDot 三态
+ * 圆点——进行中橙黄转圈 / 完成 business 蓝点 / 未到灰空心环，统一 10px。 */
 const BUILD_STEP_CLASS = 'flex items-center gap-2 py-0.5 text-sm leading-6';
 
 /** ================================== 常量与映射表 ================================== */
@@ -315,9 +316,10 @@ export function BuildWorkbench({ build, addMode, onConfirmed }: BuildWorkbenchPr
                 size={30}
               />
             ) : (
-              <span className="inline-flex text-primary [animation:eteams-spin_1s_linear_infinite]">
-                <IconSparkle16 />
-              </span>
+              // 头部「构建中」标（用户迭代 2026-09-10）：品牌色 sparkle 转圈
+              // 换成橙黄圆点转圈——与步骤时间线的进行中点同一语言（点大一档
+              // h-3.5 配标题行字重）。
+              <StepDot state="current" className="h-3.5 w-3.5" />
             )}
             <div className={cn(LINE_CLASS, 'my-0 font-semibold')}>
               {interviewWaiting ? (
@@ -334,7 +336,9 @@ export function BuildWorkbench({ build, addMode, onConfirmed }: BuildWorkbenchPr
                 '角色构建师工作中…'
               )}
             </div>
-            {interviewWaiting ? <Pill tone="warn">等你作答</Pill> : <Pill tone="info">构建中</Pill>}
+            {/* 构建中徽标（用户迭代 2026-09-10）：in-progress 统一橙黄——pill
+            的内嵌点从 info 蓝换 warn 橙黄，与步骤点同色。 */}
+            {interviewWaiting ? <Pill tone="warn">等你作答</Pill> : <Pill tone="warn">构建中</Pill>}
             <span className="flex-1" />
             {interviewWaiting && (
               <Button
@@ -378,7 +382,9 @@ export function BuildWorkbench({ build, addMode, onConfirmed }: BuildWorkbenchPr
               const glyphState = done ? 'done' : current ? 'current' : 'pending';
               return (
                 <div key={s} className={BUILD_STEP_CLASS}>
-                  <StepGlyph state={glyphState} className="font-semibold" />
+                  {/* 圆点字形（用户迭代 2026-09-10）：✔●◌ 换三态圆点——进行中
+                  橙黄转圈、完成蓝点（灰勾撤除）、未到灰空心环。 */}
+                  <StepDot state={glyphState} />
                   <span className={done || current ? 'text-foreground' : 'text-muted-foreground'}>
                     {s}
                   </span>

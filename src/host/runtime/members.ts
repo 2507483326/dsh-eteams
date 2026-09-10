@@ -4,14 +4,13 @@
  * docs/35 §5#12 之后成员是纯模板行（无状态无会话）：起会话只读模板行，状态
  * 与 session_id 的回填由调用方（首派路径，assignment.ts）随事务写回
  * task_members 实例行。harness 0.1.2 起 registerContinuableSetup 被宿主移除
- * ——成员工具改随根作用域注册（index.ts），归属/声明路线登记点前移到
- * spawn 与唤醒。
+ * ——成员工具改随根作用域注册（index.ts），归属登记点前移到 spawn 与唤醒
+ * （声明路线登记已随子会话徽章改读客户端会话投影退役，2026-09-09）。
  *
  * @module dsh-eteams/runtime/members
  */
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { SessionId } from '@deepseek-ai/dsh-session';
-import { recordSessionRoute } from './sessionRoutes.js';
 import type { MemberRecord, TaskMemberRecord, TaskRecord, TeamState } from '../model/types.js';
 import { insertMailInTx } from '../state/events.js';
 import type { TeamTx } from '../state/store.js';
@@ -65,6 +64,7 @@ export const MEMBER_DENIED_TOOLS: readonly string[] = [
   'eteams_member_save',
   'eteams_member_list',
   'eteams_build_report',
+  'eteams_build_guide',
   'eteams_build_wait',
   'eteams_remove_member',
   'eteams_update_member',
@@ -119,9 +119,10 @@ export async function spawnMember(
       : (persona?.executionPrompt ?? `你是「${row.name}」，以团队成员身份为团队交付。`),
   );
   const route = template?.modelRoute;
-  // 路线解析（模板覆盖 / 会话默认）提取成变量：spawn 成功后随归属注册表与
-  // 声明路线登记表一并落账（harness 0.1.2 起 continuable setup hook 被宿主
-  // 移除，登记点前移到 spawn；冷恢复会话的归属随唤醒补齐）。
+  // 路线解析（模板覆盖 / 会话默认）提取成变量供 request 使用；spawn 成功后
+  // 随归属注册表落账（harness 0.1.2 起 continuable setup hook 被宿主移除，
+  // 归属登记点前移到 spawn；冷恢复会话的归属随唤醒补齐）。模型显示不再
+  // 依赖声明路线登记——子会话徽章 2026-09-09 起改读客户端会话持久投影。
   const agentOptions =
     route !== undefined && route.model !== ''
       ? {
@@ -156,10 +157,6 @@ export async function spawnMember(
     memberName: row.name,
     employeeId: row.employeeId,
     parentSessionId: String(captain.id),
-  });
-  recordSessionRoute(String(start.childId), {
-    provider: agentOptions?.provider ?? '',
-    model: agentOptions?.model ?? '',
   });
   return String(start.childId);
 }

@@ -9,9 +9,11 @@
  * 2. the 团队 button — an entry at the right end of the composer tool row
  *    (`conversation.input.right`), opening the tabbed 团队/成员 popup whose
  *    team rows and 新增 shortcuts jump straight to the 团队 tab page; beside
- *    it the 子会话模型徽章 (order 101) — a read-only badge rendering an eteams
- *    subagent session's actual provider/model (用户迭代 2026-09-07；主会话
- *    不渲染，模型座位照旧);
+ *    it the 子会话模型徽章 (order 101) — a read-only badge rendering an
+ *    addressed subagent session's actual model route, read from the
+ *    session-slot standard kit's `modelSelection` projection (用户迭代
+ *    2026-09-07；2026-09-09 方案 A 改客户端投影订阅，/session-route 端点
+ *    退役；主会话不渲染，模型座位照旧);
  * 3. the hero 团队 button — DOM-injected beside the 标准模式 preset chip on
  *    the not-started screen (no additive slot exists there), clicking into
  *    the 团队 tab page (full-screen 团队页 while the view ring is not
@@ -41,6 +43,7 @@ import { errorMessageOf } from './lib/errors';
 import { ETeamsView } from './pages/teamsView/index';
 import { installHeroTeamsButton } from './pages/heroTeamsButton';
 import { installModelCatalog } from './lib/modelCatalog';
+import { installSessionState } from './lib/sessionState';
 import { ensureEteamsStyles } from './lib/tailwind';
 import { enterTeamsPanel } from './pages/teamsPanel';
 import { TeamsButton } from './pages/teamsButton';
@@ -52,9 +55,13 @@ import { SessionModelBadge } from './pages/sessionModelBadge';
  * so this list must name every service the client plane touches:
  * `slots` (all registrations), `uiConversation` (card folding — dsh 0.1.2
  * renamed the former `conversationEvents`; fiber 级硬依赖，服务缺失即永不
- * 激活 → 渲染面 boot 失败) and `modelDirectories` (session model catalog,
- * optional — 模型选择与对话一致，用户迭代 2026-09；缺服务的运行时退回静态选项). */
-export const inject = ['slots', 'uiConversation', 'modelDirectories'];
+ * 激活 → 渲染面 boot 失败), `modelDirectories` (session model catalog,
+ * optional — 模型选择与对话一致，用户迭代 2026-09；缺服务的运行时退回静态
+ * 选项) and `sessions` (Session Controller 客户端服务，optional —— 子会话
+ * 模型徽章的兜底数据源：kit hook 缺席时探测会话绑定上的 modelSelection
+ * 持久投影 + subagentAddress 门控，用户迭代 2026-09-09 方案 A；缺服务且
+ * 缺 kit 时徽章静默不渲染). */
+export const inject = ['slots', 'uiConversation', 'modelDirectories', 'sessions'];
 
 /** Run one registration step; a failure is recorded, never fatal. */
 function guard(step: string, run: () => void): void {
@@ -84,6 +91,10 @@ export function apply(ctx: Context): void {
   // 惰性读取——这里只暂存引用，绝不在此刻访问服务属性。
   guard('model-catalog', () => installModelCatalog(ctx));
 
+  // 会话状态读取面（用户迭代 2026-09-09 方案 A：徽章改读会话持久投影）：
+  // 同款暂存——sessions 服务（Session Controller）属性全部惰性读取。
+  guard('session-state', () => installSessionState(ctx));
+
   guard('conversation.view', () =>
     ctx.slots.inject('conversation.view', () =>
       ctx.slots.register(
@@ -110,8 +121,9 @@ export function apply(ctx: Context): void {
         TeamsButton,
       );
       // 子会话模型徽章（用户迭代 2026-09-07「子代理会话中显示实际的
-      // provider/model」）：order 101 排在团队按钮后；仅在 eteams 子代理
-      // 会话渲染（宿主 /session-route 判 subagent + 观测路线）。
+      // provider/model」）：order 101 排在团队按钮后；标准座位 kit
+      // （sessionId/useSession/useProjection）读会话持久投影，仅在已寻址
+      // 子代理会话渲染（composer 模型座位的互补位）。
       const unregisterModelBadge = ctx.slots.register(
         {
           name: 'conversation.input.right',

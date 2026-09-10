@@ -6,11 +6,13 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  CLOSE_TEAMS_PAGE_EVENT,
   activateETeamsTab,
   consumePendingGotoAdd,
   consumePendingGotoRoster,
   consumePendingSelectTeam,
   ETEAMS_TAB_LABEL,
+  requestCloseTeamsPage,
   stageTeamSignals,
   teamsTabVisible,
 } from '../src/client/lib/bridge';
@@ -230,5 +232,37 @@ describe('pending jump signals', () => {
     expect(consumePendingGotoAdd()).toBe(true);
     expect(consumePendingGotoRoster()).toBe(false);
     expect(consumePendingSelectTeam()).toBe(null);
+  });
+});
+
+describe('requestCloseTeamsPage (window stub)', () => {
+  const globalWin = globalThis as { window?: unknown };
+
+  afterEach(() => {
+    globalWin.window = undefined;
+  });
+
+  it('dispatches the close signal when a window exists', () => {
+    const dispatched: { type: string }[] = [];
+    globalWin.window = {
+      CustomEvent: class FakeCustomEvent {
+        type: string;
+        constructor(type: string) {
+          this.type = type;
+        }
+      },
+      dispatchEvent: (event: { type: string }): true => {
+        dispatched.push(event);
+        return true;
+      },
+    };
+    requestCloseTeamsPage();
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]?.type).toBe(CLOSE_TEAMS_PAGE_EVENT);
+  });
+
+  it('is a silent no-op without a window', () => {
+    globalWin.window = undefined;
+    expect(() => requestCloseTeamsPage()).not.toThrow();
   });
 });

@@ -59,7 +59,12 @@ import { createRoot } from 'react-dom/client';
 import { Provider } from 'react-redux';
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client';
 // lucide 深层图标导入（dialog.tsx 先例：深层 .mjs 只进用到的图标）。
-import { activateETeamsTab, stageTeamSignals, teamsTabVisible } from '../lib/bridge';
+import {
+  CLOSE_TEAMS_PAGE_EVENT,
+  activateETeamsTab,
+  stageTeamSignals,
+  teamsTabVisible,
+} from '../lib/bridge';
 import { errorMessageOf } from '../lib/errors';
 import { BackButton } from '../components/backButton';
 import { ClientErrorBoundary, recordClientDiag } from '../lib/diagnostics';
@@ -202,7 +207,21 @@ function TeamsOverlay({ onClose }: { onClose: () => void }): ReactNode {
       if (event.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [onClose]);
+  // 页内关页信号（用户迭代 2026-09-09「填充后隐藏弹窗」）：本页即「弹窗」
+  // 形态（role=dialog，盖住对话输入框）——「新增角色→填充」把命令落进
+  // 输入框后广播 CLOSE_TEAMS_PAGE_EVENT（rosterAddPage 经 lib/bridge 发出，
+  // 下引 lib 无环），这里收信号就地关页，用户直接看到输入框。信号未发时
+  // 本监听零输出，Esc/返回钮路径不受影响。
+  useEffect(() => {
+    const onSignal = (): void => onClose();
+    window.addEventListener(CLOSE_TEAMS_PAGE_EVENT, onSignal);
+    return () => {
+      window.removeEventListener(CLOSE_TEAMS_PAGE_EVENT, onSignal);
+    };
   }, [onClose]);
   return (
     /* R2-F2（docs/21 21.5.3）：表面根包 Provider——单例 store，多 Provider
