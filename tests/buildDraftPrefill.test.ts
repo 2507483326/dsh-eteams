@@ -8,6 +8,7 @@
  * @module dsh-eteams/tests/buildDraftPrefill
  */
 import { describe, expect, it } from 'vitest';
+import type { BuildDraft } from '../src/client/lib/api';
 import { fromBuildDraft, profileFromManual } from '../src/client/pages/roster/buildDraft';
 
 /** 最小 BuildDraft（fromBuildDraft 只消费这几列，其余缺省）。 */
@@ -80,5 +81,15 @@ describe('fromBuildDraft 简介预填（docs/19.20）', () => {
   it('漏报且手册无 description → 输入框留空', () => {
     expect(fromBuildDraft(draftOf({ profile: null, personaMd: '---\nname: x\n---\n正文' })).profile).toBe('');
     expect(fromBuildDraft(draftOf({ profile: null, personaMd: undefined })).profile).toBe('');
+  });
+});
+
+describe('fromBuildDraft 缺字段归一（2026-09-10 面板 trim 崩溃）', () => {
+  it('构建中草稿 name/role 尚未上报（undefined）→ 归一空串，不溢 undefined 进表单态', () => {
+    // 浅合并累积（docs/19.6.2）：构建师可以只先报手册/职责，name/role 缺省
+    // 合法——表单态拿到 undefined 会在 trim / 受控 input 处崩掉整块面板。
+    const edit = fromBuildDraft({} as BuildDraft);
+    expect(edit.name).toBe('');
+    expect(edit.role).toBe('');
   });
 });

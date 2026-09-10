@@ -79,7 +79,8 @@ import {
   SELECT_TEAM_EVENT,
 } from '../../lib/bridge';
 import { navIdOfPath } from '../../lib/status';
-import { ClientErrorBoundary } from '../../lib/diagnostics';
+import { errorMessageOf } from '../../lib/errors';
+import { ClientErrorBoundary, recordClientDiag } from '../../lib/diagnostics';
 import { Toaster } from '../../components/ui/toaster';
 import { usePoll } from '../../hooks/usePoll';
 import { EteamsBackdrop } from '../../features/backdrop/eteamsBackdrop';
@@ -155,6 +156,69 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
   // 仅在阈值两侧翻转时 setState（不重渲染 spam）。观察器缺失（老内核）恒宽栏。
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [railWide, setRailWide] = useState(true);
+  // 宽手柄隐藏规则的文档根标记（tailwind.ts HIDE_WIDTH_HANDLE_CSS 的触发键）：
+  // 挂载即挂、卸载即摘——规则不依赖 :has()，切走页签手柄自动恢复。
+  useEffect(() => {
+    document.documentElement.setAttribute('data-eteams-view-active', '');
+    return () => {
+      document.documentElement.removeAttribute('data-eteams-view-active');
+    };
+  }, []);
+  // 宽手柄排查探针（用户迭代 2026-09-10「还是出现了」）：页签挂载稳定后
+  // 一次性盘点——隐藏规则是否真的进了注入节点、[data-width-handle] 元素
+  // 存在与否及其计算 display、全文档还有哪些 cursor 为 col/ew-resize 的
+  // 元素（几何 + data-* 身份）。结果落 client.log（kind
+  // width-handle-probe），回答「团队页签里看到的手柄到底是什么」。探针
+  // 只读 DOM 零副作用，结论确认后整段撤除。
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      try {
+        const style = document.head.querySelector('style[data-dsh-eteams-tw]');
+        const rectOf = (el: Element): string => {
+          const r = el.getBoundingClientRect();
+          return `x${Math.round(r.x)} y${Math.round(r.y)} ${Math.round(r.width)}x${Math.round(r.height)}`;
+        };
+        const marked = [...document.querySelectorAll('[data-width-handle]')].map((el) => ({
+          side: el.getAttribute('data-width-handle'),
+          display: getComputedStyle(el).display,
+          rect: rectOf(el),
+        }));
+        const cursorHits = [
+          ...document.querySelectorAll<HTMLElement>('*'),
+        ]
+          .filter((el) => {
+            const c = getComputedStyle(el).cursor;
+            return c === 'col-resize' || c === 'ew-resize';
+          })
+          .slice(0, 8)
+          .map((el) => ({
+            tag: el.tagName,
+            cls: (el.getAttribute('class') ?? '').slice(0, 40),
+            attrs: [...el.attributes]
+              .filter((a) => a.name.startsWith('data-'))
+              .map((a) => `${a.name}=${a.value}`)
+              .join(',')
+              .slice(0, 80),
+            display: getComputedStyle(el).display,
+            rect: rectOf(el),
+          }));
+        recordClientDiag(
+          'width-handle-probe',
+          JSON.stringify({
+            ruleInStyle: style?.textContent.includes('data-width-handle') ?? false,
+            viewFlag: document.documentElement.hasAttribute('data-eteams-view-active'),
+            marked,
+            cursorHits,
+          }),
+        );
+      } catch (error) {
+        recordClientDiag('width-handle-probe', errorMessageOf(error));
+      }
+    }, 600);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, []);
   useLayoutEffect(() => {
     const el = rootRef.current;
     if (el === null || typeof ResizeObserver === 'undefined') return;

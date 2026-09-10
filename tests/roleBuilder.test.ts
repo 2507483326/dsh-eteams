@@ -31,6 +31,7 @@ import {
   roleBuilderFile,
   setBuildParentSession,
 } from '../src/host/runtime/roleBuilder';
+import type { BuildDraft } from '../src/host/runtime/roleBuilder';
 import { MEMBER_DENIED_TOOLS } from '../src/host/runtime/members';
 import {
   ensurePresetMembers,
@@ -288,13 +289,18 @@ describe('D18 对话式新增成员', () => {
     await reportBuildProgress(stateRoot, { status: 'active', newBuild: true });
     await reportBuildProgress(stateRoot, {
       status: 'awaiting_confirmation',
-      draft: { personaMd: '# partial 手册', profile: '一句话简介' },
+      draft: {
+        name: 'partial',
+        role: 'engineer',
+        personaMd: '# partial 手册',
+        profile: '一句话简介',
+      },
     });
     await confirmBuildSession(stateRoot, { name: 'partial', role: 'engineer' });
     await expect(resumeBuildSession(stateRoot)).rejects.toThrow(/仅已放弃/);
   });
 
-  it('awaiting_confirmation requires a non-empty personaMd and profile (docs/19.17.2 + 19.19)', async () => {
+  it('awaiting_confirmation requires a non-empty personaMd, name and profile (docs/19.17.2 + 19.19)', async () => {
     await reportBuildProgress(stateRoot, { request: 'r' });
     // 无 draft / 空白手册一律拒绝——确认页直接渲染 personaMd，空手册= 空白页
     await expect(
@@ -313,6 +319,16 @@ describe('D18 对话式新增成员', () => {
         draft: { name: 'x', role: 'y', personaMd: '# x 手册' },
       }),
     ).rejects.toThrow(/profile/);
+    // name 缺失同样拒绝（2026-09-10 面板 trim 崩溃：确认页/入库都以角色名
+    // 为键，缺名会让确认表单拿 undefined 去 trim）。本会话草稿已带 name
+    // （浅合并保旧值），先开新局再报一份缺名草稿。
+    await reportBuildProgress(stateRoot, { status: 'active', newBuild: true });
+    await expect(
+      reportBuildProgress(stateRoot, {
+        status: 'awaiting_confirmation',
+        draft: { role: 'y', personaMd: '# x 手册', profile: '一句话简介' },
+      }),
+    ).rejects.toThrow(/name/);
     // 带手册全文 + 一句话简介则放行
     const s = await reportBuildProgress(stateRoot, {
       status: 'awaiting_confirmation',
@@ -321,6 +337,41 @@ describe('D18 对话式新增成员', () => {
     expect(s.status).toBe('awaiting_confirmation');
     expect(s.draft?.personaMd).toBe('# x 手册');
     expect(s.draft?.profile).toBe('一句话简介');
+  });
+
+  it('report drafts sanitize at the write path: bad-typed fields dropped, old values kept (2026-09-10 面板 trim 崩溃)', async () => {
+    await reportBuildProgress(stateRoot, { request: 'r' });
+    // 模型自由上报的 draft：null / 错类型字段视同未上报剔除，不许落盘
+    const s1 = await reportBuildProgress(stateRoot, {
+      step: '查重角色库',
+      draft: {
+        name: '甲',
+        role: '工程师',
+        profile: null,
+        duty: 42,
+        rules: '错类型',
+      } as unknown as BuildDraft,
+    });
+    expect(s1.draft?.name).toBe('甲');
+    expect(s1.draft?.profile).toBeUndefined();
+    expect(s1.draft?.duty).toBeUndefined();
+    expect(s1.draft?.rules).toBeUndefined();
+    // 合法字段照常累积；rules 混入非字符串项只留合法项
+    const s2 = await reportBuildProgress(stateRoot, {
+      step: '起草统一手册',
+      draft: {
+        profile: '一句话简介',
+        rules: ['纪律一', 7, '纪律二'],
+      } as unknown as BuildDraft,
+    });
+    expect(s2.draft?.profile).toBe('一句话简介');
+    expect(s2.draft?.rules).toEqual(['纪律一', '纪律二']);
+    // null 视同未上报：浅合并保旧值，已定名不会被 null 清掉
+    const s3 = await reportBuildProgress(stateRoot, {
+      step: '深化领域章节',
+      draft: { name: null } as unknown as BuildDraft,
+    });
+    expect(s3.draft?.name).toBe('甲');
   });
 
   it('intent interview lands in the session and records answers (docs/19.16)', async () => {

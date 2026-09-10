@@ -84,8 +84,10 @@ export function profileFromManual(personaMd: string | undefined): string {
 
 export function fromBuildDraft(d: BuildDraft): DraftEdit {
   return {
-    name: d.name,
-    role: d.role,
+    // 草稿浅合并累积（docs/19.6.2），构建中 name/role 允许尚未上报——归一
+    // 成空串，防 undefined 溢进表单态（受控 input 与下游 trim 链会崩）。
+    name: d.name ?? '',
+    role: d.role ?? '',
     // 简介预填（docs/19.20）：构建师漏报（null/undefined）时退回手册
     // frontmatter 的 description；空串= 显式留空，不预填。
     profile: d.profile ?? profileFromManual(d.personaMd),
@@ -125,9 +127,11 @@ export const PREFILL_STEPS = [
 
 /** 构建中草稿只读预览（docs/19.6.2）：字段渐次呈现，不可编辑。 */
 export function DraftPreview({ draft }: { draft: BuildDraft }): ReactNode {
+  // 构建中草稿 name/role 可能尚未上报（浅合并渐次呈现）——缺省按空值渲染
+  // 占位「…」，不设防会在 value.trim() 处崩掉整块面板。
   const rows: [string, string][] = [
-    ['角色名', draft.name],
-    ['角色', draft.role],
+    ['角色名', draft.name ?? ''],
+    ['角色', draft.role ?? ''],
     ['简介', draft.profile ?? ''],
   ];
   return (

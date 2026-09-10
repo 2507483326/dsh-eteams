@@ -31,11 +31,16 @@ const STYLE_ATTRIBUTE = 'data-dsh-eteams-tw';
  * col-resize 光标与辉光纯属干扰。conversation.view 注册项没有任何关闭
  * 手柄的参数（0.1.2 合同只有 id/order/label/priority，已核对运行时
  * .d.ts），故按宿主自己的遮蔽手法办：宿主用
- * `.root:has([data-conversation-composer-overlay])` 隐藏手柄，这里以本面板
- * 根唯一的 `data-eteams="view"` 作触发键同法炮制——切回对话/轨迹页签时
- * 该标记随视图卸载消失，手柄自动恢复，无需任何 JS 联动。
+ * `.root:has([data-conversation-composer-overlay])` 隐藏手柄，这里双触发键
+ * 同法炮制——
+ * - `html[data-eteams-view-active]`：面板挂载 effect 在文档根挂/摘的标记
+ *   （teamsView/index.tsx），不依赖 :has()，卸载即恢复；
+ * - `body:has([data-eteams='view'])`：以视图根标记为键的纯 CSS 兜底，覆盖
+ *   effect 未及运行的瞬间。
+ * 切回对话/轨迹页签时两个键都消失，手柄自动恢复，无需任何额外 JS 联动。
  */
 const HIDE_WIDTH_HANDLE_CSS = `
+html[data-eteams-view-active] [data-width-handle],
 body:has([data-eteams='view']) [data-width-handle] { display: none; }
 `;
 

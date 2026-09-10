@@ -271,18 +271,60 @@ export interface BuildReport {
   commandId?: string;
 }
 
+/** 草稿标量字段全集（sanitizeReportDraft 逐一验型；rules/avatar 另行处理）。 */
+const DRAFT_STRING_KEYS = [
+  'name',
+  'role',
+  'profile',
+  'duty',
+  'style',
+  'skills',
+  'executionPrompt',
+  'personaMd',
+  'provider',
+  'model',
+  'reasoningEffort',
+] as const;
+
+/**
+ * 上报草稿归一（写路径纪律）：`eteams_build_report.draft` 是模型自由上报的
+ * 浅合并对象，「字段渐次呈现」是设计行为——缺字段合法，但错类型/null 不许
+ * 落盘。非字符串的标量字段与非法 rules 一律视同本轮未上报剔除（合并语义下
+ * 缺失键保留旧值）；否则坏值会经 GET /rolebuilder 直达面板，DraftPreview /
+ * 确认表单在 value.trim() 处崩掉整块（2026-09-10 实况：构建师漏报名字）。
+ */
+function sanitizeReportDraft(draft: BuildDraft): BuildDraft {
+  const out = { ...draft } as Record<string, unknown>;
+  for (const key of DRAFT_STRING_KEYS) {
+    if (out[key] !== undefined && typeof out[key] !== 'string') delete out[key];
+  }
+  if (out.rules !== undefined) {
+    const rules = Array.isArray(out.rules)
+      ? out.rules.filter((r): r is string => typeof r === 'string')
+      : null;
+    if (rules === null || rules.length === 0) delete out.rules;
+    else out.rules = rules;
+  }
+  return out as unknown as BuildDraft;
+}
+
 /**
  * 待确认守卫（docs/19.17.2 + 19.19）：报告把会话置为 awaiting_confirmation
- * 时，解析后的草稿必须带非空 personaMd（人设手册全文）与非空 profile
- * （一句话简介）——确认页两列直接渲染这两个字段，空值= 用户看到「显示完成
- * 但没有内容」（用户迭代 2026-09-06：profile 漏报曾静默进待确认，确认页
- * 简介列空）。顺序钉死 personaMd 先查、profile 后查（19.17.2 既有用例按
- * /personaMd/ 断言，profile 先查会错配）。start/continue/restart 各回合
- * 提示词已要求完整草稿一次报全，本守卫是最后一道硬闸。
+ * 时，解析后的草稿必须带非空 personaMd（人设手册全文）、非空 name（角色名
+ * ——确认页与入库都以它为键，缺名会让确认表单/列表卡片拿 undefined 去
+ * trim）与非空 profile（一句话简介）——确认页直接渲染这三个字段，空值=
+ * 用户看到「显示完成但没有内容」（用户迭代 2026-09-06：profile 漏报曾静默
+ * 进待确认，确认页简介列空）。顺序钉死 personaMd 先查、profile 后查
+ * （19.17.2 既有用例按 /personaMd/ 断言，profile 先查会错配）。start/
+ * continue/restart 各回合提示词已要求完整草稿一次报全，本守卫是最后一道
+ * 硬闸。
  */
 function requireAwaitingDraft(draft: BuildDraft | null): void {
   if (draft === null || (draft.personaMd ?? '').trim() === '') {
     throw new Error('人设手册（personaMd）不能为空——请把完整手册全文随草稿一并上报后再置待确认');
+  }
+  if ((draft.name ?? '').trim() === '') {
+    throw new Error('角色名（name）不能为空——请把定下的名字随草稿一并上报后再置待确认');
   }
   if ((draft.profile ?? '').trim() === '') {
     throw new Error('简介（profile）不能为空——请从手册提炼一句话随草稿一并上报后再置待确认');
@@ -300,6 +342,8 @@ export async function reportBuildProgress(
   report: BuildReport,
 ): Promise<BuildSession> {
   const now = Date.now();
+  // 草稿写路径先归一（null = 本轮未上报草稿，合并语义下保旧值）。
+  const sanitizedDraft = report.draft !== undefined ? sanitizeReportDraft(report.draft) : null;
   // 播报步骤名归一 + 按规范时间线推导已完成前缀（canonical 步骤命中时推导
   // 压过模型自报的 stepsDone——蓝点只由宿主判定，模型报错名也不再乱序）。
   const step = report.step !== undefined ? canonicalStep(report.step) : undefined;
@@ -308,7 +352,7 @@ export async function reportBuildProgress(
   // 新请求让位旧草稿，与 /eteam 处理器语义一致）。后台构建代理被纪律禁止
   // 传该标记，其迟到播报仍走下方终态守卫（docs/19.16）。
   if (report.newBuild === true) {
-    if (report.status === 'awaiting_confirmation') requireAwaitingDraft(report.draft ?? null);
+    if (report.status === 'awaiting_confirmation') requireAwaitingDraft(sanitizedDraft);
     const fresh: BuildSession = {
       schemaVersion: 1,
       startedAt: now,
@@ -316,7 +360,7 @@ export async function reportBuildProgress(
       step: step ?? '收到需求',
       stepsDone: derived ?? report.stepsDone ?? [],
       request: report.request ?? '',
-      draft: ensureDraftAvatar(report.draft ?? null),
+      draft: ensureDraftAvatar(sanitizedDraft),
       note: report.note ?? '',
       ...(report.interview !== undefined ? { interview: interviewOf(report) } : {}),
       ...(report.commandId !== undefined ? { commandId: report.commandId } : {}),
@@ -350,7 +394,7 @@ export async function reportBuildProgress(
       step: step ?? '收到需求',
       stepsDone: derived ?? report.stepsDone ?? [],
       request: report.request ?? '',
-      draft: ensureDraftAvatar(report.draft ?? null),
+      draft: ensureDraftAvatar(sanitizedDraft),
       note: report.note ?? '',
       ...(report.interview !== undefined ? { interview: interviewOf(report) } : {}),
       updatedAt: now,
@@ -359,11 +403,11 @@ export async function reportBuildProgress(
     return fresh;
   }
   const draft = ensureDraftAvatar(
-    report.draft === undefined
+    sanitizedDraft === null
       ? current.draft
       : current.draft === null
-        ? report.draft
-        : { ...current.draft, ...report.draft },
+        ? sanitizedDraft
+        : { ...current.draft, ...sanitizedDraft },
   );
   if (requested === 'awaiting_confirmation') requireAwaitingDraft(draft);
   const next: BuildSession = {
