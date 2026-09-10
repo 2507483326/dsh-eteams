@@ -133,7 +133,7 @@ CREATE INDEX IF NOT EXISTS idx_task_current ON task (team_id, current_member) WH
 CREATE INDEX IF NOT EXISTS idx_task_update  ON task (team_id, update_time DESC);
 
 -- ---------------------------------------------------------------------
--- 5. task_members —— 任务成员副本（有状态、有会话锚点；v7：建任务/加成员
+-- 5. task_members —— 任务成员副本（有会话锚点；v7：建任务/加成员
 --    时从班底整行复制，工号抄班底行自增主键，行生命周期跟随
 --    所属大任务——删任务→副本级联删）
 --    领队也是一行：name='项目牧羊人'、main_task_id 为空（团队级主持行，
@@ -148,7 +148,9 @@ CREATE TABLE IF NOT EXISTS task_members (
   employee_id      INTEGER,             -- 工号（v7 表自增：建任务/加成员时抄自班底行 team_member_id；主持行同步班底领队行）
   session_id       TEXT NOT NULL DEFAULT '',  -- 本行自己的子代理会话 ID（v6：成员行=成员子会话，领队行=领队子代理会话）；还没启动时是空串
   status           TEXT NOT NULL DEFAULT 'staged',
-                   -- 成员状态：staged / ready / working / paused / removed
+                   -- 【弃用】成员状态枚举已随「成员没有状态」迭代全链路下线
+                   -- （列保留不读写，同 roles.employee_id 口径——DROP 是单向门）；
+                   -- 写入端不再落该列（恒为 DDL 默认），旧库残留值不再被读
   persona_md       TEXT,                -- 执行时的人设手册（沿用 roles 角色行的手册，可按任务微调）
   model            TEXT,                -- 执行时采用的模型（沿用 team_members 班底路线；NULL=跟随）
   provider         TEXT,                -- 覆盖路线的目录 provider（v9，同班底行口径；NULL=跟随/旧数据）

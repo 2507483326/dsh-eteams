@@ -27,7 +27,6 @@ import type {
   EventRecord,
   MailKind,
   MailMessage,
-  MemberStatus,
   PersonaRecord,
   TaskMemberRecord,
 } from '../model/types.js';
@@ -76,14 +75,13 @@ interface LegacyPersona {
 }
 
 interface LegacyMember {
-  /** 旧语义：成员的持续子会话 id（'' = staged 未起会话）。 */
+  /** 旧语义：成员的持续子会话 id（'' = 未起会话）。 */
   id?: string;
   name: string;
   employeeId?: string;
   role: string;
   persona?: LegacyPersona;
   modelRoute?: LegacyModelRoute;
-  status?: string;
   avatar?: { seed: number; salt: number; updatedAt?: number };
   createdAt?: number;
 }
@@ -580,13 +578,6 @@ function mapLegacyPayload(
   return out;
 }
 
-/** 成员状态原样收敛（非法值回 ready）。 */
-function mapMemberStatus(status: string | undefined): MemberStatus {
-  return status === 'staged' || status === 'working' || status === 'paused' || status === 'removed'
-    ? status
-    : 'ready';
-}
-
 /** 邮件类型收敛（未知类型回 notice）。 */
 function mapMailKind(kind: string | undefined): MailKind {
   return kind === 'assignment' || kind === 'report' || kind === 'question' || kind === 'user_message'
@@ -745,7 +736,6 @@ function importLegacyTeam(
     employeeId: employeeByMember.get(LEADER_NAME) ?? null,
     // v6 领队行 session_id = 领队子代理会话；主会话快照归任务行（下方盖章）。
     sessionId: old.captainChildId ?? '',
-    status: hasLeader ? 'ready' : 'removed',
     personaMd: leaderRow?.persona_md ?? personaToMd(leaderPersona, LEADER_NAME),
     createdAt: old.createdAt ?? now,
   });
@@ -768,7 +758,6 @@ function importLegacyTeam(
       name: m.name,
       employeeId: employeeByMember.get(m.name) ?? null,
       sessionId: childSessionId,
-      status: mapMemberStatus(m.status),
       personaMd: personaToMd(persona, m.name),
       ...(route.model !== null ? { model: route.model } : {}),
       ...(route.effort !== null ? { reasoningEffort: route.effort } : {}),
@@ -869,18 +858,17 @@ function importLegacyTeam(
   }
 
   // ---- 任务副本补建（v7：建任务即班底全员复制——含领队；工号抄班底行的
-  // 自增主键（表自增），status=staged、session_id 空；上方导入的旧锚定行
-  // 保持原状态原会话不动。只补容器任务：副本行只锚定大任务，小任务共享
-  // 容器的副本行）----
+  // 自增主键，session_id 空；上方导入的旧锚定行保持原会话不动。只补容器
+  // 任务：副本行只锚定大任务，小任务共享容器的副本行）----
   db.prepare(
     'INSERT INTO task_members (team_id, main_task_id, now_task_id, name, employee_id, ' +
-      'session_id, status, created_time, update_time) ' +
-      'SELECT tm.team_id, t.task_id, NULL, tm.role_name, tm.team_member_id, ?, ?, ?, ? ' +
+      'session_id, created_time, update_time) ' +
+      'SELECT tm.team_id, t.task_id, NULL, tm.role_name, tm.team_member_id, ?, ?, ? ' +
       'FROM task t JOIN team_members tm ON tm.team_id = t.team_id ' +
       'WHERE t.parent_id IS NULL AND tm.role_name IS NOT NULL ' +
       'AND NOT EXISTS (SELECT 1 FROM task_members x WHERE x.team_id = tm.team_id ' +
       'AND x.main_task_id = t.task_id AND x.name = tm.role_name)',
-  ).run('', 'staged', now, now);
+  ).run('', now, now);
 
   // ---- 尝试归属回填（v7：attempts.task_member_id 按成员名 + 根任务 join
   // 副本行；解析不到保留 NULL，判定退按名兜底）----

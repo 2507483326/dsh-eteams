@@ -5,15 +5,11 @@
  * wait_user/completed/failed/cancelled）是调度/重试/依赖阻断的运行依据，
  * 本模块提供三套展示词表与 tone——纯函数、读取时计算、不落盘、不写状态机。
  *
- * 同时是任务/成员两套展示 tone 与词表的共同家：
+ * 同时是任务展示 tone 与词表的共同家：
  * - `STATUS_LABELS`：任务 11 态精确词表（八轮 DA21 页面化后无直接渲染方，
  *   仅作态键序的规范来源——STATUS_GROUPS 按其键序展开）。
  * - `ATTEMPT_STATUS_LABELS`：尝试（AttemptStatus 六态）词表——尝试行状态与
  *   任务态不同源，不复用任务词表。
- * - `MEMBER_STATUS_LABELS`：成员聚合状态词表（staged/ready/working/paused/
- *   removed；memberStatusOf 聚合口径，任务态词表不再兼管成员状态）。
- * - `memberTone`：成员状态 tone（原 eteamsView 同名函数迁移，值域更新为
- *   新成员五态；旧值 busy/idle/done/failed/error 保留兜底不破老快照）。
  * - `isStartable`/`isTerminal`：开始钮状态判据（docs/44 44.2.2，M3 收拢
  *   tasks/taskListCard、tasks/taskSubtaskItem、任务详情页头三处开始钮判据）。
  * - `DOT_BASE_CLASS`/`DOT_TONE_CLASS`：6px 状态点工具类（D22e 彩点唯一载体，
@@ -53,26 +49,6 @@ export const ATTEMPT_STATUS_LABELS: Record<string, string> = {
   revoked: '已撤销',
   paused: '已挂起',
 };
-
-/** 成员聚合状态词表（memberStatusOf 聚合口径：任一实例行 working 即 working，
- * 其次 paused，无实例行 = staged）。 */
-export const MEMBER_STATUS_LABELS: Record<string, string> = {
-  staged: '未启动',
-  ready: '就绪',
-  working: '执行中',
-  paused: '已挂起',
-  removed: '已移出',
-};
-
-/** 成员状态→Tone（working 执行、ready 就绪、paused 挂起、staged/removed
- * 中性；旧快照值 busy/idle/done/failed/error 保留兜底）。 */
-export function memberTone(status: string): Tone {
-  if (status === 'working' || status === 'busy') return 'info';
-  if (status === 'ready' || status === 'idle' || status === 'done') return 'ok';
-  if (status === 'paused') return 'warn';
-  if (status === 'failed' || status === 'error') return 'err';
-  return 'muted';
-}
 
 /**
  * D22e 的 6px 状态点（彩点唯一载体）——原 eteamsView 同名常量原值迁移：

@@ -35,7 +35,7 @@ import {
 } from '../state/usageStore.js';
 import { findTeamByCaptain } from '../state/store.js';
 import { captainChildTeamOf } from './captainAgent.js';
-import { getSessionTeamId, getConsumedSessionTeamId } from './sessionTeam.js';
+import { getSessionTeamId } from './sessionTeam.js';
 import { stateRootFor, type RuntimeLogger } from './base.js';
 
 // ---------- 行模型（docs/40；类型本体在 state/usageStore，此处转出兼容） ----------
@@ -160,9 +160,8 @@ async function resolveIdentity(sessionId: string, root: string): Promise<Session
       if (captainTeamId !== undefined) {
         identity = { teamId: captainTeamId, memberName: null, roleKind: 'captain' };
       } else {
-        // 4. 面板团队绑定（sessionTeam.ts 现成可查；一次性消费语义下绑定
-        //    已随 user/message 转本回合凭证——消费回合的用量仍归该队）。
-        const bound = getSessionTeamId(sessionId) ?? getConsumedSessionTeamId(sessionId);
+        // 4. 面板团队绑定（sessionTeam.ts；绑定常驻——锁定对话的用量恒归该队）。
+        const bound = getSessionTeamId(sessionId);
         if (bound !== undefined) {
           identity = { teamId: bound, memberName: null, roleKind: 'conversation' };
         } else {

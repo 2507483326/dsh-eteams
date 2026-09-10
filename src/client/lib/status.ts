@@ -2,8 +2,7 @@
  * 状态域查表层（docs/44 44.2.2）：各状态域收敛为 `META[status]`/`NAV_ITEMS`
  * 查表，渲染位一律查表、禁三元链，未知值落兜底（`?? FALLBACK`）。
  * M1 初版：导航四项（rail 侧栏与路由表共用）；后续模块按 44.2.2 清单继续
- * 扩表（任务十态/构建步骤三态/成员五态…）——已入表：子代理活动两态（M4）、
- * 构建会话四态（M6）。
+ * 扩表（任务十态/构建步骤三态…）——已入表：构建会话四态（M6）。
  *
  * @module dsh-eteams/client/lib/status
  */
@@ -20,9 +19,6 @@ export interface NavItem {
   label: string;
   path: string;
 }
-
-/** 子代理活动两态（docs/20.4 P4：childId → running/inactive，成员卡活动点）。 */
-export type ActivityKey = 'running' | 'inactive';
 
 /** 构建会话四态（docs/19.9.1：键型即 lib/api BuildSession.status）。 */
 export type BuildSessionStatus = BuildSession['status'];
@@ -55,26 +51,6 @@ export type RosterDetailSubtitleKey = 'leader' | 'protected';
 export const ROSTER_DETAIL_SUBTITLE_META: Record<RosterDetailSubtitleKey, string> = {
   leader: '领队 · 手册与头像可编辑，名称为系统保留',
   protected: '系统保留角色 · 名称不可改，其余可编辑',
-};
-
-/**
- * 子代理活动点查表（M4，44.2.2）：running/inactive 的点色 + title 双三元收拢
- * ——键由消费位按 activity === 'running' 计算后查表（三元只算键名，21.5.1
- * 同纪律；非 running 一律落 inactive 档，与原三元回落同口径）。点色：running
- * = success 绿 + 光晕（D22f 状态点光晕——green-100 死字面量改 color-mix
- * success 淡环，token 半透明替代路径，button.tsx 先例，亮暗自适应）；
- * inactive = 中性 muted-foreground。
- */
-export const ACTIVITY_DOT: Record<ActivityKey, { className: string; title: string }> = {
-  running: {
-    className:
-      'h-[7px] w-[7px] shrink-0 rounded-full bg-success shadow-[0_0_0_3px_color-mix(in_srgb,var(--success)_15%,transparent)]',
-    title: '子代理运行中',
-  },
-  inactive: {
-    className: 'h-[7px] w-[7px] shrink-0 rounded-full bg-muted-foreground',
-    title: '子代理已完结',
-  },
 };
 
 /**

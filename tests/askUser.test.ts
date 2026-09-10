@@ -1,10 +1,11 @@
 /**
- * 子代理用户问答路由（eteams_ask_user / eteams_ask_answer）tests：路由判定
- * （presence 命中提问会话 → 就地弹；主会话自己提问 → 就地弹；否则严格转交
- * 主会话）、转交投递（在线 steer / 离线 agents.resume 冷恢复 followup）——
- * **转交即返回不停驻**，eteams_ask_answer 回收后由宿主 followup 唤醒提问子
- * 代理、降级路径（无锚点/弹窗服务缺失/弹窗被拒）、问答单一次性（重复提交
- * 拒绝）。直接驱动工具 execute，走与 buildInterviewRelay.test.ts 同款的
+ * 子代理用户问答（eteams_ask_user，2026-09-10 统一路径）tests：弹窗目标优先
+ * 提问方所属的**主对话**（任务锚 mainSessionId / 构建父会话，agents.get 取
+ * 活运行时根），主对话不在线或拒收退回提问会话自身再试一次（ctx.userQuestions
+ * .ask 阻塞等答案、同回合继续）——弹也先落审计行（面板徽标数据源），答案落
+ * 行回传；构建师调用走 fallback 身份（构建会话 builderChildId 判定），答案由
+ * 宿主自动写回构建会话；服务缺失 → 不落单直接降级；两连弹都被拒 → 行转
+ * cancelled 后降级；非团队非构建调用者原样抛错。直接驱动工具 execute，走
  * 离线 ctx 桩。
  *
  * @module dsh-eteams/tests/askUser
@@ -18,13 +19,16 @@ import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { ETeamsResolvedConfig } from '../src/host/config';
 import { resolveConfig } from '../src/host/config';
 import { createAskUserTools } from '../src/host/tools/askUserTools';
-import { decideAskRoute } from '../src/host/runtime/askUser';
-import { writeBuildPresence } from '../src/host/runtime/roleBuilder';
 import {
-  insertAskSync,
+  markBuilderChild,
+  readBuildSession,
+  reportBuildProgress,
+  setBuildParentSession,
+} from '../src/host/runtime/roleBuilder';
+import {
   normalizeAskAnswer,
+  readAllPendingAsksSync,
   readAskSync,
-  readPendingAsksSync,
 } from '../src/host/state/asks';
 import { insertTeamRow, withTeamTx, writeTeamInTx } from '../src/host/state/store';
 import { joinPath } from '../src/host/runtime/base';
@@ -58,7 +62,7 @@ const QUESTIONS = [
 
 // ---------- seeding（captainDispatch.test.ts 同款 SQLite 契约播种） ----------
 
-function seedTeam(opts: { withMainSession?: boolean } = {}): TeamState {
+function seedTeam(): TeamState {
   const name = '演示团队';
   let teamId = 0;
   withTeamTx(root, undefined, (tx) => {
@@ -72,7 +76,6 @@ function seedTeam(opts: { withMainSession?: boolean } = {}): TeamState {
     name: LEADER_NAME,
     employeeId: null,
     sessionId: '',
-    status: 'ready',
     isLeader: true,
     createdAt: 1,
   };
@@ -84,7 +87,6 @@ function seedTeam(opts: { withMainSession?: boolean } = {}): TeamState {
     name: '甲',
     employeeId: 1,
     sessionId: 'member-1',
-    status: 'working',
     createdAt: 1,
   };
   const state: TeamState = {
@@ -126,8 +128,7 @@ function seedTeam(opts: { withMainSession?: boolean } = {}): TeamState {
         status: 'ready',
         attempts: [],
         retryCount: 0,
-        // 主会话快照（opts.withMainSession === false 时模拟异常缺快照的库）。
-        ...(opts.withMainSession === false ? {} : { mainSessionId: 'cap-1' }),
+        mainSessionId: 'cap-1',
         createdAt: 1,
         updatedAt: 1,
       },
@@ -138,56 +139,26 @@ function seedTeam(opts: { withMainSession?: boolean } = {}): TeamState {
   return state;
 }
 
-// ---------- offline ctx stub（buildInterviewRelay.test.ts 同款） ----------
+// ---------- offline ctx stub ----------
 
-function memberAgent(): Agent {
-  return { id: 'member-1', session: { header: { cwd: ws } } } as unknown as Agent;
+function agentOf(id: string): Agent {
+  return { id, session: { header: { cwd: ws } } } as unknown as Agent;
 }
 
-function mainAgent(): Agent {
-  return { id: 'cap-1', session: { header: { cwd: ws } } } as unknown as Agent;
-}
-
-interface FakeAgent {
-  id: string;
-  session: { header: { cwd: string } };
-  steer: ReturnType<typeof vi.fn>;
-  followup: ReturnType<typeof vi.fn>;
-}
-
-function fakeLive(id: string): FakeAgent {
-  return {
-    id,
-    session: { header: { cwd: ws } },
-    steer: vi.fn(),
-    followup: vi.fn(),
-  };
+/** Ask 服务桩：回包按问题 id 一一映射到固定 label（弹窗服务的最小契约）。 */
+function fakeAsk(label: string): ReturnType<typeof vi.fn> {
+  return vi.fn(async (request: { questions: { id: string }[] }) => ({
+    answers: request.questions.map((q) => ({ id: q.id, selected: label })),
+  }));
 }
 
 function fakeCtx(
-  liveAgents: FakeAgent[],
-  extras: {
-    resume?: ReturnType<typeof vi.fn>;
-    userQuestions?: { ask: ReturnType<typeof vi.fn> };
-    followup?: ReturnType<typeof vi.fn>;
-    startContinuable?: ReturnType<typeof vi.fn>;
-  } = {},
+  extras: { userQuestions?: { ask: ReturnType<typeof vi.fn> } } = {},
 ): Context {
-  const registry = new Map(liveAgents.map((a) => [a.id, a]));
   return {
     logger: { info: () => undefined, warn: () => undefined },
-    // 问答回收唤醒走 subagents.followup（wakeAskingChild / wakeBuilderChild）。
-    subagents: {
-      followup: extras.followup ?? vi.fn(async () => 'm-fake'),
-      ...(extras.startContinuable !== undefined
-        ? { startContinuable: extras.startContinuable }
-        : {}),
-    },
     ...(extras.userQuestions !== undefined ? { userQuestions: extras.userQuestions } : {}),
-    agents: {
-      get: (id: string) => registry.get(id),
-      ...(extras.resume !== undefined ? { resume: extras.resume } : {}),
-    },
+    agents: { get: () => undefined },
     tools: { register() {} },
     systemPrompt: { section() {} },
     get: (key: string) =>
@@ -197,14 +168,13 @@ function fakeCtx(
   } as unknown as Context;
 }
 
-function callTool(
-  name: 'eteams_ask_user' | 'eteams_ask_answer',
+function callAsk(
   args: Record<string, unknown>,
   agent: Agent,
   ctx: Context,
 ): Promise<Record<string, unknown>> {
-  const tool = createAskUserTools(config, ctx).find((t) => t.name === name);
-  if (!tool) throw new Error(`${name} 未注册`);
+  const tool = createAskUserTools(config, ctx).find((t) => t.name === 'eteams_ask_user');
+  if (!tool) throw new Error('eteams_ask_user 未注册');
   return tool.execute(args as never, { agent, signal: undefined } as never) as Promise<
     Record<string, unknown>
   >;
@@ -212,215 +182,206 @@ function callTool(
 
 const askArgs = (): Record<string, unknown> => ({ questions: QUESTIONS });
 
-// ---------- 路由判定（纯函数） ----------
+// ---------- 统一路径：弹窗落在提问子代理自己的对话 ----------
 
-describe('decideAskRoute 路由判定', () => {
-  it('presence 命中提问会话 → 就地弹', () => {
-    expect(
-      decideAskRoute({ askingSessionId: 'm-1', mainSessionId: 'cap-1', presenceSessionId: 'm-1' }),
-    ).toEqual({ mode: 'self' });
-  });
-
-  it('主会话自己提问 → 就地弹（无 presence 也可）', () => {
-    expect(decideAskRoute({ askingSessionId: 'cap-1', mainSessionId: 'cap-1' })).toEqual({
-      mode: 'self',
-    });
-  });
-
-  it('presence 指向别处 / 缺失 → 严格转交主会话', () => {
-    expect(
-      decideAskRoute({ askingSessionId: 'm-1', mainSessionId: 'cap-1', presenceSessionId: 'x-1' }),
-    ).toEqual({ mode: 'relay', targetSessionId: 'cap-1' });
-    expect(decideAskRoute({ askingSessionId: 'm-1', mainSessionId: 'cap-1' })).toEqual({
-      mode: 'relay',
-      targetSessionId: 'cap-1',
-    });
-  });
-
-  it('无快照退心跳兜底；两皆无 → 降级', () => {
-    expect(decideAskRoute({ askingSessionId: 'm-1', mainSessionId: '', presenceSessionId: 'p-1' })).toEqual(
-      { mode: 'relay', targetSessionId: 'p-1' },
-    );
-    expect(decideAskRoute({ askingSessionId: 'm-1', mainSessionId: '' })).toEqual({
-      mode: 'degrade',
-    });
-  });
-});
-
-// ---------- eteams_ask_user ----------
-
-describe('eteams_ask_user 转交主会话', () => {
-  it('主会话在线 → steer 转交 + 问答单 pending 后立即返回（不停驻）；eteams_ask_answer 回收并 followup 唤醒提问子代理', async () => {
+describe('eteams_ask_user 统一路径（弹窗落在提问子对话）', () => {
+  it('成员提问 → ctx.userQuestions.ask 阻塞拿答案，答案同步返回 + 问答单 answered', async () => {
     seedTeam();
-    const cap = fakeLive('cap-1');
-    const ctx = fakeCtx([cap]);
-    const result = await callTool('eteams_ask_user', askArgs(), memberAgent(), ctx);
-    // 转交即返回（不阻塞等答案）：问答单 pending、主会话已收到转交全文。
-    expect(result).toMatchObject({ ok: true, mode: 'relayed', relayedTo: 'cap-1' });
-    expect(String(result.nextStep)).toContain('结束本回合');
-    const rows = readPendingAsksSync(root, 1);
-    expect(rows).toHaveLength(1);
-    const row = rows[0]!;
-    expect(cap.steer).toHaveBeenCalledTimes(1);
-    const message = cap.steer.mock.calls[0]![0] as {
-      content: { text: string }[];
-      source?: { summary?: string };
-    };
-    expect(message.content[0].text).toContain('验收偏好哪种形式？');
-    expect(message.content[0].text).toContain(row.askId);
-    expect(message.source?.summary).toContain('问答转交');
-    // 主会话（展示弹窗的对话）提交答案 → 问答单回收 + 提问成员被 followup 唤醒。
-    await callTool(
-      'eteams_ask_answer',
-      { askId: row.askId, answers: [{ id: 'q1', selected: '跑测试脚本（推荐）' }] },
-      mainAgent(),
-      ctx,
-    );
-    expect(readAskSync(root, row.askId)?.status).toBe('answered');
-    const followup = (ctx as unknown as { subagents: { followup: ReturnType<typeof vi.fn> } })
-      .subagents.followup;
-    expect(followup).toHaveBeenCalledTimes(1);
-    // parent 必须是主会话锚（成员子会话的真实父），目标是提问成员会话。
-    expect(followup.mock.calls[0]![0]).toMatchObject({ id: 'cap-1' });
-    expect(followup.mock.calls[0]![1]).toBe('member-1');
-    const wakeText = (followup.mock.calls[0]![2] as { text: string }[])[0]!.text;
-    expect(wakeText).toContain('问答已作答');
-    expect(wakeText).toContain('验收偏好哪种形式？');
-  });
-
-  it('主会话离线 → agents.resume 冷恢复投递；答案回收后唤醒同样冷恢复', async () => {
-    seedTeam();
-    const resumedAgent = fakeLive('cap-1');
-    const resume = vi.fn(async () => ({ agent: resumedAgent, dispose: async () => undefined }));
-    const ctx = fakeCtx([], { resume });
-    const result = await callTool('eteams_ask_user', askArgs(), memberAgent(), ctx);
-    expect(result).toMatchObject({ ok: true, mode: 'relayed', relayedTo: 'cap-1' });
-    expect(resume).toHaveBeenCalledTimes(1);
-    expect(resume.mock.calls[0]![0]).toMatchObject({ resumeSessionId: 'cap-1' });
-    expect(resumedAgent.followup).toHaveBeenCalledTimes(1);
-    const row = readPendingAsksSync(root, 1)[0]!;
-    await callTool(
-      'eteams_ask_answer',
-      { askId: row.askId, answers: [{ id: 'q1', selected: '人工走查' }] },
-      mainAgent(),
-      ctx,
-    );
-    expect(readAskSync(root, row.askId)?.status).toBe('answered');
-    // 唤醒：主会话仍不在册 → 再次冷恢复 → followup 进提问成员会话。
-    expect(resume.mock.calls.length).toBeGreaterThanOrEqual(2);
-    const followup = (ctx as unknown as { subagents: { followup: ReturnType<typeof vi.fn> } })
-      .subagents.followup;
-    expect(followup).toHaveBeenCalledTimes(1);
-    expect(followup.mock.calls[0]![1]).toBe('member-1');
-  });
-
-  it('主会话离线且运行时不支持冷恢复 → 降级 + 问答单取消', async () => {
-    seedTeam();
-    const result = await callTool('eteams_ask_user', askArgs(), memberAgent(), fakeCtx([]));
-    expect(result).toMatchObject({ ok: true, mode: 'degraded' });
-    expect(String(result.degradeHint)).toContain('不要重试弹窗');
-    expect(readPendingAsksSync(root, 1)).toHaveLength(0);
-  });
-
-  it('团队无主会话快照且无心跳 → 降级（不落单、不投递）', async () => {
-    seedTeam({ withMainSession: false });
-    const cap = fakeLive('cap-1');
-    const result = await callTool('eteams_ask_user', askArgs(), memberAgent(), fakeCtx([cap]));
-    expect(result).toMatchObject({ ok: true, mode: 'degraded' });
-    expect(cap.steer).not.toHaveBeenCalled();
-    expect(readPendingAsksSync(root, 1)).toHaveLength(0);
-  });
-});
-
-describe('eteams_ask_user 就地弹（用户正在看提问会话）', () => {
-  it('presence 命中提问成员 → ctx.userQuestions.ask 直调，答案同步返回 + 问答单 answered', async () => {
-    seedTeam();
-    await writeBuildPresence(root, 'member-1');
-    const ask = vi.fn(async (request: { questions: { id: string }[] }) => ({
-      answers: request.questions.map((q) => ({ id: q.id, selected: '跑测试脚本（推荐）' })),
-    }));
-    const result = await callTool(
-      'eteams_ask_user',
-      askArgs(),
-      memberAgent(),
-      fakeCtx([], { userQuestions: { ask } }),
-    );
+    const ask = fakeAsk('跑测试脚本（推荐）');
+    const result = await callAsk(askArgs(), agentOf('member-1'), fakeCtx({ userQuestions: { ask } }));
     expect(result).toMatchObject({
       ok: true,
       mode: 'self',
       answers: [{ id: 'q1', selected: '跑测试脚本（推荐）' }],
     });
     expect(ask).toHaveBeenCalledTimes(1);
-    // 弹窗服务鉴权需要精确的活运行时根——agent 原样透传。
+    // 主对话不在线（agents.get 查不到锚会话）→ runtime 退回提问会话自身。
     expect((ask.mock.calls[0]![0] as { agent?: unknown }).agent).toMatchObject({ id: 'member-1' });
-    // 就地弹也落审计行：askId 随结果返回，行状态 = answered。
+    // 就地弹也落审计行（面板徽标数据源）：pending → answered。
     const selfAskId = String(result.askId);
-    expect(readAskSync(root, selfAskId)?.status).toBe('answered');
+    const row = readAskSync(root, selfAskId);
+    expect(row?.status).toBe('answered');
+    expect(row?.askingKind).toBe('member');
+    // relaySessionId 语义收窄为「弹窗所在会话」——恒等于提问会话自身。
+    expect(row?.relaySessionId).toBe('member-1');
   });
 
-  it('presence 命中但弹窗服务缺失 → 降级', async () => {
+  it('领队（主会话身份）提问 → 就地弹，行 askingKind=captain', async () => {
     seedTeam();
-    await writeBuildPresence(root, 'member-1');
-    const result = await callTool('eteams_ask_user', askArgs(), memberAgent(), fakeCtx([]));
+    const ask = fakeAsk('A');
+    const result = await callAsk(askArgs(), agentOf('cap-1'), fakeCtx({ userQuestions: { ask } }));
+    expect(result).toMatchObject({ ok: true, mode: 'self' });
+    expect(readAskSync(root, String(result.askId))?.askingKind).toBe('captain');
+  });
+
+  it('弹窗服务缺失 → 降级且**不落单**（不留孤儿 pending 行）', async () => {
+    seedTeam();
+    const result = await callAsk(askArgs(), agentOf('member-1'), fakeCtx());
     expect(result).toMatchObject({ ok: true, mode: 'degraded' });
     expect(String(result.degradeHint)).toContain('弹窗服务不可用');
+    expect(readAllPendingAsksSync(root)).toHaveLength(0);
+    expect(readAskSync(root, String(result.askId ?? ''))).toBeUndefined();
   });
 
-  it('弹窗被拒（DELEGATED_CALLER 等）→ 降级 + 问答单取消，不阻塞', async () => {
+  it('弹窗被拒（DELEGATED_CALLER 等）→ 行转 cancelled 后降级，不阻塞', async () => {
     seedTeam();
-    await writeBuildPresence(root, 'member-1');
     const ask = vi.fn(async () => {
       throw new Error('human interaction is unavailable while the calling agent is owned');
     });
-    const result = await callTool(
-      'eteams_ask_user',
+    const result = await callAsk(
       askArgs(),
-      memberAgent(),
-      fakeCtx([], { userQuestions: { ask } }),
+      agentOf('member-1'),
+      fakeCtx({ userQuestions: { ask } }),
     );
     expect(result).toMatchObject({ ok: true, mode: 'degraded' });
     expect(String(result.degradeHint)).toContain('不要重试弹窗');
     // 取消的问答单不再是 pending（面板徽标不悬挂）。
-    expect(readPendingAsksSync(root, 1)).toHaveLength(0);
+    expect(readAllPendingAsksSync(root)).toHaveLength(0);
+    expect(readAskSync(root, String(result.askId))?.status).toBe('cancelled');
   });
 
-  it('主会话自己提问（无 presence）→ 就地弹', async () => {
+  it('非团队非构建调用者 → 原样抛错（身份门禁不放宽）', async () => {
     seedTeam();
-    const ask = vi.fn(async (request: { questions: { id: string }[] }) => ({
-      answers: request.questions.map((q) => ({ id: q.id, selected: 'A' })),
-    }));
-    const result = await callTool(
-      'eteams_ask_user',
-      askArgs(),
-      mainAgent(),
-      fakeCtx([], { userQuestions: { ask } }),
-    );
-    expect(result).toMatchObject({ ok: true, mode: 'self' });
-    expect(ask).toHaveBeenCalledTimes(1);
+    await expect(
+      callAsk(askArgs(), agentOf('stranger-1'), fakeCtx({ userQuestions: { ask: fakeAsk('A') } })),
+    ).rejects.toThrow(/不在任何 eteams 团队中/);
   });
 });
 
-// ---------- eteams_ask_answer ----------
+// ---------- 弹窗目标=主对话（原生弹窗直接弹在用户正在的窗口） ----------
 
-describe('eteams_ask_answer 回收', () => {
-  it('未知 askId / 重复提交 → 明确报错', async () => {
+describe('eteams_ask_user 弹窗目标主对话', () => {
+  /** 桩 ctx 的 agents.get 改为按 id 命中（主对话在线的模拟）。 */
+  function withLiveAgent(ctx: Context, liveId: string): Context {
+    (ctx as unknown as { agents: { get: (id: string) => unknown } }).agents.get = (id) =>
+      id === liveId ? agentOf(id) : undefined;
+    return ctx;
+  }
+
+  it('成员提问且主对话在线 → 弹窗带主对话 agent（任务锚 mainSessionId）', async () => {
     seedTeam();
-    await expect(
-      callTool('eteams_ask_answer', { askId: 'nope', answers: [{ id: 'q1', selected: 'A' }] }, mainAgent(), fakeCtx([])),
-    ).rejects.toThrow(/不存在/);
-    const askId = 'ask-1';
-    insertAskForTest(askId);
-    await callTool('eteams_ask_answer', { askId, answers: [{ id: 'q1', selected: 'A' }] }, mainAgent(), fakeCtx([]));
-    await expect(
-      callTool('eteams_ask_answer', { askId, answers: [{ id: 'q1', selected: 'B' }] }, mainAgent(), fakeCtx([])),
-    ).rejects.toThrow(/已结束/);
+    const ask = fakeAsk('A');
+    const result = await callAsk(
+      askArgs(),
+      agentOf('member-1'),
+      withLiveAgent(fakeCtx({ userQuestions: { ask } }), 'cap-1'),
+    );
+    expect(result).toMatchObject({ ok: true, mode: 'self' });
+    expect(ask).toHaveBeenCalledTimes(1);
+    // 成员甲的锚定主任务 1 记着 mainSessionId='cap-1'——弹窗目标切到主对话。
+    expect((ask.mock.calls[0]![0] as { agent?: unknown }).agent).toMatchObject({ id: 'cap-1' });
+    // 行审计：提问者仍是成员甲（askingSessionId 不随弹窗目标漂移）。
+    const row = readAskSync(root, String(result.askId));
+    expect(row?.askingSessionId).toBe('member-1');
+    expect(row?.status).toBe('answered');
   });
 
-  it('selected 串数组 → 归一为「、」连接串（normalizeAskAnswer 单元口径）', () => {
-    expect(
-      normalizeAskAnswer({ id: 'q1', selected: ['甲', '乙'] }),
-    ).toEqual({ id: 'q1', selected: '甲、乙' });
-    // 缺 id 的答案条目丢弃；custom 保留。
+  it('主对话在线但弹窗被拒 → 退回提问会话自身再试一次（两连弹）', async () => {
+    seedTeam();
+    const ask = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('human interaction is not valid for this caller'))
+      .mockImplementation(async (request: { questions: { id: string }[] }) => ({
+        answers: request.questions.map((q) => ({ id: q.id, selected: 'A' })),
+      }));
+    const result = await callAsk(
+      askArgs(),
+      agentOf('member-1'),
+      withLiveAgent(fakeCtx({ userQuestions: { ask } }), 'cap-1'),
+    );
+    expect(result).toMatchObject({ ok: true, mode: 'self' });
+    expect(ask).toHaveBeenCalledTimes(2);
+    // 第一弹主对话、第二弹提问会话自身——主对话拒收不致命。
+    expect((ask.mock.calls[0]![0] as { agent?: unknown }).agent).toMatchObject({ id: 'cap-1' });
+    expect((ask.mock.calls[1]![0] as { agent?: unknown }).agent).toMatchObject({ id: 'member-1' });
+    expect(readAskSync(root, String(result.askId))?.status).toBe('answered');
+  });
+});
+
+// ---------- 构建师 fallback：答案由宿主自动写回构建会话 ----------
+
+describe('eteams_ask_user 构建师分支（答案自动落构建会话）', () => {
+  /** 构建会话种子：受理 → 记 childId → 发布访谈（active + 待答）。 */
+  async function seedBuildSession(): Promise<void> {
+    await reportBuildProgress(root, { request: 'r' });
+    await markBuilderChild(root, 'builder-1');
+    await reportBuildProgress(root, {
+      step: '意图访谈',
+      interview: {
+        questions: [
+          {
+            id: 'q1',
+            question: '你主要用它做什么？',
+            options: [{ label: '写数据管道（推荐）' }, { label: '写前端' }],
+          },
+        ],
+      },
+    });
+  }
+
+  it('构建师提问 → resolveCaller 抛错走 fallback，答案宿主自动写回构建会话 + 行 answered + 不唤醒', async () => {
+    await seedBuildSession();
+    const ask = fakeAsk('写数据管道（推荐）');
+    const result = await callAsk(
+      askArgs(),
+      agentOf('builder-1'),
+      fakeCtx({ userQuestions: { ask } }),
+    );
+    expect(result).toMatchObject({ ok: true, mode: 'self' });
+    const row = readAskSync(root, String(result.askId));
+    expect(row?.status).toBe('answered');
+    expect(row?.askingKind).toBe('conversation');
+    // 构建会话访谈状态同步（面板工作台可见答案）——宿主自动落盘，无须
+    // 构建子代理再 build_report(answers)。
+    expect(readBuildSession(root)?.interview?.answers).toEqual([
+      { id: 'q1', choice: '写数据管道（推荐）' },
+    ]);
+  });
+
+  it('构建会话已有答案 → 写回幂等覆写（最新答案胜出），问答照常返回', async () => {
+    await seedBuildSession();
+    // 先用面板旁路面把答案落上（answerBuildInterview 已收口）。
+    await reportBuildProgress(root, { answers: [{ id: 'q1', choice: '写前端' }] });
+    const ask = fakeAsk('写数据管道（推荐）');
+    const result = await callAsk(
+      askArgs(),
+      agentOf('builder-1'),
+      fakeCtx({ userQuestions: { ask } }),
+    );
+    // 问答本身成功；宿主写回是覆写语义——面板补交的旧答案被弹窗答案刷新。
+    expect(result).toMatchObject({ ok: true, mode: 'self' });
+    expect(readBuildSession(root)?.interview?.answers).toEqual([
+      { id: 'q1', choice: '写数据管道（推荐）' },
+    ]);
+  });
+
+  it('构建父会话在线 → 弹窗目标切到父会话（不退回构建子对话）', async () => {
+    await seedBuildSession();
+    await setBuildParentSession(root, 'cap-9');
+    const ask = fakeAsk('写数据管道（推荐）');
+    const ctx = fakeCtx({ userQuestions: { ask } });
+    (ctx as unknown as { agents: { get: (id: string) => unknown } }).agents.get = (id) =>
+      id === 'cap-9' ? agentOf(id) : undefined;
+    const result = await callAsk(askArgs(), agentOf('builder-1'), ctx);
+    expect(result).toMatchObject({ ok: true, mode: 'self' });
+    expect(ask).toHaveBeenCalledTimes(1);
+    // 弹窗直接弹在发起构建的 /eteam 主对话（受理时落盘的父会话 id）。
+    expect((ask.mock.calls[0]![0] as { agent?: unknown }).agent).toMatchObject({ id: 'cap-9' });
+    // 宿主自动写回构建会话照旧。
+    expect(readBuildSession(root)?.interview?.answers).toEqual([
+      { id: 'q1', choice: '写数据管道（推荐）' },
+    ]);
+  });
+});
+
+// ---------- 纯函数 ----------
+
+describe('normalizeAskAnswer 单元口径', () => {
+  it('selected 串数组 → 归一为「、」连接串；缺 id 丢弃；custom 保留', () => {
+    expect(normalizeAskAnswer({ id: 'q1', selected: ['甲', '乙'] })).toEqual({
+      id: 'q1',
+      selected: '甲、乙',
+    });
     expect(normalizeAskAnswer({ selected: 'A' })).toBeUndefined();
     expect(normalizeAskAnswer({ id: 'q1', selected: '', custom: '我自己写的' })).toEqual({
       id: 'q1',
@@ -429,20 +390,3 @@ describe('eteams_ask_answer 回收', () => {
     });
   });
 });
-
-/** 直接种一张 pending 问答单（回收用例的起点）。 */
-function insertAskForTest(askId: string): void {
-  const now = Date.now();
-  insertAskSync(root, {
-    askId,
-    teamId: 1,
-    askingSessionId: 'member-1',
-    askingName: '甲',
-    askingKind: 'member',
-    questions: QUESTIONS,
-    status: 'pending',
-    relaySessionId: 'cap-1',
-    createdAt: now,
-    updatedAt: now,
-  });
-}

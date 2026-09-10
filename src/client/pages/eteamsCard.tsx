@@ -254,13 +254,19 @@ function ETeamsCardBody({ node }: { node: { data: unknown } }): ReactNode {
               {/* 人数/头像含领队（用户迭代 2026-09 六：领队也算成员，初始化
               默认在团；移出后只剩成员）——与团队页、添加弹窗同一口径。
               （M7-7 收口 components/avatarStack：本件密度 = slice(0, 8)、
-              -mr-1.5 重叠、title 带「 · 领队/状态」尾注；人数行在栈外原位。） */}
+              -mr-1.5 重叠、title 只给领队带「 · 领队」尾注——用户迭代
+              2026-09-10「成员没有状态」：成员原 status 尾注撤；人数行在栈
+              外原位。） */}
               <AvatarStack
-                people={team.leaderRemoved ? team.members : [team.captain, ...team.members]}
+                people={
+                  team.leaderRemoved
+                    ? team.members
+                    : [{ ...team.captain, leader: true as const }, ...team.members]
+                }
                 size={26}
                 max={8}
                 wrapperClass="-mr-1.5"
-                titleOf={(m) => `${m.name}${'status' in m ? ` · ${m.status}` : ' · 领队'}`}
+                titleOf={(m) => ('leader' in m ? `${m.name} · 领队` : m.name)}
               />
               <span className="ml-3 text-xs text-muted-foreground">
                 {team.members.length + (team.leaderRemoved ? 0 : 1)} 人

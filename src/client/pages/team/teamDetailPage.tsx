@@ -1,6 +1,6 @@
 /**
  * 团队详情页（docs/13.3 团队）：返回条 + 成员卡列表（领队卡/成员卡：模型
- * 路线/推理等级/移出）+ 选择成员弹窗——自 teamTab 拆出（docs/44 M4），路由
+ * 路线/推理等级/移出）+ 添加成员弹窗——自 teamTab 拆出（docs/44 M4），路由
  * /team/:teamId，:teamId 路由参数即原 detailId 态（选中团队 id）。页头不再
  * 挂「＋ 新增团队」（用户迭代 2026-09-07「团队详情页面，去掉新增团队按钮」
  * ——创建只从团队列表页进）；「任务 X/Y 完成」进度行同步撤（进度在任务页
@@ -8,7 +8,10 @@
  * 不是页面滚动」，列表页满高纪律 docs/41 同链）。成员卡点击进成员详情——
  * 原 memberDetail 态改 /team/:teamId/member/:name 路由（见
  * memberDetailPage.tsx）。模型路线乐观补丁/推理等级/领队移除等提交回调
- * 逐位保持；详情态成员操作错误就地 FormErrorNote。
+ * 逐位保持；详情态成员操作错误就地 FormErrorNote。用户迭代 2026-09-10：
+ * 「选择成员」改回「添加成员」（只加不减，见 addMembersDialog）；成员卡
+ * 列表新增多选删除——「批量删除」进入勾选模式，行头勾选、选择操作条
+ * 全选/删除所选，确认后逐个 POST 移出（工号定位，遇错停在原地报错）。
  *
  * @module dsh-eteams/client/pages/team/teamDetailPage
  */
@@ -37,6 +40,7 @@ import { cn } from '../../lib/cn';
 import { errorMessageOf } from '../../lib/errors';
 import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
+import { ConfirmDeleteDialog } from '../../components/confirmDeleteDialog';
 import { AddMembersDialog } from './addMembersDialog';
 import { LeaderCard, MemberCard } from './memberCards';
 import { FormErrorNote, PageHeader } from '../shared/components';
@@ -59,8 +63,6 @@ export interface TeamDetailPageProps {
   roster: RosterMember[];
   /** 每队成员上限（host /state maxMembers）：选择成员弹窗的名额配额。 */
   memberCap: number;
-  /** Member subagent activity dots (docs/20.4 P4): childId → running/inactive. */
-  agentActivity: Record<string, string>;
 }
 
 /** ================================== 样式类 ================================== */
@@ -81,16 +83,22 @@ export function TeamDetailPage({
   pool,
   roster,
   memberCap,
-  agentActivity,
 }: TeamDetailPageProps): ReactNode {
   const navigate = useNavigate();
   // :teamId 路由参数即原 detailId 态（选中团队 id，M4 拆页）。
   const { teamId } = useParams();
-  // 选择成员弹窗（用户迭代 2026-09-07 改名，原「添加成员」）开合；详情态
+  // 添加成员弹窗（用户迭代 2026-09-10 改回，原「选择成员」）开合；详情态
   // 成员操作（模型选择/移出/领队移除）的错误就地提示，不再静默吞掉。
   const [addOpen, setAddOpen] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [modelSavingName, setModelSavingName] = useState<string | null>(null);
+  // 多选删除（用户迭代 2026-09-10）：selecting = 勾选模式；selected = 勾选集
+  // （键 = 工号显示串，每行唯一——同名成员各归各）；confirmOpen = 批量移出
+  // 确认弹窗；batchBusy = 移出在途（防连点）。
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [batchBusy, setBatchBusy] = useState(false);
   // 模型目录（用户迭代 2026-09：模型选择与对话一致；同日二级菜单）：与对话
   // /model 选择同一共享目录（ctx.modelDirectories，只读），loading/failed/
   // reload 与对话选择器打开时刷新、错误条+重试同款；catalog 为 null = 服务
@@ -232,6 +240,71 @@ export function TeamDetailPage({
     );
   };
 
+  /* —— 多选删除（用户迭代 2026-09-10）—— */
+
+  /** 可勾选成员：legacy 无工号的行定位不了移出 API，不进勾选集。 */
+  const selectableMembers = detailTeam?.members.filter((m) => m.employeeId !== null) ?? [];
+  const selectedCount = selectableMembers.filter((m) => selected.has(m.employeeId ?? '')).length;
+
+  const toggleSelect = (member: MemberView): void => {
+    const key = member.employeeId;
+    if (key === null) return;
+    setDetailError(null);
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const exitSelecting = (): void => {
+    setSelecting(false);
+    setSelected(new Set());
+    setDetailError(null);
+  };
+
+  // 全选/取消全选：可勾选成员全部已中即视为清空。
+  const toggleSelectAll = (): void => {
+    setDetailError(null);
+    setSelected((prev) => {
+      const allSelected =
+        selectableMembers.length > 0 && selectableMembers.every((m) => prev.has(m.employeeId ?? ''));
+      return allSelected
+        ? new Set()
+        : new Set(selectableMembers.map((m) => m.employeeId ?? '').filter((k) => k !== ''));
+    });
+  };
+
+  // 批量移出：逐个 POST（工号定位），遇错停在原地报错——已成功的移出生效
+  // （1s 轮询回拉），剩余勾选保留供重试。
+  const applyBatchRemove = async (): Promise<void> => {
+    if (detailTeam === null || batchBusy) return;
+    const victims = selectableMembers.filter((m) => selected.has(m.employeeId ?? ''));
+    if (victims.length === 0) {
+      setConfirmOpen(false);
+      return;
+    }
+    setBatchBusy(true);
+    setDetailError(null);
+    try {
+      for (const m of victims) {
+        const employeeId = employeeIdNumberOf(m.employeeId);
+        if (employeeId === null) throw new Error(`成员「${m.name}」没有工号，无法移出`);
+        await removeTeamMember(detailTeam.teamId, employeeId);
+      }
+      setSelected(new Set());
+      setConfirmOpen(false);
+      setSelecting(false);
+      refreshActivitySoon();
+    } catch (e) {
+      setConfirmOpen(false);
+      setDetailError(errorMessageOf(e));
+    } finally {
+      setBatchBusy(false);
+    }
+  };
+
   // 领队模型选择（用户迭代 2026-09-04 恢复）：与 changeModel 同款乐观补丁 +
   // POST /leader/model，target 换成 captain。'inherit' = 会话默认（host 空
   // body = 重置）；有值即团队默认路线，领队子代理派发按它解析。
@@ -327,8 +400,9 @@ export function TeamDetailPage({
 
       {/* 团队成员卡（S13/S14）：容器 shadcn Card（PANEL_CARD_CLASS 覆盖层，
       S12 先例）纵 flex 拉满（用户迭代 2026-09-07 内滚链，见根注记）；右上
-      「选择成员」按钮（用户迭代 2026-09-07 改名，原「添加成员」）点开弹窗。
-      成员卡点击进成员详情（原 memberDetail 态改路由，M4 拆页）。 */}
+      「添加成员」按钮（用户迭代 2026-09-10 改回，原「选择成员」）点开弹窗；
+      「批量删除」进多选模式——选择操作条（全选/删除所选/完成）替换原按钮组。
+      成员卡点击进成员详情（多选模式点击改勾选）。 */}
       <Card className={cn(PANEL_CARD_CLASS, 'mt-2 flex min-h-0 flex-1 flex-col')}>
         <div className="mb-2.5 flex items-center gap-2">
           {/* 计数紧贴标题靠左（用户迭代 2026-09-07「8/20 人的提示改到靠左
@@ -338,67 +412,132 @@ export function TeamDetailPage({
           <span className={LIST_COUNT_CLASS}>
             {detailTeam.members.length + (detailTeam.leaderRemoved ? 0 : 1)}/{memberCap} 人
           </span>
+          {selecting && (
+            <span className={LIST_COUNT_CLASS}>已选 {selectedCount} 人</span>
+          )}
           <span className="flex-1" />
-          <Button
-            type="button"
-            size="sm"
-            onClick={() => {
-              setDetailError(null);
-              setAddOpen(true);
-            }}
-          >
-            <Plus className="h-3.5 w-3.5" />
-            选择成员
-          </Button>
+          {selecting ? (
+            <>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={selectableMembers.length === 0}
+                onClick={toggleSelectAll}
+              >
+                {selectableMembers.length > 0 &&
+                selectableMembers.every((m) => selected.has(m.employeeId ?? ''))
+                  ? '取消全选'
+                  : '全选'}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="destructive"
+                disabled={selectedCount === 0}
+                onClick={() => {
+                  setDetailError(null);
+                  setConfirmOpen(true);
+                }}
+              >
+                删除所选（{selectedCount}）
+              </Button>
+              <Button type="button" size="sm" variant="ghost" onClick={exitSelecting}>
+                完成
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={detailTeam.members.length === 0}
+                onClick={() => {
+                  setDetailError(null);
+                  setSelecting(true);
+                }}
+              >
+                批量删除
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => {
+                  setDetailError(null);
+                  setAddOpen(true);
+                }}
+              >
+                <Plus className="h-3.5 w-3.5" />
+                添加成员
+              </Button>
+            </>
+          )}
         </div>
         {detailError !== null && <FormErrorNote className="mb-2.5">{detailError}</FormErrorNote>}
         {/* 成员列表：卡内弹性区 + 纵向内部滚动（页面不滚，用户迭代
-        2026-09-07「团队成员内部加滚动条」）。 */}
+        2026-09-07「团队成员内部加滚动条」）。key 用工号显示串（每行唯一，
+        同名成员不撞）。 */}
         <div className={cn(MEMBER_LIST_CLASS, 'min-h-0 flex-1 overflow-y-auto pr-0.5')}>
           {!detailTeam.leaderRemoved && (
             <LeaderCard
               captain={detailTeam.captain}
               catalog={modelCatalog}
-              onRemove={removeLeader}
+              onRemove={selecting ? undefined : removeLeader}
               onOpenDetail={() =>
                 navigate(
                   `/team/${detailTeam.teamId}/member/${encodeURIComponent(detailTeam.captain.name)}`,
                 )
               }
-              onModelChange={changeCaptainModel}
-              onEffortChange={changeCaptainEffort}
+              onModelChange={selecting ? undefined : changeCaptainModel}
+              onEffortChange={selecting ? undefined : changeCaptainEffort}
               modelSaving={modelSavingName === '__captain__'}
             />
           )}
           {detailTeam.members.map((m) => (
             <MemberCard
-              key={m.name}
+              key={m.employeeId ?? m.name}
               member={m}
               catalog={modelCatalog}
-              activity={m.childId !== null ? agentActivity[m.childId] : undefined}
-              onRemove={removeMember}
-              onModelChange={changeModel}
-              onEffortChange={changeMemberEffort}
+              onRemove={selecting ? undefined : removeMember}
+              onModelChange={selecting ? undefined : changeModel}
+              onEffortChange={selecting ? undefined : changeMemberEffort}
               modelSaving={modelSavingName === m.name}
-              onOpenDetail={() =>
-                navigate(`/team/${detailTeam.teamId}/member/${encodeURIComponent(m.name)}`)
+              onOpenDetail={
+                selecting
+                  ? undefined
+                  : () => navigate(`/team/${detailTeam.teamId}/member/${encodeURIComponent(m.name)}`)
               }
+              selecting={selecting}
+              selected={m.employeeId !== null && selected.has(m.employeeId)}
+              onToggleSelect={toggleSelect}
             />
           ))}
           {detailTeam.members.length === 0 && (
-            <div className={MUTED_CLASS}>还没有成员——点右上角「选择成员」把角色加进团队。</div>
+            <div className={MUTED_CLASS}>还没有成员——点右上角「添加成员」把角色加进团队。</div>
           )}
         </div>
       </Card>
 
-      {/* 选择成员弹窗（用户迭代 2026-09-07 改名）：步进器显示在团份数，
-      确认一次性应用增减。 */}
+      {/* 添加成员弹窗（用户迭代 2026-09-10 改回）：搜索 + 角色大卡勾选，
+      只加不减，确认逐个 POST 应用。 */}
       <AddMembersDialog
         open={addOpen}
         onOpenChange={setAddOpen}
         team={detailTeam}
         roster={roster}
         memberCap={memberCap}
+      />
+
+      {/* 批量移出确认（M7-1 壳收口 ConfirmDeleteDialog，破坏性确认钮档）。 */}
+      <ConfirmDeleteDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title="移出所选成员"
+        description={`将把所选 ${selectedCount} 名成员移出团队：工号作废不回收，任务副本行保留留档；正在执行的任务会回到就绪池。`}
+        confirmLabel="移出成员"
+        confirmBusy={batchBusy}
+        onConfirm={() => void applyBatchRemove()}
       />
     </div>
   );

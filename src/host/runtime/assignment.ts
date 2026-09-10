@@ -266,7 +266,7 @@ export async function createTask(
     };
     team.tasks.push(task);
     // 任务副本（v7 决策 5）：建大任务即把全员班底（含领队）整行抄进本任务
-    // ——副本行工号抄班底、staged 待首派起会话；后续加成员再补铺。小任务
+    // ——副本行工号抄班底、待首派起会话；后续加成员再补铺。小任务
     // 挂在大任务下，副本锚定大任务粒度、已在建大任务时铺过，不重复抄。
     // 领队同样铺行（用户迭代 2026-09-08 确认）：领队也算普通成员，每个
     // 大任务给他开独立的子会话锚点。
@@ -280,7 +280,6 @@ export async function createTask(
           name: m.name,
           employeeId: m.employeeId ?? null,
           sessionId: '',
-          status: 'staged',
           ...(m.persona.personaMd !== undefined && m.persona.personaMd !== ''
             ? { personaMd: m.persona.personaMd }
             : {}),
@@ -515,11 +514,10 @@ export async function deleteTask(env: RuntimeEnv, who: OpActor, taskId: number):
         decision.note = 'task deleted';
       }
     }
-    // 指向被删任务的实例行 now_task_id 清空（working 行一并松绑）。
+    // 指向被删任务的实例行 now_task_id 清空（在办行一并松绑）。
     for (const row of team.taskMembers) {
       if (row.nowTaskId !== null && doomedIds.has(row.nowTaskId)) {
         row.nowTaskId = null;
-        if (row.status === 'working') row.status = 'ready';
       }
     }
     // 副本行级联删（v7 决策 5）：副本行生命周期跟随所属大任务；有子会话的
@@ -588,7 +586,7 @@ interface AssignmentPlan {
 /**
  * 派发帧（docs/35 §3#14 + §5#3）：指派路径不能走 withTeam 帧——首派要起
  * 子会话（异步 I/O，必须在写事务外）。帧序：锁 → 读快照 → prepare（校验
- * + staged 起会话，只改内存快照）→ 同步事务 apply（发号/转移/事件/邮件，
+ * + 未起会话的行先起会话，只改内存快照）→ 同步事务 apply（发号/转移/事件/邮件，
  * fn 内不得 await）→ 提交后渲染文档 + 依次执行唤醒。任一步抛错快照即弃，
  * 库不留半步。
  */
@@ -772,8 +770,8 @@ export async function startGroupTask(
 
 /**
  * 派发前置（docs/35 §5#3 首派按链起人）：校验任务状态/依赖/占用/链纪律，
- * staged（session_id 空）实例行先起子会话；成功置 working、锚定到
- * 大任务、回填 session_id，随本次写事务落库。只改内存快照，失败即
+ * 未起会话（session_id 空）实例行先起子会话；成功后锚定到大任务、
+ * 回填 session_id，随本次写事务落库。只改内存快照，失败即
  * 整帧作废。改派路径（forReassign）目标任务可以在 wait/start/paused 等
  * 非 ready 态——合法性由调用方（reassignTask）校验。
  */
@@ -852,7 +850,7 @@ async function prepareAssignment(
 /**
  * 派发对象副本行（v7）：成员引用 = 工号（数字）优先、名字串退按名（旧链
  * 站点兼容）；先锚定本大任务的副本行、退未锚定 legacy 行；都没有则按班底
- * 行补一行 staged（legacy 宽容——v7 建任务/加成员已全员铺副本），模板也没
+ * 行补一行（legacy 宽容——v7 建任务/加成员已全员铺副本），模板也没
  * 有才报「不在团队中」。
  */
 function resolveAssigneeRow(
@@ -881,7 +879,6 @@ function resolveAssigneeRow(
     name: template.name,
     employeeId: template.employeeId ?? null,
     sessionId: '',
-    status: 'staged',
     createdAt: Date.now(),
   };
   team.taskMembers.push(row);
@@ -917,16 +914,16 @@ function stationRefOf(member: number | string): number | string {
  * 本任务（本任务自己的在办不算占用）。
  */
 function assertNotBusy(row: TaskMemberRecord, exceptTaskId?: number): void {
-  if (row.status !== 'working' || row.nowTaskId === exceptTaskId) return;
+  if (row.nowTaskId === null || row.nowTaskId === exceptTaskId) return;
   throw new ETeamsError(
-    `成员「${row.name}」的该副本行正在执行任务 ${row.nowTaskId ?? '（会话进行中）'}`,
+    `成员「${row.name}」的该副本行正在执行任务 ${row.nowTaskId}`,
     '等当前任务完成/失败让位后再派，或用 eteams_reassign_task 改派',
   );
 }
 
 /**
  * 首派起会话（docs/35 §5#3）：实例行 session_id 为空时由领队代理起
- * 持续子会话——异步 I/O，只能在写事务之前；成功后该行置 working、锚定到
+ * 持续子会话——异步 I/O，只能在写事务之前；成功后该行锚定到
  * 大任务并回填会话 id，随本次写事务落库。spawn 失败整帧作废（快照丢弃，
  * 库无半步残留）。
  */
@@ -940,7 +937,6 @@ async function ensureSpawned(
   row.nowTaskId = task.id;
   if (row.mainTaskId === null) row.mainTaskId = rootTaskIdOf(task);
   if (row.sessionId !== '') {
-    row.status = 'working';
     return;
   }
   if (captain === undefined) {
@@ -967,7 +963,6 @@ async function ensureSpawned(
       '检查成员模型路线/子代理配置后重试指派',
     );
   }
-  row.status = 'working';
 }
 
 /**
@@ -996,7 +991,6 @@ function applyAssignment(
   });
   applyTransition(task, 'wait', tx.now);
   task.assignee = row.name;
-  row.status = 'working';
   row.nowTaskId = task.id;
   emit(tx, team.id, actor, 'task.assigned', {
     taskId: task.id,
@@ -1229,7 +1223,6 @@ export async function resumeTask(
       });
       applyTransition(task, 'wait', tx.now);
       task.assignee = row.name;
-      row.status = 'working';
       row.nowTaskId = task.id;
       emit(tx, team.id, who.actor, 'task.resumed', {
         taskId: task.id,
@@ -1328,7 +1321,6 @@ export async function claimTask(
     attempt.token = token;
     attempt.claimedAt = tx.now;
     applyTransition(task, 'start', tx.now);
-    member.status = 'working';
     member.nowTaskId = task.id;
     emit(tx, fresh.id, memberActor(member), 'attempt.claimed', {
       taskId: task.id,
@@ -1547,7 +1539,6 @@ export async function failTask(
       });
       applyTransition(task, 'wait', tx.now);
       task.assignee = member.name;
-      member.status = 'working';
       member.nowTaskId = task.id;
       emit(tx, fresh.id, memberActor(member), 'task.retrying', {
         taskId: task.id,
@@ -1718,18 +1709,16 @@ function revokeCurrentAttempt(
 }
 
 /**
- * 释放执行者：任务松绑 + 副本行回 ready（now_task_id 清空）。v7 行定位按
- * 最近一次尝试的 task_member_id（精确副本行，同名不串）；无号 legacy 退
- * nowTaskId+working 扫描。
+ * 释放执行者：任务松绑 + 副本行 now_task_id 清空。v7 行定位按最近一次尝试
+ * 的 task_member_id（精确副本行，同名不串）；无号 legacy 退 nowTaskId 扫描。
  */
 function freeMember(team: TeamState, task: TaskRecord): void {
   if (task.assignee === undefined) return;
   const lastId = task.attempts[task.attempts.length - 1]?.taskMemberId;
   const row =
     (lastId !== undefined ? team.taskMembers.find((r) => r.id === lastId) : undefined) ??
-    team.taskMembers.find((r) => r.nowTaskId === task.id && r.status === 'working');
+    team.taskMembers.find((r) => r.nowTaskId === task.id);
   if (row !== undefined) {
-    row.status = 'ready';
     row.nowTaskId = null;
   }
   task.assignee = undefined;

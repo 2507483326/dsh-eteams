@@ -8,7 +8,7 @@
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { TaskMemberRecord, TeamState } from '../model/types.js';
 import { listTeams, findTeamByCaptain } from '../state/store.js';
-import { getSessionTeamId, getConsumedSessionTeamId } from '../runtime/sessionTeam.js';
+import { getSessionTeamId } from '../runtime/sessionTeam.js';
 import { captainChildTeamOf } from '../runtime/captainAgent.js';
 import { locateAgentTeam } from '../runtime/workspaces.js';
 import { leaderRowOf } from '../runtime/notifier.js';
@@ -59,9 +59,7 @@ export function envForAgent(
     ctx,
     sessionId,
     cwd,
-    getSessionTeamId(sessionId) ??
-      getConsumedSessionTeamId(sessionId) ??
-      captainChildTeamOf(sessionId),
+    getSessionTeamId(sessionId) ?? captainChildTeamOf(sessionId),
   );
   return {
     ctx,
@@ -94,9 +92,9 @@ export async function resolveCaller(env: RuntimeEnv, agent: Agent): Promise<Call
   if (sessionId === '') throw new ETeamsError('无法识别调用者身份（会话 id 为空）');
   const root = stateRootOf(env);
   const teams = await listTeams(root);
-  // 绑定 ?? 本回合凭证：一次性消费的那条消息，其派发/工具调用在本回合内
-  // 仍按绑定团队解析（绑定已随 user/message 事件转凭证，sessionTeam.ts）。
-  const boundTeamId = getSessionTeamId(sessionId) ?? getConsumedSessionTeamId(sessionId);
+  // 绑定常驻（用户迭代 2026-09-10 锁定语义）：绑定不再随消息消费，凡绑定
+  // 会话的 eteams_* 调用恒按绑定团队解析（sessionTeam.ts）。
+  const boundTeamId = getSessionTeamId(sessionId);
   if (boundTeamId !== undefined) {
     const bound = teams.find((t) => String(t.id) === boundTeamId);
     if (bound) return { kind: 'captain', team: bound, actor: captainActor(bound) };
@@ -122,7 +120,6 @@ export async function resolveCaller(env: RuntimeEnv, agent: Agent): Promise<Call
     const row = team.taskMembers.find(
       (r) =>
         r.sessionId === sessionId &&
-        r.status !== 'removed' &&
         (r.employeeId === null || team.members.some((m) => m.employeeId === r.employeeId)),
     );
     if (row) {

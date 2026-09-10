@@ -365,10 +365,11 @@ function upgradePresetHandbook(
  * Remove one roster entry by name (v3：删 roles 角色行). The leader
  * (项目牧羊人) and the role builder (角色构建师) are system members and
  * protected: deletion is rejected (用户模型：领队/角色构建师不可删除).
- * v7 班底守卫（R6）：任何 team_members 班底行仍引用该角色（role_id 命中，
- * 含 removed 行——班底是「成员=角色」的花名册，离职行也占位）时拒删，
- * 先从各团队移除成员（removeMember 删班底行）再删角色；task_members 副本
- * 行不挡删除（副本随任务走，任务删除时级联清理）。
+ * 用户迭代 2026-09-10「角色删除和团队不挂钩」：不再检查 team_members 班底
+ * 引用——删角色只摘角色库条目；在团成员照常持有工牌（班底行 role_id 悬空、
+ * 人设冻结在副本列，loadMembers 按副本列装回，快照重写也不回建角色行），
+ * 之后「同步到该角色」等显式写路径才按名重建角色库条目。task_members 副本
+ * 行自带人设拷贝，本就不依赖角色行。
  */
 export async function removeRosterMember(stateRoot: string, name: string): Promise<void> {
   const trimmed = name.trim();
@@ -377,19 +378,7 @@ export async function removeRosterMember(stateRoot: string, name: string): Promi
     throw new Error(`「${trimmed}」为系统保留成员，不可删除`);
   }
   withTeamTx(stateRoot, undefined, (tx) => {
-    const roleId = rolesRowByName(tx.db, trimmed)?.role_id;
-    if (roleId !== undefined) {
-      const rostered = tx.db
-        .prepare('SELECT COUNT(*) AS n FROM team_members WHERE role_id = ?')
-        .get(roleId) as { n: number };
-      if (rostered.n > 0) {
-        throw new Error(`角色「${trimmed}」仍在团队班底中，先从团队移除再删除`);
-      }
-    }
     const info = tx.db.prepare('DELETE FROM roles WHERE role_name = ?').run(trimmed);
     if (Number(info.changes) === 0) throw new Error(`成员「${trimmed}」不存在`);
-    // 角色删除不进行同步（用户迭代：删除时不动 team_members）——上面的班底
-    // 守卫已保证删角色时没有任何班底行引用（引用行须先随 removeMember 移除），
-    // 这里本就无行可刷；v4 副本列的悬空 NULL 兜底由读端防御跳过承担。
   });
 }

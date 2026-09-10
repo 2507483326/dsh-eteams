@@ -20,6 +20,7 @@ import {
   upsertRosterMember,
 } from '../src/host/runtime/roster.js';
 import { LEADER_NAME, closeDb, getDb } from '../src/host/state/db';
+import { readTeamSync, withTeamTx, writeTeamInTx } from '../src/host/state/store';
 import { cleanupTempWorkspace } from './support/tmpWorkspace';
 
 let root = '';
@@ -68,8 +69,8 @@ describe('protected system members', () => {
     await ensurePresetMembers(root);
     await upsertRosterMember(root, { name: '临时成员', role: 'tester' });
     const db = getDb(root);
-    // 模拟一条班底引用行（引用行存在时删除本就被班底守卫拒掉——删除不产生
-    // 悬空镜像，同步只发生在保存路径）。
+    // 模拟一条班底引用行（角色修改保存 → 引用它的班底行镜像全量刷新；
+    // 用户迭代 2026-09-10 起删除角色不再被引用行挡下——本测只覆盖保存路径）。
     const roleId = (
       db.prepare('SELECT role_id FROM roles WHERE role_name = ?').get('临时成员') as {
         role_id: number;
@@ -115,5 +116,40 @@ describe('protected system members', () => {
     // 落库（avatar 列 JSON）后读回应原样保留。
     expect(stored.avatar).toEqual({ seed: avatarSeedFor(LEADER_NAME), salt: 7 });
     expect(entry?.avatar).toEqual({ seed: avatarSeedFor(LEADER_NAME), salt: 7 });
+  });
+
+  it('角色删除与团队不挂钩（用户迭代 2026-09-10）：班底引用行冻结存活', async () => {
+    await ensurePresetMembers(root);
+    await upsertRosterMember(root, { name: '在团角色', role: 'engineer', profile: '简介A' });
+    const db = getDb(root);
+    // 建一个团队 + 一条引用该角色的班底行（副本列手工同步好，模拟正常写路径）。
+    db.prepare(
+      "INSERT INTO team (team_name, has_leader, created_time, update_time) VALUES ('甲队', 1, 1, 1)",
+    ).run();
+    const roleId = (
+      db.prepare('SELECT role_id FROM roles WHERE role_name = ?').get('在团角色') as {
+        role_id: number;
+      }
+    ).role_id;
+    db.prepare(
+      'INSERT INTO team_members (team_member_id, team_id, role_id, role_name, persona_md, created_time, update_time) ' +
+        'VALUES (21, 1, ?, ?, ?, 1, 1)',
+    ).run(roleId, '在团角色', '- 角色：engineer');
+    // 删除角色：不再被「仍在团队班底中」挡下。
+    await removeRosterMember(root, '在团角色');
+    expect(readRoster(root).map((m) => m.name)).not.toContain('在团角色');
+    // 班底行按冻结副本装回（工牌跟人走），人设拷贝仍在。
+    const team = readTeamSync(root, 1);
+    expect(team?.members.map((m) => m.name)).toEqual(['在团角色']);
+    expect(team?.members[0]?.role).toBe('engineer');
+    // 快照重写不回建角色行（删除保持生效），人设跨重写不丢。
+    withTeamTx(root, 1, (tx) => {
+      writeTeamInTx(tx, team!);
+    });
+    expect(readRoster(root).some((m) => m.name === '在团角色')).toBe(false);
+    const team2 = readTeamSync(root, 1);
+    expect(team2?.members.map((m) => m.name)).toEqual(['在团角色']);
+    expect(team2?.members[0]?.role).toBe('engineer');
+    closeDb(root);
   });
 });

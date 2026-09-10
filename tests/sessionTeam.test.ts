@@ -1,8 +1,9 @@
 /**
- * Session-team binding (docs/26): the band branches and the 领队子代理
- * relay split — a bound session no longer self-hosts the captain workflow
- * (user iteration 2026-09-03「主窗口发问题不合适——由领队子代理完成主持」);
- * it relays via eteams_dispatch_captain and shows the child's report.
+ * Session-team binding (docs/26 + docs/teamSessionLock): the band branches,
+ * the 领队子代理 relay split, and the 2026-09-10 lock semantics — a bound
+ * session is permanently pinned to one team (binding persists, no one-shot
+ * consumption), and a session with an in-flight anchored main task routes
+ * new work to 增补小任务 instead of building another main task.
  */
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,11 +14,11 @@ import { resolveCaller } from '../src/host/tools/identity';
 import { insertTeamRow, writeTeam, withTeamTx } from '../src/host/state/store';
 import { joinPath, type RuntimeEnv } from '../src/host/runtime/base';
 import {
+  anchoredMainTaskOf,
   clearSessionTeam,
-  consumeSessionTeamBinding,
-  getConsumedSessionTeamId,
+  clearSessionTeamForTeam,
+  getSessionTeamBinding,
   getSessionTeamId,
-  isHumanUserTurn,
   sessionTeamSection,
   setSessionTeam,
 } from '../src/host/runtime/sessionTeam';
@@ -28,7 +29,7 @@ import {
 } from '../src/host/runtime/captainAgent';
 import { LEADER_NAME } from '../src/host/state/db';
 import { cleanupTempWorkspace } from './support/tmpWorkspace';
-import type { TaskMemberRecord, TeamState } from '../src/host/model/types';
+import type { TaskMemberRecord, TaskRecord, TeamState } from '../src/host/model/types';
 
 let ws: string;
 let root: string;
@@ -45,6 +46,8 @@ afterEach(() => {
   clearSessionTeam('s-other');
   clearSessionTeam('s-creator');
   clearSessionTeam('s-x');
+  clearSessionTeam('s-a');
+  clearSessionTeam('s-b');
   unregisterCaptainChild('s-child');
   unregisterCaptainChild('s-stranger');
 });
@@ -64,6 +67,24 @@ function team(overrides: Partial<TeamState> = {}): TeamState {
   };
 }
 
+/** 主任务行（锚定判据输入：parentId 为空 + mainSessionId 盖章 + 状态）。 */
+function mainTask(id: number, mainSessionId: string, status: TaskRecord['status']): TaskRecord {
+  return {
+    id,
+    subject: `任务 ${id}`,
+    parentId: null,
+    dependencies: [],
+    chain: [],
+    chainCursor: -1,
+    status,
+    attempts: [],
+    retryCount: 0,
+    mainSessionId,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
+
 /** 领队实例行（v6：领队行 session_id 只记领队子代理会话；主会话锚点在任务行）。 */
 function leaderRow(teamId: number): TaskMemberRecord {
   return {
@@ -75,7 +96,6 @@ function leaderRow(teamId: number): TaskMemberRecord {
     employeeId: null,
     sessionId: '',
     roleId: null,
-    status: 'ready',
     createdAt: 1,
   };
 }
@@ -86,13 +106,24 @@ describe('sessionTeamSection branches', () => {
     expect(sessionTeamSection(undefined, () => team())).toBe('');
   });
 
-  it('runs the two-step workflow in the bound session (先建任务再转交)', () => {
-    // 用户迭代 2026-09-07 两步走：主会话第一步自己建主任务（标题由模型把
-    // 原话简化），第二步转交持续领队子代理分解分配——不再是「只转交不建任务」。
+  it('declares the fixed-conversation semantics (锁定声明)', () => {
+    // 用户迭代 2026-09-10「对话固定为团队对话」：band 显式声明 1 对话 1 团队，
+    // 模型不再建议取消选择或换团队。
     setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
     const band = sessionTeamSection('s-other', () => team());
     expect(band).toContain('【eteams 团队绑定·生效中】');
-    expect(band).toContain('领队子代理');
+    expect(band).toContain('本对话已固定为团队对话');
+    expect(band).toContain('一个对话只对应一个团队');
+    expect(band).not.toContain('你就是该团队的领队');
+    expect(band).not.toContain('他队');
+  });
+
+  it('runs the two-step workflow when no main task is anchored (先建任务再转交)', () => {
+    // 用户迭代 2026-09-07 两步走：主会话第一步自己建主任务（标题由模型把
+    // 原话简化），第二步转交持续领队子代理分解分配。锁定语义下该形态保留
+    // ——只在无进行中锚定主任务时走。
+    setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
+    const band = sessionTeamSection('s-other', () => team());
     expect(band).toContain('第一步·建任务');
     expect(band).toContain('eteams_submit_task');
     expect(band).toContain('把用户原话简化成一句话任务标题');
@@ -100,44 +131,68 @@ describe('sessionTeamSection branches', () => {
     expect(band).toContain('eteams_dispatch_captain');
     expect(band).toContain('主任务号');
     expect(band).toContain('以领队的名字命名');
-    expect(band).not.toContain('你就是该团队的领队');
-    expect(band).not.toContain('他队');
   });
 
-  it('forbids the main session calling eteams_* beyond the two entry tools (转交分工)', () => {
+  it('anchors to the in-flight main task: dispatch-only增补 workflow (有领队)', () => {
+    // 用户迭代 2026-09-10「已创建任务走增补子任务」：锚定主任务 #3 在案时
+    // 新工作直接转交领队（taskId=3），由领队挂 parentTaskId 增补——不再
+    // 两步走建任务。
     setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
-    const band = sessionTeamSection('s-other', () => team());
-    expect(band).toContain('不要直接调用其它 eteams_* 工具');
-    expect(band).toContain('不自己动手执行');
+    const band = sessionTeamSection('s-other', () =>
+      team({ tasks: [mainTask(3, 's-other', 'ready')] }),
+    );
+    expect(band).toContain('主任务 #3');
+    expect(band).toContain('eteams_dispatch_captain（taskId=3，message=用户原话）');
+    expect(band).toContain('增补小任务');
+    expect(band).toContain('parentTaskId=3');
+    expect(band).toContain('不要再 eteams_submit_task');
+    // 两步走的建任务第一步不再出现。
+    expect(band).not.toContain('第一步·建任务');
+  });
+
+  it('anchors to the main task: leaderless self-hosted增补 workflow (无领队)', () => {
+    setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
+    const band = sessionTeamSection('s-other', () =>
+      team({ hasLeader: false, tasks: [mainTask(5, 's-other', 'wait')] }),
+    );
+    expect(band).toContain('主任务 #5');
+    expect(band).toContain('团队未设领队');
+    expect(band).toContain('eteams_create_task（parentTaskId=5）');
+    expect(band).toContain('ask_user_question');
+    expect(band).toContain('不要再 eteams_submit_task');
+    // dispatch 只出现在红线「不要调用」里，不出现指令形态（taskId= 调用式）。
+    expect(band).not.toContain('eteams_dispatch_captain（taskId=');
+  });
+
+  it('keeps the for-built-entry-tools red line in the anchored band (转交分工)', () => {
+    setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
+    const band = sessionTeamSection('s-other', () =>
+      team({ tasks: [mainTask(3, 's-other', 'ready')] }),
+    );
+    expect(band).toContain('不要调用其它 eteams_* 工具');
+    expect(band).toContain('不要自己动手执行');
     expect(band).toContain('不要复述全文');
   });
 
-  it('treats binding itself as task intent (绑定即意图，无需点名)', () => {
-    // User iteration 2026-09-03「选择团队然后使用团队开始任务，主对话直接
-    // 开始完成任务」: the old band gated dispatch on the user explicitly
-    // saying 用团队做X, so a plain task message made the session execute the
-    // task itself. The band must state binding = intent with no phrase gate.
+  it('falls back to two-step when all anchored main tasks are terminal (终态回退)', () => {
+    // 锚定判据只认非终态主任务：completed 容器不再锚定——band 回到两步走，
+    // 允许开新项目（新建主任务）。
     setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
-    const band = sessionTeamSection('s-other', () => team());
-    expect(band).toContain('绑定即用户意图');
-    expect(band).toContain('与消息里是否点名团队无关');
-    expect(band).not.toContain('「用团队做X」');
+    const band = sessionTeamSection('s-other', () =>
+      team({ tasks: [mainTask(3, 's-other', 'completed')] }),
+    );
+    expect(band).toContain('第一步·建任务');
+    expect(band).toContain('eteams_submit_task');
+    expect(band).not.toContain('增补小任务');
   });
 
-  it('branches on hasLeader: leaderless team self-hosts（docs/panelTaskCommission）', () => {
-    // 旧口径「领队移出与 band 无关」已被面板手动建任务推翻：无领队团队的
-    // 完善/推进路径就是主会话直接主持（与面板 commission 路由的
-    // anchor.followup 唤醒同语义），band 必须切到直接主持分工并保留
-    // 「不自批开跑」红线；有领队仍是转交 band。两条互斥、不再同文。
+  it('branches on hasLeader in the two-step shape（docs/panelTaskCommission）', () => {
+    // 无领队团队的完善/推进路径就是主会话直接主持；有领队仍是转交 band。
     setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
     const kept = sessionTeamSection('s-other', () => team());
     const removed = sessionTeamSection('s-other', () => team({ hasLeader: false }));
-    // 有领队：两步走——先建主任务，再转交持续领队子代理分解分配。
     expect(kept).toContain('持续领队子代理');
     expect(kept).toContain('eteams_dispatch_captain');
-    expect(kept).toContain('eteams_submit_task');
-    expect(kept).toContain('第一步·建任务');
-    // 无领队：本会话直接主持（提交/问询/拆解），指派等批准后由小任务派发。
     expect(removed).toContain('本团队未设领队');
     expect(removed).toContain('由本会话直接主持');
     expect(removed).toContain('eteams_submit_task');
@@ -157,6 +212,7 @@ describe('sessionTeamSection branches', () => {
     setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
     const band = sessionTeamSection('s-other', () => undefined);
     expect(band).toContain('【eteams 团队绑定·失效】');
+    expect(band).toContain('重新选择其他团队');
     expect(band).not.toContain('生效中');
   });
 });
@@ -176,83 +232,83 @@ describe('getSessionTeamId', () => {
   });
 });
 
-describe('一次性消费（用户迭代 2026-09-07 发送后清空选择）', () => {
-  it('consume moves the binding into a one-turn grant (band 与绑定查表分流)', () => {
+describe('绑定常驻（用户迭代 2026-09-10 锁定语义）', () => {
+  it('the binding persists across repeated reads (无一次性消费)', () => {
     setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
-    consumeSessionTeamBinding('s-other');
-    // 绑定已消费：普通绑定查表为空（客户端按钮面已清、不再重申）。
-    expect(getSessionTeamId('s-other')).toBeUndefined();
-    // 但本回合凭证仍在：band 照常注入（消费这条消息的工作流不中断）。
-    expect(sessionTeamSection('s-other', () => team())).toContain('【eteams 团队绑定·生效中】');
-    expect(getConsumedSessionTeamId('s-other')).toBe('demo');
+    // 绑定不是回合凭证：连读两次都在（旧的一次性消费函数已删除）。
+    expect(getSessionTeamBinding('s-other')).toEqual({
+      teamId: 'demo',
+      name: '演示团队',
+      boundAt: 1,
+    });
+    expect(getSessionTeamId('s-other')).toBe('demo');
+    expect(getSessionTeamBinding('s-other')).toEqual({
+      teamId: 'demo',
+      name: '演示团队',
+      boundAt: 1,
+    });
   });
 
-  it('the next user/message revokes the grant (回到普通对话)', () => {
-    setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
-    consumeSessionTeamBinding('s-other'); // 第一条消息：绑定 → 凭证
-    consumeSessionTeamBinding('s-other'); // 第二条消息：撤销凭证
-    expect(sessionTeamSection('s-other', () => team())).toBe('');
-    expect(getConsumedSessionTeamId('s-other')).toBeUndefined();
-  });
-
-  it('consume without any binding is a no-op', () => {
-    consumeSessionTeamBinding('s-other');
-    expect(getConsumedSessionTeamId('s-other')).toBeUndefined();
-    expect(sessionTeamSection('s-other', () => team())).toBe('');
-  });
-
-  it('explicit deselect also drops the in-flight grant', () => {
-    setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
-    consumeSessionTeamBinding('s-other');
-    clearSessionTeam('s-other');
-    expect(getConsumedSessionTeamId('s-other')).toBeUndefined();
-    expect(sessionTeamSection('s-other', () => team())).toBe('');
-  });
-
-  it('ignores blank session ids', () => {
-    setSessionTeam('', { teamId: 't9', name: 'n', boundAt: 1 });
-    consumeSessionTeamBinding('');
-    expect(getConsumedSessionTeamId('')).toBeUndefined();
+  it('clearSessionTeamForTeam drops only the entries pointing at that team (删队逃生口)', () => {
+    setSessionTeam('s-a', { teamId: 't1', name: '甲队', boundAt: 1 });
+    setSessionTeam('s-b', { teamId: 't2', name: '乙队', boundAt: 2 });
+    clearSessionTeamForTeam('t1');
+    expect(getSessionTeamBinding('s-a')).toBeUndefined();
+    expect(getSessionTeamBinding('s-b')).toEqual({ teamId: 't2', name: '乙队', boundAt: 2 });
+    // 幂等：再清一次不报错、其余条目不动。
+    clearSessionTeamForTeam('t1');
+    expect(getSessionTeamBinding('s-b')).toEqual({ teamId: 't2', name: '乙队', boundAt: 2 });
   });
 });
 
-describe('isHumanUserTurn（真人输入判定）', () => {
-  it('accepts only source.kind === user', () => {
-    expect(isHumanUserTurn({ source: { kind: 'user' } })).toBe(true);
-    // 插件注入（唤醒/邮件/面板完善/steer）与 agent.inject 合成上下文、
-    // 工具结果、模型产物——一律不算真人。
-    expect(isHumanUserTurn({ source: { kind: 'plugin', plugin: 'dsh-eteams' } })).toBe(false);
-    expect(isHumanUserTurn({ source: { kind: 'tool', callId: 'c1' } })).toBe(false);
-    expect(isHumanUserTurn({ source: { kind: 'model' } })).toBe(false);
+describe('anchoredMainTaskOf（锚定判据：本会话最新非终态主任务）', () => {
+  it('picks the latest non-terminal main task of the session', () => {
+    const t = team({
+      tasks: [
+        mainTask(1, 's-other', 'ready'),
+        mainTask(4, 's-other', 'wait'),
+      ],
+    });
+    expect(anchoredMainTaskOf(t, 's-other')?.id).toBe(4);
   });
 
-  it('rejects missing or malformed data', () => {
-    expect(isHumanUserTurn(undefined)).toBe(false);
-    expect(isHumanUserTurn(null)).toBe(false);
-    expect(isHumanUserTurn({})).toBe(false);
-    expect(isHumanUserTurn({ source: {} })).toBe(false);
-    expect(isHumanUserTurn({ source: { kind: 42 } })).toBe(false);
+  it('ignores terminal main tasks, other sessions, and subtasks', () => {
+    const t = team({
+      tasks: [
+        mainTask(1, 's-other', 'completed'),
+        mainTask(2, 's-else', 'ready'),
+        { ...mainTask(3, 's-other', 'wait'), parentId: 2 },
+        mainTask(5, 's-other', 'cancelled'),
+      ],
+    });
+    expect(anchoredMainTaskOf(t, 's-other')).toBeUndefined();
   });
-});
 
-describe('一次性消费 × 真人判定（回合中途注入不清凭证）', () => {
-  it('a plugin-injected user/message between consume and the tool call keeps the grant', () => {
-    // 用户实测 2026-09-07：绑定被真人消息消费后，回合中途到达的插件注入
-    // （领队唤醒/邮件/文件通知，同样走 user/message 事件）把凭证当「下一
-    // 条用户消息」撤销——随后的 eteams_dispatch_captain 报「当前会话不在
-    // 任何 eteams 团队中」。监听器按 isHumanUserTurn 过滤后注入不再撤销。
-    setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
-    // 真人消息到达：绑定 → 凭证。
-    expect(isHumanUserTurn({ source: { kind: 'user' } })).toBe(true);
-    consumeSessionTeamBinding('s-other');
-    expect(getConsumedSessionTeamId('s-other')).toBe('demo');
-    // 回合中途的插件注入到达：guard 为 false → 不消费（凭证保留）。
-    expect(isHumanUserTurn({ source: { kind: 'plugin', plugin: 'dsh-eteams' } })).toBe(false);
-    expect(getConsumedSessionTeamId('s-other')).toBe('demo');
-    // 下一条真人消息到达：凭证撤销，回到普通对话。
-    consumeSessionTeamBinding('s-other');
-    expect(getConsumedSessionTeamId('s-other')).toBeUndefined();
-    expect(sessionTeamSection('s-other', () => team())).toBe('');
+  it('ignores chained standalone tasks (面板单杆的派发锚点补章不误锚)', () => {
+    // 面板 start 路由派发时把主会话快照补章到任务行——带链的独立小任务
+    // 因此也带 mainSessionId；容器由 createTask 校验保证不带链，据此区分。
+    const t = team({
+      tasks: [{ ...mainTask(5, 's-other', 'wait'), chain: [{ member: 3, stageBrief: '做' }] }],
+    });
+    expect(anchoredMainTaskOf(t, 's-other')).toBeUndefined();
+  });
+
+  it('treats wait_decision / failed-superseded states as non-terminal anchors', () => {
+    // 阻塞/等待决策中的主任务仍在进行——继续锚定增补。
+    const t = team({
+      tasks: [
+        mainTask(2, 's-other', 'wait_decision'),
+        mainTask(6, 's-other', 'failed'),
+      ],
+    });
+    expect(anchoredMainTaskOf(t, 's-other')?.id).toBe(2);
+  });
+
+  it('returns undefined for blank session ids and empty teams', () => {
+    expect(anchoredMainTaskOf(team(), 's-other')).toBeUndefined();
+    expect(
+      anchoredMainTaskOf(team({ tasks: [mainTask(1, 's-other', 'ready')] }), ''),
+    ).toBeUndefined();
   });
 });
 
@@ -314,22 +370,6 @@ describe('resolveCaller 绑定优先 (binding-first identity)', () => {
     const caller = await resolveCaller(envFor(ws), agentOf('s-other'));
     expect(caller.kind).toBe('captain');
     if (caller.kind === 'captain') expect(caller.team.id).toBe(seeded.id);
-  });
-
-  it('resolveCaller keeps working through the consumed turn (本回合凭证)', async () => {
-    // 一次性消费语义：绑定已随 user/message 转凭证，但消费这条消息的回合
-    // 里 dispatch/工具调用仍按绑定团队解析（sessionTeam.ts 模块头）。
-    const seeded = await seedTeam('演示团队', 's-creator');
-    setSessionTeam('s-other', { teamId: String(seeded.id), name: seeded.name, boundAt: 1 });
-    consumeSessionTeamBinding('s-other');
-    const caller = await resolveCaller(envFor(ws), agentOf('s-other'));
-    expect(caller.kind).toBe('captain');
-    if (caller.kind === 'captain') expect(caller.team.id).toBe(seeded.id);
-    // 下一条消息撤销凭证后，同一会话不再有团队身份。
-    consumeSessionTeamBinding('s-other');
-    await expect(resolveCaller(envFor(ws), agentOf('s-other'))).rejects.toThrow(
-      '当前会话不在任何 eteams 团队中',
-    );
   });
 
   it('resolves a registered captain child as its team captain (领队子代理)', async () => {

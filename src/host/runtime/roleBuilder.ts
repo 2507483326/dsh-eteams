@@ -257,13 +257,11 @@ export interface BuildReport {
   draft?: BuildDraft;
   note?: string;
   /**
-   * Publish an intent interview (docs/19.16): the builder child posts its
-   * questions; the host relays answers back to the child by followup. The
-   * child also reports `popFailed` when its own ask_user_question is
-   * rejected — the host then steers the parent to pop the questionnaire
-   * (event-driven fallback instead of a blind 45s timer).
+   * Publish an intent interview (2026-09-10 unified ask): the builder child
+   * posts its questions here for the record, then pops them itself via
+   * eteams_ask_user — answers land back by the host automatically.
    */
-  interview?: { questions: InterviewQuestion[]; popFailed?: boolean; routed?: boolean };
+  interview?: { questions: InterviewQuestion[] };
   /**
    * Marks a deliberate brand-new build (the /eteam handler opening over a
    * terminal session). Ordinary builder reports never set this — so a
@@ -433,18 +431,10 @@ export async function reportBuildProgress(
   return next;
 }
 
-/** Project a report's interview payload onto the session shape (questions +
- * popFailed/routed flags only — answers live exclusively in the answer paths). */
-function interviewOf(report: BuildReport): {
-  questions: InterviewQuestion[];
-  popFailed?: boolean;
-  routed?: boolean;
-} {
-  return {
-    questions: report.interview!.questions,
-    ...(report.interview!.popFailed === true ? { popFailed: true } : {}),
-    ...(report.interview!.routed === true ? { routed: true } : {}),
-  };
+/** Project a report's interview payload onto the session shape (questions
+ * only — answers live exclusively in the answer paths). */
+function interviewOf(report: BuildReport): { questions: InterviewQuestion[] } {
+  return { questions: report.interview!.questions };
 }
 
 /**
@@ -539,25 +529,9 @@ export function phaseSpawnLocked(
 }
 
 /**
- * Mark the current interview as routed/unrouted（统一路由去重痕迹，用户迭代
- * 2026-09-08）：宿主按统一路由处理完本次发布（就地弹或已转交主会话）后置
- * routed=true——同题复发（重启代理后重新发布相同问题）据此跳过重路由，
- * 防止 self 路径（不留问答单）的同题双弹。新问题发布/popFailed 补转重置。
- * 合并写不动 updatedAt（与 markBuilderWake 同口径，不驱动面板表单重置）。
- */
-export async function markInterviewRouted(stateRoot: string, routed: boolean): Promise<void> {
-  const current = readBuildSession(stateRoot);
-  if (current === null || current.interview === undefined) return;
-  await writeSession(stateRoot, {
-    ...current,
-    interview: { ...current.interview, routed },
-    updatedAt: current.updatedAt,
-  });
-}
-
-/**
- * Store the user's interview answers (docs/19.16): the host route calls this
- * and then wakes the builder child with a formatted followup. Idempotent
+ * Store the user's interview answers (2026-09-10 unified ask: the host calls
+ * this automatically when the builder child's eteams_ask_user returns; the
+ * panel route and build_report(answers) remain as bypass entries). Idempotent
  * re-answers overwrite (the panel allows correcting before the child resumes).
  */
 export async function answerBuildInterview(
@@ -574,7 +548,7 @@ export async function answerBuildInterview(
   const next: BuildSession = {
     ...current,
     interview: { ...current.interview, answers, answeredAt: Date.now() },
-    note: '意图访谈已作答——构建代理恢复中',
+    note: '意图访谈已作答',
     updatedAt: Date.now(),
   };
   await writeSession(stateRoot, next);
@@ -600,27 +574,13 @@ export interface InterviewQuestion {
 
 /**
  * Intent-interview state carried on the session (docs/19.16): the builder
- * child publishes questions here; the host relays answers back to the
- * continuable builder child via followup.
+ * child publishes questions here; answers land via the unified ask (host
+ * auto-persist), the panel route, or build_report(answers).
  */
 export interface InterviewState {
   questions: InterviewQuestion[];
   answers?: { id: string; choice: string }[];
   answeredAt?: number;
-  /**
-   * 子代理弹窗失败标记（docs/19.16 持续构建子代理迭代）：构建代理弹
-   * ask_user_question 被拒/报错时经 `eteams_build_report(interview.popFailed)`
-   * 上报，宿主立即 steer 父代理补弹（事件驱动兜底，替代 45 秒盲定时器——
-   * 子代理阻塞在弹窗等答案时定时器分不清「在等答案」与「已失败」）。
-   * 下一次访谈发布（新 questions 报告）即重置。
-   */
-  popFailed?: boolean;
-  /**
-   * 统一路由已处理标记（用户迭代 2026-09-08）：宿主已按统一路由处理过本次
-   * 发布（就地弹或已转交主会话）。同题复发（重启代理后重新发布相同问题）
-   * 据此跳过重路由——否则 self 路径不留问答单，重发会同题双弹。
-   */
-  routed?: boolean;
 }
 
 /** One-time avatar assignment: stable face from first preview through confirm. */

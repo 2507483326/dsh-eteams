@@ -45,7 +45,7 @@ export interface ModelSelectionProjectionView {
   next?: ModelSelectionValue | null;
 }
 
-/** Client sessions 服务（Session Controller）的结构化读取面——只用这两员。 */
+/** Client sessions 服务（Session Controller）的结构化读取面。 */
 interface SessionsFace {
   binding?: (
     sessionId: string,

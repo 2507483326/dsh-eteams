@@ -26,7 +26,7 @@ export function dispatchAck(childId: string): string {
   const short = childId.slice(0, 8);
   return [
     `已转交持续领队子代理（会话 ${short}…）主持团队工作流。`,
-    '它将直接主持后续流程：问询会以 ask_user_question 弹窗出现在本对话（用户作答后领队继续）；',
+    '它将直接主持后续流程：问询弹窗直接弹在主对话（原生问答界面，用户作答后领队同回合继续）；',
     '每轮汇报经子代理汇报消息送达本对话——到达后原样展示给用户，不要复述全文，也不要重复转交相同内容。',
   ].join('\n');
 }

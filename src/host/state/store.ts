@@ -161,6 +161,13 @@ export function rolesRowByName(db: DatabaseSync, name: string): RolesRow | undef
     .get(name) as RolesRow | undefined;
 }
 
+/** roles 表按 role_id 探一行（写端判悬空引用用；缺行返回 undefined）。 */
+export function rolesRowById(db: DatabaseSync, roleId: number): { role_id: number } | undefined {
+  return db.prepare('SELECT role_id FROM roles WHERE role_id = ?').get(roleId) as
+    | { role_id: number }
+    | undefined;
+}
+
 /**
  * 主对话注入角色行（v12 读端）：按 is_root 标识取行（不按名），缺行返回
  * undefined。persona_md 即注入主对话 system 提示词的原文（system 角色
@@ -177,13 +184,13 @@ export function rootRoleRow(
 /**
  * 会话是否绑定着任务成员副本行（v12 注入过滤读端）：task_members.session_id
  * 持久命中 = 该会话是成员/领队子代理（领队副本行同表同列），主对话注入段
- * 对其静默。removed 行不算——离职截断后子会话残留装配不再算子代理。
+ * 对其静默。离职截断由「工号是否还在班底」判据负责（identity 同口径），
+ * 这里只判会话绑没绑过副本行。
  */
 export function hasTaskMemberSession(db: DatabaseSync, sessionId: string): boolean {
   return (
-    db
-      .prepare("SELECT 1 FROM task_members WHERE session_id = ? AND status != 'removed' LIMIT 1")
-      .get(sessionId) !== undefined
+    db.prepare('SELECT 1 FROM task_members WHERE session_id = ? LIMIT 1').get(sessionId) !==
+    undefined
   );
 }
 
@@ -215,18 +222,21 @@ export function ensureRolesRowInTx(
  * 班底行角色信息副本刷新（v4；v10 补头像）：team_members 的 role_name/
  * persona_md/profile/avatar 四列是随 roles 角色行同步刷新的副本（真相在
  * roles）。每次写路径落库后调用——一律从 roles 反查回填（不从内存 persona
- * 取值，同源语义：已有角色行优先），悬空 role_id 行刷成 NULL（与
- * loadMembers 防御性跳过同口径）。角色修改保存（面板/构建器/成员同步）与
- * 删除走同一收口：删除路径因班底守卫（R6）不可能有引用行，不在此处理
- * （角色删除不进行同步）。刷新不算行变更，不碰 update_time。scope 省略 =
- * 全表（导入/迁移兜底）；给 roleId 按角色刷、给 teamId 按队刷，两者可并用
- * （AND）。
+ * 取值，同源语义：已有角色行优先）。角色修改保存（面板/构建器/成员同步）
+ * 与删除走同一收口。用户迭代 2026-09-10「角色删除和团队不挂钩」：只刷
+ * role_id 可解析的行——角色行已删的悬空班底行不碰（人设冻结在副本列，
+ * 装回端按副本列兜底），不再刷成 NULL 把成员从快照里抹掉。刷新不算行变更，
+ * 不碰 update_time。scope 省略 = 全表（导入/迁移兜底）；给 roleId 按角色刷、
+ * 给 teamId 按队刷，两者可并用（AND）。
  */
 export function syncTeamMemberRoleMirrorInTx(
   tx: TeamTx,
   scope?: { roleId?: number; teamId?: number },
 ): void {
-  const clauses: string[] = [];
+  const clauses: string[] = [
+    // 悬空 role_id（角色行已删）跳过：副本列保留冻结拷贝（见上方注释）。
+    'EXISTS (SELECT 1 FROM roles r WHERE r.role_id = team_members.role_id)',
+  ];
   const args: number[] = [];
   if (scope?.roleId !== undefined) {
     clauses.push('role_id = ?');
@@ -266,15 +276,16 @@ export function insertTeamRow(tx: TeamTx, name: string, hasLeader: boolean, now:
  * 插入一条执行实例行（task_members）：内存新建行 id = 0，落库时交给自增
  * 发号并把发下的号回填进内存（docs/27 §27.4）；已有号则带原号写入。
  * 返回该行最终 id。领队行（mainTaskId 为空）与任务实例行同走这里。
+ * status 列弃用不写（用户迭代 2026-09-10「成员没有状态」）——落 DDL 默认。
  */
 export function insertTaskMemberRow(tx: TeamTx, row: TaskMemberRecord): number {
   const assigned = row.id > 0 ? row.id : null;
   const info = tx.db
     .prepare(
       'INSERT INTO task_members (task_member_id, team_id, main_task_id, now_task_id, name, ' +
-        'employee_id, session_id, status, persona_md, model, provider, ' +
+        'employee_id, session_id, persona_md, model, provider, ' +
         'reasoning_effort, avatar, is_leader, created_time, update_time) ' +
-        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     )
     .run(
       assigned,
@@ -284,7 +295,6 @@ export function insertTaskMemberRow(tx: TeamTx, row: TaskMemberRecord): number {
       row.name,
       row.employeeId ?? null,
       row.sessionId,
-      row.status,
       row.personaMd ?? null,
       row.model !== undefined && row.model !== '' ? row.model : null,
       row.provider !== undefined && row.provider !== '' ? row.provider : null,
@@ -350,7 +360,9 @@ function loadMembers(db: DatabaseSync, teamId: number): MemberRecord[] {
   const rows = db
     .prepare(
       'SELECT tm.team_member_id, tm.role_id, tm.model, tm.provider, tm.reasoning_effort, tm.is_leader, tm.created_time, ' +
-        'r.role_name, r.persona_md, r.profile, r.avatar ' +
+        'r.role_name, r.persona_md, r.profile, r.avatar, ' +
+        'tm.role_name AS tm_role_name, tm.persona_md AS tm_persona_md, ' +
+        'tm.profile AS tm_profile, tm.avatar AS tm_avatar ' +
         'FROM team_members tm LEFT JOIN roles r ON r.role_id = tm.role_id ' +
         'WHERE tm.team_id = ? ORDER BY tm.team_member_id',
     )
@@ -366,24 +378,38 @@ function loadMembers(db: DatabaseSync, teamId: number): MemberRecord[] {
     persona_md: string | null;
     profile: string | null;
     avatar: string | null;
+    tm_role_name: string | null;
+    tm_persona_md: string | null;
+    tm_profile: string | null;
+    tm_avatar: string | null;
   }>;
   const members: MemberRecord[] = [];
   for (const row of rows) {
-    // 角色行缺失（角色库被删后的悬空班底行）：人设无从装回，防御性跳过。
-    if (row.role_name === null) continue;
-    const persona = personaFromMd(row.persona_md ?? '', row.role_name, row.role_name);
+    // 角色行在（真相优先）：与旧口径一致，按 roles 行装回。
+    // 角色行缺失（角色已从角色库删除——用户迭代 2026-09-10「角色删除和团队
+    // 不挂钩」）：班底行按 v4 副本列的冻结拷贝装回（工牌跟人走，删角色不
+    // 动在团成员）；两路全空（畸形行）才防御性跳过。
+    const live = row.role_name !== null;
+    const name = live ? row.role_name : row.tm_role_name;
+    if (name === null) continue;
+    const persona = personaFromMd(
+      (live ? row.persona_md : row.tm_persona_md) ?? '',
+      name,
+      name,
+    );
+    const avatarJson = (live ? row.avatar : row.tm_avatar) ?? null;
+    const profile = live ? row.profile : row.tm_profile;
     members.push({
       memberId: row.team_member_id,
       roleId: row.role_id,
-      name: row.role_name,
+      name,
       // 工号 = 班底行自增主键（v7 表自增）：读端由 team_member_id 派生
       employeeId: row.team_member_id,
       role: persona.role,
       // profile 独立成列（v3）：列值优先，旧库烘进手册的 `- 简介：` 行兜底。
-      persona:
-        row.profile !== null && row.profile !== '' ? { ...persona, profile: row.profile } : persona,
+      persona: profile !== null && profile !== '' ? { ...persona, profile } : persona,
       modelRoute: routeFromColumns(row.model, row.provider, row.reasoning_effort),
-      avatar: avatarFromJson(row.avatar) ?? { seed: 0, salt: 0 },
+      avatar: avatarFromJson(avatarJson) ?? { seed: 0, salt: 0 },
       // 领队标识（v8）：读列，领队行查找按它不按名
       isLeader: row.is_leader === 1,
       createdAt: row.created_time,
@@ -392,12 +418,13 @@ function loadMembers(db: DatabaseSync, teamId: number): MemberRecord[] {
   return members;
 }
 
-/** task_members 实例行（含领队主持行），按 task_member_id 升序装回。 */
+/** task_members 实例行（含领队主持行），按 task_member_id 升序装回。status
+ * 列弃用不读（用户迭代 2026-09-10「成员没有状态」；历史枚举值原样留在库）。 */
 function loadTaskMembers(db: DatabaseSync, teamId: number): TaskMemberRecord[] {
   const rows = db
     .prepare(
       'SELECT task_member_id, team_id, main_task_id, now_task_id, name, employee_id, ' +
-        'session_id, status, persona_md, model, provider, ' +
+        'session_id, persona_md, model, provider, ' +
         'reasoning_effort, avatar, is_leader, created_time FROM task_members WHERE team_id = ? ' +
         'ORDER BY task_member_id',
     )
@@ -409,7 +436,6 @@ function loadTaskMembers(db: DatabaseSync, teamId: number): TaskMemberRecord[] {
     name: string;
     employee_id: number | null;
     session_id: string;
-    status: TaskMemberRecord['status'];
     persona_md: string | null;
     model: string | null;
     provider: string | null;
@@ -426,7 +452,6 @@ function loadTaskMembers(db: DatabaseSync, teamId: number): TaskMemberRecord[] {
     name: row.name,
     employeeId: row.employee_id,
     sessionId: row.session_id,
-    status: row.status,
     ...(row.persona_md !== null ? { personaMd: row.persona_md } : {}),
     ...(row.model !== null ? { model: row.model } : {}),
     ...(row.provider !== null ? { provider: row.provider } : {}),
@@ -675,9 +700,17 @@ export function writeTeamInTx(tx: TeamTx, state: TeamState): void {
   );
   for (const m of state.members) {
     const route = routeToColumns(m.modelRoute);
-    const roleId = ensureRolesRowInTx(tx, m.name, m.persona, {
-      ...(m.avatar !== undefined ? { avatar: m.avatar } : {}),
-    });
+    // 用户迭代 2026-09-10「角色删除和团队不挂钩」：role_id 悬空（角色行已删）
+    // 的成员不回建角色行、原号保留——班底行带着冻结的人设拷贝独立存活；只有
+    // 真相行还在（ensureRolesRowInTx 按名命中即返回）或无角色行引用（legacy
+    // 自愈补建）才走 ensure。
+    const dangling =
+      m.roleId !== null && m.roleId !== undefined && rolesRowById(db, m.roleId) === undefined;
+    const roleId = dangling
+      ? m.roleId
+      : ensureRolesRowInTx(tx, m.name, m.persona, {
+          ...(m.avatar !== undefined ? { avatar: m.avatar } : {}),
+        });
     m.roleId = roleId; // 内存同步：角色行重建/改名后内存引用随之对齐
     m.employeeId = m.memberId; // 工号即主键（表自增）：写端同步派生值
     insMember.run(
@@ -693,6 +726,25 @@ export function writeTeamInTx(tx: TeamTx, state: TeamState): void {
     );
   }
   syncTeamMemberRoleMirrorInTx(tx, { teamId });
+  // 悬空班底行的副本列冻结落库：镜像刷新只碰 role_id 可解析的行（悬空行被
+  // 跳过），重插后副本列为 NULL——这里按内存 persona（装回时即从冻结副本
+  // 读来）写回，人设拷贝跨快照重写不丢。
+  const freezeDangling = db.prepare(
+    'UPDATE team_members SET role_name = ?, persona_md = ?, profile = ?, avatar = ? ' +
+      'WHERE team_member_id = ? AND team_id = ? AND NOT EXISTS ' +
+      '(SELECT 1 FROM roles r WHERE r.role_id = team_members.role_id)',
+  );
+  for (const m of state.members) {
+    if (m.roleId === null || m.roleId === undefined) continue;
+    freezeDangling.run(
+      m.name,
+      personaToMd(m.persona, m.name),
+      m.persona.profile ?? null,
+      avatarToJson(m.avatar),
+      m.memberId,
+      teamId,
+    );
+  }
 
   // task：带原号重插（发号已由 wave-2 的分配步骤经 nextAutoincrementId 完成）；
   // current_member_id 暂不维护（内存模型无此字段，docs/27 松引用列）。

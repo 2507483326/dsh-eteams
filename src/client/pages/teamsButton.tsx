@@ -19,16 +19,18 @@
  * that role — no draft text, nothing sent. For a team the host asserts the
  * 团队绑定 band (docs/26: conversation task workflow, led by the captain or
  * by the main window when the leader is removed). Selections persist per
- * session in localStorage and re-assert to the host on mount. 一次性选择
- * （用户迭代 2026-09-07「发送后清空选择」）：团队面在提交瞬间（输入状态机
- * submitting 转变沿）就地清空——按钮回「团队」、localStorage 清除；宿主侧
- * 绑定不在此处删除（那条消息的 band 与派发身份还要靠它），由宿主
- * user/message 事件一次性消费（host runtime/sessionTeam）。角色面不随发送
- * 清空。 Clicking the
- * button ALWAYS toggles this popup (opened on the tab matching the
- * selection) — panel navigation stays with the 新增 shortcuts. When the
- * slot's `inputActions` kit is unavailable the prefill degrades to clipboard
- * copy.
+ * session in localStorage. 团队对话锁定（用户迭代 2026-09-10「对话固定为
+ * 团队对话，1 个主对话只能有 1 个团队」）：团队面改为**常驻锁定**——替代
+ * 2026-09-07 的一次性选择（发送后清空）语义：选中团队后按钮恒显该团队
+ * 徽章（发送不清空），且不能再点击打开 团队/角色 弹层（只读徽章）；宿主
+ * 绑定常驻，换队 POST 被 409 拒。唯一逃生口 = 绑定的团队被删除：轮询快
+ * 照里队伍消失（fetchedAt 已落地）即自动解锁——徽章置灰可点、弹层顶部
+ * 提示重选；挂载对账以宿主 GET /session-team 为真相源（本地镜像兜底重
+ * 申）。角色面不随发送清空。 Clicking the button ALWAYS toggles this popup
+ * (opened on the tab matching the selection) — panel navigation stays with
+ * the 新增 shortcuts — except the locked badge, which never opens it. When
+ * the slot's `inputActions` kit is unavailable the prefill degrades to
+ * clipboard copy.
  *
  * S11 样式迁移（docs/21-client-ui-stack.md 21.6 / D19b/D19c/D19g）：弹层与
  * 按钮面的 inline style 与手写注入样式表（POPUP_CSS）全部迁到 Tailwind 类 +
@@ -59,6 +61,17 @@
  * 同文收编 ClearButton 子组件。EMPTY_CLASS 与 shared 的同名常量
  * 异值（M8 平铺收口易混）——改局部命名 POPUP_EMPTY_CLASS，类值逐字不变。
  *
+ * 子代理身份面（用户迭代 2026-09-10「子代理隐藏团队按钮」）：已寻址子代理
+ * 会话不再提供 团队/角色 选择——门控读标准座位 kit 的会话快照 `subagent`
+ * 面（InputBar/子会话模型徽章同款判定，kit 缺席落 ctx.sessions 探测兜底，
+ * sessionModelBadge 同款逐轴择源）。门控内两分支：eteams 自己的子代理
+ * （成员/领队/构建师，宿主 GET /session-identity 按磁盘真相解析）渲染
+ * **只读身份面**——头像 + 名字，无清除钮、点击无弹层（子代理身份不可选、
+ * 不可换、不可绑）；无关子代理与身份失效（离职截断）会话**整个按钮隐藏**
+ * （加载期同样不渲染——子代理会话上绝不闪出可交互按钮）。主会话完全不受
+ * 影响：选择/锁定/弹层交互照旧；persona/团队恢复对账在子代理会话一律跳过
+ * （那是主会话语义）。
+ *
  * @module dsh-eteams/client/teamsButton
  */
 import {
@@ -83,16 +96,21 @@ import {
   clearSessionPersona,
   clearSessionTeam,
   fetchRoster,
+  fetchSessionIdentity,
+  fetchSessionTeam,
   reportPresence,
   setSessionPersona,
   setSessionTeam,
   type RosterMember,
+  type SessionIdentity,
 } from '../lib/api';
 import { useActivityMonitor } from '../lib/monitor';
 import { getApp } from '../store/app';
 import { Avatar } from '../features/avatar/avatar';
 import { cn } from '../lib/cn';
 import { errorMessageOf } from '../lib/errors';
+import { isAddressedSubagentSession } from '../lib/sessionState';
+import { subagentFaceMode, subagentFaceTitle } from '../lib/subagentFace';
 import { matchesQuery } from '../lib/text';
 import { BORDER_L1_CLASS, TEAM_CHIP_CLASS } from './shared/styles';
 import { Button } from '../components/ui/button';
@@ -102,33 +120,30 @@ import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs';
 
 /** ================================== 类型 ================================== */
 
-/** 会话快照里本按钮只关心的员（ConversationSnapshot.running 的结构化投影
- * ——回合在途即 true；快照未就绪 → undefined）。 */
-interface SessionSnapshotFace {
-  readonly running?: unknown;
-}
-
-/** useSession 的在途 selector（模块级常量——引用稳定，行为纯函数）。 */
-const SESSION_RUNNING_SELECTOR = (snapshot: SessionSnapshotFace | undefined): boolean =>
-  snapshot?.running === true;
-
 /**
  * 标准座位入参（SessionStandardProps 契约的结构化投影）：框架随每个
- * session 作用域槽位组件下发 `sessionId`（会话 id 直传 prop）、
- * `useSession`（会话快照选择器）与 `useProjection`（keyed 投影读取），
- * owner 不传任何东西——故全部可选。首版误读 `props.session` /
- * `props.input`（框架从不传这两个 prop），绑定 POST、挂载恢复、心跳与
- * 发送清空全部静默失效，2026-09-10 改正（实测 conversation 包：input.right
- * 槽位 owner 传空包，InputBar 自身的输入状态 hook 不透传——发送清空改走
- * 快照 `running` 位，见主组件注记）。类型保持结构化，不触及宿主未导出的
- * 契约名。`inputActions` 是 conversation 输入域专属的既有 prop（草稿写入
- * 动作，prefillComposer 用）。
+ * session 作用域槽位组件下发 `sessionId`（会话 id 直传 prop）与 `useSession`
+ * （会话快照选择器——子代理门控判定用，InputBar/子会话模型徽章同款读取），
+ * owner 不传任何东西——故全部可选。`inputActions` 是 conversation 输入域
+ * 专属的既有 prop（草稿写入动作，prefillComposer 用）。曾有 `useSession`
+ * 在途选择器（2026-09-07 一次性选择的发送清空沿检测）——锁定语义下选择
+ * 常驻已随该语义移除；本员随子代理身份面（用户迭代 2026-09-10）以标准
+ * 座位身份回归，与当年用途无关。
  */
 interface TeamsButtonProps {
   readonly sessionId?: string;
-  readonly useSession?: <S>(selector: (snapshot: SessionSnapshotFace | undefined) => S) => S;
   readonly inputActions?: { setDraft: (text: string) => void };
+  readonly useSession?: <S>(
+    selector: (snapshot: { subagent?: SubagentFace | null } | undefined) => S,
+  ) => S;
 }
+
+/**
+ * 会话快照里子代理门控只关心的员（ConversationSnapshot.subagent 的结构化
+ * 投影——null/undefined = 普通会话传输，非空对象 = 已寻址子代理会话；
+ * InputBar/子会话模型徽章同款判定）。
+ */
+type SubagentFace = { readonly address?: unknown };
 
 /** ================================== 样式类 ================================== */
 
@@ -191,6 +206,12 @@ const FACE_NAME_CLASS = 'max-w-[120px] truncate font-medium';
 const CLEAR_BUTTON_CLASS =
   'inline-flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded-full border-none bg-transparent p-0 text-sm leading-none text-muted-foreground opacity-0 [transition:opacity_120ms] group-hover:opacity-100 hover:bg-muted hover:text-foreground';
 
+/* 子代理身份面（用户迭代 2026-09-10）：沿用触发钮选中面的胶囊观感（同档
+   高/字号/内距，品牌淡底 + 品牌字），去掉 group/hover 与清除钮——子代理
+   会话上没有可选可清的东西，脸面是纯只读标识。 */
+const IDENTITY_FACE_CLASS =
+  'inline-flex h-7 shrink-0 cursor-default items-center gap-1.5 rounded-full border-none bg-business-tint px-2.5 text-[13px] leading-[18px] font-medium text-primary';
+
 /** ================================== 常量与映射表 ================================== */
 
 /** 团队 tab 空态两态查表（M6，M5 boardTab EMPTY_FOOTNOTE_META 同模式）：
@@ -210,6 +231,9 @@ const TAB_ACTION_META: Record<'team' | 'member', { label: string }> = {
 };
 
 /** ================================== 工具函数 ================================== */
+
+/* 显隐决策与 tooltip 文案在 lib/subagentFace（纯函数独立成模块，node 单测
+ * 锁语义——teamsButton 本体带着 UI 依赖链，测试拉不动），此处直接取用。 */
 
 /* Selection persistence (per session, guarded). */
 
@@ -304,6 +328,107 @@ function ClearButton({ onClear }: { onClear: () => void }): ReactNode {
 }
 
 /**
+ * 子代理身份面（用户迭代 2026-09-10）：eteams 自己的子代理会话（成员/领队/
+ * 构建师）在输入栏渲染的只读脸面——头像 + 名字，无清除钮、点击无弹层
+ * （子代理身份不可选、不可换，团队/角色 绑定对子代理会话不成立）。数据来自
+ * 宿主 GET /session-identity 的磁盘真相（任务副本行 / 领队副本行 / 构建会话
+ * 文件），身份由插件指派而不是用户选择——脸面因此纯展示。
+ */
+function SubagentIdentityFace({ identity }: { identity: SessionIdentity }): ReactNode {
+  return (
+    <span className={IDENTITY_FACE_CLASS} title={subagentFaceTitle(identity)}>
+      <Avatar
+        name={identity.name}
+        seed={identity.avatar?.seed}
+        salt={identity.avatar?.salt}
+        size={18}
+      />
+      <span className={FACE_NAME_CLASS}>{identity.name}</span>
+    </span>
+  );
+}
+
+/**
+ * 触发钮面（团队对话锁定，用户迭代 2026-09-10）：渲染在 Provider 子树内
+ * （useActivityMonitor 需 store context），按选中面三分支——
+ * - 角色面：头像 + 名字 + hover 清除钮（行为不变）；
+ * - 团队锁定面（快照里队伍健在）：chip + 队名，**只读**——无清除钮、点击
+ *   不弹层（1 个主对话只能有 1 个团队，不能切换 团队/角色）；
+ * - 团队失联面（快照已落地但队伍不在列表 = 已删除）：同一张脸置灰，恢复
+ *   可点（解锁逃生口）——弹层自算同判据（state 现成）在团队 tab 顶部提示
+ *   重选。
+ * 失联判定门槛 `fetchedAt !== 0`：轮询首帧未落地前不判（快照空列表≠无团队），
+ * 避免挂载瞬间解锁闪烁。
+ */
+function TeamsTriggerButton(props: {
+  selectedMember: RosterMember | null;
+  selectedTeam: { teamId: string; name: string } | null;
+  open: boolean;
+  onButtonClick: () => void;
+  onClear: () => void;
+}): ReactNode {
+  const state = useActivityMonitor();
+  const teamGone =
+    props.selectedTeam !== null &&
+    state.fetchedAt !== 0 &&
+    !state.teams.some((t) => t.teamId === props.selectedTeam!.teamId);
+  const locked = props.selectedTeam !== null && !teamGone;
+  const onTriggerClick = (): void => {
+    // 锁定徽章不可点击（不能打开 团队/角色 切换弹层）。
+    if (locked) return;
+    props.onButtonClick();
+  };
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="group h-7 rounded-full border-none px-2.5 text-[13px] leading-[18px] font-medium normal-case tracking-normal data-[selected=true]:bg-business-tint data-[selected=true]:text-primary data-[locked=true]:cursor-default"
+      data-selected={
+        props.selectedMember !== null || props.selectedTeam !== null ? 'true' : undefined
+      }
+      data-locked={locked ? 'true' : undefined}
+      title={
+        props.selectedMember !== null
+          ? undefined
+          : props.selectedTeam !== null
+            ? teamGone
+              ? '绑定的团队已删除——点击重新选择'
+              : `本对话已固定为团队「${props.selectedTeam.name}」对话`
+            : undefined
+      }
+      aria-label="团队"
+      aria-haspopup="dialog"
+      aria-expanded={props.open}
+      onClick={onTriggerClick}
+    >
+      {props.selectedMember !== null ? (
+        <span className={FACE_ROW_CLASS}>
+          <Avatar
+            name={props.selectedMember.name}
+            seed={props.selectedMember.avatar?.seed}
+            salt={props.selectedMember.avatar?.salt}
+            size={18}
+          />
+          <span className={FACE_NAME_CLASS}>{props.selectedMember.name}</span>
+          <ClearButton onClear={props.onClear} />
+        </span>
+      ) : props.selectedTeam !== null ? (
+        <span className={FACE_ROW_CLASS}>
+          <span className={TEAM_CHIP_CLASS} aria-hidden={true}>
+            {props.selectedTeam.name.slice(0, 1)}
+          </span>
+          <span className={cn(FACE_NAME_CLASS, teamGone ? 'text-muted-foreground' : null)}>
+            {props.selectedTeam.name}
+          </span>
+        </span>
+      ) : (
+        '团队'
+      )}
+    </Button>
+  );
+}
+
+/**
  * The popup card, portaled to `<body>` (the composer card would crop an
  * in-place surface). It floats ABOVE the trigger with a small gap — the
  * button sits at the bottom of the window, and a below-placement (or a
@@ -374,6 +499,13 @@ function TeamsPopup(props: {
     return () => cancelAnimationFrame(raf);
   }, [anchor]);
   const state = useActivityMonitor();
+  // 团队失联（用户迭代 2026-09-10 解锁逃生口）：弹层自算——父层在 Provider
+  // 外（无法用 useActivityMonitor），本组件在 Provider 子树内现成有 state。
+  // 判定门槛 `fetchedAt !== 0`：轮询首帧未落地前不判（快照空列表≠无团队）。
+  const teamDead =
+    selectedTeam !== null &&
+    state.fetchedAt !== 0 &&
+    !state.teams.some((t) => t.teamId === selectedTeam.teamId);
   const [roster, setRoster] = useState<RosterMember[] | null>(null);
   const [rosterError, setRosterError] = useState(false);
 
@@ -495,6 +627,9 @@ function TeamsPopup(props: {
           </div>
 
           <div className={LIST_CLASS}>
+            {tab === 'team' && teamDead && (
+              <div className={HINT_CLASS}>绑定的团队已删除——请重新选择团队。</div>
+            )}
             {tab === 'team' ? (
               teams.length === 0 ? (
                 <div className={POPUP_EMPTY_CLASS}>
@@ -611,6 +746,16 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
   // The wrapper is per session — the standard seat carries the framework-
   // resolved id (渲染器注入的直传 prop，不是 owner prop)。
   const sessionId = typeof props.sessionId === 'string' ? props.sessionId : undefined;
+  // 子代理门控（用户迭代 2026-09-10）：已寻址子代理会话不提供 团队/角色
+  // 选择。逐轴择源（sessionModelBadge 同款）：kit hook 在场按会话快照
+  // `subagent` 面判定（InputBar 同款）；缺席落 ctx.sessions subagentAddress
+  // 探测兜底（非响应式——kit 缺席是旧装配退化，翻转窗口可忽略）。
+  const sessionHook = typeof props.useSession === 'function' ? props.useSession : undefined;
+  const kitSubagent = sessionHook?.((snapshot) => snapshot?.subagent ?? null);
+  const isSubagent =
+    sessionHook === undefined
+      ? sessionId !== undefined && sessionId !== '' && isAddressedSubagentSession(sessionId)
+      : kitSubagent !== null && kitSubagent !== undefined;
   // Selections (docs/13.8.2, docs/26): a selected MEMBER drives the
   // system-prompt persona band (the conversation speaks as that role); a
   // selected TEAM drives the 团队绑定 band (conversation task workflow +
@@ -623,40 +768,45 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
   const [selectedTeam, setSelectedTeam] = useState<{ teamId: string; name: string } | null>(() =>
     loadSelectedTeam(sessionId),
   );
-  // 一次性团队选择（用户迭代 2026-09-07「发送后清空选择」）：消息发出并被
-  // 受理（快照 running false→true 沿——实测 conversation 包：input.right
-  // 槽位 owner 传空包，InputBar 自身的输入状态 hook 不透传，session 标准
-  // kit 的快照 running 位是本域内唯一的「回合在途」权威信号）即清团队面
-  // ——按钮回「团队」+ localStorage 清除，不调 clearSessionTeam（那条消息
-  // 的宿主 band/派发身份还要靠绑定，宿主 user/message 事件一次性消费，
-  // host runtime/sessionTeam）。转变沿检测走渲染期调整（React 官方对
-  // 「prop 变化派生状态」的替代——effect 同步 setState 被
-  // react-hooks/set-state-in-effect 禁止）：lastRunning 记上一帧在途位，
-  // 仅在 false→true 转变沿清空——挂载即在途（首帧同值）与回合中段重选
-  // （位未变）都不误清。removeItem 幂等，重复执行无副作用。角色面不受
-  // 发送影响（用户只要求团队选择）。hook prop 先取局部变量再调用（成员名
-  // 不以 use 开头，hook 判定不受影响；是否在场随 mounting 固定，顺序稳定），
-  // 缺席时恒 false（转变沿无从发生，清空静默退化）。
-  const sessionHook = typeof props.useSession === 'function' ? props.useSession : undefined;
-  const turnRunning = sessionHook?.(SESSION_RUNNING_SELECTOR) ?? false;
-  const [lastRunning, setLastRunning] = useState<boolean>(turnRunning);
-  if (turnRunning !== lastRunning) {
-    setLastRunning(turnRunning);
-    if (turnRunning && selectedTeam !== null) {
-      setSelectedTeam(null);
-      forgetSelectedTeam(sessionId);
-    }
-  }
   // Host sync failure surface (角色接管): the POST is fire-and-forget for
   // latency, but its outcome lands here — a stale host (app not restarted
   // since the feature shipped) must be VISIBLE, not silently swallowed.
   const [personaError, setPersonaError] = useState<string | null>(null);
+  // 子代理身份面数据（用户迭代 2026-09-10）：宿主 GET /session-identity 的
+  // 磁盘真相（成员/领队副本行、构建会话文件）。identityReady 门槛把加载期
+  // 归入 hidden——子代理会话上绝不闪出可交互按钮；请求失败同归 hidden（只
+  // 进诊断通道），绝不退回交互面。
+  const [identity, setIdentity] = useState<SessionIdentity | null>(null);
+  const [identityReady, setIdentityReady] = useState(false);
+  useEffect(() => {
+    if (!isSubagent || sessionId === undefined || sessionId === '') return;
+    let alive = true;
+    fetchSessionIdentity(sessionId)
+      .then((found) => {
+        if (!alive) return;
+        setIdentity(found);
+        setIdentityReady(true);
+      })
+      .catch((error: unknown) => {
+        if (!alive) return;
+        setIdentity(null);
+        setIdentityReady(true);
+        recordClientDiag('session-identity', errorMessageOf(error));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [isSubagent, sessionId]);
   // inputActions 捕获桥（addPeople）：本组件随 composer 工具行挂载（hero 与
   // 对话内都在）且拿得到会话标准 kit 的官方写路——整页团队页弹窗里的
   // ETeamsView 是独立 React 根、没有 kit prop，其「填充」回落用这里登记的
   // 一份。actions 身份按会话稳定（kit 契约），effect 只在换会话时重登记。
   useEffect(() => captureInputActions(props.inputActions), [props.inputActions]);
   useEffect(() => {
+    // 子代理会话不参与选择/绑定（用户迭代 2026-09-10）：persona/团队恢复
+    // 对账是主会话语义，已寻址子代理一律跳过——其按钮位是只读身份面。
+    if (isSubagent) return;
+    let alive = true;
     const restore = (): void => {
       const member = loadSelectedMember(sessionId);
       setSelectedMember(member);
@@ -675,21 +825,42 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
         }
         return;
       }
+      // 团队面挂载对账（锁定语义）：宿主 GET /session-team 为真相源——
+      // 有绑定直接采信（刷 face + 本地镜像，不 POST，宿主侧重命名也对齐）；
+      // 宿主无绑定则按本地镜像照旧 POST 重申（重启/失联自愈）。失败只进
+      // 诊断通道：锁定态徽章应常驻显示，团队面没有 personaError 那样的
+      // 错误位（那是角色面的），宿主不可达时误报反而误导。
       const team = loadSelectedTeam(sessionId);
-      setSelectedTeam(team);
-      // docs/26：团队绑定挂载重申（宿主重启自愈，同 persona 模式）——绑定
-      // 生效后该会话的提示词携带「团队绑定」band（对话任务工作流）。
-      if (team !== null && sessionId !== undefined) {
-        setSessionTeam(sessionId, team.teamId)
-          .then(() => setPersonaError(null))
-          .catch((error: unknown) => {
-            setPersonaError(errorMessageOf(error));
-            recordClientDiag('team-restore', errorMessageOf(error));
-          });
+      if (sessionId === undefined) {
+        setSelectedTeam(team);
+        return;
       }
+      void fetchSessionTeam(sessionId)
+        .then((bound) => {
+          if (!alive) return;
+          if (bound !== null) {
+            setSelectedTeam(bound);
+            saveSelectedTeam(sessionId, bound);
+            return;
+          }
+          setSelectedTeam(team);
+          if (team !== null) {
+            setSessionTeam(sessionId, team.teamId).catch((error: unknown) => {
+              recordClientDiag('team-restore', errorMessageOf(error));
+            });
+          }
+        })
+        .catch((error: unknown) => {
+          if (!alive) return;
+          setSelectedTeam(team);
+          recordClientDiag('team-restore', errorMessageOf(error));
+        });
     };
     restore();
-  }, [sessionId]);
+    return () => {
+      alive = false;
+    };
+  }, [sessionId, isSubagent]);
 
   // 活跃会话心跳（用户迭代）：本按钮挂在当前打开对话的输入栏，sessionId
   // 即「用户正在看的对话」。5 秒一跳（页面隐藏时暂停），宿主兜底弹窗据此
@@ -781,12 +952,18 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
     });
   };
 
-  // Button click ALWAYS toggles the popup（用户反馈：无论什么状态都点开小
-  // 弹窗选择）—— the popup opens on the tab matching the selection; the
-  // hover × clears it. Panel navigation stays with the 新增 actions.
+  // Button click toggles the popup (opened on the tab matching the selection;
+  // the hover × clears it; panel navigation stays with the 新增 actions) —
+  // except the locked team badge, which never reaches this callback
+  // （TeamsTriggerButton 拦截：锁定态点击不弹层）.
   const onButtonClick = (): void => {
     setOpen((v) => !v);
   };
+
+  // 渲染门控（subagentFaceMode 逐分支）：子代理 + eteams 身份 → 只读身份面；
+  // 子代理无身份/加载中 → 整个隐藏（连弹层与 anchor 交互一起不渲染，根 div
+  // 保留只为 DOM 结构与 data-eteams 标记稳定）；主会话 → 既有交互不变。
+  const mode = subagentFaceMode(isSubagent, identityReady, identity);
 
   return (
     <ClientErrorBoundary label="团队按钮">
@@ -803,62 +980,38 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
           style={{ display: 'inline-flex', alignItems: 'center' }}
           data-eteams="button"
         >
-          {/* 选中高亮（原 POPUP_CSS `.eteams-teams-btn[data-selected]` 迁移）：
-        `group` 供 hover 显隐的清除钮用；交互激活底色无语义 token → 任意值
-        直引（D19c），文字用 brand 主色 token。 */}
-          {/* D25-6：触发钮镜像宿主 preset chip 观感（胶囊/无边框/13px，同
-              heroTeamsButton 的 chip 口径）——R4 用户反馈「太大 + 边框突兀」
-              根因即 UA button 边框未压（ghost 变体已补 border-none）+ h-8
-              偏大。选中态沿用品牌淡底。`group` 供 hover 显隐的清除钮用。 */}
-          <Button
-            variant="ghost"
-            size="sm"
-            className="group h-7 rounded-full border-none px-2.5 text-[13px] leading-[18px] font-medium normal-case tracking-normal data-[selected=true]:bg-business-tint data-[selected=true]:text-primary"
-            data-selected={selectedMember !== null || selectedTeam !== null ? 'true' : undefined}
-            aria-label="团队"
-            aria-haspopup="dialog"
-            aria-expanded={open}
-            onClick={onButtonClick}
-          >
-            {selectedMember !== null ? (
-              <span className={FACE_ROW_CLASS}>
-                <Avatar
-                  name={selectedMember.name}
-                  seed={selectedMember.avatar?.seed}
-                  salt={selectedMember.avatar?.salt}
-                  size={18}
-                />
-                <span className={FACE_NAME_CLASS}>{selectedMember.name}</span>
-                <ClearButton onClear={clearSelection} />
-              </span>
-            ) : selectedTeam !== null ? (
-              <span className={FACE_ROW_CLASS}>
-                <span className={TEAM_CHIP_CLASS} aria-hidden={true}>
-                  {selectedTeam.name.slice(0, 1)}
-                </span>
-                <span className={FACE_NAME_CLASS}>{selectedTeam.name}</span>
-                <ClearButton onClear={clearSelection} />
-              </span>
-            ) : (
-              '团队'
-            )}
-          </Button>
-          {open && anchorEl !== null && typeof document !== 'undefined'
-            ? createPortal(
-                <TeamsPopup
-                  anchor={anchorEl}
-                  inputActions={props.inputActions}
-                  selectedMember={selectedMember}
-                  selectedTeam={selectedTeam}
-                  personaError={personaError}
-                  onSelectMember={selectMember}
-                  onSelectTeam={selectTeam}
-                  initialTab={selectedMember !== null ? 'member' : 'team'}
-                  onClose={() => setOpen(false)}
-                />,
-                document.body,
-              )
-            : null}
+          {mode === 'identity' && identity !== null ? (
+            // 子代理身份面（只读）：身份由插件指派，无弹层、无清除、不可点。
+            <SubagentIdentityFace identity={identity} />
+          ) : mode === 'interactive' ? (
+            <>
+              {/* 选中面与锁定态在 TeamsTriggerButton 内（Provider 子树）：
+                  锁定徽章不可点、失联徽章置灰可点（解锁逃生口），见该组件注记。 */}
+              <TeamsTriggerButton
+                selectedMember={selectedMember}
+                selectedTeam={selectedTeam}
+                open={open}
+                onButtonClick={onButtonClick}
+                onClear={clearSelection}
+              />
+              {open && anchorEl !== null && typeof document !== 'undefined'
+                ? createPortal(
+                    <TeamsPopup
+                      anchor={anchorEl}
+                      inputActions={props.inputActions}
+                      selectedMember={selectedMember}
+                      selectedTeam={selectedTeam}
+                      personaError={personaError}
+                      onSelectMember={selectMember}
+                      onSelectTeam={selectTeam}
+                      initialTab={selectedMember !== null ? 'member' : 'team'}
+                      onClose={() => setOpen(false)}
+                    />,
+                    document.body,
+                  )
+                : null}
+            </>
+          ) : null}
         </div>
       </Provider>
     </ClientErrorBoundary>

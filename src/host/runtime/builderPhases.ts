@@ -45,7 +45,7 @@ const BUILDER_TOOLS = [
   'eteams_build_wait',
   'eteams_member_list',
   'eteams_member_save',
-  'ask_user_question',
+  'eteams_ask_user',
 ];
 
 /** 单构建串行锁 key：resume/restart/访谈唤醒的读改写临界区互斥。 */
@@ -83,9 +83,12 @@ const failMessage = (stage: string, error: unknown): string =>
  * harness 0.1.2 起成员工具随根作用域注册（registerContinuableSetup 被宿主
  * 移除）——构建器子代理拒见构建面之外的全部成员工具（member_list/save
  * 是构建面的一部分，保持可见）。**MEMBER_DENIED_TOOLS 必须先滤掉
- * BUILDER_TOOLS**：构建五件套（build_report/build_guide/build_wait/
+ * BUILDER_TOOLS**：构建面工具（build_report/build_guide/build_wait/
  * member_list/member_save）在成员禁刀里，不过滤会把构建子代理自己的工具
- * 禁掉（2026-09-08 用户实测：子代理推理「build_report 不在我的工具集」）。 */
+ * 禁掉（2026-09-08 用户实测：子代理推理「build_report 不在我的工具集」）。
+ * eteams_ask_user 本就不在任何禁刀里，列进来只是文档化「构建子代理可见的
+ * 问答面」——统一问答（2026-09-10）要求访谈经它弹出而非原生
+ * ask_user_question（后者绕过审计行）。 */
 export function builderToolFilter(): { deny: string[] } {
   return {
     deny: [
@@ -180,12 +183,13 @@ export function startBuilderChild(args: BuilderDispatchArgs): void {
 }
 
 /**
- * Wake the continuable builder child with a followup turn（面板路由与主
- * 对话工具的共用出口）：优先 `followup` 续聊同一子代理；失败（宿主重启后
- * 冷恢复失败/lineage 不符/会话记录被回收）→ `startContinuable` 以快照
- * 提示词重建并覆盖落盘 childId。continue 的唤醒去重键（startedAt:
- * answeredAt）落盘会话——面板路由与 eteams_interview_answer 工具双入口
- * 竞态时第二个直接跳过。resume/restart 的互斥与读改写串行走单构建文件锁。
+ * Wake the continuable builder child with a followup turn（面板访谈路由/
+ * 恢复/重启的共用出口；2026-09-10 统一问答后访谈答案由宿主在 eteams_ask_user
+ * 里自动落盘、子代理同回合续跑，本函数只剩面板路由/恢复/重启三个调用方）：
+ * 优先 `followup` 续聊同一子代理；失败（宿主重启后冷恢复失败/lineage 不符/
+ * 会话记录被回收）→ `startContinuable` 以快照提示词重建并覆盖落盘 childId。
+ * continue 的唤醒去重键（startedAt:answeredAt）落盘会话——双入口竞态时第二
+ * 个直接跳过。resume/restart 的互斥与读改写串行走单构建文件锁。
  */
 export function wakeBuilderChild(args: {
   ctx: BuilderDispatchArgs['ctx'];

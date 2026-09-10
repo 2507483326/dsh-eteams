@@ -21,7 +21,6 @@ import { createTeamViaPanel } from '../../lib/api';
 import type { TeamSnapshot } from '../../lib/monitor';
 import { cn } from '../../lib/cn';
 import { runWithBusy } from '../../lib/errors';
-import { MEMBER_STATUS_LABELS, memberTone } from '../../features/tasks/taskDisplayStatus';
 import { Avatar } from '../../features/avatar/avatar';
 import { FormDialog, FormFooterActions } from '../../components/formDialog';
 import { Button } from '../../components/ui/button';
@@ -30,7 +29,7 @@ import { Input } from '../../components/ui/input';
 import { MarkdownDoc } from '../shared/markdownDoc';
 import { handbookSeed, type HandbookSource } from '../roster/buildDraft';
 import { ROLE_CHIP_CLASS } from './memberCards';
-import { FormErrorNote, PageHeader, Pill } from '../shared/components';
+import { FormErrorNote, PageHeader } from '../shared/components';
 import { MUTED_CLASS, PANEL_CARD_CLASS, SECTION_TITLE_CLASS } from '../shared/styles';
 
 /** ================================== 类型 ================================== */
@@ -199,7 +198,6 @@ export function MemberDetailPage({ sessionId, pool, onSelectTeam }: MemberDetail
     name: string;
     employeeId: string | null;
     role: string;
-    status: string | null;
     avatar: { seed: number; salt: number } | null;
     source: HandbookSource;
   } =
@@ -208,7 +206,6 @@ export function MemberDetailPage({ sessionId, pool, onSelectTeam }: MemberDetail
           name: team.captain.name,
           employeeId: team.captain.employeeId,
           role: team.captain.role,
-          status: null,
           avatar: team.captain.avatar,
           source: {
             name: team.captain.name,
@@ -223,7 +220,6 @@ export function MemberDetailPage({ sessionId, pool, onSelectTeam }: MemberDetail
           name: memberRow?.name ?? target.name,
           employeeId: memberRow?.employeeId ?? null,
           role: memberRow?.role ?? '',
-          status: memberRow?.status ?? null,
           avatar: memberRow?.avatar ?? null,
           source: {
             name: memberRow?.name ?? target.name,
@@ -243,14 +239,11 @@ export function MemberDetailPage({ sessionId, pool, onSelectTeam }: MemberDetail
       {teamHeader}
       <div className="flex flex-wrap items-center gap-1.5">
         {/* 返回钮走上方页头 onBack（用户迭代 2026-09-08 统一收口）——
-        标题行原 BackBar 文案钮撤，只留成员名 + 角色/状态徽标。 */}
+        标题行原 BackBar 文案钮撤，只留成员名 + 领队徽标（用户迭代
+        2026-09-10「成员没有状态」：状态 pill 撤——成员只是工牌持有者，
+        在忙什么看任务，不挂状态）。 */}
         <span className="text-lg font-semibold tracking-tight text-foreground">{view.name}</span>
         {target.kind === 'captain' && <span className={ROLE_CHIP_CLASS}>领队</span>}
-        {view.status !== null && (
-          <Pill tone={memberTone(view.status)}>
-            {MEMBER_STATUS_LABELS[view.status] ?? view.status}
-          </Pill>
-        )}
       </div>
 
       <Card className={cn(PANEL_CARD_CLASS, 'mt-2')}>

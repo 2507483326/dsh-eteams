@@ -228,13 +228,13 @@ export function locateAgentTeam(
     if (bound) return bound;
   }
   // 2. 领队身份：任一任务行 main_session_id 快照命中（同队任务由同一领队
-  //    会话创建；removed 行同样归属，身份判定不看你行状态）。
+  //    会话创建）。
   const asCaptain = teamMatchingIn(workspaces, config, (team) =>
     team.tasks.some((task) => task.mainSessionId === agentId),
   );
   if (asCaptain) return asCaptain;
   // 3. 成员身份（实例行 session_id === 本会话，跨工作区同样成立）。
   return teamMatchingIn(workspaces, config, (team) =>
-    team.taskMembers.some((r) => r.sessionId === agentId && r.status !== 'removed'),
+    team.taskMembers.some((r) => r.sessionId === agentId),
   );
 }

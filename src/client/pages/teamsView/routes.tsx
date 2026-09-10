@@ -62,8 +62,6 @@ export interface ETeamsRoutesProps {
   memberCap: number;
   /** 团队：选中团队（详情进出与领队卡详情同流）。 */
   onSelectTeam: (teamId: string) => void;
-  /** 团队：成员子代理活动点（childId → running/inactive）。 */
-  agentActivity: Record<string, string>;
   /** 角色：删除回拉（roster/fetchRoster）。 */
   onDeleted: () => void;
   /** 角色：一键预填 composer（'set'/'copied'/'aborted'）。 */
@@ -167,7 +165,6 @@ export function ETeamsViewRoutes(props: ETeamsRoutesProps): ReactNode {
             pool={props.pool}
             roster={props.roster}
             memberCap={props.memberCap}
-            agentActivity={props.agentActivity}
           />
         }
       />

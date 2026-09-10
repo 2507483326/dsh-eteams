@@ -3,7 +3,7 @@
  * （DA2——只包任务消费面根（原 TasksTab；M3 拆页后 tasks/ 两路由页各自包
  * 裹），单实例单 Provider，A.6 同文档注入无跨文档问题）、
  * 成员罗列条（A.5.3 用户拍板：每张组卡下方各一条，chip 副本相同；领队 chip
- * 单列置首、带徽标、不可拖；staged 成员可拖带「未启动」弱化标记）、小任务
+ * 单列置首、带徽标、不可拖）、小任务
  * 行尾成员框（TaskAssignDropBox：2026-09-04 二轮 DA13 多人接力槽位——可编辑
  * 窗口内框承整链 chips（按序=接力顺序），拖到空白处=追加站点、拖到 chip=
  * 替换该站（嵌套 drop target，dnd-core 内层先 drop + didDrop 防双触发）、
@@ -67,7 +67,6 @@ import {
   isAssignEditable,
   readonlyStationMember,
 } from './taskAssignCore';
-import { DOT_BASE_CLASS, DOT_TONE_CLASS, memberTone } from './taskDisplayStatus';
 import { Button } from '../../components/ui/button';
 import { Popover, PopoverAnchor, PopoverContent } from '../../components/ui/popover';
 
@@ -262,9 +261,10 @@ const CHIP_TAG_CLASS = 'text-[10px] font-normal text-muted-foreground';
  * 徽章面——中性 pill 底 + token 边 + 10px medium，区别于 chip 主题色。 */
 const STRIP_BADGE_CLASS = `inline-flex items-center rounded-[3px] border border-solid bg-[color:var(--eteams-pill-bg)] ${BORDER_TOKEN_CLASS} px-1 text-[10px] font-medium leading-none text-muted-foreground`;
 
-/** 成员罗列条的可拖 chip（A.3.2：staged 可拖，源 chip 拖拽中半透明；头像
- * 渲染复用 Avatar，状态点 memberTone 五桶——staged 态由状态点表达；五轮
- * DA18：原「未启动」小字改工号数字徽章 STRIP_BADGE_CLASS）。 */
+/** 成员罗列条的可拖 chip（A.3.2：可拖，源 chip 拖拽中半透明；头像渲染复用
+ * Avatar；五轮 DA18：原「未启动」小字改工号数字徽章 STRIP_BADGE_CLASS；
+ * 用户迭代 2026-09-10「成员没有状态」：原状态点随 memberTone 下线——成员
+ * 只是工牌持有者，不挂状态）。 */
 function MemberDragChip({ member }: { member: MemberView }): ReactNode {
   const [{ isDragging }, dragRef] = useMemberDrag(memberRefOf(member));
   const badge = employeeBadgeOf(member.employeeId);
@@ -278,7 +278,6 @@ function MemberDragChip({ member }: { member: MemberView }): ReactNode {
       <Avatar name={member.name} seed={member.avatar?.seed} salt={member.avatar?.salt} size={26} />
       <span>{member.name}</span>
       {badge && <span className={STRIP_BADGE_CLASS}>{badge}</span>}
-      <span className={cn(DOT_BASE_CLASS, DOT_TONE_CLASS[memberTone(member.status)])} />
     </div>
   );
 }

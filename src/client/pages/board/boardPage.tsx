@@ -116,7 +116,7 @@ export function BoardTab({
           {team.pendingAsks
             .map((a) => `${a.askingName}（${a.questionCount} 问）`)
             .join('；')}
-          {' '}—— 已转交主会话弹出，到主会话作答。
+          {' '}—— 问答弹窗已弹在对应主对话（提问成员的主任务会话），到那里作答即可。
         </Alert>
       )}
       {/* docs/28 看板 · 每日 Token 消耗日历（全年格子 + 悬浮明细；用户迭代

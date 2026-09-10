@@ -155,27 +155,36 @@ describe('D18 对话式新增成员', () => {
     expect(ROLE_BUILDER_SECTION).toContain('项目牧羊人');
   });
 
-  it('build child prompt is a fetch-first brief — task and snapshot ride the guide tool (用户迭代 2026-09-10)', () => {
-    // 全相位同一文本：激活原文/本回合任务/会话快照都不进提示词，模型第一步自己领
+  it('build child prompt is one fetch-first sentence — everything else rides the guide tool (用户迭代 2026-09-10)', () => {
+    // 用户钦定的一句话：构建对话里只此一段——播报纪律、回合任务、快照、
+    // 父会话等所需内容全部经规程/工具面获取，提示词一律不带。
     const prompt = builderPhasePrompt();
-    expect(prompt).toContain('eteams_build_guide');
-    expect(prompt).toContain('eteams_build_report');
+    expect(prompt).toBe(
+      '你是「角色构建师」（后台持续构建子代理），使用eteams_build_guide 领取完整构建规程，请严格按规程执行。',
+    );
+    expect(prompt).not.toContain('eteams_build_report');
     expect(prompt).not.toContain('【激活原文】');
     expect(prompt).not.toContain('【本回合任务】');
-    expect(prompt).not.toContain('【原需求】');
-    expect(prompt).not.toContain('【当前草稿】');
-    expect(prompt).not.toContain('agency-agents-zh');
-    expect(prompt).not.toContain('持久记忆是');
-    // 纪律全文（含按 turn 的回合决策表）在 persona 常量里：系统段常驻 + 工具返回同文
+    // 纪律全文（回合决策表 + 可用接口清单）在 persona 常量里：系统段常驻 + 工具返回同文
     expect(ROLE_BUILDER_CHILD_PERSONA).toContain('eteams_build_guide');
     expect(ROLE_BUILDER_CHILD_PERSONA).toContain('回合决策表');
+    expect(ROLE_BUILDER_CHILD_PERSONA).toContain('【可用接口】');
+    expect(ROLE_BUILDER_CHILD_PERSONA).toContain('parentSessionId');
     expect(ROLE_BUILDER_CHILD_PERSONA).toContain('eteams_build_wait');
     expect(ROLE_BUILDER_CHILD_PERSONA).toContain('awaiting_confirmation');
-    expect(ROLE_BUILDER_CHILD_PERSONA).toContain('multi_select');
+    // 统一问答（2026-09-10）：访谈弹窗经 eteams_ask_user（multiSelect 是
+    // 它的问题字段）——旧 interview 参数名 multi_select 不再出现。
+    expect(ROLE_BUILDER_CHILD_PERSONA).toContain('eteams_ask_user');
+    expect(ROLE_BUILDER_CHILD_PERSONA).toContain('multiSelect');
+    expect(ROLE_BUILDER_CHILD_PERSONA).not.toContain('multi_select');
     expect(ROLE_BUILDER_CHILD_PERSONA).toContain('一次报全');
+    // 不指路状态文件（全局/相对状态根布局子代理无从得知，猜路径只会误判）、
+    // 不向父会话发结果（harness 附加的 send_message 提示对本子代理不适用）。
+    expect(ROLE_BUILDER_CHILD_PERSONA).not.toContain('rolebuilder.json');
+    expect(ROLE_BUILDER_CHILD_PERSONA).toContain('不要用 send_message');
   });
 
-  it('eteams_build_guide returns the guide, turn and session snapshot (用户迭代 2026-09-10)', async () => {
+  it('eteams_build_guide delivers guide, turn and snapshot through the model-facing render (用户迭代 2026-09-10)', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'eteams-build-guide-'));
     const root = join(workspace, '.eteams');
     try {
@@ -184,12 +193,13 @@ describe('D18 对话式新增成员', () => {
         step: '收到需求',
       });
       await markBuilderTurn(root, 'continue');
+      await setBuildParentSession(root, 'session-parent-1');
       const tools = createCaptainTools(ETeamsConfig({}) as ETeamsResolvedConfig, {} as Context);
       const guide = tools.find((t) => t.name === 'eteams_build_guide');
       expect(guide).toBeDefined();
       const call = (agent: unknown): Promise<Record<string, unknown>> =>
         guide!.execute({}, { agent } as never) as Promise<Record<string, unknown>>;
-      // 有会话：turn 取宿主写的 wakeKind，快照带原需求（草稿/访谈为空值）
+      // 有会话：turn 取宿主写的 wakeKind，快照带状态/步骤/原需求/父会话
       const out = (await call({ session: { header: { cwd: workspace } } })) as {
         ok: boolean;
         guide: string;
@@ -200,14 +210,30 @@ describe('D18 对话式新增成员', () => {
       expect(out.guide).toBe(ROLE_BUILDER_CHILD_PERSONA);
       expect(out.turn).toBe('continue');
       const snap = JSON.parse(out.snapshot) as {
+        status: string;
+        step: string;
         request: string;
         stepsDone: string[];
         draft: unknown;
         interview: { questions: unknown[]; answers?: unknown } | null;
+        parentSessionId: string | null;
       };
+      expect(snap.status).toBe('active');
+      expect(snap.step).toBe('收到需求');
       expect(snap.request).toBe('eTeam --add-people 建一个数据工程师');
       expect(snap.draft).toBeNull();
       expect(snap.interview).toBeNull();
+      expect(snap.parentSessionId).toBe('session-parent-1');
+      // render 是模型可见通道（dsh-tools 契约，presentResult 只是用户卡片）：
+      // 规程全文 / turn / 快照必须出现在 render 内容里，模型才拿得到载荷。
+      const blocks = guide!.output.render({}, out as never) as Array<{
+        type: string;
+        text?: string;
+      }>;
+      const rendered = blocks.map((b) => b.text ?? '').join('');
+      expect(rendered).toContain(ROLE_BUILDER_CHILD_PERSONA);
+      expect(rendered).toContain('turn=continue');
+      expect(rendered).toContain('"parentSessionId":"session-parent-1"');
       // 无会话：turn=none、快照 null——领了规程也不会误判成受理开局
       const empty = (await call({
         session: { header: { cwd: join(workspace, 'empty-ws') } },

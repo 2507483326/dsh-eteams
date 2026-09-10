@@ -107,9 +107,6 @@ export interface ModelRouteSnapshot {
   reasoningEffort?: string;
 }
 
-/** Member/task-member lifecycle status (docs/27 task_members.status 同集). */
-export type MemberStatus = 'staged' | 'ready' | 'working' | 'paused' | 'removed';
-
 /** Avatar seed + option (docs/14; option payload arrives with M6). */
 export interface AvatarRecord {
   seed: number;
@@ -165,7 +162,6 @@ export interface TaskMemberRecord {
   employeeId: number | null;
   /** 本行自己的子代理会话 id（v6：成员行=成员子会话，领队行=领队子代理会话）；未启动时是空串。 */
   sessionId: string;
-  status: MemberStatus;
   /** 执行时的人设手册（沿用角色行手册，可按任务微调；库内 persona_md 列）。 */
   personaMd?: string;
   /** 执行时采用的模型（空串 = 会话默认，用户迭代 2026-09-04）。 */

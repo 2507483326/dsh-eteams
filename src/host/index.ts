@@ -35,11 +35,7 @@ import { stateRootFor } from './runtime/base.js';
 import { leaderHandbookForChild } from './runtime/captainAgent.js';
 import { sessionPersonaSection, sessionIdOfScope } from './runtime/sessionPersona.js';
 import { rootPromptSection } from './runtime/rootPrompt.js';
-import {
-  sessionTeamSection,
-  consumeSessionTeamBinding,
-  isHumanUserTurn,
-} from './runtime/sessionTeam.js';
+import { sessionTeamSection } from './runtime/sessionTeam.js';
 import { CAPTAIN_SECTION_SHORT } from './prompts/system/captain.js';
 import { composeCaptainPersona } from './prompts/personas/captain.js';
 import { personaDigest } from './prompts/personas/framework.js';
@@ -119,9 +115,9 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
   // 任务转给一次性领队子代理主持。同一根作用域注册（子代理对 eteams_*
   // 可见的前提）；成员与领队子代理在 spawn 时 deny。
   ctx.tools.register(createCaptainDispatchTool(config, ctx));
-  // 1c) 子代理用户问答（用户迭代 2026-09-08）：eteams_ask_user / eteams_ask_answer。
-  // 根作用域注册且不进任何 deny 列表——领队子代理与成员都可见（问答自动
-  // 路由：用户在提问会话就地弹，不在则转交主会话弹出）。
+  // 1c) 子代理用户问答（2026-09-10 统一）：eteams_ask_user 单工具。根作用域
+  // 注册且不进任何 deny 列表——领队子代理、成员、构建师子代理都可见；DeepSeek
+  // 原生弹窗直接弹在提问方的主对话（不在线退回提问会话自身，阻塞同回合继续）。
   for (const tool of createAskUserTools(config, ctx)) {
     ctx.tools.register(tool);
   }
@@ -275,33 +271,6 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
     });
   } catch (error) {
     log.warn('eteams: session team context registration failed: %s', String(error));
-  }
-
-  // 3b3-2) 一次性消费（用户迭代 2026-09-07「发送后清空选择」）：user/message
-  // 到达即把绑定转为本回合凭证（sessionTeam.ts）——消费这条消息的 band 与
-  // 派发身份照常生效，下一条真人消息起回到普通对话。客户端在提交瞬间只清
-  // 按钮面不删宿主绑定（那条消息的 band/身份还得靠它，见 sessionTeam 模块
-  // 头）。只认真人输入（source.kind === 'user'，isHumanUserTurn）：插件注入
-  // 的 user 消息（唤醒/邮件/steer）与 agent.inject 合成上下文（文件通知等）
-  // 同样走这个事件，若一并消费会把消费回合中途的凭证误撤——dispatch 等
-  // 工具随即报「当前会话不在任何 eteams 团队中」。失败不外抛（监听绝不影
-  // 响会话，usage.ts 同纪律）。
-  try {
-    ctx.on(
-      'session/event',
-      (session: { id?: unknown }, event: { type?: unknown; data?: unknown }): void => {
-        try {
-          if (event?.type !== 'user/message') return;
-          if (!isHumanUserTurn(event.data)) return;
-          consumeSessionTeamBinding(String(session?.id ?? ''));
-        } catch {
-          // 消费失败静默：绑定留在原地，下一条消息再消费。
-        }
-      },
-    );
-    log.info('eteams: session team one-shot consumer registered');
-  } catch (error) {
-    log.warn('eteams: session team consumer registration failed: %s', String(error));
   }
 
   // 3b3-3) 领队手册插槽（用户迭代 2026-09-08「让真实的 {{}} 渲染出来」）：

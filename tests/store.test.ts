@@ -150,7 +150,6 @@ describe('team snapshots', () => {
     expect(loaded?.hasLeader).toBe(true);
     expect(loaded?.taskMembers).toHaveLength(1);
     expect(loaded?.taskMembers[0]?.name).toBe(LEADER_NAME);
-    expect(loaded?.taskMembers[0]?.status).toBe('ready');
     expect(loaded?.tasks[0]?.subject).toBe('映射表');
     expect(loaded?.tasks[0]?.status).toBe('wait');
     expect(loaded?.tasks[0]?.mainSessionId).toBe('cap-1');
@@ -966,16 +965,16 @@ describe('v6→v7 工牌迁移（工号=班底自增主键：副本重键/邮件
 
       // 步骤 2/4/5：团队级 staged 行删除；容器任务按班底全员补副本（李四 +
       // 领队补建，张三已有锚定行跳过）；锚定行/主持行工号重键到班底主键号。
+      // （status 列已随「成员没有状态」全链路下线——补建不再落该列，断言不验。）
       const rows = db
         .prepare(
-          'SELECT task_member_id, main_task_id, name, employee_id, status FROM task_members ORDER BY task_member_id',
+          'SELECT task_member_id, main_task_id, name, employee_id FROM task_members ORDER BY task_member_id',
         )
         .all() as Array<{
         task_member_id: number;
         main_task_id: number | null;
         name: string;
         employee_id: number | null;
-        status: string;
       }>;
       expect(rows).toHaveLength(4); // 主持行 + 张三锚定副本 + 李四/领队补建副本
       expect(rows[0]).toMatchObject({
@@ -990,12 +989,11 @@ describe('v6→v7 工牌迁移（工号=班底自增主键：副本重键/邮件
         main_task_id: 10,
         employee_id: 1,
       });
-      expect(rows[2]).toMatchObject({ name: '李四', main_task_id: 10, employee_id: 2, status: 'staged' });
+      expect(rows[2]).toMatchObject({ name: '李四', main_task_id: 10, employee_id: 2 });
       expect(rows[3]).toMatchObject({
         name: '项目牧羊人',
         main_task_id: 10,
         employee_id: 4,
-        status: 'staged',
       });
       const rowIdOf = (name: string) =>
         rows.find((r) => r.name === name && r.main_task_id === 10)!.task_member_id;

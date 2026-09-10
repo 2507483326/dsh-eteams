@@ -40,7 +40,7 @@ import { insertEventInTx, insertMailInTx } from '../state/events.js';
 import { defaultCaptainPersona } from '../prompts/personas/captain.js';
 import { applyTransition, sanitizeKey, taskSlug } from '../model/taskMachine.js';
 import { ETeamsError, captainActor, memberActor, stateRootOf, type RuntimeEnv } from './base.js';
-import { clearSessionTeam, getSessionTeamId } from './sessionTeam.js';
+import { clearSessionTeamForTeam, getSessionTeamId } from './sessionTeam.js';
 import { rosterProfilesAcrossWorkspaces } from './workspaces.js';
 import { renderTeamDocs, teamWorkDirRel } from './docs.js';
 import { findRosterMember, ROLE_BUILDER_NAME, upsertRosterMember } from './roster.js';
@@ -51,7 +51,6 @@ import {
   latestInstanceRow,
   makeMail,
   memberBoxOf,
-  memberStatusOf,
   notifyCaptain,
   readBox,
   requireMember,
@@ -161,10 +160,9 @@ export async function createTeam(
         });
       }
     });
-    // 绑定让位（docs/26 绑定即可驱动）：resolveCaller 绑定优先——刚建的
-    // 新队以本会话为领队，若本会话还绑着旧团队，旧绑定会遮蔽新队（工具
-    // 全落到旧队上）。建队成功即清除本会话的旧绑定。
-    clearSessionTeam(captainId);
+    // 绑定常驻（用户迭代 2026-09-10 锁定语义）：不再随建队清本会话旧绑定
+    // ——锁定对话（含面板建队路径）的绑定保持不动；死绑定由 resolveCaller
+    // fall-through 与删队清绑兜住（createTeamTool 对健在绑定另有硬守卫）。
     const team = readTeamSync(root, teamId!);
     if (!team) throw new ETeamsError(`建队失败：团队行写入后读取为空（${name}）`);
     return team;
@@ -291,7 +289,7 @@ export async function addMember(
     });
     const route = member.modelRoute;
     // 任务副本（v7 决策 5）：新成员即把班底抄进所有现存大任务（含已完结）
-    // ——副本行工号抄班底、staged 待首派起会话；任务级操作按 (工号, 大任务)
+    // ——副本行工号抄班底、待首派起会话；任务级操作按 (工号, 大任务)
     // 定位副本行。
     for (const parent of teamNow.tasks.filter((t) => t.parentId === null)) {
       teamNow.taskMembers.push({
@@ -302,7 +300,6 @@ export async function addMember(
         name,
         employeeId: memberId,
         sessionId: '',
-        status: 'staged',
         ...(member.persona.personaMd !== undefined && member.persona.personaMd !== ''
           ? { personaMd: member.persona.personaMd }
           : {}),
@@ -820,7 +817,7 @@ export async function sendMessage(
         );
       }
       const byId = isNumericRef
-        ? fresh.taskMembers.find((r) => r.employeeId === numeric && r.status !== 'removed')
+        ? fresh.taskMembers.find((r) => r.employeeId === numeric)
         : undefined;
       const member = byId ?? requireMember(fresh, to);
       const box = memberBoxOf(member);
@@ -863,10 +860,10 @@ export function teamView(env: RuntimeEnv, team: TeamState): Record<string, JsonV
     name: team.name,
     hasLeader: team.hasLeader,
     members: team.members
-      // v7 领队也是一行班底（普通成员）：不再过滤，工牌/简介/聚合状态照常透出。
-      // 团队现状精简（用户迭代 2026-09-03「团队现状太繁杂了」）：成员只带
-      // 工号/一句话简介/聚合状态；状态取副本行聚合口径（docs/35 §5#12），
-      // currentTask 可从 tasks 的 assignee+status 读出，模型路线属于派发细节。
+      // v7 领队也是一行班底（普通成员）：不再过滤，工牌/简介照常透出。
+      // 团队现状精简（用户迭代 2026-09-03「团队现状太繁杂了」；2026-09-10
+      // 「成员没有状态」再撤 status）：成员只带工号/一句话简介；在忙什么可
+      // 从 tasks 的 assignee+status 读出，模型路线属于派发细节。
       // name 保留：eteams_* 工具按工号/成员名指派，没有名字工号无法落地。
       .map((m): JsonValue => {
         const fromRoster = profiles.get(m.name);
@@ -881,7 +878,6 @@ export function teamView(env: RuntimeEnv, team: TeamState): Record<string, JsonV
           name: m.name,
           employeeId: m.employeeId ?? null,
           profile,
-          status: memberStatusOf(team, m.employeeId ?? m.name),
         };
       }),
     tasks: team.tasks.map((t): JsonValue => ({
@@ -958,9 +954,7 @@ export async function deleteTeam(env: RuntimeEnv, captain: Agent, teamId: TeamKe
         '先 eteams_cancel_task 取消任务，再删除团队',
       );
     }
-    const childIds = fresh.taskMembers
-      .filter((r) => r.status !== 'removed')
-      .map((r) => r.sessionId);
+    const childIds = fresh.taskMembers.map((r) => r.sessionId);
     withTeamTx(root, fresh.id, (tx) => {
       for (const table of [
         'task',
@@ -977,6 +971,9 @@ export async function deleteTeam(env: RuntimeEnv, captain: Agent, teamId: TeamKe
       // 角色库行（roles）是全局共享的，不随团队删除。
       tx.db.prepare('DELETE FROM team WHERE team_id = ?').run(fresh.id);
     });
+    // 提交后：清掉指向本队的会话绑定（用户迭代 2026-09-10 锁定语义的逃生
+    // 口——团队没了，绑定它的对话解锁，客户端徽章经快照失联回可选状态）。
+    clearSessionTeamForTeam(String(fresh.id));
     // 提交后：回收成员子代理驻留（子会话已随团队删除，只能尽量清场）。
     // 锚点按 v6 派生（任务行快照）；无快照退回调用的 captain。
     const anchorId = teamMainSessionOf(fresh);

@@ -35,23 +35,20 @@ import {
   finalizeCommissionTask,
 } from '../runtime/assignment.js';
 import { listTeams, envForAgent, resolveCaller } from './identity.js';
+import { getSessionTeamId, anchoredMainTaskOf } from '../runtime/sessionTeam.js';
+import { locateTeamAcrossWorkspaces } from '../runtime/workspaces.js';
 import { readBox } from '../runtime/notifier.js';
 import { readRoster, taskMemberBadge, upsertRosterMember } from '../runtime/roster.js';
 import {
   answerBuildInterview,
   hasBuildSessionFile,
-  markInterviewRouted,
   readBuildParentSession,
   readBuildSession,
   reportBuildProgress,
   cancelBuildSession,
   type BuildDraft,
 } from '../runtime/roleBuilder.js';
-import {
-  publishBuilderAsk,
-} from '../runtime/askUser.js';
-import { readPendingAsksBySessionSync, answerAskSync } from '../state/asks.js';
-import { startBuilderChild, wakeBuilderChild } from '../runtime/builderPhases.js';
+import { startBuilderChild } from '../runtime/builderPhases.js';
 import { stationPointsTo, stationProgress } from '../model/taskMachine.js';
 import { renderContract } from '../prompts/handoff/mails.js';
 import { ROLE_BUILDER_CHILD_PERSONA } from '../prompts/personas/builder.js';
@@ -83,13 +80,6 @@ const intArr = (description: string) => ({
   items: { type: 'integer' as const },
   description,
 });
-
-/**
- * 意图访谈弹窗失败中转（模块级，docs/19.16 持续构建子代理迭代）：中转的
- * 触发是事件驱动的——子代理亲报 interview.popFailed（边沿：播报前标记未
- * 置位）才由 publishBuilderAsk(forceParent) 强制转交构建父补弹，弹窗成功
- * 路径（答案内联落盘）永不触发，见 eteams_build_report 的执行体。
- */
 
 const chainParam = () => ({
   type: 'array' as const,
@@ -178,6 +168,20 @@ export function createCaptainTools(
     },
     execute: async (args, exec) => {
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
+      // 锁定守卫（用户迭代 2026-09-10「1 个主对话只能有 1 个团队」）：绑定
+      // 常驻且绑定优先——锁定对话里再建队，队虽建成但工具调用仍落在绑定队
+      // 上，只会制造「建了队却动不了」的死路。旧队已死（删队清绑定竞态窗）
+      // 时放行：resolveCaller 对死绑定自然 fall-through 到建队身份。
+      const boundTeamId = getSessionTeamId(String(exec.agent?.id ?? ''));
+      if (boundTeamId !== undefined) {
+        const stillAlive = locateTeamAcrossWorkspaces(runtime, config, boundTeamId);
+        if (stillAlive !== undefined) {
+          throw new ETeamsError(
+            `本对话已固定为团队「${stillAlive.team.name}」——一个对话只能服务一个团队`,
+            '新建团队请在团队页或未绑定团队的新对话中进行',
+          );
+        }
+      }
       const team = await createTeam(env, exec.agent!, {
         name: args.name,
         questionnaire: args.questionnaire,
@@ -370,7 +374,7 @@ export function createCaptainTools(
       interview: {
         type: 'object' as const,
         description:
-          '意图访谈（统一问答路由，用户迭代 2026-09-08）：把问题写入会话并按统一路由分发（发布前先播报步骤「意图访谈」）。看本次返回的 popSelf：true → 用户正看着本对话，立即用 ask_user_question 把问题逐题弹给用户，拿到答案 eteams_build_report(answers=[{id, choice}]) 落盘后同回合继续起草；false → 宿主已把问题转交主会话弹出，**立即结束本回合**（不要调 eteams_build_wait、不要追问）——用户作答后答案会以 followup 消息送达你，收到后继续起草。弹窗被拒/报错：不重试——再发一次本参数并带 popFailed=true 上报（宿主会强制转交主会话），然后结束回合；弹窗被用户关闭/未答也照样结束回合（答案稍后送达）。',
+          '意图访谈（2026-09-10 统一问答）：把问题写入会话（发布前先播报步骤「意图访谈」），然后**立即调 eteams_ask_user 把同一组问题弹给用户**——原生弹窗直接弹在发起构建的主对话（不在线自动退回你的对话），答案由宿主自动写回构建会话（无须再 eteams_build_report(answers)），你在同回合继续起草。弹窗被拒/报错：不重试弹窗——按 degradeHint 把问题写进汇报文本直接问用户。',
         properties: {
           questions: {
             type: 'array' as const,
@@ -400,11 +404,6 @@ export function createCaptainTools(
               additionalProperties: false,
             },
           },
-          popFailed: {
-            type: 'boolean' as const,
-            description:
-              '弹窗失败标记（docs/19.16 持续构建子代理）：ask_user_question 被拒/报错时置 true 上报——宿主把问题强制转交主会话补弹；弹窗正常时不要传。',
-          },
         },
         additionalProperties: false,
       },
@@ -416,7 +415,7 @@ export function createCaptainTools(
       answers: {
         type: 'array' as const,
         description:
-          '意图访谈答案（构建代理经 ask_user_question 拿到用户选择后用）：[{id, choice}]，与已发布问题一一对应；宿主写回会话，你随后同回合继续起草。',
+          '意图访谈答案（旁路入口，2026-09-10 统一后构建子代理通常无须调用——eteams_ask_user 的答案由宿主自动写回）：[{id, choice}]，与已发布问题一一对应；宿主写回会话，构建代理随后继续起草。主对话亲自构建的降级路径与面板补交用本面。',
         items: {
           type: 'object' as const,
           properties: {
@@ -435,9 +434,6 @@ export function createCaptainTools(
           status: str('会话状态'),
           step: str('当前步骤'),
           updatedAt: { type: 'integer' as const, description: '更新时间戳（毫秒）' },
-          popSelf: bool(
-            '弹窗指引（统一问答路由）：true=用户正看着本对话，由你本回合用 ask_user_question 就地弹；false=宿主已把问题转交主会话弹出，立即结束本回合（不要 eteams_build_wait）——答案会以 followup 消息送达你',
-          ),
         },
         additionalProperties: false as const,
       },
@@ -456,12 +452,10 @@ export function createCaptainTools(
     execute: async (args, exec) => {
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
       const root = stateRootOf(env);
-      // 构建代理经 ask_user_question 拿到用户答案 → 只落盘（docs/19.16
-      // 持续构建子代理迭代）：调用者就是持续构建子代理本身（toolFilter 只
-      // 对它开放本工具的 answers 面），提示词纪律要求它拿到答案后同回合
-      // 继续起草——宿主不代唤醒，也就没有「childId 尚未落盘误判外部作答
-      // → 多余 followup → 双起草」的竞态面。答案中转/面板提交两条路才由
-      // 宿主 followup 唤醒（见 eteams_interview_answer / 面板 interview 路由）。
+      // 构建代理拿到用户答案 → 只落盘：答案来源已统一为 eteams_ask_user（宿
+      // 主自动写回，2026-09-10），本工具的 answers 面保留给两条旁路——主对话
+      // 亲自构建的降级路径（prompts/system/roleBuilder）与面板补交（answer-
+      // BuildInterview 幂等覆写，双入口不冲突）。
       const inlineAnswers = (Array.isArray(args.answers) ? args.answers : []).filter(
         (a): a is { id: string; choice: string } => {
           const o = a as Record<string, unknown>;
@@ -482,24 +476,6 @@ export function createCaptainTools(
           updatedAt: answered.updatedAt,
         };
       }
-      // 播报前的访谈态（用于 popFailed 边沿判定与同题复发去重）。
-      const beforeReport = readBuildSession(root);
-      // 同题复发透传 routed 痕迹：重启代理后重新发布相同问题（未带 popFailed、
-      // 也未带答案）时，把上一次发布的 routed 标记原样带入本次写入——否则
-      // interviewOf 重置痕迹，第三次重发会漏过去重。
-      const interviewArgs = args.interview as
-        | { questions: unknown; popFailed?: boolean; routed?: boolean }
-        | undefined;
-      if (
-        interviewArgs !== undefined &&
-        beforeReport?.interview !== undefined &&
-        beforeReport.interview.answers === undefined &&
-        interviewArgs.popFailed !== true &&
-        JSON.stringify(interviewArgs.questions) ===
-          JSON.stringify(beforeReport.interview.questions)
-      ) {
-        interviewArgs.routed = beforeReport.interview.routed;
-      }
       const session = await reportBuildProgress(root, {
         ...(args.status !== undefined ? { status: args.status } : {}),
         ...(args.step !== undefined ? { step: args.step } : {}),
@@ -511,80 +487,14 @@ export function createCaptainTools(
           : {}),
         ...(args.newBuild === true ? { newBuild: true } : {}),
       });
-      // 弹窗失败即补转（事件驱动兜底，docs/19.16 持续构建子代理迭代）：
-      // 子代理就地自弹被拒/报错时经 interview.popFailed 上报——宿主强制转交
-      // 构建父（主对话）补弹（forceParent 跳过 presence：自弹刚被拒，再判
-      // self 只会原地重蹈）。投递走统一 deliverAskRelay（在线 steer / 离线
-      // 冷恢复）。事件驱动只在子代理亲报失败那一刻触发，无竞态。
-      if (
-        session.interview !== undefined &&
-        session.interview.answers === undefined &&
-        session.interview.popFailed === true &&
-        beforeReport?.interview?.popFailed !== true
-      ) {
-        const relayed = await publishBuilderAsk(env, {
-          askingSessionId: String(exec.agent?.id ?? ''),
-          askingName: '角色构建师',
-          parentSessionId: readBuildParentSession(root) ?? '',
-          questions: session.interview.questions,
-          forceParent: true,
-        });
-        if (relayed.outcome === 'relayed') {
-          await markInterviewRouted(root, true);
-        }
-      }
-      // 访谈发布边沿（统一问答路由，用户迭代 2026-09-08）：与 eteams_ask_user
-      // 同一套判定（runtime/askUser）——presence 命中构建子会话 → popSelf:true
-      // 就地弹；否则严格转交构建父（主对话）弹出并落统一问答单（ask_questions，
-      // 答案经 eteams_ask_answer 桥接回收 + wakeBuilderChild 唤醒）。发布即返回：
-      // 子代理结束回合等唤醒，不再 eteams_build_wait 停驻（回合边界才消费排队
-      // 消息，停驻会把 followup 饿死在队列里——用户实测 45 分钟无唤醒的根因）。
-      // 只对构建子代理调用者生效（其它调用者不判、返回不带 popSelf 字段）；
-      // 同题复发（重启代理后重新发布相同问题）不重复中转——同会话已有同题
-      // pending 问答单时直接跳过（作答入口是已中转弹窗或面板，先提交者胜）。
-      const buildCaller =
-        exec.agent !== undefined && session.builderChildId === String(exec.agent.id);
-      let popSelf: boolean | undefined;
-      const interview = session.interview;
-      if (
-        buildCaller &&
-        interview !== undefined &&
-        interview.answers === undefined &&
-        interview.popFailed !== true
-      ) {
-        const askingSessionId = String(exec.agent!.id);
-        const samePending = readPendingAsksBySessionSync(root, askingSessionId).some(
-          (r) => JSON.stringify(r.questions) === JSON.stringify(interview.questions),
-        );
-        // routed 痕迹去重覆盖 self 路径（就地弹不留问答单）的同题复发；
-        // pending 问答单去重覆盖转交路径的同题复发。
-        const sameRouted =
-          beforeReport?.interview?.routed === true &&
-          beforeReport.interview.answers === undefined &&
-          JSON.stringify(interview.questions) === JSON.stringify(beforeReport.interview.questions);
-        if (samePending || sameRouted) {
-          popSelf = false;
-        } else {
-          const published = await publishBuilderAsk(env, {
-            askingSessionId,
-            askingName: '角色构建师',
-            parentSessionId: readBuildParentSession(root) ?? '',
-            questions: interview.questions,
-          });
-          // self=就地弹；degraded（无父侧车/投递失败）→ 就地弹兜底（弹窗再
-          // 被拒走 popFailed 补转）；relayed=已转交，子代理结束回合等唤醒。
-          popSelf = published.outcome !== 'relayed';
-          if (published.outcome !== 'degraded') {
-            await markInterviewRouted(root, true);
-          }
-        }
-      }
+      // 发布即返回（2026-09-10 统一问答）：interview 只写进构建会话，弹窗由
+      // 子代理随后自己调 eteams_ask_user 发起（原生弹窗直接弹在主对话，答案宿
+      // 主自动写回）。宿主不做任何会话路由/中转/唤醒。
       return {
         ok: true as const,
         status: session.status,
         step: session.step,
         updatedAt: session.updatedAt,
-        ...(popSelf !== undefined ? { popSelf } : {}),
       };
     },
   });
@@ -592,27 +502,34 @@ export function createCaptainTools(
   const buildGuideTool = defineTool({
     name: 'eteams_build_guide',
     description:
-      '领取角色构建师规程与本回合任务（构建子代理每回合第一步先调本工具）：返回 guide=构建纪律全文（含按 turn 的回合决策表——播报规范、意图访谈与统一问答路由、回合收束纪律、人设手册规格）、turn=本回合种类、snapshot=会话快照（原需求/已完成步骤/当前草稿/意图访谈）。只读幂等，可重复领取。',
+      '领取角色构建师规程与本回合任务（构建子代理每回合第一步先调本工具）：返回 guide=构建纪律全文（含按 turn 的回合决策表、可用接口清单——播报规范、意图访谈与统一问答、回合收束纪律、人设手册规格）、turn=本回合种类、snapshot=会话快照（status/step/request/stepsDone/draft/interview/parentSessionId）。只读幂等，可重复领取。',
     parameters: {},
     output: {
       schema: {
         type: 'object' as const,
         properties: {
           ok: bool('是否成功'),
-          guide: str('构建纪律全文（含回合决策表）'),
+          guide: str('构建纪律全文（含回合决策表与可用接口清单）'),
           turn: str(
             '本回合种类：start=受理开局 / continue=访谈答案已送达 / resume=放弃后恢复 / restart=手动重启 / none=无进行中会话',
           ),
           snapshot: str(
-            '会话快照 JSON（request 原需求 / stepsDone 已完成步骤 / draft 当前草稿 / interview 意图访谈{questions,answers}；无会话为 null）',
+            '会话快照 JSON（status 会话状态 / step 当前步骤 / request 原需求 / stepsDone 已完成步骤 / draft 当前草稿 / interview 意图访谈{questions,answers} / parentSessionId 发起构建的主会话 id；无会话为 null）',
           ),
         },
         additionalProperties: false as const,
       },
-      render: () => text('已领取构建规程与本回合任务（全文随结果返回，照此执行）'),
+      // render = 模型可见内容（dsh-tools 契约：output.render 产出 Native/
+      // model content，presentResult 才是用户卡片）——规程与快照必须在这里
+      // 全文进模型上下文（2026-09-10 用户实测：render 只回一行占位文案时
+      // 模型拿不到 turn/snapshot，转而去读文件、误判无会话）。
+      render: (_a, v) =>
+        text(
+          `【构建规程】\n${v.guide}\n\n【本回合任务】turn=${v.turn}\n【会话快照】${v.snapshot}`,
+        ),
     },
-    // 静默呈现（用户迭代 2026-09-10）：规程与快照只进模型上下文——默认卡
-    // 会把整包渲染成大 JSON 行铺进对话，这里收敛为一行。
+    // 用户卡片静默呈现：规程与快照全文只进模型上下文，对话卡片收敛为一行，
+    // 不把整包大 JSON 铺进用户视野。
     presentCall: () => ({ card: 'generic' as const, title: '领取构建规程' }),
     presentResult: (_args, result) => {
       if (result.isError) return undefined;
@@ -620,11 +537,13 @@ export function createCaptainTools(
     },
     // 无状态只读：纪律单一来源 = persona 常量（与子代理系统段同文）；turn
     // 来自宿主派发/唤醒时写的 wakeKind（旧会话无字段回退 start 受理语义）；
-    // snapshot 只投影 request/stepsDone/draft/interview（popFailed/routed 等
-    // 路由痕迹不外溢）。成员被拒见本工具。
+    // snapshot 投影宿主管理的会话字段（status/step/request/stepsDone/draft/
+    // interview/parentSessionId——子代理自己不读状态文件，一切经本工具）。
+    // 成员被拒见本工具。
     execute: async (_args, exec) => {
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
-      const session = readBuildSession(stateRootOf(env));
+      const root = stateRootOf(env);
+      const session = readBuildSession(root);
       return {
         ok: true as const,
         guide: ROLE_BUILDER_CHILD_PERSONA,
@@ -633,6 +552,8 @@ export function createCaptainTools(
           session === null
             ? null
             : {
+                status: session.status,
+                step: session.step,
                 request: session.request ?? '',
                 stepsDone: session.stepsDone ?? [],
                 draft: session.draft,
@@ -645,6 +566,7 @@ export function createCaptainTools(
                           ? { answers: session.interview.answers }
                           : {}),
                       },
+                parentSessionId: readBuildParentSession(root),
               },
         ),
       };
@@ -753,107 +675,6 @@ export function createCaptainTools(
         step: latest !== null ? latest.step : session.step,
         waitedSeconds: Math.round((Date.now() - startedAt) / 1000),
       };
-    },
-  });
-
-  const interviewAnswerTool = defineTool({
-    name: 'eteams_interview_answer',
-    description:
-      '提交意图访谈答案（docs/19.16/19.18）：弹出访谈的对话（主对话或被中转的成员会话）均可提交——用户经 ask_user_question 选择框或对话文本回复作答后，把答案写入构建会话并 followup 唤醒持续构建子代理起草（构建父由宿主按会话侧车定位，调用者无须是父会话）。answers 与会话里的问题一一对应（id=问题 id，choice=所选项 label，多选以「、」连接）。',
-    parameters: {
-      answers: {
-        type: 'array' as const,
-        required: true as const,
-        description: '答案列表：[{id: 问题id, choice: 所选项文案}]',
-        items: {
-          type: 'object' as const,
-          properties: {
-            id: str('问题唯一 id'),
-            choice: str('所选项文案（多选以「、」连接）'),
-          },
-          additionalProperties: false,
-        },
-      },
-    },
-    output: {
-      schema: {
-        type: 'object' as const,
-        properties: {
-          ok: bool('是否成功'),
-          status: str('会话状态'),
-          step: str('当前步骤'),
-        },
-        additionalProperties: false as const,
-      },
-      render: (_a, v) => text(`访谈答案已提交：${v.status} · ${v.step}`),
-    },
-    execute: async (args, exec) => {
-      const env = envForAgent(config, runtime, exec.agent, exec.signal);
-      if (!exec.agent) throw new ETeamsError('无法识别调用者（exec.agent 缺失）');
-      const answers = (Array.isArray(args.answers) ? args.answers : [])
-        .filter((a): a is { id: string; choice: string } => {
-          const o = a as Record<string, unknown>;
-          return (
-            typeof o.id === 'string' &&
-            o.id !== '' &&
-            typeof o.choice === 'string' &&
-            o.choice !== ''
-          );
-        })
-        .map((a) => ({ id: a.id, choice: a.choice }));
-      if (answers.length === 0) throw new ETeamsError('answers 不能为空');
-      const root = stateRootOf(env);
-      // 真父定位（19.18 答案回流配套）：调用者可能是被中转的成员代理——
-      // followup 必须以侧车记录的构建父（主对话）为 parent，与面板 interview
-      // 路由同口径。用调用者当父：成员调用时 lineage 不符 → 冷恢复重建把
-      // 构建子代理改挂到成员会话下（拓扑损坏）。父不在线时诚实报错（答案
-      // 未保存 + 指引面板），绝不重建错挂。
-      const parentSessionId = readBuildParentSession(root);
-      if (parentSessionId === null) {
-        throw new ETeamsError('构建父会话未记录，答案未保存——请到面板「成员创建页」作答或重新发起构建');
-      }
-      const parent = (env.ctx as unknown as RuntimeContext).agents?.get(parentSessionId);
-      if (parent === undefined) {
-        throw new ETeamsError(
-          `构建父会话（${parentSessionId.slice(0, 8)}…）当前不在线——答案未保存，请稍后重试或到面板「成员创建页」作答`,
-        );
-      }
-      const session = await answerBuildInterview(root, answers);
-      // 同步统一问答单（v11）：该访谈若经统一路由落了 ask_questions 行，一并
-      // 回收——面板「待问答」徽标不再悬挂；已被 eteams_ask_answer 先回收时
-      // 静默跳过（构建桥接/面板路由/对话工具三入口幂等，先提交者胜）。
-      try {
-        const pendingRow = readPendingAsksBySessionSync(root, session.builderChildId ?? '').at(-1);
-        if (pendingRow !== undefined) {
-          answerAskSync(
-            root,
-            pendingRow.askId,
-            answers.map((a) => ({ id: a.id, selected: a.choice })),
-          );
-        }
-      } catch {
-        // 已答过/无问答单（旧会话/面板旧路径）：忽略。
-      }
-      // 唤醒同一持续构建子代理续聊（parent=侧车定位的构建父；followup 失败
-      // 会冷恢复重建，见 builderPhases.wakeBuilderChild；同轮答案双入口竞态
-      // 由会话落盘的 builderWakeKey 去重）。fire-and-forget：返回值不阻塞
-      // 工具应答，失败走 logger；唤醒与重建都失败则回滚成 cancelled，给
-      // 用户留「继续构建」的可读出路。
-      void wakeBuilderChild({
-        ctx: env.ctx,
-        config,
-        parent,
-        stateRoot: root,
-        kind: 'continue',
-        logger: env.ctx.logger,
-        onSpawnFailure: () => {
-          void cancelBuildSession(
-            stateRootOf(env),
-            '构建唤醒失败——可稍后点「继续构建」重试',
-          ).catch(() => undefined);
-        },
-      });
-      return { ok: true as const, status: session.status, step: session.step };
     },
   });
 
@@ -1063,6 +884,23 @@ export function createCaptainTools(
             : {}),
         });
       } else {
+        // 锁定 + 增补守卫（用户迭代 2026-09-10）：本对话已有进行中的主任务
+        // 就不再开新容器——band 是软约束，这里是硬兜底（模型忘了带 taskId
+        // 或无视 band 时给出可执行出路）。终态容器不拦：项目收口后的新大
+        // 请求自然开新主任务。
+        const freshBefore = await readTeam(stateRootOf(env), caller.team.id);
+        // env.sessionId 缺省（无会话上下文的调用）按无锚定处理：'' 在判据里
+        // 恒返回 undefined，不误拦面板等无会话路径。
+        const anchored =
+          freshBefore !== undefined ? anchoredMainTaskOf(freshBefore, env.sessionId ?? '') : undefined;
+        if (anchored !== undefined) {
+          throw new ETeamsError(
+            `本对话已有进行中的主任务 #${anchored.id}「${anchored.subject}」——不要再另建主任务`,
+            caller.team.hasLeader
+              ? `新请求用 eteams_dispatch_captain（taskId=${anchored.id}，message=用户原话）转交领队，由领队在主任务下增补小任务`
+              : `新请求先问询，然后 eteams_create_task（parentTaskId=${anchored.id}）在主任务下增补小任务`,
+          );
+        }
         task = await createTask(
           env,
           who,
@@ -1580,7 +1418,6 @@ export function createCaptainTools(
     buildGuideTool,
     buildWaitTool,
     buildDispatchTool,
-    interviewAnswerTool,
     removeMemberTool,
     updateMemberTool,
     submitTaskTool,

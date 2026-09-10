@@ -42,7 +42,6 @@ export interface MemberView {
   /** 工号 (docs/21): host 发格式化显示串（`ET-0001` style）；null for legacy. */
   employeeId: string | null;
   role: string;
-  status: string;
   /** 模型路线（docs/35 §3#5）：空串 = 会话默认（用户迭代 2026-09-04）。 */
   model: string;
   /**
@@ -54,7 +53,6 @@ export interface MemberView {
   currentTaskId: number | null;
   currentAttemptId: number | null;
   childId: string | null;
-  removed: boolean;
   /** Pre-generated avatar pair (docs/14); null for legacy members. */
   avatar: { seed: number; salt: number } | null;
   /**

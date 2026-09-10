@@ -1,33 +1,22 @@
 /**
  * prefillComposer 分流单测（2026-09-10 用户报告「整页团队页弹窗里点填充，
- * 对话输入框没内容」）：根因是整页团队页（teamsPanel.TeamsOverlay）里的
- * ETeamsView 不吃会话标准 kit、拿不到 inputActions，旧逻辑据此直接退化
- * 剪贴板。修复三处：① 分流判据——模拟键入路径并不依赖 setDraft（机器写入
- * 由 composer 自己的 onChange 完成），无实参时看「DOM 里有没有可写的
- * textarea」；② 捕获桥——TeamsButton 随 composer 工具行挂载时登记一份
- * inputActions（模块级单例），整页弹窗里的 prefill 按「实参 → 捕获」回退
- * 解析；③ 捕获写路直接落规范模板（带空格）——弹窗 composer 是未开始 hero
- * 的锁定态，claim 舞蹈的合成事件进不去，粘连 claim form 会被原样发出、
- * 命令名解析失败（第二轮用户反馈「填充后没有调用到插件」）。
- * node 环境无真 DOM，用最小 document/window 桩钉决策树；键入舞蹈本身
+ * 对话输入框没内容」→ 后续「填充后没有调用到插件」「又坏了」三轮迭代）：
+ * 最终形态——所有 kit 写路（槽位实参 / 捕获桥）统一用官方 setDraft 直写
+ * 规范模板（带空格、回车即派发）。早期的「粘连 claim form + 合成空格键」
+ * 舞蹈彻底废除：claim 走斜杠决策表，合成事件下终态不可控（粘连文本被
+ * 原样发出、或 claim 管线消费 token 后草稿被清空）。
+ * node 环境无真 DOM，用最小 document/window 桩钉决策树；键入兜底路径
  * （原生 setter + input 事件）依赖浏览器全局，桩下静默降级不影响结果位。
  *
  * @module dsh-eteams/tests/composerPrefill
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  ADD_PEOPLE_COMMAND,
   ADD_PEOPLE_TEMPLATE,
   captureInputActions,
   peekCapturedInputActions,
   prefillComposer,
-  type PrefillOutcome,
 } from '../src/client/lib/addPeople';
-
-/** claim form：/eteam 与参数粘连（空格由 space-claim 键事件补回）——仅
- * 槽位写路（对话内页签）使用；捕获桥写路直接落规范模板。 */
-const CLAIM_FORM = ADD_PEOPLE_TEMPLATE.slice(0, 1 + ADD_PEOPLE_COMMAND.length) +
-  ADD_PEOPLE_TEMPLATE.slice(2 + ADD_PEOPLE_COMMAND.length);
 
 /** 最小可写 textarea 桩（withComposerTextarea 的筛选面足够）。 */
 const fakeTextarea = (overrides: { disabled?: boolean; readOnly?: boolean } = {}) =>
@@ -69,52 +58,38 @@ describe('prefillComposer 分流（无 inputActions：整页团队页场景）',
   });
 });
 
-describe('prefillComposer 分流（有 inputActions：对话内页签场景）', () => {
-  it('setDraft 收到 claim form，结果 set', () => {
+describe('prefillComposer kit 写路（槽位实参与捕获桥同归：直写规范模板）', () => {
+  it('槽位实参：setDraft 收到规范模板（带空格），结果 set', () => {
     const setDraft = vi.fn();
-    const outcome: PrefillOutcome = prefillComposer({ setDraft });
-    expect(outcome).toBe('set');
+    expect(prefillComposer({ setDraft })).toBe('set');
     expect(setDraft).toHaveBeenCalledTimes(1);
-    expect(setDraft).toHaveBeenCalledWith(CLAIM_FORM);
-  });
-});
-
-describe('inputActions 捕获桥（整页弹窗的官方写路：直接落规范模板）', () => {
-  let unregister: (() => void) | null = null;
-  afterEach(() => {
-    // 捕获是模块级单例：每用例自清，防同文件内串捕获（vitest 按文件隔离，
-    // 文件内共享模块实例）。
-    unregister?.();
-    unregister = null;
-  });
-
-  it('capture 后 prefill(undefined)：captured 的 setDraft 收到规范模板（带空格）', () => {
-    const setDraft = vi.fn();
-    unregister = captureInputActions({ setDraft });
-    // 无 DOM 桩：composerDraft() 静默空串跳过覆盖确认，键入舞蹈静默降级。
-    expect(prefillComposer(undefined)).toBe('set');
-    expect(setDraft).toHaveBeenCalledTimes(1);
-    // 2026-09-10 用户反馈「填充后没有调用到插件」：弹窗 composer 锁定态下
-    // claim 不可能完成，粘连 claim form 会被原样发出——捕获桥必须直接写
-    // 规范模板，回车即派发。
     expect(setDraft).toHaveBeenCalledWith(ADD_PEOPLE_TEMPLATE);
+  });
+
+  it('捕获桥（弹窗场景）：同样直写规范模板，不走粘连 claim form', () => {
+    const setDraft = vi.fn();
+    const unregister = captureInputActions({ setDraft });
+    try {
+      // 无 DOM 桩：composerDraft() 静默空串跳过覆盖确认，键入兜底静默降级。
+      expect(prefillComposer(undefined)).toBe('set');
+      expect(setDraft).toHaveBeenCalledTimes(1);
+      expect(setDraft).toHaveBeenCalledWith(ADD_PEOPLE_TEMPLATE);
+    } finally {
+      unregister();
+    }
+    expect(peekCapturedInputActions()).toBeUndefined();
   });
 
   it('capture + 只有禁用 textarea（无会话 hero）→ 仍走 setDraft 官方写路', () => {
     const setDraft = vi.fn();
-    unregister = captureInputActions({ setDraft });
-    stubDom([fakeTextarea({ disabled: true })]);
-    expect(prefillComposer(undefined)).toBe('set');
-    expect(setDraft).toHaveBeenCalledWith(ADD_PEOPLE_TEMPLATE);
-  });
-
-  it('注销后回落 DOM 分流（不再动 captured 的 setDraft）', () => {
-    const setDraft = vi.fn();
-    captureInputActions({ setDraft })();
-    expect(peekCapturedInputActions()).toBeUndefined();
-    stubDom([fakeTextarea()]);
-    expect(prefillComposer(undefined)).toBe('set');
-    expect(setDraft).not.toHaveBeenCalled();
+    const unregister = captureInputActions({ setDraft });
+    try {
+      stubDom([fakeTextarea({ disabled: true })]);
+      expect(prefillComposer(undefined)).toBe('set');
+      expect(setDraft).toHaveBeenCalledWith(ADD_PEOPLE_TEMPLATE);
+    } finally {
+      unregister();
+    }
   });
 
   it('capture(undefined)（kit 缺失的挂载）返回 no-op 且不清既有捕获', () => {
@@ -128,5 +103,14 @@ describe('inputActions 捕获桥（整页弹窗的官方写路：直接落规范
       keep();
     }
     expect(peekCapturedInputActions()).toBeUndefined();
+  });
+
+  it('注销后回落 DOM 兜底（不再动 captured 的 setDraft）', () => {
+    const setDraft = vi.fn();
+    captureInputActions({ setDraft })();
+    expect(peekCapturedInputActions()).toBeUndefined();
+    stubDom([fakeTextarea()]);
+    expect(prefillComposer(undefined)).toBe('set');
+    expect(setDraft).not.toHaveBeenCalled();
   });
 });

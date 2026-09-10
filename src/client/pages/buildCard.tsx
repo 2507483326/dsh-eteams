@@ -74,9 +74,13 @@ const BUILD_VIEW_META: Record<
   orphanConfirmed: { text: '本次构建已完成入库——新构建请发起 /eteam', spin: false, stepFallback: '' },
   orphanEnded: { text: '本次构建已结束（会话已被新构建取代）', spin: false, stepFallback: '' },
   loading: { text: '连接构建会话…', spin: false, stepFallback: '' },
-  // 访谈未答 = 子代理停驻等待（eteams_build_wait，docs/19.17.1）——不是
-  // 卡死，别转圈装忙。作答入口在主会话（本卡片所在会话）的 ask_user_question 选择框。
-  activeInterview: { text: '意图访谈待作答——在本会话作答后自动续跑', spin: false, stepFallback: '' },
+  // 访谈未答 = 构建子代理阻塞在问答弹窗上（2026-09-10 统一问答，弹窗弹在
+  // 发起构建的主对话）——不是卡死，别转圈装忙。
+  activeInterview: {
+    text: '意图访谈待作答——问答弹窗已弹在本对话，作答后自动续跑',
+    spin: false,
+    stepFallback: '',
+  },
   building: { text: '角色构建师工作中 · ', spin: true, stepFallback: '准备中' },
   awaitingConfirm: { text: '草稿就绪——待你确认入库', spin: true, stepFallback: '' },
   confirmed: { text: '构建完成，成员已入库——点击查看详情', spin: false, stepFallback: '' },

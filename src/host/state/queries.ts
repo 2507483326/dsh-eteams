@@ -59,8 +59,6 @@ export interface BoardMemberRow {
   name: string;
   /** 班底工号（v7 身份键；孤儿副本行 NULL——按名兜底成组）。 */
   employeeId: number | null;
-  /** 聚合成员状态（任一实例行 working 即 working，其次 paused）。 */
-  status: string;
   /** 该成员当前承担的活跃任务数（wait/start/paused/wait_decision/wait_user）。 */
   activeTasks: number;
   /** 是否领队（v8 按标识：组内含 is_leader=1 的行——不再按主持行判据）。 */
@@ -193,21 +191,20 @@ export function boardTeam(db: DatabaseSync, teamId: number): BoardTeamSummary {
     ...groupProgress(db, teamId, Number(p.task_id)),
   }));
   // Q5（带 tm.team_id 过滤）：v7 副本行建任务即全员在、且允许同名成员——
-  // 按工号成组（孤儿副本无号按名兜底）：状态取「working 优先，其次 paused，
-  // 再次首行」；活跃任务数与行解耦：按副本行 id 归属（attempts.task_member_id）
-  // 对活跃状态任务一次分组计数，成组行直接查表——若按名字统计，同名成员会
-  // 互相放大。领队判定按 is_leader 标识（v8：领队行=1，不再按主持行判据）。
+  // 按工号成组（孤儿副本无号按名兜底）；活跃任务数与行解耦：按副本行 id
+  // 归属（attempts.task_member_id）对活跃状态任务一次分组计数，成组行直接
+  // 查表——若按名字统计，同名成员会互相放大。领队判定按 is_leader 标识
+  // （v8：领队行=1，不再按主持行判据）。
   const memberRows = db
     .prepare(
-      'SELECT tm.task_member_id AS rid, tm.employee_id AS eid, tm.name, tm.status, tm.is_leader AS isldr ' +
+      'SELECT tm.task_member_id AS rid, tm.employee_id AS eid, tm.name, tm.is_leader AS isldr ' +
         'FROM task_members tm ' +
-        'WHERE tm.team_id = ?1 AND tm.status <> ?2 ORDER BY tm.task_member_id',
+        'WHERE tm.team_id = ?1 ORDER BY tm.task_member_id',
     )
-    .all(teamId, 'removed') as Array<{
+    .all(teamId) as Array<{
     rid: number;
     eid: number | null;
     name: string;
-    status: string;
     isldr: number;
   }>;
   const activeByRow = new Map<number, number>();
@@ -232,14 +229,10 @@ export function boardTeam(db: DatabaseSync, teamId: number): BoardTeamSummary {
       members.push({
         name: row.name,
         ...(row.eid !== null ? { employeeId: Number(row.eid) } : { employeeId: null }),
-        status: row.status,
         activeTasks: activeByRow.get(Number(row.rid)) ?? 0,
         isLeader: row.isldr === 1,
       });
     } else {
-      if (row.status === 'working' && existing.status !== 'working') existing.status = 'working';
-      else if (row.status === 'paused' && existing.status !== 'working' && existing.status !== 'paused')
-        existing.status = 'paused';
       if (row.isldr === 1) existing.isLeader = true;
       existing.activeTasks += activeByRow.get(Number(row.rid)) ?? 0;
     }

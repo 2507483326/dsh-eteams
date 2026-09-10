@@ -28,13 +28,13 @@
 | system/sessionPersona.ts | 角色接管 band 文本组装、neutralizeInterpolation | runtime/sessionPersona.ts 薄壳 |
 | system/sessionTeam.ts | 团队绑定 band 文本组装 | runtime/sessionTeam.ts 薄壳 |
 | spawn/captainChild.ts | 领队子代理人格 + 手册拼装 | tools/captainDispatch.ts |
-| spawn/builderPhases.ts | 构建回合提示词（全相位同一「第一步领规程」简短文本——任务与快照经 eteams_build_guide 获取，docs/19.16 持续构建子代理） | runtime/builderPhases.ts |
+| spawn/builderPhases.ts | 构建回合提示词（全相位同一句「身份 + 调 eteams_build_guide 领规程」——任务/快照/父会话等所需内容全部经规程与工具面获取，docs/19.16 持续构建子代理） | runtime/builderPhases.ts |
 | spawn/member.ts | 成员欢迎包（规则 + 工具表） | runtime/members.ts |
 | handoff/mails.ts | 指派 / 汇报 / 婉拒 / 挂起 / 取消模板 | runtime/assignment.ts、runtime/members.ts、runtime/docs.ts、tools/memberTools.ts |
 | personas/framework.ts | 人设框架（字段渲染 / 合并 / 摘要 / 回退执行提示） | state/、runtime/、prompts 内部 |
 | personas/presets.ts | ROLE_TEMPLATES、PRESET_MEMBER_ROLES、defaultPersonaFor | runtime/roster.ts、runtime/teamOps.ts、state/import.ts |
 | personas/captain.ts | 领队人设默认值 + 覆盖文件合成 | runtime/webui.ts、runtime/roster.ts、state/import.ts、tools/captainDispatch.ts、host/index.ts |
-| personas/builder.ts | 角色构建师预设 + 持续构建子代理人格（构建纪律全文，经 persona 系统段注入；回合提示词只指路不复述） | runtime/builderPhases.ts、personas/presets.ts |
+| personas/builder.ts | 角色构建师预设 + 持续构建子代理人格（构建纪律全文 = 回合决策表 + 可用接口清单，经 persona 系统段注入 + eteams_build_guide 的 render 模型通道同文返回；回合提示词只指路不复述） | runtime/builderPhases.ts、personas/presets.ts |
 | personas/roleDocs.ts | ROLE_DOCS 逐字角色手册（scripts/gen-role-docs.cjs 生成） | personas/presets.ts、personas/builder.ts、personas/captain.ts |
 | steering/interview.ts | 访谈发布唤醒主对话的 steer 文本 | tools/captainTools.ts |
 | steering/dispatch.ts | dispatch 受理确认 + 领队子代理首轮 prompt 组装 | tools/captainDispatch.ts |

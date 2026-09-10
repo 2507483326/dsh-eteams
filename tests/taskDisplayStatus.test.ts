@@ -4,13 +4,11 @@
  * retryCount 并入 detail、未知态中性回退、isStartable/isTerminal 开始钮
  * 状态窗口（M3 收拢三处开始钮判据）与 isGroupStartable（创建中容器不渲染
  * 开始钮——与宿主 startGroupTask 同闸镜像）、group 汇总优先级
- * （error > doing > waiting > done 全完成 null）与全部 done → null；
- * 成员五态词表/tone 与 13 态旧值兜底。
+ * （error > doing > waiting > done 全完成 null）与全部 done → null。
  */
 import { describe, expect, it } from 'vitest';
 import {
   ATTEMPT_STATUS_LABELS,
-  MEMBER_STATUS_LABELS,
   STATUS_GROUPS,
   STATUS_LABELS,
   displayStatusOf,
@@ -18,7 +16,6 @@ import {
   isGroupStartable,
   isStartable,
   isTerminal,
-  memberTone,
 } from '../src/client/features/tasks/taskDisplayStatus';
 
 describe('displayStatusOf（11 态→展示态全表）', () => {
@@ -127,7 +124,7 @@ describe('displayStatusOf（11 态→展示态全表）', () => {
 });
 
 describe('STATUS_LABELS（11 态精确词表）', () => {
-  it('11 态齐全且值与词表一致（成员状态 pill 不再复用任务词表）', () => {
+  it('11 态齐全且值与词表一致（用户迭代 2026-09-10：成员没有状态，任务词表独占）', () => {
     expect(Object.keys(STATUS_LABELS).sort()).toEqual(
       [
         'cancelled',
@@ -151,38 +148,11 @@ describe('STATUS_LABELS（11 态精确词表）', () => {
   });
 });
 
-describe('ATTEMPT_STATUS_LABELS / MEMBER_STATUS_LABELS（词表搬家后口径）', () => {
+describe('ATTEMPT_STATUS_LABELS（词表搬家后口径）', () => {
   it('尝试六态词表齐全', () => {
     expect(Object.keys(ATTEMPT_STATUS_LABELS).sort()).toEqual(
       ['failed', 'paused', 'pending_accept', 'revoked', 'running', 'succeeded'].sort(),
     );
-  });
-
-  it('成员五态词表齐全（含 removed）', () => {
-    expect(Object.keys(MEMBER_STATUS_LABELS).sort()).toEqual(
-      ['paused', 'ready', 'removed', 'staged', 'working'].sort(),
-    );
-    expect(MEMBER_STATUS_LABELS.staged).toBe('未启动');
-    expect(MEMBER_STATUS_LABELS.removed).toBe('已移出');
-  });
-});
-
-describe('memberTone（成员状态五档 + 旧值兜底）', () => {
-  it('working→info、ready→ok、paused→warn、staged/removed→muted', () => {
-    expect(memberTone('working')).toBe('info');
-    expect(memberTone('ready')).toBe('ok');
-    expect(memberTone('paused')).toBe('warn');
-    expect(memberTone('staged')).toBe('muted');
-    expect(memberTone('removed')).toBe('muted');
-  });
-
-  it('旧快照值 busy/idle/done/failed/error 保留兜底', () => {
-    expect(memberTone('busy')).toBe('info');
-    expect(memberTone('idle')).toBe('ok');
-    expect(memberTone('done')).toBe('ok');
-    expect(memberTone('failed')).toBe('err');
-    expect(memberTone('error')).toBe('err');
-    expect(memberTone('unknown')).toBe('muted');
   });
 });
 

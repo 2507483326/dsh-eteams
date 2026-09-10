@@ -8,11 +8,11 @@
  * @module dsh-eteams/client/pages/team/memberCards
  */
 import type { ReactNode } from 'react';
+import Check from 'lucide-react/dist/esm/icons/check.mjs';
 import type { CaptainView, MemberView } from '../../lib/monitor';
 import type { ModelCatalogState } from '../../lib/modelCatalog';
 import { catalogRowByModel } from '../../lib/modelCatalog';
 import { cn } from '../../lib/cn';
-import { ACTIVITY_DOT } from '../../lib/status';
 import { Avatar } from '../../features/avatar/avatar';
 import { DeleteButton } from '../../components/deleteButton';
 import { ModelRoutePicker } from './modelRoutePicker';
@@ -131,26 +131,30 @@ export function LeaderCard({
 }
 
 /** 成员卡（用户迭代 2026-09 七）：与领队卡同款单行、竖排一行一个——头像 +
- * 名字（+ 子代理活动点）+ 工号 · 角色，右侧模型选择（默认「会话默认」，与
- * 领队一致）+ 移出团队。状态 pill（staged 等）与「汇报记录」按钮已去掉
- * （用户迭代 2026-09 七）；模型目录与对话一致——二级菜单内多档 effort 模型
- * 带「推理等级」子面板。用户迭代 2026-09 四：点卡片（头像/名字区）进成员
- * 详情页。团队可以没有领队：领队被移出时这里只剩成员行。 */
+ * 名字 + 工号 · 角色，右侧模型选择（默认「会话默认」，与领队一致）+ 移出
+ * 团队。状态 pill（staged 等）、「汇报记录」按钮与子代理活动点已去掉（用户
+ * 迭代 2026-09 七 / 2026-09-10「成员没有状态」——成员只是工牌持有者，在忙
+ * 什么看任务）；模型目录与对话一致——二级菜单内多档 effort 模型带「推理
+ * 等级」子面板。用户迭代 2026-09 四：点卡片（头像/名字区）进成员详情页。
+ * 团队可以没有领队：领队被移出时这里只剩成员行。
+ * 用户迭代 2026-09-10 多选删除：selecting 模式下卡片行头出勾选框、点击改
+ * 为勾选/取消（不进详情），右侧模型菜单与移出钮隐藏——批量动作收口在
+ * teamDetailPage 的选择操作条。 */
 export function MemberCard({
   member: m,
   catalog,
-  activity,
   onRemove,
   onModelChange,
   onEffortChange,
   modelSaving,
   onOpenDetail,
+  selecting,
+  selected,
+  onToggleSelect,
 }: {
   member: MemberView;
   /** 会话模型目录状态（数据 + loading/failed/reload，对话选择器同款）。 */
   catalog: ModelCatalogState;
-  /** Subagent activity (docs/20.4 P4): 'running' | 'inactive' | undefined. */
-  activity?: string;
   // v7 R3：数据回调携带整行（定位键 = 行内工号，同名成员各归各）。
   onRemove?: (member: MemberView) => void;
   /** 模型选择（右侧二级菜单）：行 id=`provider/model`，'inherit' = 会话默认。 */
@@ -161,35 +165,61 @@ export function MemberCard({
   modelSaving?: boolean;
   /** 点卡片（头像/名字区）进成员详情页（路由按名，纯导航不带数据语义）。 */
   onOpenDetail?: (name: string) => void;
+  /** 多选模式（用户迭代 2026-09-10）：行头勾选框、点击改勾选。 */
+  selecting?: boolean;
+  /** 多选模式下本卡是否已勾选。 */
+  selected?: boolean;
+  /** 多选模式下点击卡片回调（整行携带，定位键 = 行内工号）。 */
+  onToggleSelect?: (member: MemberView) => void;
 }): ReactNode {
   const openDetail = (): void => {
     if (onOpenDetail !== undefined) onOpenDetail(m.name);
+  };
+  // 多选模式下整卡点击 = 勾选切换；普通模式保持进详情。
+  const onCardClick = (): void => {
+    if (selecting === true) onToggleSelect?.(m);
+    else openDetail();
   };
   // 快照路线 v9 起带 provider——菜单内部仍按 `provider/model` 行值渲染选中
   // 态，provider 优先用快照声明的（同 id 模型跨提供方时按 id 反查会命中错误
   // 条目）；旧快照缺省回退目录反查；会话默认（model 空串）回 inherit 哨兵。
   const routeRow = catalogRowByModel(catalog.catalog, m.model);
   const inherit = m.model === '';
-  // 子代理活动点查表（lib/status.ts ACTIVITY_DOT，M4 双三元收拢）：键只算
-  // 名——非 running 一律按 inactive 档渲染（与原三元回落同口径）。
-  const activityDot = activity === 'running' ? ACTIVITY_DOT.running : ACTIVITY_DOT.inactive;
   return (
-    <div className={MEMBER_CARD_CLASS}>
+    <div
+      className={cn(
+        MEMBER_CARD_CLASS,
+        selected === true && 'border-primary bg-primary/5',
+      )}
+    >
       <div className="flex items-center gap-2.5">
+        {/* 可点区（头像/名字 + 多选勾选框）：多选模式整行再无右侧控件，点击
+        即全卡；普通模式右侧行尾控件在可点区外，点击不串进详情。 */}
         <div
           className={cn(
             'flex min-w-0 flex-1 items-center gap-2.5 rounded-lg',
-            onOpenDetail !== undefined && 'cursor-pointer transition-colors hover:bg-muted/60',
+            (selecting === true || onOpenDetail !== undefined) &&
+              'cursor-pointer transition-colors hover:bg-muted/60',
           )}
-          onClick={openDetail}
-          title={onOpenDetail !== undefined ? '进入成员详情' : undefined}
+          onClick={onCardClick}
+          title={selecting === true ? (selected === true ? '取消勾选' : '勾选该成员') : '进入成员详情'}
         >
+          {selecting === true && (
+            /* 多选勾选框（用户迭代 2026-09-10）：行头方框，勾中实心品牌色。 */
+            <span
+              className={cn(
+                'flex h-4 w-4 flex-none items-center justify-center rounded border border-solid',
+                selected === true
+                  ? 'border-primary bg-primary text-primary-foreground'
+                  : 'border-muted-foreground/40 text-transparent',
+              )}
+            >
+              <Check className="h-3 w-3" />
+            </span>
+          )}
           <Avatar name={m.name} seed={m.avatar?.seed} salt={m.avatar?.salt} />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
-              {activity !== undefined && (
-                <span className={activityDot.className} title={activityDot.title} />
-              )}
               {m.name}
             </div>
             <div className={cn(MUTED_CLASS, 'mt-px')}>
@@ -198,7 +228,8 @@ export function MemberCard({
             </div>
           </div>
         </div>
-        {onModelChange !== undefined && (
+        {/* 多选模式下右侧控件（模型菜单/移出钮）让位，避免批量操作误触。 */}
+        {selecting !== true && onModelChange !== undefined && (
           <ModelRoutePicker
             catalogState={catalog}
             stored={
@@ -219,7 +250,9 @@ export function MemberCard({
           />
         )}
         {/* 移出团队（M7-4 收口 components/deleteButton，destructive 默认档）。 */}
-        {onRemove !== undefined && <DeleteButton label="移出团队" onClick={() => onRemove(m)} />}
+        {selecting !== true && onRemove !== undefined && (
+          <DeleteButton label="移出团队" onClick={() => onRemove(m)} />
+        )}
       </div>
     </div>
   );

@@ -57,16 +57,11 @@ function leaderRow(teamId: number): TaskMemberRecord {
     employeeId: null,
     sessionId: '',
     roleId: null,
-    status: 'ready',
     createdAt: 1,
   };
 }
 
-function memberRow(
-  teamId: number,
-  sessionId: string,
-  status: TaskMemberRecord['status'],
-): TaskMemberRecord {
+function memberRow(teamId: number, sessionId: string): TaskMemberRecord {
   return {
     id: 0,
     teamId,
@@ -76,7 +71,6 @@ function memberRow(
     employeeId: null,
     sessionId,
     roleId: null,
-    status,
     createdAt: 1,
   };
 }
@@ -89,7 +83,6 @@ function seedTeam(
     name?: string;
     leaderSession?: string;
     memberSession?: string;
-    memberStatus?: TaskMemberRecord['status'];
   } = {},
 ): TeamState {
   const root = joinPath(ws, '.eteams');
@@ -118,7 +111,7 @@ function seedTeam(
     });
   }
   if (opts.memberSession !== undefined) {
-    taskMembers.push(memberRow(teamId, opts.memberSession, opts.memberStatus ?? 'ready'));
+    taskMembers.push(memberRow(teamId, opts.memberSession));
   }
   const state: TeamState = {
     id: teamId,
@@ -187,11 +180,6 @@ describe('locateAgentTeam (registry-wide, binding → captain → member)', () =
     seedTeam(wsB, { memberSession: 'm-1' });
     const located = locateAgentTeam(config, ctxWithRegistry([wsA, wsB]), 'm-1', wsA);
     expect(located?.workspacePath).toBe(wsB);
-  });
-
-  it('excludes removed members', () => {
-    seedTeam(wsB, { memberSession: 'm-1', memberStatus: 'removed' });
-    expect(locateAgentTeam(config, ctxWithRegistry([wsA, wsB]), 'm-1', wsA)).toBeUndefined();
   });
 
   it('degrades to own-workspace-only without the registry service', () => {

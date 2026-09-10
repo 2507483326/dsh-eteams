@@ -14,7 +14,6 @@ import type { SessionId } from '@deepseek-ai/dsh-session';
 import type {
   Actor,
   MailMessage,
-  MemberStatus,
   ModelRouteSnapshot,
   TaskMemberRecord,
   TaskRecord,
@@ -113,7 +112,6 @@ export function ensureLeaderAnchorRow(
     name: rosterLeader.name,
     employeeId: rosterLeader.employeeId ?? null,
     sessionId: '',
-    status: 'ready',
     isLeader: true,
     createdAt: now,
   };
@@ -144,13 +142,11 @@ export function sameMemberOf(
   return a.name === b.name;
 }
 
-/** 成员引用按定位键过滤出的非 removed 副本行（含领队主持行）。 */
+/** 成员引用按定位键过滤出的副本行（含领队主持行）。 */
 function rowsByRef(team: TeamState, ref: string | number): TaskMemberRecord[] {
   const key = memberRefId(ref);
   return team.taskMembers.filter((r) =>
-    key.employeeId !== undefined
-      ? r.employeeId === key.employeeId && r.status !== 'removed'
-      : r.name === key.name && r.status !== 'removed',
+    key.employeeId !== undefined ? r.employeeId === key.employeeId : r.name === key.name,
   );
 }
 
@@ -168,8 +164,8 @@ export function findInstanceRow(
 }
 
 /**
- * 跨任务选行（§5#12）：非 removed、已起会话（session_id 非空）的最近活跃
- * 行。TaskMemberRecord 内存不带 update_time（docs/27 库列），以 createdAt/id
+ * 跨任务选行（§5#12）：已起会话（session_id 非空）的最近活跃行。
+ * TaskMemberRecord 内存不带 update_time（docs/27 库列），以 createdAt/id
  * 最大行近似「最近活跃」。
  */
 export function latestInstanceRow(
@@ -182,25 +178,13 @@ export function latestInstanceRow(
   return rows[0];
 }
 
-/** 在册判定：该成员（工号/名）名下存在非 removed 实例行（领队行同样算在册）。 */
+/** 在册判定：该成员（工号/名）名下存在实例行（领队行同样算在册）。 */
 export function requireMember(team: TeamState, ref: string | number): TaskMemberRecord {
   const rows = rowsByRef(team, ref);
   if (rows.length === 0) {
     throw new ETeamsError(`成员「${String(ref)}」不存在`, '用 eteams_team_status 查看在册成员');
   }
   return rows[rows.length - 1]!;
-}
-
-/**
- * 成员聚合状态（团队视图/看板口径）：任一实例行 working 即 working，其次
- * paused；没有实例行 = staged（只有班底行、未铺任务副本）。
- */
-export function memberStatusOf(team: TeamState, ref: string | number): MemberStatus {
-  const rows = rowsByRef(team, ref);
-  if (rows.length === 0) return 'staged';
-  if (rows.some((r) => r.status === 'working')) return 'working';
-  if (rows.some((r) => r.status === 'paused')) return 'paused';
-  return rows[0]!.status;
 }
 
 // --------------------------------------------------------------------------
@@ -236,7 +220,7 @@ export function rootTaskIdOf(task: Pick<TaskRecord, 'id' | 'parentId'>): number 
 
 /**
  * Wake one member: 按任务行快照/心跳派生的领队代理向该成员实例行的
- * sessionId 续投消息。staged（session_id 为空）不唤醒——邮件留在邮箱，
+ * sessionId 续投消息。未起会话（session_id 为空）不唤醒——邮件留在邮箱，
  * 起会话后随派发消息送达。
  */
 export async function wakeMember(

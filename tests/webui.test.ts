@@ -272,7 +272,7 @@ async function installFull(overrides: Partial<ETeamsResolvedConfig> = {}): Promi
 function childIdOf(teamId: number, name: string): string {
   const team = readTeam(teamId);
   const row = team.taskMembers
-    .filter((r) => r.name === name && r.sessionId !== '' && r.status !== 'removed')
+    .filter((r) => r.name === name && r.sessionId !== '')
     .at(-1);
   if (row === undefined) throw new Error(`成员 ${name} 还没有起会话`);
   return row.sessionId;
@@ -338,17 +338,12 @@ describe('TeamSnapshot builder (docs/35 §5 面板快照)', () => {
       role: string;
       currentTaskId: number | null;
       childId: string | null;
-      status: string;
       model: string | null;
-      removed: boolean;
     }>;
     expect(members.map((m) => m.name)).toEqual(['Alice', 'Bob']);
     expect(members[0]!.currentTaskId).toBe(t1);
-    expect(members[0]!.status).toBe('working');
     expect(members[0]!.childId).toMatch(/^sess-child-/);
     expect(members[0]!.employeeId).toMatch(/^ET-\d{4}$/);
-    expect(members[0]!.removed).toBe(false);
-    expect(members[1]!.status).toBe('staged');
 
     const tasks = snap.tasks as Array<{
       taskId: number;
@@ -547,8 +542,9 @@ describe('panel write routes (M5 first slice)', () => {
     // v7 决策 5：副本行建任务即有——无任务时不产团队级实例行。
     expect(fresh.taskMembers.filter((r) => r.name === 'Bob')).toHaveLength(0);
     const snap = teamSnapshot(fresh, workspace, config);
-    // 快照成员列表跳过领队卡 → [0] 就是 Bob（无实例行按 staged 展示）。
-    expect((snap.members as { name: string; status: string }[])[0]!.status).toBe('staged');
+    // 快照成员列表跳过领队卡 → [0] 就是 Bob（用户迭代 2026-09-10：成员没有
+    // 状态——只验名字在场）。
+    expect((snap.members as { name: string }[])[0]!.name).toBe('Bob');
   });
 
   it('pre-generates a roster avatar and the adopted member keeps a stable seed', async () => {
@@ -659,9 +655,9 @@ describe('panel write routes (M5 first slice)', () => {
     // 播种（GET /roster 即 ensurePresetMembers）：is_root 行默认 MD 空 + 提示简介。
     const seeded = await h.get('/eteams-api/roster');
     expect(seeded.code).toBe(200);
-    const system = json<{ members: { name: string; isRoot?: boolean; personaMd?: string; profile?: string }[] }>(
-      seeded.body,
-    ).members.find((m) => m.name === 'system');
+    const system = json<{
+      members: { name: string; isRoot?: boolean; personaMd?: string; profile?: string }[];
+    }>(seeded.body).members.find((m) => m.name === 'system');
     expect(system?.isRoot).toBe(true);
     expect(system?.personaMd).toBe('');
     expect(system?.profile).toContain('主对话注入');
@@ -795,7 +791,12 @@ describe('panel write routes (M5 first slice)', () => {
     expect(inherited.reasoningEffort).toBeUndefined();
     const snap = teamSnapshot(readTeam(teamId), workspace, config);
     const member = (
-      snap.members as { name: string; model: string; provider: string | null; reasoningEffort: string | null }[]
+      snap.members as {
+        name: string;
+        model: string;
+        provider: string | null;
+        reasoningEffort: string | null;
+      }[]
     ).find((m) => m.name === 'Nova')!;
     expect(member.model).toBe('');
     expect(member.provider).toBeNull();
@@ -1139,9 +1140,9 @@ describe('panel write routes (M5 first slice)', () => {
     const reset = await h.post(`/eteams-api/team/${teamId}/leader/model`, {});
     expect(reset.code).toBe(200);
     const state2 = await h.get('/eteams-api/state');
-    const team2 = json<{ teams: { teamId: number; captain: { model?: string; provider?: string | null } }[] }>(
-      state2.body,
-    ).teams.find((t) => t.teamId === teamId)!;
+    const team2 = json<{
+      teams: { teamId: number; captain: { model?: string; provider?: string | null } }[];
+    }>(state2.body).teams.find((t) => t.teamId === teamId)!;
     expect(team2.captain.model ?? '').toBe('');
     // 重置后 provider 一并清空（路线整体回会话默认）。
     expect(team2.captain.provider ?? null).toBeNull();
@@ -1173,19 +1174,72 @@ describe('panel write routes (M5 first slice)', () => {
 });
 
 describe('conversation task workflow (docs/26)', () => {
-  it('binds and clears the session team via POST /session-team (团队必须存在)', async () => {
+  it('binds, locks, unlocks on team deletion, and clears via /session-team (对话固定 1 团队)', async () => {
     const h = await installFull();
-    const created = await h.post('/eteams-api/team', { name: '绑定团队', sessionId: 'cap-conv' });
-    const teamId = json<{ teamId: number }>(created.body).teamId;
+    const createdA = await h.post('/eteams-api/team', {
+      name: '绑定团队甲',
+      sessionId: 'cap-conv',
+    });
+    const teamA = json<{ teamId: number }>(createdA.body).teamId;
+    // 乙队换一个领队会话建（createTeam：一个领队同时只带一个团队）。
+    const createdB = await h.post('/eteams-api/team', {
+      name: '绑定团队乙',
+      sessionId: 'cap-second',
+    });
+    const teamB = json<{ teamId: number }>(createdB.body).teamId;
+
+    // 绑定 + GET 对账回读（客户端挂载的真相源）。
     const bind = await h.post('/eteams-api/session-team', {
       sessionId: 'sess-a',
-      teamId: String(teamId),
+      teamId: String(teamA),
     });
     expect(bind.code).toBe(200);
+    const readback = await h.get('/eteams-api/session-team?sessionId=sess-a');
+    expect(readback.code).toBe(200);
+    expect(json<{ empty?: boolean; teamId?: string; name?: string }>(readback.body)).toEqual({
+      teamId: String(teamA),
+      name: '绑定团队甲',
+    });
+    // GET 未绑定会话 → empty。
+    const emptyRead = await h.get('/eteams-api/session-team?sessionId=sess-none');
+    expect(json<{ empty?: boolean }>(emptyRead.body)).toEqual({ empty: true });
+
+    // 同队重绑放行（刷新名字/时间，不 409）。
+    const rebind = await h.post('/eteams-api/session-team', {
+      sessionId: 'sess-a',
+      teamId: String(teamA),
+    });
+    expect(rebind.code).toBe(200);
+
+    // 锁定守卫：会话已绑定健在的甲队 → 换绑乙队 409（1 对话 1 团队）。
+    const locked = await h.post('/eteams-api/session-team', {
+      sessionId: 'sess-a',
+      teamId: String(teamB),
+    });
+    expect(locked.code).toBe(409);
+    expect(locked.body).toContain('绑定团队甲');
+    // GET 仍是甲队。
+    const stillA = await h.get('/eteams-api/session-team?sessionId=sess-a');
+    expect(json<{ teamId?: string }>(stillA.body).teamId).toBe(String(teamA));
+
+    // 逃生口：删除甲队 → 绑定随之清除 → 重绑乙队放行。
+    const del = await h.post(`/eteams-api/team/${teamA}/delete`, {});
+    expect(del.code).toBe(200);
+    const freed = await h.post('/eteams-api/session-team', {
+      sessionId: 'sess-a',
+      teamId: String(teamB),
+    });
+    expect(freed.code).toBe(200);
+    const nowB = await h.get('/eteams-api/session-team?sessionId=sess-a');
+    expect(json<{ teamId?: string; name?: string }>(nowB.body)).toEqual({
+      teamId: String(teamB),
+      name: '绑定团队乙',
+    });
+
     // 过期选择（团队已删）→ 404，不是静默绑上。
-    const bad = await h.post('/eteams-api/session-team', { sessionId: 'sess-a', teamId: 'ghost' });
+    const bad = await h.post('/eteams-api/session-team', { sessionId: 'sess-b', teamId: 'ghost' });
     expect(bad.code).toBe(404);
-    const blank = await h.post('/eteams-api/session-team', { sessionId: 'sess-a', teamId: '' });
+    const blank = await h.post('/eteams-api/session-team', { sessionId: 'sess-b', teamId: '' });
     expect(blank.code).toBe(400);
     const clear = await h.post('/eteams-api/session-team/clear', { sessionId: 'sess-a' });
     expect(clear.code).toBe(200);
@@ -1319,7 +1373,6 @@ describe('conversation task workflow (docs/26)', () => {
     const dialog = await h.get(`/eteams-api/team/${teamId}/member/Bob/dialog`);
     expect(dialog.code).toBe(200);
     const dialogBody = json<{
-      memberStatus: string;
       currentTaskId: number | null;
       items: unknown[];
     }>(dialog.body);
@@ -1466,6 +1519,11 @@ describe('conversation task workflow (docs/26)', () => {
     expect(childIdOf(teamId, 'Alice')).not.toBe('');
 
     // 全 ready 卡都无链：整体开始只回跳过清单（started=0，原因逐卡透出）。
+    // 锁定语义下先把第一个任务单落终态再开第二个（一个对话同时只有一个
+    // 进行中的主任务，docs/teamSessionLock）。
+    getDb(stateRoot())
+      .prepare('UPDATE task SET status = ? WHERE task_id = ?')
+      .run('completed', group);
     const group2 = (
       (await h.call!('eteams_submit_task', { subject: '主任务二' })) as { taskId: number }
     ).taskId;
@@ -1558,7 +1616,12 @@ describe('conversation task workflow (docs/26)', () => {
     expect(teamAfterSingle.tasks.find((t) => t.id === singleId)!.attempts[0]!.member).toBe('Bob');
 
     // 依赖未完成的 draft 卡：跳过原因诚实透出（依赖卡 wait 未完成 →
-    // 「依赖未完成」，不再被状态闸静默吞掉）。
+    // 「依赖未完成」，不再被状态闸静默吞掉）。锁定语义下本会话（cap-conv）
+    // 已有进行中的主任务容器 #1——先把第一个任务单落终态再开第二个
+    // （一个对话同时只有一个进行中的主任务，docs/teamSessionLock）。
+    getDb(stateRoot())
+      .prepare('UPDATE task SET status = ? WHERE task_id = ?')
+      .run('completed', group);
     const group3 = (
       (await h.call!('eteams_submit_task', { subject: '主任务三' })) as { taskId: number }
     ).taskId;
@@ -1719,9 +1782,7 @@ describe('conversation task workflow (docs/26)', () => {
     // 不改写（group 任务的 cap-conv 原样保留）。
     expect(team.tasks.find((t) => t.id === subId)!.mainSessionId).toBe('cap-second');
     // v8+：主持行取消——领队的会话锚在本大任务的领队副本行上（未派发保持空串）。
-    const leaderRow = team.taskMembers.find(
-      (r) => r.mainTaskId === group && r.isLeader === true,
-    );
+    const leaderRow = team.taskMembers.find((r) => r.mainTaskId === group && r.isLeader === true);
     expect(leaderRow).toBeDefined();
     expect(leaderRow!.sessionId).toBe('');
   });
@@ -1847,9 +1908,7 @@ describe('conversation task workflow (docs/26)', () => {
     expect(started.code).toBe(200);
     const team = readTeam(teamId);
     expect(team.tasks.find((t) => t.id === subId)!.status).toBe('wait');
-    const leaderRow = team.taskMembers.find(
-      (r) => r.mainTaskId === group && r.isLeader === true,
-    );
+    const leaderRow = team.taskMembers.find((r) => r.mainTaskId === group && r.isLeader === true);
     expect(leaderRow).toBeDefined();
     // v8+：主持行取消——领队副本行只作会话锚（未派发保持空串）；派发锚点
     // 补章在任务行（本行未登记 → cap-second）。
@@ -2029,19 +2088,13 @@ describe('GET /board 跨团队聚合 (docs/35 §6 Q1/Q3/Q4/Q5/Q9)', () => {
     await h.post(`/eteams-api/team/${teamA}/member`, { name: 'Bob', role: 'engineer' });
     await h.post(`/eteams-api/team/${teamB}/member`, { name: 'Cara', role: 'writer' });
 
-    // 甲队：两个任务单 + 一个独立任务。
+    // 甲队：三支任务单逐支推进——锁定语义下一个对话同时只有一个进行中的
+    // 主任务（docs/teamSessionLock），上一支落终态后才提交下一支；各支的
+    // 小任务在容器进终态前挂好（终态容器不再收小任务）。小任务全部完成会
+    // 自动收口容器，subB/subC 完成时容器已提前终态则自动收口早退——看板
+    // groups 列表读小任务进度，两种时序断言同值。
     const group1 = (
       (await h.call!('eteams_submit_task', { subject: '主任务一' })) as {
-        taskId: number;
-      }
-    ).taskId;
-    const group2 = (
-      (await h.call!('eteams_submit_task', { subject: '主任务二' })) as {
-        taskId: number;
-      }
-    ).taskId;
-    const group3 = (
-      (await h.call!('eteams_submit_task', { subject: '主任务三' })) as {
         taskId: number;
       }
     ).taskId;
@@ -2059,7 +2112,23 @@ describe('GET /board 跨团队聚合 (docs/35 §6 Q1/Q3/Q4/Q5/Q9)', () => {
 
     const subA = await makeSub('子任务挂起', group1, 'Alice');
     const subB = await makeSub('子任务完成', group1, 'Alice');
+    getDb(stateRoot())
+      .prepare('UPDATE task SET status = ? WHERE task_id = ?')
+      .run('completed', group1);
+    const group2 = (
+      (await h.call!('eteams_submit_task', { subject: '主任务二' })) as {
+        taskId: number;
+      }
+    ).taskId;
     const subC = await makeSub('子任务B一', group2, 'Bob');
+    getDb(stateRoot())
+      .prepare('UPDATE task SET status = ? WHERE task_id = ?')
+      .run('completed', group2);
+    const group3 = (
+      (await h.call!('eteams_submit_task', { subject: '主任务三' })) as {
+        taskId: number;
+      }
+    ).taskId;
     const subD = await makeSub('子任务B二', group3, 'Bob');
     const subF = await makeSub('子任务失败', group3, 'Alice');
     const subE = json<{ taskId: number }>(
@@ -2125,7 +2194,7 @@ describe('GET /board 跨团队聚合 (docs/35 §6 Q1/Q3/Q4/Q5/Q9)', () => {
           ready: { taskId: number; subject: string; status: string }[];
           columns: Record<string, { taskId: number; subject: string }[]>;
           groups: { taskId: number; subject: string; done: number; total: number }[];
-          members: { name: string; status: string; activeTasks: number; isLeader: boolean }[];
+          members: { name: string; activeTasks: number; isLeader: boolean }[];
           decisions: { taskId: number; error: string; retryCount: number }[];
         }[]
       >;
@@ -2160,9 +2229,7 @@ describe('GET /board 跨团队聚合 (docs/35 §6 Q1/Q3/Q4/Q5/Q9)', () => {
     expect(names.filter((n) => n === 'Bob')).toHaveLength(1);
     // v7 决策 5：建任务即全员铺副本——Alice 在甲队全部 4 支大任务（三张
     // 任务单 + 独立小任务）各一行副本，工号同源不混。
-    const aliceRows = readTeam(teamA).taskMembers.filter(
-      (r) => r.name === 'Alice' && r.status !== 'removed',
-    );
+    const aliceRows = readTeam(teamA).taskMembers.filter((r) => r.name === 'Alice');
     expect(aliceRows).toHaveLength(4);
     // 表自增（v7）：工号 = 班底行全局自增主键——甲领队 1、乙领队 2、Alice 3。
     expect(new Set(aliceRows.map((r) => r.employeeId))).toEqual(new Set([3]));
@@ -2170,9 +2237,7 @@ describe('GET /board 跨团队聚合 (docs/35 §6 Q1/Q3/Q4/Q5/Q9)', () => {
     // subA 挂起（paused）与 subF 失败进决策（wait_decision）虽已释放执行行，
     // 尝试记录仍在案——Alice 计 2；Bob 的 subD 还在 wait，计 1。
     expect(a.members.find((m) => m.name === 'Alice')!.activeTasks).toBe(2);
-    expect(a.members.find((m) => m.name === 'Alice')!.status).toBe('ready');
     expect(a.members.find((m) => m.name === 'Bob')!.activeTasks).toBe(1);
-    expect(a.members.find((m) => m.name === 'Bob')!.status).toBe('working');
     expect(a.members.find((m) => m.name === 'Bob')!.isLeader).toBe(false);
     expect(a.members.find((m) => m.name === '项目牧羊人')!.isLeader).toBe(true);
     expect(a.members).toHaveLength(3);
@@ -2521,5 +2586,153 @@ describe('POST /eteams-api/rolebuilder/resume (docs/19.16)', () => {
     // 放弃不回收 durable 会话（恢复经 followup 或冷恢复重建续聊）。
     expect(calls.rebuilt).toBe(0);
     expect(calls.followups).toEqual([]);
+  });
+});
+
+describe('GET /session-identity (子代理身份面)', () => {
+  it('resolves a member child via its replica row (成员子代理身份面)', async () => {
+    const h = await installFull();
+    const created = await h.post('/eteams-api/team', { name: '身份队', sessionId: 'cap-conv' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Alice', role: 'researcher' });
+    const made = await h.post(`/eteams-api/team/${teamId}/task`, {
+      subject: '接力任务',
+      chain: [{ member: 'Alice', stageBrief: '调研' }],
+    });
+    const taskId = json<{ taskId: number }>(made.body).taskId;
+    await h.post('/eteams-api/presence', { sessionId: 'cap-conv' });
+    const assigned = await h.call!('eteams_assign_task', { taskId, member: 'Alice' });
+    expect(assigned.ok).toBe(true);
+    const childId = childIdOf(teamId, 'Alice');
+
+    const got = await h.get(
+      `/eteams-api/session-identity?sessionId=${encodeURIComponent(childId)}`,
+    );
+    expect(got.code, got.body).toBe(200);
+    const body = json<{
+      empty: boolean;
+      kind: string;
+      name: string;
+      teamId: string | null;
+      teamName: string | null;
+      avatar: { seed: number; salt: number } | null;
+    }>(got.body);
+    expect(body.empty).toBe(false);
+    expect(body.kind).toBe('member');
+    expect(body.name).toBe('Alice');
+    expect(body.teamId).toBe(String(teamId));
+    expect(body.teamName).toBe('身份队');
+    expect(body.avatar).not.toBeNull();
+    expect(typeof body.avatar!.seed).toBe('number');
+    expect(typeof body.avatar!.salt).toBe('number');
+  });
+
+  it('resolves a captain child via the leader replica row (领队子代理身份面)', async () => {
+    const h = await installFull();
+    const created = await h.post('/eteams-api/team', { name: '领队身份队', sessionId: 'cap-conv' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    const res = await h.post(`/eteams-api/team/${teamId}/task/commission`, {
+      description: '盘点资料',
+      sessionId: 'cap-conv',
+    });
+    expect(res.code, res.body).toBe(200);
+    const team = readTeam(teamId);
+    const task = team.tasks.at(-1)!;
+    const leaderRow = team.taskMembers.find(
+      (r) => r.mainTaskId === task.id && r.isLeader === true,
+    )!;
+    expect(leaderRow.sessionId).toMatch(/^sess-child-/);
+
+    const got = await h.get(
+      `/eteams-api/session-identity?sessionId=${encodeURIComponent(leaderRow.sessionId)}`,
+    );
+    expect(got.code, got.body).toBe(200);
+    const body = json<{
+      empty: boolean;
+      kind: string;
+      name: string;
+      teamId: string | null;
+      teamName: string | null;
+      avatar: unknown;
+    }>(got.body);
+    expect(body.empty).toBe(false);
+    expect(body.kind).toBe('captain');
+    expect(body.name).toBe('项目牧羊人');
+    expect(body.teamId).toBe(String(teamId));
+    expect(body.teamName).toBe('领队身份队');
+    expect(body.avatar).not.toBeNull();
+
+    // 跨测试注册表残留清理（与 commission 用例同口径：模块级 Map，而每个
+    // installFull 的子会话计数器都从 sess-child-1 重来）。
+    unregisterCaptainChild(leaderRow.sessionId);
+  });
+
+  it('resolves the builder child via the build session file (构建师子代理身份面)', async () => {
+    const h = await installFull();
+    await reportBuildProgress(stateRoot(), { request: '造个角色', step: '收到需求' });
+    await markBuilderChild(stateRoot(), 'build-child-id');
+
+    const got = await h.get('/eteams-api/session-identity?sessionId=build-child-id');
+    expect(got.code, got.body).toBe(200);
+    const body = json<{
+      empty: boolean;
+      kind: string;
+      name: string;
+      teamId: string | null;
+      teamName: string | null;
+      avatar: unknown;
+    }>(got.body);
+    expect(body.empty).toBe(false);
+    expect(body.kind).toBe('builder');
+    expect(body.name).toBe('角色构建师');
+    expect(body.teamId).toBeNull();
+    expect(body.teamName).toBeNull();
+    expect(body.avatar).not.toBeNull();
+  });
+
+  it('hides unrelated subagent sessions (无关子代理 → empty)', async () => {
+    const h = await installFull();
+    const got = await h.get('/eteams-api/session-identity?sessionId=sess-child-999');
+    expect(got.code, got.body).toBe(200);
+    expect(json<{ empty: boolean }>(got.body).empty).toBe(true);
+    // 缺参（主对话误查此端点同款）也是 empty，不报错。
+    const blank = await h.get('/eteams-api/session-identity');
+    expect(blank.code, blank.body).toBe(200);
+    expect(json<{ empty: boolean }>(blank.body).empty).toBe(true);
+  });
+
+  it("hides removed members' sessions (离职截断 → empty)", async () => {
+    const h = await installFull();
+    const created = await h.post('/eteams-api/team', { name: '离职队', sessionId: 'cap-conv' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    const added = await h.post(`/eteams-api/team/${teamId}/member`, {
+      name: 'Alice',
+      role: 'researcher',
+    });
+    const employeeId = json<{ member: { employeeId: number | null } }>(added.body).member
+      .employeeId;
+    expect(employeeId).not.toBeNull();
+    const made = await h.post(`/eteams-api/team/${teamId}/task`, {
+      subject: '接力任务',
+      chain: [{ member: 'Alice', stageBrief: '调研' }],
+    });
+    const taskId = json<{ taskId: number }>(made.body).taskId;
+    await h.post('/eteams-api/presence', { sessionId: 'cap-conv' });
+    const assigned = await h.call!('eteams_assign_task', { taskId, member: 'Alice' });
+    expect(assigned.ok).toBe(true);
+    const childId = childIdOf(teamId, 'Alice');
+    const before = await h.get(
+      `/eteams-api/session-identity?sessionId=${encodeURIComponent(childId)}`,
+    );
+    expect(json<{ empty: boolean }>(before.body).empty).toBe(false);
+
+    // 工牌收回（移出班底）：副本行留档但身份面失效——resolveCaller 同判据。
+    const removed = await h.post(`/eteams-api/team/${teamId}/member/${employeeId}/remove`, {});
+    expect(removed.code, removed.body).toBe(200);
+    const after = await h.get(
+      `/eteams-api/session-identity?sessionId=${encodeURIComponent(childId)}`,
+    );
+    expect(after.code, after.body).toBe(200);
+    expect(json<{ empty: boolean }>(after.body).empty).toBe(true);
   });
 });

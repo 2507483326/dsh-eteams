@@ -1,9 +1,9 @@
 /**
- * ask_questions 表读写（v11，docs/plan 子代理用户问答路由）：eteams_ask_user
- * 的路由状态——提问子代理（领队/成员）需要用户决策时，用户不在它的会话就
- * 转交主会话弹出，提问方阻塞轮询本表等答案。独立行 CRUD（不随 TeamState
- * 整存整取重写，events.ts 同型：随动写走 *InTx，独立事务走直写助手）。
- * ask_id 由调用方生成（uuid）——主键即幂等键。
+ * ask_questions 表读写（v11；2026-09-10 统一问答后语义）：eteams_ask_user 的
+ * 审计/回收表——子代理弹窗前先落一行 pending（面板「待问答」徽标的数据源），
+ * 弹窗拿到答案后宿主落行 answered。独立行
+ * CRUD（不随 TeamState 整存整取重写，events.ts 同型：随动写走 *InTx，独立
+ * 事务走直写助手）。ask_id 由调用方生成（uuid）——主键即幂等键。
  *
  * @module dsh-eteams/state/asks
  */
@@ -37,9 +37,9 @@ export type AskStatus = 'pending' | 'answered' | 'expired' | 'cancelled';
 export interface AskRecord {
   askId: string;
   teamId: number;
-  /** 提问子代理会话 ID（答案回流对账）。 */
+  /** 提问子代理会话 ID（面板定位用）。 */
   askingSessionId: string;
-  /** 提问者展示名（成员名 / '领队'；转弹时向用户说明来源）。 */
+  /** 提问者展示名（成员名 / '领队' / '角色构建师'；面板文案用）。 */
   askingName: string;
   /** 提问者类型。 */
   askingKind: 'captain' | 'member' | 'conversation';
@@ -48,7 +48,7 @@ export interface AskRecord {
   questions: AskQuestion[];
   answers?: AskAnswer[];
   status: AskStatus;
-  /** 转交目标主会话 ID（就地弹=提问会话自身，审计用）。 */
+  /** 弹窗所在会话 ID（2026-09-10 统一后恒等于提问会话自身，审计留档）。 */
   relaySessionId?: string;
   createdAt: number;
   answeredAt?: number;
@@ -205,18 +205,14 @@ export function readPendingAsksSync(stateRoot: string, teamId: number): AskRecor
   return rows.map(rowToRecord);
 }
 
-/** 某提问会话名下的 pending 问答单（ask_id 升序；同题复发去重/构建器桥接用）。 */
-export function readPendingAsksBySessionSync(
-  stateRoot: string,
-  askingSessionId: string,
-): AskRecord[] {
+/** 全库 pending 问答单（ask_id 升序；跨团队含 teamId=0 构建桶——诊断/
+ * 运维读端）。 */
+export function readAllPendingAsksSync(stateRoot: string): AskRecord[] {
   const db = getDb(stateRoot);
   ensureWorkspaceReady(stateRoot, db);
   const rows = db
-    .prepare(
-      `SELECT ${SELECT_COLS} FROM ask_questions WHERE asking_session_id = ? AND status = 'pending' ORDER BY ask_id`,
-    )
-    .all(askingSessionId) as Array<Record<string, unknown>>;
+    .prepare(`SELECT ${SELECT_COLS} FROM ask_questions WHERE status = 'pending' ORDER BY ask_id`)
+    .all() as Array<Record<string, unknown>>;
   return rows.map(rowToRecord);
 }
 
@@ -249,7 +245,7 @@ export function answerAskSync(
   return { ...existing, answers, status: 'answered', answeredAt: now, updatedAt: now };
 }
 
-/** Mark an ask cancelled（调用方 abort/转交失败；仅 pending 可迁移）。 */
+/** Mark an ask cancelled（调用方 abort/弹窗失败；仅 pending 可迁移）。 */
 export function cancelAskSync(stateRoot: string, askId: string): void {
   const db = getDb(stateRoot);
   ensureWorkspaceReady(stateRoot, db);

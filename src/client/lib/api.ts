@@ -307,6 +307,73 @@ export async function clearSessionTeam(sessionId: string): Promise<void> {
   });
 }
 
+/**
+ * Mount-time 对账（用户迭代 2026-09-10 团队对话锁定）：读宿主侧常驻绑定。
+ * 返回 null = 宿主无绑定（重启后未重申/未绑定）。宿主绑定是锁定真相源，
+ * 客户端徽章据此刷面；有绑定即免 POST 重申。
+ */
+export async function fetchSessionTeam(
+  sessionId: string,
+): Promise<{ teamId: string; name: string } | null> {
+  const body = (await requestJson(
+    `${API_BASE}/session-team?sessionId=${encodeURIComponent(sessionId)}`,
+  )) as { empty?: unknown; teamId?: unknown; name?: unknown };
+  if (body.empty === true) return null;
+  if (typeof body.teamId !== 'string' || body.teamId === '') return null;
+  return {
+    teamId: body.teamId,
+    name: typeof body.name === 'string' ? body.name : body.teamId,
+  };
+}
+
+// ---------- subagent session identity (子代理身份面) ----------
+
+/** One session's eteams subagent identity as shown by the composer button. */
+export interface SessionIdentity {
+  kind: 'member' | 'captain' | 'builder';
+  name: string;
+  teamId: string | null;
+  teamName: string | null;
+  avatar: { seed: number; salt: number } | null;
+}
+
+/**
+ * Resolve one session's eteams subagent identity（宿主 GET /session-identity，
+ * 用户迭代 2026-09-10「子代理隐藏团队按钮」）。null = 非 eteams 子代理（无关
+ * 子代理会话）——团队按钮整个隐藏；非空 = 成员/领队/构建师子代理，按钮降级
+ * 为只读身份面。逐字段校验（旧宿主/未知结构一律按 null 处理，不抛）。
+ */
+export async function fetchSessionIdentity(sessionId: string): Promise<SessionIdentity | null> {
+  const body = (await requestJson(
+    `${API_BASE}/session-identity?sessionId=${encodeURIComponent(sessionId)}`,
+  )) as {
+    empty?: unknown;
+    kind?: unknown;
+    name?: unknown;
+    teamId?: unknown;
+    teamName?: unknown;
+    avatar?: unknown;
+  };
+  if (body.empty === true) return null;
+  if (body.kind !== 'member' && body.kind !== 'captain' && body.kind !== 'builder') return null;
+  if (typeof body.name !== 'string' || body.name === '') return null;
+  const pair =
+    typeof body.avatar === 'object' && body.avatar !== null
+      ? (body.avatar as { seed?: unknown; salt?: unknown })
+      : undefined;
+  const avatar =
+    pair !== undefined && typeof pair.seed === 'number' && typeof pair.salt === 'number'
+      ? { seed: pair.seed, salt: pair.salt }
+      : null;
+  return {
+    kind: body.kind,
+    name: body.name,
+    teamId: typeof body.teamId === 'string' ? body.teamId : null,
+    teamName: typeof body.teamName === 'string' ? body.teamName : null,
+    avatar,
+  };
+}
+
 // ---------- conversation task workflow (docs/26 面板审阅/批准) ----------
 
 /** One member slot (execution-chain station) as edited on the panel.
@@ -573,19 +640,6 @@ export async function cancelBuild(): Promise<void> {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({}),
   });
-}
-
-/**
- * Member subagent activity dots (docs/20.4 P4): childId → 'running' |
- * 'inactive'. Empty map on older runtimes without listChildren (no dots).
- */
-export async function fetchAgentActivity(teamId: string): Promise<Record<string, string>> {
-  const body = (await requestJson(
-    `${API_BASE}/team/${encodeURIComponent(teamId)}/agentactivity`,
-  )) as { activity?: unknown };
-  return body.activity !== null && typeof body.activity === 'object'
-    ? (body.activity as Record<string, string>)
-    : {};
 }
 
 // ---------- usage calendar (docs/28 每日 Token 消耗日历) ----------

@@ -12,7 +12,6 @@ import { sanitizeKey, stationProgress, taskSlug } from '../model/taskMachine.js'
 import type { MemberRecord, ModelRouteSnapshot, TaskRecord, TeamState } from '../model/types.js';
 import { renderContract, stationLabel } from '../prompts/handoff/mails.js';
 import { formatEmployeeId } from './roster.js';
-import { memberStatusOf } from './notifier.js';
 
 /** 团队工作目录基准段（相对工作区；任务 work_dir 在它之下分配）。 */
 export function teamWorkDirRel(team: TeamState): string {
@@ -60,14 +59,11 @@ export function renderTeamReadme(team: TeamState): string {
     '## 成员',
   ];
   // 成员列表按班底行（v7：班底是成员全集中营，领队也是一行；工号挂班底
-  // 行——「同名按号找人」，README 即按 ET-xxxx 展示）。状态按工号聚合到
-  // 该成员全部任务副本行。
+  // 行——「同名按号找人」，README 即按 ET-xxxx 展示）。
   if (team.members.length === 0) lines.push('（暂无成员）');
   for (const m of team.members) {
     const badge = m.employeeId !== undefined ? ` · ${formatEmployeeId(m.employeeId)}` : '';
-    lines.push(
-      `- **${m.name}**（${m.role}）${badge} · ${memberStatusOf(team, m.employeeId ?? m.name)} · 路线 ${routeLabel(m)}`,
-    );
+    lines.push(`- **${m.name}**（${m.role}）${badge} · 路线 ${routeLabel(m)}`);
   }
   lines.push('', '## 任务');
   if (team.tasks.length === 0) lines.push('（暂无任务）');

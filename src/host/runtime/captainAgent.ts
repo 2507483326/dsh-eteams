@@ -108,8 +108,8 @@ export function unregisterCaptainChild(childId: string): void {
  * `tools.restrict({ deny })`, which fails loudly on unknown names inside
  * the child creation window (same footgun note as MEMBER_DENIED_TOOLS;
  * e.g. `eteams_approve_plan` is never registered, so it must NOT appear
- * here). The child must not create/delete teams, open builds, answer
- * interviews, or re-dispatch captains (recursion guard). Subagent spawn
+ * here). The child must not create/delete teams, open builds, post build
+ * reports, or re-dispatch captains (recursion guard). Subagent spawn
  * tools ('subagent', 'subagent_fork') are intentionally absent — no such
  * registered names were found in the harness, and denying unregistered
  * names aborts the spawn; the child is a continuable runtime ROOT, and
@@ -122,7 +122,6 @@ export const CAPTAIN_CHILD_DENIED_TOOLS: readonly string[] = [
   'eteams_dispatch_captain',
   'eteams_build_dispatch',
   'eteams_build_report',
-  'eteams_interview_answer',
   // 成员工具（harness 0.1.2 起 registerContinuableSetup 被移除，成员工具随
   // 根作用域注册——领队子代理拒见，守住「领队不干成员的活」的可见性纪律）。
   // task_board/team_status/send_message 不在列：它们已合并为身份感知单工具
@@ -319,7 +318,6 @@ export async function dispatchCaptainCore(
         name: LEADER_NAME,
         employeeId: fresh?.members.find((m) => m.isLeader === true)?.employeeId ?? null,
         sessionId: String(childId),
-        status: 'ready',
         isLeader: true,
         ...(baked !== '' ? { personaMd: baked } : {}),
         createdAt: Date.now(),

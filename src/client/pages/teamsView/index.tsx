@@ -70,6 +70,7 @@ import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/clie
 import { Provider, useDispatch, useSelector } from 'react-redux';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
+  composerCensus,
   composerDraftProbe,
   peekCapturedInputActions,
   prefillComposer,
@@ -87,9 +88,7 @@ import { navIdOfPath } from '../../lib/status';
 import { errorMessageOf } from '../../lib/errors';
 import { ClientErrorBoundary, recordClientDiag } from '../../lib/diagnostics';
 import { Toaster } from '../../components/ui/toaster';
-import { usePoll } from '../../hooks/usePoll';
 import { EteamsBackdrop } from '../../features/backdrop/eteamsBackdrop';
-import { fetchAgentActivity } from '../../lib/api';
 import { useActivityMonitor } from '../../lib/monitor';
 import { getApp, type RootState } from '../../store/app';
 import { FormErrorNote, PageHeader } from '../shared/components';
@@ -148,9 +147,6 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
   // S10：成员库列表迁入 roster model——useSelector 读、refreshRoster 发
   // `roster/fetchRoster`（takeLatest 防叠）。
   const roster = useSelector((s: RootState) => s.roster.list);
-  // 成员子代理活动点（docs/20.4 P4）：childId → running/inactive。旧运行时
-  // 无 listChildren 时返回空表——面板不渲染点，不误导。
-  const [agentActivity, setAgentActivity] = useState<Record<string, string>>({});
   // 创建卡片/弹层跳转信号（docs/19.9.5）：递增计数驱动角色列表页
   // （roster/rosterPage，M2 拆页）打开新增页。
   const [openAddTick, setOpenAddTick] = useState(0);
@@ -298,29 +294,11 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
     if (activeTab === 'roster' || activeTab === 'team') refreshRoster();
   }, [activeTab, refreshRoster]);
 
-  // 活动点轮询：跟随当前选中的团队，3s 节流（docs/20.4 P4）。M7-8 收口
-  // usePoll：挂载/换队即拉一次 + interval 重拉 + 卸载/换队清理（pull 身份
-  // 随 team 变化重启轮询，同原 effect deps）；异步回包经 isCurrent 判定本轮
-  // 询代仍存活（与原 alive 旗号同语义）才回写，防陈旧团队快照。无选中团队
-  // 时 pull 空转（原 effect 早退——不拉不轮询，观察面一致）。
-  const pullAgentActivity = useCallback(
-    (isCurrent: () => boolean): void => {
-      if (team === undefined) return;
-      void fetchAgentActivity(team.teamId)
-        .then((a) => {
-          if (isCurrent()) setAgentActivity(a);
-        })
-        .catch(() => undefined);
-    },
-    [team],
-  );
-  usePoll(pullAgentActivity, 3000);
-
-  // 一键预填（docs/19.7.1, D18-1）：共享 helper（addPeople.ts）把命令写入
-  // 对话输入框并聚焦；写路解析「槽位实参 → 捕获桥 → 模拟键入」，两路皆空才
-  // 退化剪贴板。不自动发送。诊断落 client.log（2026-09-10 用户报告填充不落
-  // 地）：记写路来源 + 结果位，200ms 后探一次草稿——claim/修复窗是否生效
-  // 一目了然，下一轮反馈直接看日志定位。
+  // 一键预填（docs/19.7.1, D18-1）：共享 helper（addPeople.ts）把规范模板
+  // 写进对话输入框机器状态并聚焦；写路解析「槽位实参 → 捕获桥 → 模拟键入」，
+  // 两路皆空才退化剪贴板。不自动发送。诊断落 client.log（2026-09-10 用户
+  // 报告填充不落地）：写路来源 + 结果位，200ms 后探机器草稿投影与 textarea
+  // 普查——落没落地、挂在哪个元素，一条日志看清。
   const prefillAddPeople = useCallback((): PrefillOutcome => {
     const slotActions = (
       props as { inputActions?: { setDraft: (text: string) => void } | undefined }
@@ -335,7 +313,7 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
     window.setTimeout(() => {
       recordClientDiag(
         'prefill-add',
-        `source=${source} outcome=${outcome} draft=${composerDraftProbe()}`,
+        `source=${source} outcome=${outcome} draft=${composerDraftProbe()} census=${composerCensus()}`,
         'rosterAdd',
       );
     }, 200);
@@ -411,7 +389,6 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
             roster={roster}
             memberCap={state.maxMembers}
             onSelectTeam={(id) => dispatch({ type: 'ui/setSelectedTeam', payload: id })}
-            agentActivity={agentActivity}
             onDeleted={refreshRoster}
             onPrefillAddPeople={prefillAddPeople}
             openAddTick={openAddTick}

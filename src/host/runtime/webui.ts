@@ -37,6 +37,7 @@ import {
   LEADER_NAME,
   readRoster,
   removeRosterMember,
+  ROLE_BUILDER_NAME,
   taskMemberBadge,
   upsertRosterMember,
 } from './roster.js';
@@ -64,7 +65,6 @@ import {
   leaderRowOf,
   leaderRouteOf,
   latestInstanceRow,
-  memberStatusOf,
   teamMainSessionOf,
 } from './notifier.js';
 import {
@@ -79,7 +79,12 @@ import {
 } from './roleBuilder.js';
 import { stopBuilderChild, wakeBuilderChild } from './builderPhases.js';
 import { clearSessionPersona, setSessionPersona } from './sessionPersona.js';
-import { clearSessionTeam, getSessionTeamId, setSessionTeam } from './sessionTeam.js';
+import {
+  clearSessionTeam,
+  getSessionTeamBinding,
+  getSessionTeamId,
+  setSessionTeam,
+} from './sessionTeam.js';
 import { dispatchCaptainCore } from './captainAgent.js';
 import { captainCommissionPrompt } from '../prompts/steering/dispatch.js';
 import { readUsageCalendar, readAppUsageCalendar } from './usage.js';
@@ -191,7 +196,7 @@ function rosterMemberByRef(team: TeamState, ref: string): MemberRecord | undefin
 
 /** Per-member view row (docs/12.2; avatar/persona editors land in M6/M5).
  * 人设经 role_id 装自 roles 角色行（v3 成员=角色，成员详情与角色详情同源），
- * 状态与会话锚点按工号聚合副本行（v7：同名成员各聚合各的）。 */
+ * 会话锚点按工号聚合副本行（v7：同名成员各聚合各的）。 */
 function memberView(team: TeamState, m: MemberRecord) {
   // 当前任务按该成员副本行的最近 attempt 归属（v7 副本并行，assignee 名字
   // 只作显示——同名成员不能互相当成「当前任务」）。
@@ -221,7 +226,6 @@ function memberView(team: TeamState, m: MemberRecord) {
     skills: m.persona.skills,
     rules: m.persona.rules,
     executionPrompt: m.persona.executionPrompt,
-    status: memberStatusOf(team, m.employeeId ?? m.name),
     model: m.modelRoute.model,
     // 覆盖路线的目录 provider（v9 回归）：客户端显示按 provider+model 精确
     // 定位目录行（同 id 模型跨提供方时按 id 反查会命中错误条目）。
@@ -229,7 +233,6 @@ function memberView(team: TeamState, m: MemberRecord) {
     reasoningEffort: m.modelRoute.reasoningEffort ?? null,
     currentTaskId: currentTask?.id ?? null,
     childId: row?.sessionId ? row.sessionId : null,
-    removed: false,
     avatar: m.avatar ?? null,
   };
 }
@@ -251,7 +254,8 @@ function taskView(t: TaskRecord, team: TeamState, groupOutcomes?: Map<number, st
     // 时详情页也要走编排分支——罗列条/任务列表/新增小任务全程可见，
     // docs/panelTaskCommission）（旧 kind 列已砍，docs/35 §3）。
     kind:
-      t.parentId === null && (t.status === 'creating' || team.tasks.some((x) => x.parentId === t.id))
+      t.parentId === null &&
+      (t.status === 'creating' || team.tasks.some((x) => x.parentId === t.id))
         ? 'group'
         : 'task',
     parentId: t.parentId ?? null,
@@ -370,17 +374,8 @@ export function teamSnapshot(
       reasoningEffort: leaderRoute.reasoningEffort ?? null,
     },
     // 成员 = 班底行（v7）。领队也是班底一行，但领队卡单独走 captain 段，
-    // 成员列表跳过它避免重复出卡；副本行全部 removed 的成员不再展示
-    // （docs/35 §5#12 口径改按工号聚合——同名成员各判各的）。
-    members: team.members
-      .filter((m) => {
-        if (m.isLeader === true) return false;
-        const rows = team.taskMembers.filter(
-          (r) => m.employeeId !== undefined && r.employeeId === m.employeeId,
-        );
-        return rows.length === 0 || rows.some((r) => r.status !== 'removed');
-      })
-      .map((m) => memberView(team, m)),
+    // 成员列表跳过它避免重复出卡。
+    members: team.members.filter((m) => m.isLeader !== true).map((m) => memberView(team, m)),
     tasks: team.tasks.map((t) => taskView(t, team, groupOutcomes)),
     pendingDecisions: team.pendingDecisions
       .filter((d) => d.status === 'open')
@@ -391,11 +386,13 @@ export function teamSnapshot(
         retryCount: d.retryCount,
         createdAt: d.createdAt,
       })),
-    // 子代理待问答（v11 ask_questions）：转交主会话弹出、等提问方回收的问答单。
+    // 子代理待问答（2026-09-10 统一：就地弹窗也落行）：面板「待问答」徽标
+    // 数据源；askingSessionId 供后续深链到提问子对话。
     pendingAsks: readPendingAsksSync(stateRoot, team.id).map((a) => ({
       askId: a.askId,
       askingName: a.askingName,
       askingKind: a.askingKind,
+      askingSessionId: a.askingSessionId,
       questionCount: a.questions.length,
       createdAt: a.createdAt,
     })),
@@ -502,6 +499,91 @@ async function collectTeams(
     }
   }
   return snapshots;
+}
+
+// ---------- subagent session identity (用户迭代 2026-09-10 子代理身份面) ----------
+
+/** One session's resolved eteams subagent identity (GET /session-identity body). */
+export interface SessionIdentityView {
+  kind: 'member' | 'captain' | 'builder';
+  name: string;
+  teamId: string | null;
+  teamName: string | null;
+  avatar: { seed: number; salt: number } | null;
+}
+
+/**
+ * 子代理会话身份面（用户迭代 2026-09-10「子代理隐藏团队按钮」）：把一个会话
+ * id 解析成 eteams 子代理身份——成员子代理（任务副本行）、领队子代理（领队
+ * 副本行/主持行）、角色构建师子代理（构建会话文件的 builderChildId）。其余
+ * 会话（未绑定主对话、无关子代理、身份已失效的离职子代理）返回 undefined =
+ * 客户端把团队按钮整个隐藏。
+ *
+ * 只认**磁盘真相**（快照构建器同口径，重启/冷恢复免疫）：成员/领队副本行的
+ * session_id 随 spawn 同流回填（members.ts / captainAgent.ts），构建子代理
+ * 的 builderChildId 落构建会话文件；运行时注册表（usage/captainAgent）不
+ * 兜底——它的条目不随删任务/离职清理，兜底会让已失效的会话借尸还魂。判定
+ * 与 tools/identity.resolveCaller 同源：is_leader 行 → 领队（不滤 removed，
+ * leaderRowOf 冷恢复同口径）；成员行滤离职（status=removed 或工牌已删 →
+ * undefined，工面失效按钮同隐）。
+ */
+export async function sessionIdentityOf(
+  ctx: Context,
+  config: ETeamsResolvedConfig,
+  sessionId: string,
+): Promise<SessionIdentityView | undefined> {
+  if (sessionId === '') return undefined;
+  // 1) 构建子代理：各根构建会话文件的 builderChildId 即身份凭证（单槽，一读
+  //    一文件；confirmed/cancelled 后子代理会话仍在，脸面照常成立）。
+  for (const { root } of collectRoots(ctx, config)) {
+    const build = readBuildSession(root);
+    if (build !== null && build.builderChildId === sessionId) {
+      const entry = readRoster(root).find((m) => m.name === ROLE_BUILDER_NAME);
+      return {
+        kind: 'builder',
+        name: ROLE_BUILDER_NAME,
+        teamId: null,
+        teamName: null,
+        avatar: entry?.avatar ?? { seed: avatarSeedFor(ROLE_BUILDER_NAME), salt: 7 },
+      };
+    }
+  }
+  // 2) 团队副本行扫描（跨工作区）：sessionId 精确锚一行副本行，命中即出身份。
+  for (const { root } of collectRoots(ctx, config)) {
+    for (const teamId of await listTeamIds(root)) {
+      const team = readTeamSync(root, teamId);
+      if (team === undefined) continue;
+      const row = team.taskMembers.find((r) => r.sessionId === sessionId);
+      if (row === undefined) continue;
+      if (row.isLeader === true) {
+        // 领队子代理：脸面对齐团队快照 captain 段（名册领队头像 → 固定兜底）。
+        const rosterLeader = readRoster(root).find((m) => m.isLeader === true);
+        return {
+          kind: 'captain',
+          name: LEADER_NAME,
+          teamId: String(team.id),
+          teamName: team.name,
+          avatar: rosterLeader?.avatar ?? { seed: avatarSeedFor(LEADER_NAME), salt: 7 },
+        };
+      }
+      // 成员副本行：resolveCaller 同判据的离职截断——工牌不在的存活会话
+      // 工面失效，身份面同判据隐藏（视为离职，不是成员了）。
+      if (row.employeeId !== null && !team.members.some((m) => m.employeeId === row.employeeId)) {
+        return undefined;
+      }
+      // 头像随班底行（memberView 同源，roles 实时值）；副本行冻结值兜底，
+      // 都没有按名字色相生成（teamSnapshot 领队兜底同款 salt=7 约定）。
+      const template = team.members.find((m) => m.employeeId === row.employeeId);
+      return {
+        kind: 'member',
+        name: row.name,
+        teamId: String(team.id),
+        teamName: team.name,
+        avatar: template?.avatar ?? row.avatar ?? { seed: avatarSeedFor(row.name), salt: 7 },
+      };
+    }
+  }
+  return undefined;
 }
 
 // ---------- lazy route installation ----------
@@ -787,6 +869,11 @@ export function installWebSurface(
             // gains a 团队绑定 band (sessionTeam.ts) with the conversation
             // task workflow and the leadership branch (领队 / 主窗口充当
             // 领队 / 团队建在他会话的可行动提示).
+            //
+            // 锁定守卫（用户迭代 2026-09-10「1 个主对话只能有 1 个团队」）：
+            // 会话已绑定其他健在团队 → 409 拒绝；同队重绑放行（刷新名字/
+            // 时间）；旧队已删除放行（删队清绑定 + 客户端徽章解锁后的重选
+            // 逃生口）。
             if (req.method === 'POST' && segments[0] === 'session-team' && segments.length === 1) {
               const body = parseJsonObject(await readBody(req));
               const sessionId = str(body.sessionId, '');
@@ -800,8 +887,52 @@ export function installWebSurface(
                 sendError(res, 404, `团队「${teamId}」不存在`);
                 return;
               }
+              const existing = getSessionTeamBinding(sessionId);
+              if (existing !== undefined && existing.teamId !== teamId) {
+                const current = locateTeam(ctx, config, existing.teamId);
+                if (current !== undefined) {
+                  sendError(
+                    res,
+                    409,
+                    `本对话已固定为团队「${current.team.name}」——一个对话只能绑定一个团队`,
+                  );
+                  return;
+                }
+              }
               setSessionTeam(sessionId, { teamId, name: located.team.name, boundAt: Date.now() });
               sendJson(res, 200, { ok: true });
+              return;
+            }
+            // GET /session-team?sessionId=… — the composer button's mount-time
+            // 对账：宿主绑定是锁定真相源，客户端徽章据此刷面（localStorage
+            // 只是离线镜像；宿主重启后查空 → 客户端走本地镜像 POST 重申自愈）。
+            if (req.method === 'GET' && segments[0] === 'session-team' && segments.length === 1) {
+              const sessionId = url.searchParams.get('sessionId') ?? '';
+              const binding = sessionId !== '' ? getSessionTeamBinding(sessionId) : undefined;
+              if (binding === undefined) {
+                sendJson(res, 200, { empty: true });
+                return;
+              }
+              sendJson(res, 200, { teamId: binding.teamId, name: binding.name });
+              return;
+            }
+            // GET /session-identity?sessionId=… — 子代理会话身份（用户迭代
+            // 2026-09-10「子代理隐藏团队按钮」）：输入栏团队按钮对已寻址子代理
+            // 会话降级——eteams 成员/领队/构建师子代理渲染只读身份面（头像 +
+            // 名字），无关子代理整个按钮隐藏。主会话不查此端点（选择/锁定交互
+            // 照旧）；只读磁盘真相，无副作用。
+            if (
+              req.method === 'GET' &&
+              segments[0] === 'session-identity' &&
+              segments.length === 1
+            ) {
+              const sessionId = url.searchParams.get('sessionId') ?? '';
+              const identity = await sessionIdentityOf(ctx, config, sessionId);
+              if (identity === undefined) {
+                sendJson(res, 200, { empty: true });
+                return;
+              }
+              sendJson(res, 200, { empty: false, ...identity });
               return;
             }
             // POST /session-team/clear — deselect (plain conversation again).
@@ -1310,8 +1441,7 @@ export function installWebSurface(
               // 期间卡片可读）。
               const firstLine =
                 description.split(/\r?\n/).find((line) => line.trim() !== '') ?? description;
-              const subject =
-                firstLine.trim().slice(0, COMMISSION_SUBJECT_MAX) || '未命名任务';
+              const subject = firstLine.trim().slice(0, COMMISSION_SUBJECT_MAX) || '未命名任务';
               let task: TaskRecord;
               try {
                 task = await createTask(
@@ -1836,10 +1966,11 @@ export function installWebSurface(
               return;
             }
             // POST /rolebuilder/interview — user answered the intent interview
-            // in the workbench (docs/19.16 持续构建子代理): store the answers,
-            // then followup-wake the SAME continuable builder child to draft
-            // with the full session snapshot（唤醒去重在单构建锁内，面板与
-            // 主对话 eteams_interview_answer 双入口竞态时后者跳过）。
+            // in the workbench (panel bypass entry; 2026-09-10 unified ask made
+            // eteams_ask_user the primary pop path with host-side auto-persist):
+            // store the answers, then followup-wake the SAME continuable builder
+            // child to draft with the full session snapshot（唤醒去重在单构建
+            // 锁内，双入口竞态时后者跳过）。
             if (
               req.method === 'POST' &&
               segments[0] === 'rolebuilder' &&
@@ -2000,30 +2131,8 @@ export function installWebSurface(
                 sendJson(res, 200, { events, serverTime: Date.now() });
                 return;
               }
-              // GET /team/<id>/agentactivity — member subagent activity dots
-              // (docs/20.4 P4): feature-detected listChildren; empty on older
-              // runtimes (panel renders no dots then). 锚点是任务行主会话
-              // 快照（v6 派生）——领队不在线时无活动可报。
-              if (segments[2] === 'agentactivity') {
-                const list = (ctx as unknown as RuntimeContext).subagents?.listChildren;
-                const leaderSessionId = teamMainSessionOf(team);
-                if (list === undefined || leaderSessionId === '') {
-                  sendJson(res, 200, { activity: {} });
-                  return;
-                }
-                const entries = await list.call(
-                  (ctx as unknown as RuntimeContext).subagents,
-                  leaderSessionId as never,
-                );
-                const activity: Record<string, string> = {};
-                for (const entry of entries) {
-                  if (entry.kind === 'child' && entry.activity !== undefined) {
-                    activity[entry.id] = entry.activity;
-                  }
-                }
-                sendJson(res, 200, { activity });
-                return;
-              }
+              // GET /team/<id>/agentactivity 已随「成员没有状态」一并退役
+              // （用户迭代 2026-09-10：成员卡活动点撤，面板不再轮询本路由）。
               if (segments[2] === 'task' && segments[4] === 'track') {
                 const taskId = Number.parseInt(segments[3] ?? '', 10);
                 const task = Number.isFinite(taskId)
@@ -2290,7 +2399,6 @@ function memberDialog(
       : last.member === member.name;
   });
   return {
-    memberStatus: memberStatusOf(team, member.employeeId ?? member.name),
     currentTaskId: currentTask?.id ?? null,
     items,
     serverTime: Date.now(),

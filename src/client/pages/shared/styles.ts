@@ -32,7 +32,7 @@ export const PROTECTED_MEMBERS: readonly string[] = [
  * 拼接，21.5.1 纪律）。语义色走 token 类（D19c；success/warning/business
  * 为附录 A 扩展 token，muted 走中性 token muted-foreground）。
  * S13 的状态徽标（pillClass/dotClass）沿用此表语义，S14 余下区块同。
- * （Tone 类型与成员态映射 memberTone 已迁 taskDisplayStatus——docs/29 B，
+ * （Tone 类型与 6px 状态点工具类已迁 taskDisplayStatus——docs/29 B，
  * 经 import 使用。）
  */
 export const TONE_CLASS: Record<Tone, string> = {

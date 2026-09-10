@@ -513,13 +513,14 @@ describe('teamView 团队现状精简 (用户迭代 2026-09-03)', () => {
 
     const view = teamView(env, readTeamSync(root, seeded.id)!);
     // 角色库无 profile、班底 persona 也没烘 → null；role 已从快照移除（v7
-    // 成员名=角色名，与 name 冗余）。
-    expect(view.members).toEqual([{ name: '甲', employeeId: 1, profile: null, status: 'ready' }]);
+    // 成员名=角色名，与 name 冗余；status 已随「成员没有状态」撤——用户迭代
+    // 2026-09-10）。
+    expect(view.members).toEqual([{ name: '甲', employeeId: 1, profile: null }]);
     // 角色库 profile 列是 live 源（用户迭代 2026-09-08）：upsert 后现读透出。
     await upsertRosterMember(root, { name: '甲', role: '前端', profile: '一句话简介：前端交付' });
     const fresh = teamView(env, readTeamSync(root, seeded.id)!);
     expect(fresh.members).toEqual([
-      { name: '甲', employeeId: 1, profile: '一句话简介：前端交付', status: 'ready' },
+      { name: '甲', employeeId: 1, profile: '一句话简介：前端交付' },
     ]);
     // Member persona/route never leak into the snapshot.
     const json = JSON.stringify(fresh);

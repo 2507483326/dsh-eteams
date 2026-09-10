@@ -5,27 +5,24 @@
  * host restart self-heals) and the session agent's prompt gains a 团队绑定
  * band（每次组装时对照活团队现读）.
  *
- * 一次性消费（用户迭代 2026-09-07「发送后清空选择」）：客户端在提交瞬间只
- * 清本地按钮面（不删宿主绑定——那条消息还要靠绑定注入 band 并解析派发身
- * 份）。宿主在 user/message 事件到达时把绑定转为「本回合凭证」（consumed）：
- * band 组装与 resolveCaller 读 `绑定 ?? 凭证`，所以消费它的这条消息照常走
- * 团队工作流；下一条**真人**消息到达即撤销凭证——再往后的消息回到普通
- * 对话，想再用团队需重新选择。「真人」判定见 {@link isHumanUserTurn}：
- * 插件注入的 user 消息（唤醒/邮件/steer/文件通知）同样走 user/message
- * 事件，不区分会把消费回合中途的凭证误撤（实测：dispatch 工具随即报
- * 「当前会话不在任何 eteams 团队中」）。
+ * 绑定即固定（用户迭代 2026-09-10「对话固定为团队对话」）：选中团队后绑定
+ * **常驻**、不随发送消费——一个主对话只对应一个团队（换队在 webui POST
+ * /session-team 守卫 409，旧队已死才放行重选）；输入栏徽章常显该团队且
+ * 不能再打开 团队/角色 切换弹层（客户端锁定面）。替代 2026-09-07 的一次性
+ * 消费语义（consumeSessionTeamBinding/本回合凭证已随锁定语义整体移除）。
  *
  * band 文本组装在 prompts/system/sessionTeam.ts（纯函数，判别联合入参）——
- * 本文件只留 bindings/consumed store 与薄壳：领队子代理注册表守卫、绑定
- * 查表、活团队快照解析后，把判别联合传给纯函数。绑定即意图、转交分工等
- * 口径说明随 band 文本在 prompts 平面。
+ * 本文件只留 bindings store 与薄壳：领队子代理注册表守卫、绑定查表、活团
+ * 队快照解析、**锚定主任务判据**（anchoredMainTaskOf：本会话最新一个非终
+ * 态主任务）后，把判别联合传给纯函数。绑定即意图、转交分工等口径说明随
+ * band 文本在 prompts 平面。
  *
  * The band is built per assembly against the LIVE team snapshot (readTeamSync
  * via the webui locateTeam helper) so 批准/阶段变化即时反映，无需重绑。
  *
  * @module dsh-eteams/host/runtime/sessionTeam
  */
-import type { TeamState } from '../model/types.js';
+import type { TaskRecord, TeamState } from '../model/types.js';
 import { captainChildTeamOf } from './captainAgent.js';
 import { sessionTeamBand } from '../prompts/system/sessionTeam.js';
 
@@ -41,21 +38,29 @@ export interface SessionTeamBinding {
 
 const bindings = new Map<string, SessionTeamBinding>();
 
-/** 本回合凭证：绑定被一条 user/message 消费后的余晖（该回合的 band + 身份
- * 还靠它；下一条 user/message 到达即撤销）。同一 Map 键语义与 bindings 一致。 */
-const consumed = new Map<string, SessionTeamBinding>();
-
-/** Bind (or re-bind) one session to a team. */
+/** Bind (or re-bind) one session to a team. 换队守卫在 webui 路由层（需要
+ * 活团队判定），store 本体只做覆盖写——同队重绑刷新名字/时间属正常路径。 */
 export function setSessionTeam(sessionId: string, binding: SessionTeamBinding): void {
   if (sessionId === '') return;
   bindings.set(sessionId, binding);
 }
 
-/** Remove the binding (deselect in the composer popup). 显式取消连本回合
- * 凭证一并撤销（用户明确收手，派发身份不再保留）。 */
+/** Remove the binding (team deletion cleanup / API 兼容保留). */
 export function clearSessionTeam(sessionId: string): void {
   bindings.delete(sessionId);
-  consumed.delete(sessionId);
+}
+
+/** Drop every binding that points at one team（deleteTeam 提交后调用）：
+ * 绑定的团队消失即解锁会话，徽章端经快照失联自动回到可选状态。 */
+export function clearSessionTeamForTeam(teamId: string): void {
+  for (const [sessionId, binding] of bindings) {
+    if (binding.teamId === teamId) bindings.delete(sessionId);
+  }
+}
+
+/** The session's full binding, if any（webui GET 对账 / 409 文案取队名）. */
+export function getSessionTeamBinding(sessionId: string): SessionTeamBinding | undefined {
+  return bindings.get(sessionId);
 }
 
 /** The session's bound teamId, if any (identity.ts 绑定优先 resolveCaller). */
@@ -63,42 +68,32 @@ export function getSessionTeamId(sessionId: string): string | undefined {
   return bindings.get(sessionId)?.teamId;
 }
 
+/** 主任务终态集合：终态容器不可再挂小任务（taskMachine 边 + 组收口），锚定
+ * 判据跳过它们——全部终态时回退两步走（下一个大请求自然开新项目）。 */
+const TERMINAL_TASK_STATUSES: ReadonlySet<TaskRecord['status']> = new Set([
+  'completed',
+  'failed',
+  'cancelled',
+]);
+
 /**
- * 一次性消费（user/message 事件调用，index.ts 监听器）：有绑定 → 转为本
- * 回合凭证；已有凭证（上一回合的余晖）→ 撤销。此后 band 与身份读
- * `绑定 ?? 凭证`，再往后一条消息两者皆空。
+ * 锚定主任务判据（用户迭代 2026-09-10「已创建任务走增补子任务」）：本会话
+ * 建过且仍非终态的最新**主任务容器**（parentId 空 + chain 空——createTask
+ * 校验容器不带执行链，面板单杆任务有链不会误锚；mainSessionId 是建任务时
+ * 登记的调用方会话快照——对话工具与面板 commission 同源）。返回 undefined
+ * = 本对话尚无进行中的主任务（band 走两步走、submit_task 放行）。
  */
-export function consumeSessionTeamBinding(sessionId: string): void {
-  if (sessionId === '') return;
-  const binding = bindings.get(sessionId);
-  if (binding !== undefined) {
-    bindings.delete(sessionId);
-    consumed.set(sessionId, binding);
-    return;
+export function anchoredMainTaskOf(team: TeamState, sessionId: string): TaskRecord | undefined {
+  if (sessionId === '') return undefined;
+  let latest: TaskRecord | undefined;
+  for (const task of team.tasks) {
+    if (task.parentId !== null) continue;
+    if (task.chain.length > 0) continue;
+    if (task.mainSessionId !== sessionId) continue;
+    if (TERMINAL_TASK_STATUSES.has(task.status)) continue;
+    if (latest === undefined || task.id > latest.id) latest = task;
   }
-  consumed.delete(sessionId);
-}
-
-/**
- * 判定一条 user/message 事件是否真人输入（监听器据此决定是否消费/撤销）：
- * 事件的 data 即 UserMessage 本体（dsh-session SessionEventMap），其
- * `source.kind === 'user'` 才是「直接人类提示」。插件注入的 user 消息
- * （领队/主会话唤醒 followup、成员邮件、面板完善、steer，source 均带
- * `kind: 'plugin'`）与 agent.inject 合成上下文（文件变更通知、子目录
- * AGENTS.md、cron 通知等）同样走 user/message 事件——不区分的话，它们在
- * 消费回合中途到达就会被当成「下一条用户消息」把本回合凭证撤销，该回合
- * 随后的 eteams_* 工具调用失去身份（实测 2026-09-07：eteams_dispatch_captain
- * 报「当前会话不在任何 eteams 团队中」）。data 缺失/畸形一律不算真人。
- */
-export function isHumanUserTurn(message: unknown): boolean {
-  const kind = (message as { source?: { kind?: unknown } } | undefined)?.source?.kind;
-  return kind === 'user';
-}
-
-/** The session's consumed (one-shot) teamId, if any — resolveCaller /
- * envForAgent / usage 归属在消费回合内的回退身份。 */
-export function getConsumedSessionTeamId(sessionId: string): string | undefined {
-  return consumed.get(sessionId)?.teamId;
+  return latest;
 }
 
 /**
@@ -113,8 +108,7 @@ export function sessionTeamSection(
   if (sessionId === undefined) return '';
   // 领队子代理：band 对其静默（它是领队本人，不该再看到「转交」指示）。
   if (captainChildTeamOf(sessionId) !== undefined) return '';
-  // 绑定 ?? 本回合凭证：消费那条消息的组装照常带 band（一次性消费语义）。
-  const binding = bindings.get(sessionId) ?? consumed.get(sessionId);
+  const binding = bindings.get(sessionId);
   if (binding === undefined) return '';
   const team = liveTeam(binding.teamId);
   // 失效分支的名字取绑定时记录的团队名（团队已删，磁盘无名可读）。
@@ -128,6 +122,9 @@ export function sessionTeamSection(
           // 分工口径随 hasLeader 分支：无领队团队由主会话直接主持（面板
           // 手动建任务的完善路径同语义，docs/panelTaskCommission）。
           hasLeader: team.hasLeader,
+          // 锚定主任务：非空 = 本对话已有进行中的主任务，band 切增补子任务
+          // 分工（不再两步走建任务）。
+          mainTaskId: anchoredMainTaskOf(team, sessionId)?.id,
         },
   );
 }
