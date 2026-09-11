@@ -15,7 +15,7 @@
  *
  * @module dsh-eteams/client/modelCatalog
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 
 /** One adapter-owned reasoning effort (wire shape mirrors dsh-host-apiproxy sessions). */
 export interface CatalogEffort {
@@ -132,7 +132,12 @@ function resolverOf(): ResolverFace | null {
 
 /** 共享目录 store 的裸快照（dsh-client-store 家族：value/status/error）。 */
 export interface SharedCatalogSnapshot {
-  value?: { groups?: CatalogGroup[] } | null;
+  /** 宿主世代目录值（`default/routableProviders/groups/failures`）；刷新失败时保留上一份。 */
+  value?: { groups?: CatalogGroup[]; failures?: CatalogFailure[] } | null;
+  /** 生命周期：idle/loading/ready/error（选择器据此显示刷新条与错误条）。 */
+  status?: string;
+  /** 目录加载失败诊断（status='error' 时）。 */
+  error?: string | null;
 }
 
 /**
@@ -165,11 +170,31 @@ export function sharedCatalogStore(): {
 }
 
 /**
+ * 共享目录的请求器（resolver 级 `catalog.load()`，结构化探测并**保持 this**
+ * ——load 读 this.store，脱钩调用会丢接收者）。选择器打开时用它触发一次
+ * 缓存感知的刷新：目录已 ready 即在飞/命中，未 ready 才真发宿主 RPC，
+ * 与官方 ModelSelect.show() → load() 同语义（用户迭代 2026-09-11「直接拉它
+ * 的数据」）。服务/结构缺席 → null（旧运行时回落会话级路径）。
+ */
+function sharedCatalogLoad(): (() => Promise<unknown>) | null {
+  const face = (catalogCtx as { modelDirectories?: unknown } | null)?.modelDirectories;
+  if (typeof face !== 'object' || face === null) return null;
+  const catalog = (face as { catalog?: unknown }).catalog;
+  if (typeof catalog !== 'object' || catalog === null) return null;
+  const load = (catalog as { load?: unknown }).load;
+  if (typeof load !== 'function') return null;
+  return () => (load as () => Promise<unknown>).call(catalog);
+}
+
+/**
  * Load the session's shared model catalog (the same data the conversation
  * picker renders). Null when the resolver service is absent or the payload
  * shape is unexpected（旧运行时/未知结构 → 静态回退）; the RPC failure path
  * THROWS so the hook can flag `failed`（对话同款错误条 + 重试，用户迭代
  * 2026-09 二级菜单）。
+ *
+ * 2026-09-11 起只作旧运行时兜底：共享目录 store 在场的运行时，选择器改
+ * 订阅 store 直接读（共享目录已是宿主世代级缓存），不再每次经本函数 await。
  * @param sessionId - the owning conversation session.
  */
 export async function loadModelCatalog(sessionId: string): Promise<ModelCatalog | null> {
@@ -201,18 +226,46 @@ export async function loadModelCatalog(sessionId: string): Promise<ModelCatalog 
   }
 }
 
+/** uSES 缺源时的恒定订阅/快照（store 缺席 → 永不通知、快照 undefined）。 */
+const NOOP_SUBSCRIBE = (): (() => void) => () => undefined;
+const NOOP_SNAPSHOT = (): undefined => undefined;
+
+/** 共享快照 → 面板目录值（value 缺席或 groups 非数组 → null = 尚无目录）。 */
+function catalogOf(snapshot: SharedCatalogSnapshot | undefined): ModelCatalog | null {
+  const value = snapshot?.value ?? null;
+  if (value === null || !Array.isArray(value.groups)) return null;
+  return {
+    groups: value.groups,
+    failures: Array.isArray(value.failures) ? value.failures : [],
+  };
+}
+
 /**
- * Load the catalog once per mount (advisory directory, stable within a
- * session; the detail view re-mounts on every entry which is fresh enough).
- * Undefined session (overlay/hero surfaces) → null → legacy options.
+ * Read the shared model catalog the conversation's /model popup renders.
  *
- * 用户迭代 2026-09（模型二级菜单）：返回对象带 loading / failed / reload
- * ——对话选择器每次打开都刷新目录（ModelSelect.show() → reload()），加载
- * 失败显示错误条 + 重试，这里同款语义。`failed` 只在「服务在但加载失败」
- * 时为 true；服务缺失是旧运行时的永久态，走静态回退选项、不显示重试。
+ * 用户迭代 2026-09-11「直接拉它的数据」：共享目录已是**宿主世代级缓存**
+ * （官方 resolver 构造即后台预热一次、in-flight 去重、ready 即命中；官方
+ * ModelSelect 与 /model 弹层同样只读它）——这里改为**订阅**该 store 直接读
+ * 快照，打开选择器首帧即出列表，不再每次 `directoryFor(...).load()` await
+ * 往返（旧路径的 15s 超时/冷恢复假设属 rc.8 会话级契约，已过时）。
+ *
+ * loading / failed / reload 语义与官方 ModelSelect 对齐：loading 只表示目录
+ * 尚未就绪（已有目录时后台刷新不挂提示条，stale-while-revalidate）；failed
+ * 只在「store 在但加载失败」时为 true；reload 触发一次缓存感知的
+ * `catalog.load()`（ready 即 no-op）。目录 store 缺席的旧运行时回落原生会话级
+ * 路径（loadModelCatalog + 15s 限时），行为不变。
+ *
+ * Undefined session (overlay/hero surfaces) → 无会话级兜底 → 静态回退选项。
  */
 export function useModelCatalog(sessionId: string | undefined): ModelCatalogState {
-  const [state, setState] = useState<{
+  // 共享目录 store（全体会话共用一份，构造即预热）；缺席 = 旧运行时。
+  const store = sharedCatalogStore();
+  const shared = useSyncExternalStore(
+    store?.subscribe ?? NOOP_SUBSCRIBE,
+    store?.getSnapshot ?? NOOP_SNAPSHOT,
+  );
+  // 旧运行时兜底态（store 在场时此路不跑；hook 顺序恒定）。
+  const [legacy, setLegacy] = useState<{
     catalog: ModelCatalog | null;
     loading: boolean;
     failed: boolean;
@@ -224,31 +277,50 @@ export function useModelCatalog(sessionId: string | undefined): ModelCatalogStat
   }));
   const [tick, setTick] = useState(0);
   useEffect(() => {
+    if (store !== null) return;
     if (typeof sessionId !== 'string' || sessionId === '') return;
     let alive = true;
     void loadModelCatalog(sessionId)
       .then((catalog) => {
-        if (alive) setState({ catalog, loading: false, failed: false });
+        if (alive) setLegacy({ catalog, loading: false, failed: false });
       })
       .catch(() => {
         // 刷新失败保留旧目录（对话同款：失败条叠加在旧列表上，不闪回空态）。
-        if (alive) setState((s) => ({ catalog: s.catalog, loading: false, failed: true }));
+        if (alive) setLegacy((s) => ({ catalog: s.catalog, loading: false, failed: true }));
       });
     return () => {
       alive = false;
     };
-  }, [sessionId, tick]);
-  // 打开时刷新（对话 ModelSelect.show() → reload() 同款）：loading 置位在
-  // 事件回调里（react-hooks/set-state-in-effect 禁止 effect 同步 setState），
-  // tick 触发上方 effect 重新拉取。
+  }, [store, sessionId, tick]);
+  // 打开时刷新（对话 ModelSelect.show() → reload() 同款）：共享 store 在场时
+  // 走缓存感知的 catalog.load()（ready 即命中，不重复往返）；旧运行时置
+  // loading 并 tick 重拉（setState 在事件回调里——react-hooks/set-state-in-effect
+  // 禁止 effect 同步 setState）。
   const reload = useCallback(() => {
-    setState((s) => ({ ...s, loading: true }));
+    if (store !== null) {
+      const load = sharedCatalogLoad();
+      if (load !== null) {
+        void load().catch(() => {
+          // 失败态由 store 的 status/error 承载，订阅会推到界面（错误条 + 重试）。
+        });
+        return;
+      }
+    }
+    setLegacy((s) => ({ ...s, loading: true }));
     setTick((t) => t + 1);
-  }, []);
+  }, [store]);
+  if (store !== null) {
+    return {
+      catalog: catalogOf(shared),
+      loading: shared?.status === 'loading',
+      failed: shared?.status === 'error',
+      reload,
+    };
+  }
   return {
-    catalog: state.catalog,
-    loading: state.loading,
-    failed: state.failed,
+    catalog: legacy.catalog,
+    loading: legacy.loading,
+    failed: legacy.failed,
     reload,
   };
 }
