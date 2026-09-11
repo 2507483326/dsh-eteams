@@ -406,35 +406,6 @@ export async function createTeamTask(
   return { taskId: typeof body.taskId === 'number' ? body.taskId : Number(body.taskId ?? 0) };
 }
 
-/**
- * 面板手动创建主任务（docs/panelTaskCommission）：只交任务描述（+选团队），
- * 宿主建「创建中」容器并交完善者（有领队 = 领队子代理；无领队 = 主会话）。
- * `dispatched` 为假时 `detail` 带原因（任务仍创建成功，保留为创建中可删）。
- */
-export async function createTaskCommission(
-  teamId: string,
-  payload: { description: string; sessionId?: string },
-): Promise<{ taskId: number; dispatched: boolean; detail?: string }> {
-  const body = (await requestJson(
-    `${API_BASE}/team/${encodeURIComponent(teamId)}/task/commission`,
-    {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        description: payload.description,
-        ...(payload.sessionId !== undefined && payload.sessionId !== ''
-          ? { sessionId: payload.sessionId }
-          : {}),
-      }),
-    },
-  )) as { taskId?: unknown; dispatched?: unknown; detail?: unknown };
-  return {
-    taskId: typeof body.taskId === 'number' ? body.taskId : Number(body.taskId ?? 0),
-    dispatched: body.dispatched === true,
-    ...(typeof body.detail === 'string' && body.detail !== '' ? { detail: body.detail } : {}),
-  };
-}
-
 /** Update an unclaimed task (subject/description/成员槽/依赖 = 执行顺序, 七轮 DA20). */
 export async function updateTeamTask(
   teamId: string,

@@ -68,11 +68,13 @@ export function getSessionTeamId(sessionId: string): string | undefined {
   return bindings.get(sessionId)?.teamId;
 }
 
-/** 主任务终态集合：终态容器不可再挂小任务（taskMachine 边 + 组收口），锚定
- * 判据跳过它们——全部终态时回退两步走（下一个大请求自然开新项目）。 */
+/** 主任务锚定终态集合（用户迭代 2026-09-11：`failed` 已并入 `wait_user`）。
+ * 锚定判据跳过终态容器——全部终态时回退两步走（下一个大请求自然开新项目）。
+ * 注：`completed` 容器在状态机上可回退 ready（追加小任务即续），但锚定语义
+ * 仍按「已完成即释放锚点」——同一对话的**新**大请求开新项目，继续旧项目走
+ * 显式 parentTaskId。 */
 const TERMINAL_TASK_STATUSES: ReadonlySet<TaskRecord['status']> = new Set([
   'completed',
-  'failed',
   'cancelled',
 ]);
 

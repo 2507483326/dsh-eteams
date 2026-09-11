@@ -17,12 +17,15 @@ import { createCaptainTools } from '../src/host/tools/captainTools';
 import { createMemberTools } from '../src/host/tools/memberTools';
 import { setLeaderModel, setMemberModel } from '../src/host/runtime/teamOps';
 import {
+  assignTask,
+  cancelTask,
   createTask,
   finalizeCommissionTask,
   startGroupTask,
   type OpActor,
 } from '../src/host/runtime/assignment';
 import { joinPath, type RuntimeEnv } from '../src/host/runtime/base';
+import { getDb } from '../src/host/state/db';
 import { readTeamSync } from '../src/host/state/store';
 import { readEventsSync, readMailboxSync } from '../src/host/state/events';
 import type { TeamState } from '../src/host/model/types';
@@ -447,7 +450,8 @@ describe('lifecycle (offline full flow)', () => {
     await failOnce(true); // 第 1 次失败 → 同成员立即重试（attempt kind=retry）
     team = readTeam(teamId);
     let docTask = team.tasks.find((t) => t.id === doc.taskId)!;
-    expect(docTask.status).toBe('wait');
+    // 用户迭代 2026-09-11：重试排队归位 ready（wait 已撤销）。
+    expect(docTask.status).toBe('ready');
     expect(docTask.attempts.at(-1)!.kind).toBe('retry');
     expect(docTask.attempts.at(-1)!.member).toBe('Bob');
     expect(docTask.retryCount).toBe(1);
@@ -457,7 +461,8 @@ describe('lifecycle (offline full flow)', () => {
     await failOnce(false); // 第 4 次失败：retryCount 4 > maxRetries 3 → 待决策
     team = readTeam(teamId);
     docTask = team.tasks.find((t) => t.id === doc.taskId)!;
-    expect(docTask.status).toBe('wait_decision');
+    // 用户迭代 2026-09-11：wait_decision 并入 wait_user。
+    expect(docTask.status).toBe('wait_user');
     expect(docTask.retryCount).toBe(4);
     expect(team.pendingDecisions).toHaveLength(1);
     expect(team.pendingDecisions[0]!.status).toBe('open');
@@ -465,7 +470,7 @@ describe('lifecycle (offline full flow)', () => {
       'eteams_mailbox',
       {},
     );
-    expect(decisionBox.messages.at(-1)!.content).toContain('需决策');
+    expect(decisionBox.messages.at(-1)!.content).toContain('待用户');
 
     // 13. 事件一致性（SQLite events 表；偏离在 task.assigned payload，
     // chain.deviated 事件已随波次 2 下线）
@@ -920,5 +925,61 @@ describe('面板手动建任务（docs/panelTaskCommission）', () => {
     await expect(
       finalizeCommissionTask(env, who(teamId), group.id, { subject: '收口两次' }),
     ).rejects.toThrow(/无需重复提交/);
+  });
+});
+
+describe('大任务状态语义 + 依赖派发闸（用户迭代 2026-09-11 精简状态机）', () => {
+  const who = (teamId: number): OpActor => ({ teamId, actor: { kind: 'user', name: '用户' } });
+
+  it('completed 容器追加小任务 → 自动回 ready（完成后可继续，completed 只是标识）', async () => {
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '续做团队' });
+    const teamId = created.teamId;
+    const env = runtimeEnvFor();
+    const group = await createTask(env, who(teamId), { subject: '主任务', kind: 'group' });
+    // 模拟「全部小任务已完成」的收口标识（completeGroupIfDoneInTx 的产物）。
+    getDb(root)
+      .prepare('UPDATE task SET status = ? WHERE task_id = ?')
+      .run('completed', group.id);
+    const more = await createTask(env, who(teamId), {
+      subject: '续做小任务',
+      parentTaskId: group.id,
+    });
+    expect(more.parentId).toBe(group.id);
+    expect(readTeam(teamId).tasks.find((t) => t.id === group.id)!.status).toBe('ready');
+  });
+
+  it('取消大任务 → 未完成小任务取消 + 容器回 ready（不置 cancelled 终态）', async () => {
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '取消团队' });
+    const teamId = created.teamId;
+    const env = runtimeEnvFor();
+    const group = await createTask(env, who(teamId), { subject: '主任务', kind: 'group' });
+    const sub = await createTask(env, who(teamId), { subject: '小任务', parentTaskId: group.id });
+    await cancelTask(env, who(teamId), group.id, '不做了');
+    const team = readTeam(teamId);
+    // 容器不落 cancelled（用户原话「不要 cancelled，终端直接变回 ready」）。
+    expect(team.tasks.find((t) => t.id === group.id)!.status).toBe('ready');
+    // 未完成小任务逐个取消。
+    expect(team.tasks.find((t) => t.id === sub.id)!.status).toBe('cancelled');
+  });
+
+  it('依赖未完成的任务派发被拒（依赖不再物化，派发口显式校验）', async () => {
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '依赖团队' });
+    const teamId = created.teamId;
+    await cap('eteams_add_member', { name: 'Dave', role: 'engineer', teamId });
+    const env = runtimeEnvFor();
+    const first = await createTask(env, who(teamId), {
+      subject: '前置任务',
+      chain: [{ member: 2, stageBrief: '先做' }],
+    });
+    const second = await createTask(env, who(teamId), {
+      subject: '后置任务',
+      chain: [{ member: 2, stageBrief: '后做' }],
+      dependencies: [first.id],
+    });
+    await expect(assignTask(env, who(teamId), { taskId: second.id, member: 2 })).rejects.toThrow(
+      /依赖未完成/,
+    );
+    // 依赖被拒不改写状态：任务仍是 ready 等着（无物化 wait）。
+    expect(readTeam(teamId).tasks.find((t) => t.id === second.id)!.status).toBe('ready');
   });
 });

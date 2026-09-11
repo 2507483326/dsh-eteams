@@ -206,20 +206,21 @@ function parseLegacyId(raw: string | undefined, prefix: string): number | undefi
   return Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
-/** 旧 13 态 → 新 10 态（docs/35 §4 映射方案 A）。 */
+/** 旧 13 态 → 新 7 态（用户迭代 2026-09-11 精简：draft/ready/wait 并入 ready，
+ * wait_decision/failed 并入 wait_user）。 */
 const LEGACY_STATUS_MAP: Record<string, string> = {
-  draft: 'draft',
+  draft: 'ready',
   ready: 'ready',
-  assigned: 'wait',
+  assigned: 'ready',
   in_progress: 'start',
-  retrying: 'wait',
+  retrying: 'ready',
   paused: 'paused',
-  awaiting_decision: 'wait_decision',
+  awaiting_decision: 'wait_user',
   needs_user: 'wait_user',
   suspended: 'paused',
-  blocked: 'wait',
+  blocked: 'ready',
   completed: 'completed',
-  failed: 'failed',
+  failed: 'wait_user',
   cancelled: 'cancelled',
 };
 
@@ -788,8 +789,9 @@ function importLegacyTeam(
     if (taskId === undefined) continue;
     const parentId = t.parentId !== undefined ? (maps.task.get(t.parentId) ?? null) : null;
     const parentSubject = t.parentId !== undefined ? subjectOf.get(t.parentId) : undefined;
-    const blockedFrom =
-      t.status === 'blocked' ? mapLegacyStatus(t.blockedFrom ?? 'ready', 'ready') : null;
+    // blocked_from 弃用恒写 NULL（用户迭代 2026-09-11：依赖阻塞不再物化，
+    // 旧 blocked 态已映射为 ready）。
+    const blockedFrom = null;
     insertTask.run(
       taskId,
       teamId,
@@ -810,7 +812,7 @@ function importLegacyTeam(
         }),
       ),
       t.chainCursor ?? -1,
-      mapLegacyStatus(t.status, 'draft'),
+      mapLegacyStatus(t.status, 'ready'),
       t.assignee ?? null,
       // 主会话快照：旧版任务盖章建队会话（task.main_session_id，v5 落列
       // v6 改名；导入直盖，落库后不变）

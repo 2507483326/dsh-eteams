@@ -30,7 +30,6 @@ import {
   applyTransition,
   hasUpcomingStation,
   nextChainStation,
-  refreshDependencyStatus,
   stationKeyOf,
   stationPointsTo,
   taskSlug,
@@ -222,8 +221,14 @@ export async function createTask(
       parent = team.tasks.find((t) => t.id === params.parentTaskId);
       if (parent === undefined || parent.parentId !== null)
         throw new ETeamsError(`父任务 ${params.parentTaskId} 不存在或不是主任务（任务单）`);
-      if (!['creating', 'draft', 'ready'].includes(parent.status))
-        throw new ETeamsError(`主任务 ${parent.id} 处于 ${parent.status}，不能再挂小任务`);
+      // 大任务（容器）任意非终态都可挂小任务（用户迭代 2026-09-11「完成后
+      // 还可以继续添加小任务继续」）——completed 是「当前小任务都完成」的标识
+      // 不是死路，追加即由 applyTransition 的结构特例边回退 ready（下面）。
+      if (parent.status === 'cancelled')
+        throw new ETeamsError(`主任务 ${parent.id} 已取消，不能再挂小任务`);
+      if (parent.status === 'completed') {
+        applyTransition(parent, 'ready', tx.now);
+      }
     }
     for (const dep of deps) {
       if (!team.tasks.some((t) => t.id === dep))
@@ -313,7 +318,7 @@ export async function createTask(
   return out.task;
 }
 
-/** Update an unclaimed task（creating/draft/ready 可改，合同冻结后只读 — docs/06.4）。
+/** Update an unclaimed task（creating/ready 可改，合同冻结后只读 — docs/06.4）。
  * `creating`（面板手动创建占位）可改是完善收口的前提：完善者先回写主题/说明。 */
 export async function updateTask(
   env: RuntimeEnv,
@@ -332,10 +337,10 @@ export async function updateTask(
 ): Promise<TaskRecord> {
   const out = await withTeam(env, who.teamId, (team, _root, tx) => {
     const task = requireTask(team, params.taskId);
-    if (!['creating', 'draft', 'ready'].includes(task.status)) {
+    if (!['creating', 'ready'].includes(task.status)) {
       throw new ETeamsError(
         `任务 ${task.id} 处于 ${task.status}，合同已冻结`,
-        '未开始（creating/draft/ready）的任务才可修改；执行期变更先取消后重建',
+        '未开始（creating/ready）的任务才可修改；执行期变更先取消后重建',
       );
     }
     if (params.dependencies !== undefined) {
@@ -480,20 +485,20 @@ function renameTaskFolder(
 }
 
 /**
- * Delete an unclaimed task（draft/ready 未开始可删，docs/06.4）：组任务级联
+ * Delete an unclaimed task（creating/ready 未开始可删，docs/06.4）：组任务级联
  * 删除全部小任务（要求全部未开始）；任务文件夹一并移除（rmTree 手动递归，
  * 规避本机 rmSync 对中文路径的静默失效）。
  */
 export async function deleteTask(env: RuntimeEnv, who: OpActor, taskId: number): Promise<void> {
   const out = await withTeam(env, who.teamId, (team, _root, tx) => {
     const task = requireTask(team, taskId);
-    if (!['creating', 'draft', 'ready'].includes(task.status))
+    if (!['creating', 'ready'].includes(task.status))
       throw new ETeamsError(
-        `任务 ${task.id} 处于 ${task.status}，只能删除未开始（creating/draft/ready）任务`,
+        `任务 ${task.id} 处于 ${task.status}，只能删除未开始（creating/ready）任务`,
       );
     const doomed = [task, ...team.tasks.filter((t) => t.parentId === task.id)];
     for (const sub of doomed.slice(1)) {
-      if (!['draft', 'ready'].includes(sub.status))
+      if (sub.status !== 'ready')
         throw new ETeamsError(
           `小任务 ${sub.id} 处于 ${sub.status}，主任务不能级联删除`,
           '先处理（删除）该小任务，或等它完成',
@@ -732,10 +737,9 @@ export async function startGroupTask(
   }
   const result: GroupStartResult = { started: 0, skipped: [] };
   for (const sub of subExecutionOrder(team.tasks.filter((t) => t.parentId === group.id))) {
-    // 三十六轮 DA49（用户「任务点击开始没有反应」）：draft 小任务同进发棒
-    // 序（DA37 待开始语义闭环——派发核会把 draft 晋升 ready 后派发，旧库
-    // draft 小任务此前被静默跳过，点开始零反馈）。
-    if (!['draft', 'ready'].includes(sub.status)) continue;
+    // 只有待开始（ready）小任务进发棒序；draft 已并入 ready（用户迭代
+    // 2026-09-11）。
+    if (sub.status !== 'ready') continue;
     const next = sub.chain[sub.chainCursor + 1];
     if (next === undefined) {
       result.skipped.push({
@@ -765,6 +769,20 @@ export async function startGroupTask(
       });
     }
   }
+  // 大任务整体开始：真有棒发出去时容器 ready/paused→start（用户迭代
+  // 2026-09-11 大任务状态集）。全跳过（无链/成员未就绪等）不改容器——
+  // 计划还没真跑起来，保持待开始并让调用位把跳过原因就地提示。
+  // 链式续派（小任务完成后再进本函数）容器已在 start，applyTransition 幂等。
+  if (result.started > 0) {
+    // withTeam 锁内现读现写（上面的 assignTask 已写过盘，本地 team 快照已陈旧）。
+    await withTeam(env, team.id, (freshTeam, _root, tx) => {
+      const fresh = requireTask(freshTeam, taskId);
+      if (fresh.status !== 'start') {
+        applyTransition(fresh, 'start', tx.now);
+        emit(tx, team.id, who.actor, 'task.started', { taskId: fresh.id });
+      }
+    });
+  }
   return result;
 }
 
@@ -791,19 +809,16 @@ async function prepareAssignment(
   const task = requireTask(team, params.taskId);
   const isStation = task.chain.length > 0;
   if (params.forReassign !== true) {
-    // 三十六轮 DA49（用户「任务点击开始没有反应」）：draft 小任务派发即就绪
-    // （draft→ready 合法边，依赖/占用校验随下方原样兜）——DA37 起 draft/ready
-    // 面板同显「待开始」，旧库导入的 draft 小任务面板又没有晋升钮，状态闸
-    // 再挡 ready 就是永久开不了、整体开始还零反馈。
-    if (task.status === 'draft') applyTransition(task, 'ready', Date.now());
+    // 用户迭代 2026-09-11：draft/wait 已并入 ready，唯一可派发态就是 ready
+    // （派发不再改状态——成员领取才 ready→start）。
     if (task.status !== 'ready') {
       throw new ETeamsError(
         `任务 ${task.id} 处于 ${task.status}，只能指派 ready 任务`,
-        task.status === 'wait' && task.blockedFrom !== undefined
-          ? '任务被上游依赖阻塞：先推进依赖任务'
-          : '检查任务状态，或用 eteams_reassign_task 改派',
+        '检查任务状态，或用 eteams_reassign_task 改派',
       );
     }
+    // 依赖未满足的任务保持 ready 不物化（原 wait+blockedFrom 退役）：派发口
+    // 显式校验，不达标即拒——用户迭代 2026-09-11「阻塞就 ready 等待就行」。
     const unsat = unsatisfiedDependencies(team.tasks, task);
     if (unsat.length > 0) {
       throw new ETeamsError(`任务 ${task.id} 的依赖未完成：${unsat.join('、')}`, '先推进依赖任务');
@@ -817,6 +832,16 @@ async function prepareAssignment(
           `主任务 ${parent.id} 创建中，等完善收口后再派发小任务 ${task.id}`,
         );
       }
+    }
+    // 防重复派发（用户迭代 2026-09-11「派发归入 start 语义」后新增）：派发不
+    // 再改状态，`ready` 不再是「尚未派发」的充分判据——已有在办/待接取尝试
+    // 就不允许再派一次（否则点两次「开始」/换人会叠出两条待接取）。
+    const live = liveAttemptOf(task);
+    if (live !== undefined) {
+      throw new ETeamsError(
+        `任务 ${task.id} 已有进行中的指派（${live.member}，attempt ${live.id}）`,
+        '等该尝试接取/失败/婉拒，或用 eteams_reassign_task 改派',
+      );
     }
   }
   const row = resolveAssigneeRow(team, task, params.member);
@@ -966,8 +991,9 @@ async function ensureSpawned(
 }
 
 /**
- * 派发落笔（写事务内）：发号尝试 → 转移 wait（已派待接取）→ 占用实例行 →
- * 事件 + 派发邮件（返回唤醒动作，提交后由 dispatchCore 执行）。
+ * 派发落笔（写事务内）：发号尝试 → 占用实例行 → 事件 + 派发邮件（返回唤醒
+ * 动作，提交后由 dispatchCore 执行）。用户迭代 2026-09-11：派发**不再改状态**
+ * ——「等待派发/接取」并入 start 语义，任务留 ready、成员领取时 ready→start。
  */
 function applyAssignment(
   env: RuntimeEnv,
@@ -989,7 +1015,6 @@ function applyAssignment(
     taskMemberId: row.id,
     stationIndex: isStation ? task.chainCursor + 1 : 0,
   });
-  applyTransition(task, 'wait', tx.now);
   task.assignee = row.name;
   row.nowTaskId = task.id;
   emit(tx, team.id, actor, 'task.assigned', {
@@ -1064,16 +1089,9 @@ export async function reassignTask(
       const current = liveAttemptOf(task) ?? task.attempts.find((a) => a.status === 'paused');
       if (
         current === undefined &&
-        !['ready', 'wait', 'start', 'paused', 'wait_decision', 'wait_user'].includes(task.status)
+        !['ready', 'start', 'paused', 'wait_user'].includes(task.status)
       ) {
         throw new ETeamsError(`任务 ${task.id} 处于 ${task.status}，无法改派`);
-      }
-      if (task.status === 'wait' && task.blockedFrom !== undefined && current === undefined) {
-        // 阻塞物化（wait + blockedFrom）不是「已派待接取」：改派无意义。
-        throw new ETeamsError(
-          `任务 ${task.id} 被上游依赖阻塞，改派无意义`,
-          '先推进依赖任务解除阻塞，或 eteams_update_task 调整依赖',
-        );
       }
       const target = params.member ?? task.assignee;
       if (target === undefined) throw new ETeamsError('未指定改派目标成员');
@@ -1090,8 +1108,9 @@ export async function reassignTask(
 }
 
 /**
- * 改派落笔（写事务内）：吊销在办尝试 → 归位 wait（离开物化态即清
- * blockedFrom）→ 释放原执行者 → 开放决策收口 → 走通用派发落笔。
+ * 改派落笔（写事务内）：吊销在办尝试 → 归位 ready（改派回到待派池；派发
+ * 本身不改状态，见 applyAssignment）→ 释放原执行者 → 开放决策收口 → 走通用
+ * 派发落笔。
  */
 function applyReassignment(
   env: RuntimeEnv,
@@ -1103,7 +1122,7 @@ function applyReassignment(
 ): { task: TaskRecord; attempt: AttemptRecord } {
   const task = plan.task;
   revokeCurrentAttempt(tx, team, actor, task, 'reassign');
-  if (task.status !== 'ready') applyTransition(task, 'wait', tx.now);
+  if (task.status !== 'ready') applyTransition(task, 'ready', tx.now);
   freeMember(team, task);
   const decision = team.pendingDecisions.find((d) => d.status === 'open' && d.taskId === task.id);
   if (decision !== undefined) {
@@ -1133,31 +1152,26 @@ export async function suspendTask(
 ): Promise<TaskRecord> {
   const out = await withTeam(env, who.teamId, (team, _root, tx) => {
     const task = requireTask(team, taskId);
-    if (!['wait', 'start', 'ready'].includes(task.status)) {
+    if (!['ready', 'start'].includes(task.status)) {
       throw new ETeamsError(`任务 ${task.id} 处于 ${task.status}，无法挂起`);
     }
     const wakes: Wake[] = [];
-    if (task.status === 'ready') {
-      // 就绪任务挂起搭车物化（docs/36 建议 1）：wait + blockedFrom='ready' +
-      // status_note，resume 按 blockedFrom 还原。status_note 必写——它是与
-      // 「依赖阻塞物化」的区分判据。
-      applyTransition(task, 'wait', tx.now);
-      task.blockedFrom = 'ready';
-      task.statusNote = note ?? '领队挂起（未留说明）';
-    } else {
-      // 释放前留档执行者：freeMember 会清 assignee，通知按它投递。
-      const assignee = task.assignee;
-      revokeCurrentAttempt(tx, team, who.actor, task, 'suspend');
-      applyTransition(task, 'paused', tx.now);
-      task.statusNote = note;
-      freeMember(team, task);
+    // 释放前留档执行者：freeMember 会清 assignee，通知按它投递。
+    const assignee = task.assignee;
+    // ready（含已派待接取）与 start 一律吊销在办/待接取尝试 → paused（原
+    // 「就绪挂起搭车物化 wait+blockedFrom」随 wait 撤销退役，用户迭代
+    // 2026-09-11；恢复走 resumeTask 的 paused→ready）。
+    revokeCurrentAttempt(tx, team, who.actor, task, 'suspend');
+    applyTransition(task, 'paused', tx.now);
+    task.statusNote = note;
+    freeMember(team, task);
+    if (assignee !== undefined) {
       wakes.push(notifyMemberSuspendedInTx(env, tx, team, task, assignee, note));
     }
     emit(tx, team.id, who.actor, 'task.suspended', {
       taskId: task.id,
       payload: { note },
     });
-    refreshDependentsInTx(tx, team, who.actor, task.id);
     return { team, task, wakes };
   });
   renderTeamDocs(env.workspace, out.team, (msg) => env.ctx.logger.warn(msg));
@@ -1166,8 +1180,9 @@ export async function suspendTask(
 }
 
 /**
- * Resume a suspended task: 挂起的就绪任务（wait + blockedFrom + status_note）
- * 按 blockedFrom 还原并清说明；paused 任务给原执行者开新一轮尝试。
+ * Resume a suspended task: paused 任务给原执行者开新一轮尝试（回 ready——
+ * 用户迭代 2026-09-11；原「挂起的就绪任务按 blockedFrom 还原」分支随 wait
+ * 撤销退役）。
  */
 export async function resumeTask(
   env: RuntimeEnv,
@@ -1184,20 +1199,6 @@ export async function resumeTask(
       );
     }
     const task = requireTask(team, taskId);
-    if (task.blockedFrom !== undefined && task.statusNote !== undefined) {
-      // 挂起的就绪任务（suspendTask 的 ready 搭车物化）：还原到 blockedFrom。
-      const out = withTeamTx(root, team.id, (tx) => {
-        const target = task.blockedFrom;
-        if (target === undefined) throw new ETeamsError(`任务 ${task.id} 无恢复目标`);
-        applyTransition(task, target, tx.now);
-        task.statusNote = undefined;
-        emit(tx, team.id, who.actor, 'task.resumed', { taskId: task.id });
-        writeTeamInTx(tx, team);
-        return task.attempts[task.attempts.length - 1];
-      });
-      renderTeamDocs(env.workspace, team, (msg) => env.ctx.logger.warn(msg));
-      return { team, task, ...(out !== undefined ? { attempt: out } : {}) };
-    }
     if (task.status !== 'paused')
       throw new ETeamsError(`任务 ${task.id} 处于 ${task.status}，无法恢复`);
     // 挂起时执行者已释放（assignee 清空）：按最近一次尝试的副本行恢复
@@ -1221,7 +1222,8 @@ export async function resumeTask(
         ...(row.id > 0 ? { taskMemberId: row.id } : {}),
         stationIndex: task.chain.length > 0 ? task.chainCursor + 1 : 0,
       });
-      applyTransition(task, 'wait', tx.now);
+      applyTransition(task, 'ready', tx.now);
+      task.statusNote = undefined;
       task.assignee = row.name;
       row.nowTaskId = task.id;
       emit(tx, team.id, who.actor, 'task.resumed', {
@@ -1249,7 +1251,44 @@ function thrower(message: string): never {
   throw new ETeamsError(message);
 }
 
-/** Cancel a task (captain; any non-terminal status). */
+/** 单任务取消落笔（事务内）：吊销在办/待接取尝试 → 释放执行者 → 置
+ * cancelled → 收口开放决策。返回通知唤醒动作。 */
+function cancelSingleInTx(
+  env: RuntimeEnv,
+  tx: TeamTx,
+  team: TeamState,
+  actor: Actor,
+  task: TaskRecord,
+  reason?: string,
+): Wake {
+  // 释放前留档执行者：freeMember 会清 assignee，通知按它投递。
+  const assignee = task.assignee;
+  revokeCurrentAttempt(tx, team, actor, task, 'cancel');
+  freeMember(team, task);
+  applyTransition(task, 'cancelled', tx.now);
+  task.updatedAt = tx.now;
+  const decision = team.pendingDecisions.find((d) => d.status === 'open' && d.taskId === task.id);
+  if (decision !== undefined) {
+    decision.status = 'resolved';
+    decision.resolvedAt = tx.now;
+    decision.choice = 'suspend';
+    decision.note = 'task cancelled';
+  }
+  emit(tx, team.id, actor, 'task.cancelled', {
+    taskId: task.id,
+    payload: { reason },
+  });
+  return notifyMemberCancelledInTx(env, tx, team, task, assignee, reason);
+}
+
+/**
+ * Cancel a task (captain)。
+ *
+ * 用户迭代 2026-09-11「不要 cancelled，终端直接变回 ready」：大任务（容器）
+ * **不置 cancelled**——取消 = 把其未完成小任务逐个取消 + 容器回到 ready
+ * （计划作废、可重新编排或重开）；彻底不要了走 deleteTask。
+ * 小任务维持 cancelled 终态。
+ */
 export async function cancelTask(
   env: RuntimeEnv,
   who: OpActor,
@@ -1259,27 +1298,20 @@ export async function cancelTask(
   const out = await withTeam(env, who.teamId, (team, _root, tx) => {
     const task = requireTask(team, taskId);
     const wakes: Wake[] = [];
-    if (['wait', 'start', 'paused'].includes(task.status)) {
-      // 释放前留档执行者：freeMember 会清 assignee，通知按它投递。
-      const assignee = task.assignee;
-      revokeCurrentAttempt(tx, team, who.actor, task, 'cancel');
-      freeMember(team, task);
-      wakes.push(notifyMemberCancelledInTx(env, tx, team, task, assignee, reason));
+    if (task.parentId === null) {
+      for (const sub of team.tasks.filter((t) => t.parentId === task.id)) {
+        if (sub.status === 'completed' || sub.status === 'cancelled') continue;
+        wakes.push(cancelSingleInTx(env, tx, team, who.actor, sub, reason));
+      }
+      if (task.status !== 'ready') applyTransition(task, 'ready', tx.now);
+      task.updatedAt = tx.now;
+      emit(tx, team.id, who.actor, 'task.reopened', {
+        taskId: task.id,
+        payload: { reason, via: 'group.cancel' },
+      });
+      return { team, task, wakes };
     }
-    applyTransition(task, 'cancelled', tx.now);
-    task.updatedAt = tx.now;
-    const decision = team.pendingDecisions.find((d) => d.status === 'open' && d.taskId === task.id);
-    if (decision !== undefined) {
-      decision.status = 'resolved';
-      decision.resolvedAt = tx.now;
-      decision.choice = 'suspend';
-      decision.note = 'task cancelled';
-    }
-    emit(tx, team.id, who.actor, 'task.cancelled', {
-      taskId: task.id,
-      payload: { reason },
-    });
-    refreshDependentsInTx(tx, team, who.actor, task.id);
+    wakes.push(cancelSingleInTx(env, tx, team, who.actor, task, reason));
     return { team, task, wakes };
   });
   renderTeamDocs(env.workspace, out.team, (msg) => env.ctx.logger.warn(msg));
@@ -1468,7 +1500,6 @@ export async function completeTask(
       attemptId: attempt.id,
       payload: { output, changedPaths: params.changedPaths, isStation, final: final || !isStation },
     });
-    refreshDependentsInTx(tx, fresh, memberActor(member), task.id);
     // docs/26：组任务收口——末个小任务完成且全组 completed 时自动落组状态。
     completeGroupIfDoneInTx(tx, fresh, memberActor(member), task);
     wakes.push(
@@ -1530,14 +1561,15 @@ export async function failTask(
     // 重试上限读全局配置（docs/35 §3#3：maxRetries 不再随队）。
     const maxRetries = env.config.maxRetries;
     if (task.retryCount <= maxRetries) {
-      // 立即同成员重试（docs/35 §5#8）：单次落 wait（已派待接取）。
+      // 立即同成员重试（docs/35 §5#8）：归位 ready（原 wait 已撤销——用户
+      // 迭代 2026-09-11「重试排队」并入 ready）。
       const retry = makeAttempt(tx, task, {
         kind: 'retry',
         member: member.name,
         ...(member.id > 0 ? { taskMemberId: member.id } : {}),
         stationIndex: task.chain.length > 0 ? task.chainCursor + 1 : 0,
       });
-      applyTransition(task, 'wait', tx.now);
+      applyTransition(task, 'ready', tx.now);
       task.assignee = member.name;
       member.nowTaskId = task.id;
       emit(tx, fresh.id, memberActor(member), 'task.retrying', {
@@ -1555,8 +1587,9 @@ export async function failTask(
       );
       return { team: fresh, task, retried: true, retryCount: task.retryCount, maxRetries, wakes };
     }
-    // Retries exhausted → wait_decision + DecisionRecord (docs/08).
-    applyTransition(task, 'wait_decision', tx.now);
+    // Retries exhausted → wait_user + DecisionRecord（docs/08；用户迭代
+    // 2026-09-11「其实都是 wait_user，就合并为一个 wait_user 吧」）。
+    applyTransition(task, 'wait_user', tx.now);
     const decision: DecisionRecord = {
       id: nextAutoincrementId(tx.db, 'decisions'),
       taskId: task.id,
@@ -1567,7 +1600,7 @@ export async function failTask(
       createdAt: tx.now,
     };
     fresh.pendingDecisions.push(decision);
-    emit(tx, fresh.id, memberActor(member), 'task.wait_decision', {
+    emit(tx, fresh.id, memberActor(member), 'task.wait_user', {
       taskId: task.id,
       attemptId: attempt.id,
       payload: { decisionId: decision.id, retryCount: task.retryCount },
@@ -1577,7 +1610,6 @@ export async function failTask(
       attemptId: attempt.id,
       payload: { decisionId: decision.id },
     });
-    refreshDependentsInTx(tx, fresh, memberActor(member), task.id);
     wakes.push(
       notifyCaptainInTx(
         tx,
@@ -1725,30 +1757,11 @@ function freeMember(team: TeamState, task: TaskRecord): void {
 }
 
 /**
- * 依赖物化（docs/35 §5#11）：任务状态落定后刷新其依赖方——ready 依赖方在
- * 上游未齐时物化为 wait + blockedFrom，已物化依赖方在上游齐后还原到
- * blockedFrom。事件按方向分型：原已物化 → task.unblocked，原就绪 →
- * task.blocked。
- */
-function refreshDependentsInTx(tx: TeamTx, team: TeamState, actor: Actor, taskId: number): void {
-  for (const dependent of team.tasks.filter(
-    (t) => t.dependencies.includes(taskId) && (t.status === 'ready' || t.blockedFrom !== undefined),
-  )) {
-    const wasMaterialized = dependent.blockedFrom !== undefined;
-    if (refreshDependencyStatus(team.tasks, dependent, tx.now)) {
-      emit(tx, team.id, actor, wasMaterialized ? 'task.unblocked' : 'task.blocked', {
-        taskId: dependent.id,
-        payload: { by: taskId, status: dependent.status },
-      });
-    }
-  }
-}
-
-/**
  * 对话任务组收口（docs/26）：小任务完成时检查父组——组内小任务全部
- * completed 即把组任务 ready→completed（applyTransition 的大任务特例边）；
+ * completed 即把组任务 → completed（applyTransition 的大任务特例边）；
  * 产出汇总各小任务的 attempts 最新成功行（{@link taskOutcome}，不落列）。
- * 有子任务取消/失败则组保持现状，交领队处理。
+ * 有子任务取消则组保持现状，交领队处理。用户迭代 2026-09-11（依赖阻塞不再
+ * 物化、大任务有 start 态）：容器在 ready 或 start 都可收口。
  */
 function completeGroupIfDoneInTx(
   tx: TeamTx,
@@ -1759,9 +1772,9 @@ function completeGroupIfDoneInTx(
   if (subtask.parentId === null) return;
   const parent = team.tasks.find((t) => t.id === subtask.parentId);
   if (parent === undefined || parent.status === 'completed' || parent.parentId !== null) return;
-  // 容器还在「创建中」（面板手动创建占位）不自动收口：ready→completed 特例
-  // 边对 creating 不成立，硬收会抛非法转移（docs/panelTaskCommission）。
-  if (parent.status !== 'ready') return;
+  // 可收口的容器状态 = ready / start（大任务整体开始后容器转 start，用户
+  // 迭代 2026-09-11）；「创建中」（面板手动创建占位）与 paused 不自动收口。
+  if (parent.status !== 'ready' && parent.status !== 'start') return;
   const subs = team.tasks.filter((t) => t.parentId === parent.id);
   if (subs.length === 0 || !subs.every((t) => t.status === 'completed')) return;
   applyTransition(parent, 'completed', tx.now);

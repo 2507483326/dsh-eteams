@@ -1,9 +1,13 @@
 /**
- * Task state machine (docs/06.2；11 态收敛见 docs/27 §27.9.11 / docs/35 §4；
- * 第 11 态 `creating` = 面板手动创建占位，docs/panelTaskCommission)
- * — pure functions, no I/O, no cordis.
- * Illegal transitions throw `TransitionError`; the tool layer converts them
- * into actionable Chinese error text.
+ * Task state machine（用户迭代 2026-09-11 由 11 态精简为 7 态：
+ * creating/ready/start/paused/wait_user/completed/cancelled）— pure functions,
+ * no I/O, no cordis. Illegal transitions throw `TransitionError`; the tool layer
+ * converts them into actionable Chinese error text.
+ *
+ * 「阻塞」不再是状态：原 `ready → wait + blockedFrom` 的依赖物化随 `wait` 撤销
+ * 整体退役（依赖未满足的任务保持 ready，派发口用 {@link dependenciesSatisfied}
+ * 校验）；大任务（parentId 为空）的 completed↔ready 走 applyTransition 的结构
+ * 特例边。
  *
  * @module dsh-eteams/model/taskMachine
  */
@@ -20,27 +24,26 @@ export class TransitionError extends Error {
 }
 
 /**
- * Allowed outgoing edges per status (docs/27 §27.9.11：11 态收敛；docs/35 §4
- * 映射方案 A)。旧 13 态的合并：assigned/retrying/blocked → wait，
- * in_progress → start，awaiting_decision → wait_decision，
- * needs_user → wait_user，suspended → paused。「阻塞」不再是独立状态——
- * 物化阻塞 = `wait + blockedFrom 非空`，恢复走 restoreBlocked()。
- * `creating`（面板手动创建占位）：只有两条出边——完善收口转 ready、放弃转
- * cancelled；不经转移进入（建任务直接以 creating 落库）。
+ * Allowed outgoing edges per status（用户迭代 2026-09-11 精简为 7 态）。
+ *
+ * 原 11 态边的收敛：`draft`/`wait` 边并入 `ready`；`wait_decision`/`failed`
+ * 边并入 `wait_user`。「阻塞」不再是状态（原 `wait + blockedFrom` 物化随
+ * wait 撤销退役）——被上游依赖卡住的任务保持 `ready`，是否可派发由
+ * {@link dependenciesSatisfied} 在派发口校验。
+ *
+ * `creating`（面板手动创建占位）：完善收口转 ready、放弃转 cancelled；不经
+ * 转移进入（建任务直接以 creating 落库）。
+ * `completed` 小任务是终态；大任务（parentId 为空）的 `completed → ready`
+ * 是**特例边**（追加小任务即回退，见 applyTransition），故记在 ready 侧。
  */
 const EDGES: Record<TaskStatus, readonly TaskStatus[]> = {
   creating: ['ready', 'cancelled'],
-  draft: ['ready', 'cancelled'],
-  // ready → wait 双义：正常派发（无 blockedFrom）与依赖毒化物化（恢复目标
-  // 记进 blockedFrom，见 refreshDependencyStatus）共用同一条边。
-  ready: ['wait', 'cancelled'],
-  wait: ['start', 'ready', 'wait', 'paused', 'cancelled'],
-  start: ['wait', 'completed', 'ready', 'wait_decision', 'paused', 'cancelled'],
-  paused: ['start', 'wait', 'ready', 'failed', 'cancelled'],
-  wait_decision: ['wait', 'paused', 'wait_user', 'cancelled'],
-  wait_user: ['wait', 'failed', 'cancelled'],
+  ready: ['start', 'paused', 'wait_user', 'cancelled'],
+  // 严格顺序执行：start 可回 ready（失败重试/改派/中间站交接）。
+  start: ['ready', 'completed', 'paused', 'wait_user', 'cancelled'],
+  paused: ['ready', 'start', 'wait_user', 'cancelled'],
+  wait_user: ['ready', 'start', 'paused', 'cancelled'],
   completed: [],
-  failed: [],
   cancelled: [],
 };
 
@@ -50,60 +53,32 @@ export function canTransition(from: TaskStatus, to: TaskStatus): boolean {
 }
 
 /**
- * Apply one status move in place. Bookkeeping:
- * - 任何离开物化阻塞态（wait + blockedFrom 非空）的转移都清掉恢复目标
- *   （正常恢复走 restoreBlocked；这里兜底取消等旁路）；
- * - 物化本体（ready → wait + blockedFrom）由 refreshDependencyStatus 落笔，
- *   普通派发的 ready → wait 不得带上 blockedFrom。
+ * Apply one status move in place（用户迭代 2026-09-11：blockedFrom 物化退役，
+ * 不再有退出物化阻塞态的清理动作）。
  */
 export function applyTransition(task: TaskRecord, to: TaskStatus, now: number): void {
   if (task.status === to) return;
-  // 对话任务组（docs/26）：group 任务不经执行链，全部小任务完成时由插件
-  // 直接 ready→completed（标准边没有这条，这里单独放行）。docs/27 定案
-  // kind 不落库，容器判据换成结构：parent_id 为空 = 大任务（容器）。
-  if (task.parentId === null && task.status === 'ready' && to === 'completed') {
-    task.completedAt = now;
-    task.status = to;
-    task.updatedAt = now;
-    return;
+  // 对话任务组（docs/26）：大任务（容器）不经执行链，两条结构特例边：
+  // ready→completed（全部小任务完成时由插件收口）与 completed→ready
+  // （用户迭代 2026-09-11「完成后还可以继续添加小任务继续」——追加小任务即
+  // 回退，completed 只是「当前小任务都完成」的标识）。docs/27 定案 kind 不
+  // 落库，容器判据换成结构：parent_id 为空 = 大任务。
+  if (task.parentId === null) {
+    const containerEdge =
+      (task.status === 'ready' && to === 'completed') ||
+      (task.status === 'completed' && to === 'ready');
+    if (containerEdge) {
+      if (to === 'completed') task.completedAt = now;
+      task.status = to;
+      task.updatedAt = now;
+      return;
+    }
   }
   if (!canTransition(task.status, to)) throw new TransitionError(task.status, to);
-  if (task.status === 'wait' && task.blockedFrom !== undefined) {
-    task.blockedFrom = undefined;
-  }
   if (to === 'completed') task.completedAt = now;
   task.status = to;
   task.updatedAt = now;
 }
-
-/**
- * Restore a materialized blocked task (wait + blockedFrom) to its pre-block
- * status, re-checking that dependencies actually recovered (docs/05.9: the
- * blocked state is materialized but its exit re-derives from live dependency
- * statuses). 入口判据 = blockedFrom 非空（docs/35 §5#11），恢复目标取
- * blockedFrom 本身，解除即清空。
- */
-export function restoreBlocked(
-  task: TaskRecord,
-  dependenciesSatisfied: boolean,
-  now: number,
-): TaskStatus {
-  if (task.blockedFrom === undefined) return task.status;
-  const target: TaskStatus = task.blockedFrom;
-  if (target === 'ready' && !dependenciesSatisfied) return task.status;
-  task.status = target;
-  task.blockedFrom = undefined;
-  task.updatedAt = now;
-  return target;
-}
-
-/** Dependency statuses that poison downstream tasks (docs/35 §3#12 定案集). */
-const POISON: ReadonlySet<TaskStatus> = new Set([
-  'paused',
-  'failed',
-  'wait_decision',
-  'wait_user',
-]);
 
 /** Un-satisfied dependency ids of one task against the task list. */
 export function unsatisfiedDependencies(tasks: readonly TaskRecord[], task: TaskRecord): number[] {
@@ -111,46 +86,11 @@ export function unsatisfiedDependencies(tasks: readonly TaskRecord[], task: Task
   return task.dependencies.filter((depId) => byId.get(depId)?.status !== 'completed');
 }
 
-/** Poisoning dependency ids (any non-terminal bad status) of one task. */
-export function poisoningDependencies(tasks: readonly TaskRecord[], task: TaskRecord): number[] {
-  const byId = new Map(tasks.map((t) => [t.id, t]));
-  return task.dependencies.filter((depId) => {
-    const status = byId.get(depId)?.status;
-    return status !== undefined && POISON.has(status);
-  });
-}
-
-/** True when every dependency is `completed` (assignment precondition). */
+/** True when every dependency is `completed`（派发前置条件；依赖未满足的任务
+ * 保持 ready 不物化，由派发口显式校验——用户迭代 2026-09-11「阻塞就 ready
+ * 等待就行」）。 */
 export function dependenciesSatisfied(tasks: readonly TaskRecord[], task: TaskRecord): boolean {
   return unsatisfiedDependencies(tasks, task).length === 0;
-}
-
-/**
- * Refresh one task's dependency-derived status in place (docs/05.9 + docs/35
- * §5#11)：ready 任务被依赖毒化时物化为 wait + blockedFrom='ready'；物化态
- * （blockedFrom 非空）在依赖恢复后还原。只有 ready 物化：已派发/执行中的
- * 任务不因依赖毒化回退（依赖 completed 即终态）。
- * @returns whether the status changed.
- */
-export function refreshDependencyStatus(
-  tasks: readonly TaskRecord[],
-  task: TaskRecord,
-  now: number,
-): boolean {
-  if (task.status === 'ready') {
-    if (poisoningDependencies(tasks, task).length > 0) {
-      applyTransition(task, 'wait', now);
-      task.blockedFrom = 'ready';
-      return true;
-    }
-    return false;
-  }
-  if (task.blockedFrom !== undefined) {
-    const before = task.status;
-    restoreBlocked(task, dependenciesSatisfied(tasks, task), now);
-    return before !== task.status;
-  }
-  return false;
 }
 
 /** The next planned chain station, or undefined at/past the end (docs/06.7). */

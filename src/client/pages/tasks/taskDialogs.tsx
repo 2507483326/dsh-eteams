@@ -99,7 +99,7 @@ export function TaskDialogs({
 
       {/* 任务删除确认弹窗（十二轮 DA25 共用面扩大：列表卡删除 + 详情页
       小任务删除；标题去「小任务」限定，主任务追加级联提示）。未领取
-      （draft/ready）可删，host 校验，拒绝原因就地显示。（M7-1 壳收口
+      （creating/ready）可删，host 校验，拒绝原因就地显示。（M7-1 壳收口
       ConfirmDeleteDialog，破坏性确认钮档。） */}
       <ConfirmDeleteDialog
         open={deleteTarget !== null}

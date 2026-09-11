@@ -28,6 +28,13 @@ function text(value: string): ContentBlock[] {
 const str = (description: string) => ({ type: 'string' as const, description });
 const bool = (description: string) => ({ type: 'boolean' as const, description });
 
+/** 多选字段别名容错（2026-09-11 实况）：模型会把规范字段 multiSelect 漂移成
+ * snake_case 的 multi_select（或构建访谈旧名 multi）——问题项 schema 虽已放宽
+ * （additionalProperties: true），这里仍把别名收口回规范字段，避免多选语义丢失。 */
+function multiSelectOf(o: Record<string, unknown>): boolean {
+  return o['multiSelect'] === true || o['multi_select'] === true || o['multi'] === true;
+}
+
 /** 入参问题校验（id/question 必填；options 原样透传给弹窗服务渲染）。 */
 function normalizeQuestions(raw: unknown): AskQuestion[] {
   if (!Array.isArray(raw)) throw new ETeamsError('questions 必须是问题列表');
@@ -56,7 +63,7 @@ function normalizeQuestions(raw: unknown): AskQuestion[] {
       question,
       ...(typeof o['header'] === 'string' && o['header'] !== '' ? { header: o['header'] as string } : {}),
       options,
-      ...(o['multiSelect'] === true ? { multiSelect: true } : {}),
+      ...(multiSelectOf(o) ? { multiSelect: true } : {}),
     });
   }
   if (questions.length === 0) throw new ETeamsError('questions 不能为空（一次问全 ≤5 问）');
@@ -107,7 +114,11 @@ export function createAskUserTools(
             },
             multiSelect: { type: 'boolean' as const, description: '允许多选（缺省单选）' },
           },
-          additionalProperties: false,
+          // 问题项放宽（2026-09-11 实况）：模型常把 multiSelect 写成 multi_select，
+          // 严格 additionalProperties:false 会让整次调用被宿主按 invalid arguments
+          // 拒收——别名交给 normalizeQuestions 归一，未知键忽略（defineTool 要求
+          // object 显式声明 additionalProperties，故写 true）。
+          additionalProperties: true,
         },
       },
     },

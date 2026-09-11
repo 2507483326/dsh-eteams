@@ -1,12 +1,11 @@
 /**
- * 任务展示态派生层（docs/27 §27.9#11 十态收敛 + docs/panelTaskCommission
- * 第 11 态 creating）：底层 11 态状态机
- * （types.ts TaskStatus：creating/draft/ready/wait/start/paused/wait_decision/
- * wait_user/completed/failed/cancelled）是调度/重试/依赖阻断的运行依据，
- * 本模块提供三套展示词表与 tone——纯函数、读取时计算、不落盘、不写状态机。
+ * 任务展示态派生层（用户迭代 2026-09-11 精简为 7 态）：底层状态机
+ * （types.ts TaskStatus：creating/ready/start/paused/wait_user/completed/
+ * cancelled）是调度/重试/依赖校验的运行依据，本模块提供三套展示词表与
+ * tone——纯函数、读取时计算、不落盘、不写状态机。
  *
  * 同时是任务展示 tone 与词表的共同家：
- * - `STATUS_LABELS`：任务 11 态精确词表（八轮 DA21 页面化后无直接渲染方，
+ * - `STATUS_LABELS`：任务 7 态精确词表（八轮 DA21 页面化后无直接渲染方，
  *   仅作态键序的规范来源——STATUS_GROUPS 按其键序展开）。
  * - `ATTEMPT_STATUS_LABELS`：尝试（AttemptStatus 六态）词表——尝试行状态与
  *   任务态不同源，不复用任务词表。
@@ -21,22 +20,16 @@
 /** Semantic tone — every status color flows through these five buckets. */
 export type Tone = 'info' | 'ok' | 'warn' | 'err' | 'muted';
 
-/** 任务 11 态精确词表（docs/27 §27.9#11 + docs/panelTaskCommission 第 11 态
- * creating；二十四轮 DA37 用户拍板「没有什么草稿状态、待指派状态，只有待
- * 开始状态」——draft/ready 两态展示文案合并为「待开始」，词表仅作键序规范
- * 来源；creating = 面板手动创建占位「创建中」，键序在最前——比待开始更早
- * 的态）。 */
+/** 任务 7 态精确词表（用户迭代 2026-09-11 精简：draft/ready/wait 并入
+ * ready——「待开始」，wait_decision/failed 并入 wait_user——「待用户」；
+ * creating = 面板手动创建占位「创建中」，键序在最前）。 */
 export const STATUS_LABELS: Record<string, string> = {
   creating: '创建中',
-  draft: '待开始',
   ready: '待开始',
-  wait: '待接取',
   start: '执行中',
   paused: '已挂起',
-  wait_decision: '待决策',
   wait_user: '待用户',
   completed: '已完成',
-  failed: '失败',
   cancelled: '已取消',
 };
 
@@ -78,31 +71,22 @@ export interface DisplayStatus {
 }
 
 /**
- * 11 态 → 展示态映射表：creating→init（面板手动创建占位，尚未进入执行
- * 语义，docs/panelTaskCommission）；draft→init；ready→created；wait/paused→waiting；
- * start→doing；completed→done；wait_decision/wait_user/failed→error；
- * cancelled→error 桶但文案「已取消」、中性灰（同桶异色——wait_decision/
- * wait_user 行内点色 warning 黄、failed 红、cancelled 灰）。
+ * 7 态 → 展示态映射表（用户迭代 2026-09-11 精简）：creating→init（面板手动
+ * 创建占位，尚未进入执行语义，docs/panelTaskCommission）；ready→created
+ * 「待开始」；start→doing；paused→waiting；wait_user→error 桶但 warning 黄
+ * （等人介入不是故障）；completed→done；cancelled→error 桶但文案「已取消」、
+ * 中性灰（同桶异色）。
  *
- * 二十四轮 DA37（用户拍板「没有什么草稿状态、待指派状态，只有待开始状态」）：
- * draft 与 ready 展示**合并为「待开始」**（同 label 同 tone，桶键保留
- * init/created 不动组卡汇总优先级语义）；无成员不设状态——「需要选择成员」
- * 是指派提示不是状态（成员卡槽空槽即提示面）。
- *
- * 十态已是用户口径的精确粒度，detail 不再做吞并态补字；仅 retryCount>0
- * 并入重试计数。
+ * 无成员不设状态——「需要选择成员」是指派提示不是状态（成员卡槽空槽即
+ * 提示面）。detail 只并入 retryCount>0 的重试计数。
  */
 const DISPLAY_STATUS_TABLE: Record<string, { key: DisplayStatusKey; label: string; tone: Tone }> = {
   creating: { key: 'init', label: '创建中', tone: 'info' },
-  draft: { key: 'init', label: '待开始', tone: 'info' },
   ready: { key: 'created', label: '待开始', tone: 'info' },
-  wait: { key: 'waiting', label: '待接取', tone: 'warn' },
-  paused: { key: 'waiting', label: '已挂起', tone: 'warn' },
   start: { key: 'doing', label: '执行中', tone: 'info' },
-  wait_decision: { key: 'error', label: '待决策', tone: 'warn' },
+  paused: { key: 'waiting', label: '已挂起', tone: 'warn' },
   wait_user: { key: 'error', label: '待用户', tone: 'warn' },
   completed: { key: 'done', label: '已完成', tone: 'ok' },
-  failed: { key: 'error', label: '失败', tone: 'err' },
   cancelled: { key: 'error', label: '已取消', tone: 'muted' },
 };
 
@@ -121,13 +105,13 @@ export function displayStatusOf(status: string, retryCount = 0): DisplayStatus {
 
 /**
  * 任务/小任务「开始」钮状态判据（docs/44 44.2.2，M3 自 tasks/taskSubtaskItem
- * 行头与任务详情页头收拢）：状态窗口 = ready / draft（三十六轮 DA49——派发核
- * draft 即就绪，待开始语义闭环；draft 与 ready 面板同显「待开始」，旧库导入
- * 的 draft 卡此前不渲染开始钮）。链是否为空（无链 = 行内「需要选择成员」
- * 提示面）是数据判据，调用位与状态判据并列消费——判定结果与收拢前逐位等价。
+ * 行头与任务详情页头收拢）：状态窗口 = ready（用户迭代 2026-09-11：draft/wait
+ * 撤销并入 ready，唯一待开始态）。链是否为空（无链 = 行内「需要选择成员」
+ * 提示面）是数据判据，调用位与状态判据并列消费。
  */
 export function isStartable(status: string): boolean {
-  return status === 'ready' || status === 'draft';
+  // 用户迭代 2026-09-11：draft/wait 并入 ready，唯一待开始态就是 ready。
+  return status === 'ready';
 }
 
 /**
@@ -142,12 +126,13 @@ export function isTerminal(status: string): boolean {
 
 /**
  * 主任务（group）「开始」钮状态判据扩位（docs/panelTaskCommission）：
- * 非终态且**非创建中**——创建中的容器（面板手动建任务占位）计划未定不可
- * 开跑（宿主 startGroupTask 同闸），面板两侧按钮判据收拢于此，与宿主守卫
- * 镜像。结构判据（kind === 'group'、小任务数 > 0）留在调用位。
+ * 非终态、**非创建中**、**非已完成**——创建中的容器（面板手动建任务占位）
+ * 计划未定不可开跑（宿主 startGroupTask 同闸）；completed 是「当前小任务都
+ * 完成」的标识（用户迭代 2026-09-11），要再跑得先追加小任务把容器拉回
+ * ready。结构判据（kind === 'group'、小任务数 > 0）留在调用位。
  */
 export function isGroupStartable(status: string): boolean {
-  return !isTerminal(status) && status !== 'creating';
+  return !isTerminal(status) && status !== 'creating' && status !== 'completed';
 }
 
 /** 组卡汇总 chip（B.2 group 汇总规则）：一条可渲染的汇总（tone/icon/detail）。 */
@@ -162,16 +147,15 @@ export interface GroupSummary {
 
 /**
  * 组卡小任务汇总（ready 且存在小任务时调用方才消费）：优先级 error >
- * doing > waiting > created，与 POISON 传染语义一致：
- * - 含任一 error 桶小任务（wait_decision/wait_user/failed/cancelled）→
- *   「✕ n 项异常」（点色 err；detail 取首个异常的词表文案）；
- * - 否则含 doing（start）→ 「n 执行中」（info）；
- * - 否则含 waiting（wait/paused）→ 「n 待接取」（warn）；
+ * doing > waiting > created：
+ * - 含任一 error 桶小任务（wait_user/cancelled）→「✕ n 项异常」（点色 err；
+ *   detail 取首个异常的词表文案）；
+ * - 否则含 doing（start）→「n 执行中」（info）；
+ * - 否则含 waiting（paused）→「n 已挂起」（warn）；
  * - 全部 done → null（「小任务 n/n 完成」进度行已表达，不加 chip）；
- * - 其余（ready/draft 混合）→ null（用户迭代 2026-09-08「去掉那个圆角的
- *   待开始」：卡底状态 pill 已表达待开始，chip 再画一个重复了——chip 只
- *   承担异常/执行中/待接取这类增量信息）。
- * group 的 draft（拆解中）不做汇总——调用方只在 ready 时消费本函数。
+ * - 其余（ready 混合）→ null（用户迭代 2026-09-08「去掉那个圆角的待开始」：
+ *   卡底状态 pill 已表达待开始，chip 再画一个重复了——chip 只承担异常/
+ *   执行中/挂起这类增量信息）。
  */
 export function groupDisplayOf(
   subs: readonly { status: string; retryCount?: number }[],
@@ -191,21 +175,19 @@ export function groupDisplayOf(
   }
   const waiting = views.filter((v) => v.key === 'waiting');
   if (waiting.length > 0) {
-    return { label: `${waiting.length} 待接取`, tone: 'warn', icon: '', detail: '' };
+    return { label: `${waiting.length} 已挂起`, tone: 'warn', icon: '', detail: '' };
   }
   return null;
 }
 
 /**
- * 顶层状态分组（十态一列——每态独立成组，组头 label/tone 与行内 pill
- * 同口径；二十四轮 DA37 文案合并：draft/ready 同显「待开始」info）：
- * draft 待开始 info / ready 待开始 info（就绪待派单列）/
- * wait 待接取 warn / start 执行中 info / paused 已挂起 warn /
- * wait_decision 待决策 warn / wait_user 待用户 warn / completed 已完成 ok /
- * failed 失败 err / cancelled 已取消 muted。
+ * 顶层状态分组（7 态一列——每态独立成组，组头 label/tone 与行内 pill
+ * 同口径）：creating 创建中 info / ready 待开始 info（就绪待派单列）/
+ * start 执行中 info / paused 已挂起 warn / wait_user 待用户 warn /
+ * completed 已完成 ok / cancelled 已取消 muted。
  *
  * 十一轮 DA24 后任务列表页平铺小卡栅格，不再按状态分区渲染（本表无运行时
- * 渲染方）——保留为十态键序的结构化规范（tests/taskDisplayStatus.test.ts
+ * 渲染方）——保留为 7 态键序的结构化规范（tests/taskDisplayStatus.test.ts
  * 锁定），后续需要按态聚合时复用。
  */
 export const STATUS_GROUPS: { id: string; label: string; statuses: string[]; tone: Tone }[] = (

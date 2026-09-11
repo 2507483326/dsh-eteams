@@ -1,9 +1,10 @@
 /**
- * 展示态派生层单测（docs/27 §27.9#11 十态收敛 + docs/panelTaskCommission
- * 第 11 态 creating）：11 态→展示态映射全表（含 cancelled 同桶异色特例）、
- * retryCount 并入 detail、未知态中性回退、isStartable/isTerminal 开始钮
- * 状态窗口（M3 收拢三处开始钮判据）与 isGroupStartable（创建中容器不渲染
- * 开始钮——与宿主 startGroupTask 同闸镜像）、group 汇总优先级
+ * 展示态派生层单测（用户迭代 2026-09-11 精简为 7 态：draft/ready/wait 并入
+ * ready，wait_decision/failed 并入 wait_user）：7 态→展示态映射全表（含
+ * cancelled 同桶异色特例）、retryCount 并入 detail、未知态中性回退、
+ * isStartable/isTerminal 开始钮状态窗口（M3 收拢三处开始钮判据）与
+ * isGroupStartable（创建中容器不渲染开始钮——与宿主 startGroupTask 同闸
+ * 镜像；completed 需先追加小任务回 ready）、group 汇总优先级
  * （error > doing > waiting > done 全完成 null）与全部 done → null。
  */
 import { describe, expect, it } from 'vitest';
@@ -18,17 +19,11 @@ import {
   isTerminal,
 } from '../src/client/features/tasks/taskDisplayStatus';
 
-describe('displayStatusOf（11 态→展示态全表）', () => {
-  it('六档映射逐格对表（key/label/tone；二十四轮 DA37 draft/ready 文案合并待开始；creating 创建中占位 init 桶）', () => {
+describe('displayStatusOf（7 态→展示态全表）', () => {
+  it('逐格对表（key/label/tone；creating 创建中占位 init 桶）', () => {
     expect(displayStatusOf('creating')).toEqual({
       key: 'init',
       label: '创建中',
-      tone: 'info',
-      detail: '',
-    });
-    expect(displayStatusOf('draft')).toEqual({
-      key: 'init',
-      label: '待开始',
       tone: 'info',
       detail: '',
     });
@@ -36,13 +31,6 @@ describe('displayStatusOf（11 态→展示态全表）', () => {
       key: 'created',
       label: '待开始',
       tone: 'info',
-      detail: '',
-    });
-    // waiting 桶两态：wait 待接取、paused 已挂起（detail 不再补吞并态小字）。
-    expect(displayStatusOf('wait')).toEqual({
-      key: 'waiting',
-      label: '待接取',
-      tone: 'warn',
       detail: '',
     });
     expect(displayStatusOf('paused')).toEqual({
@@ -65,39 +53,19 @@ describe('displayStatusOf（11 态→展示态全表）', () => {
     });
   });
 
-  it('error 桶同桶异色：wait_decision/wait_user 黄、failed 红、cancelled 中性灰', () => {
-    // wait_decision / wait_user：行内 pill 点色 warning 黄（非红）。
-    expect(displayStatusOf('wait_decision')).toEqual({
-      key: 'error',
-      label: '待决策',
-      tone: 'warn',
-      detail: '',
-    });
+  it('error 桶同桶异色：wait_user 黄、cancelled 中性灰（不标红）', () => {
     expect(displayStatusOf('wait_user')).toEqual({
       key: 'error',
       label: '待用户',
       tone: 'warn',
       detail: '',
     });
-    expect(displayStatusOf('failed')).toEqual({
-      key: 'error',
-      label: '失败',
-      tone: 'err',
-      detail: '',
-    });
-    // cancelled：归 error 桶但文案「已取消」、中性灰（不标红）。
     expect(displayStatusOf('cancelled')).toEqual({
       key: 'error',
       label: '已取消',
       tone: 'muted',
       detail: '',
     });
-  });
-
-  it('detail 保留重试计数（十态已精确，无吞并态补字）', () => {
-    expect(displayStatusOf('start').detail).toBe('');
-    expect(displayStatusOf('wait').detail).toBe('');
-    expect(displayStatusOf('ready').detail).toBe('');
   });
 
   it('retryCount 并入 detail（重试 n）', () => {
@@ -108,9 +76,8 @@ describe('displayStatusOf（11 态→展示态全表）', () => {
       detail: '重试 2',
     });
     expect(displayStatusOf('start', 0).detail).toBe('');
-    // 非 doing 态带重试计数同样并入（顶层行既有口径：重试 n）。
     expect(displayStatusOf('ready', 3).detail).toBe('重试 3');
-    expect(displayStatusOf('wait', 0).detail).toBe('');
+    expect(displayStatusOf('wait_user', 1).detail).toBe('重试 1');
   });
 
   it('未知状态中性回退（旧快照/词表外不臆造档位）', () => {
@@ -123,27 +90,14 @@ describe('displayStatusOf（11 态→展示态全表）', () => {
   });
 });
 
-describe('STATUS_LABELS（11 态精确词表）', () => {
-  it('11 态齐全且值与词表一致（用户迭代 2026-09-10：成员没有状态，任务词表独占）', () => {
+describe('STATUS_LABELS（7 态精确词表）', () => {
+  it('7 态齐全且值与词表一致（用户迭代 2026-09-11 精简状态集）', () => {
     expect(Object.keys(STATUS_LABELS).sort()).toEqual(
-      [
-        'cancelled',
-        'completed',
-        'creating',
-        'draft',
-        'failed',
-        'paused',
-        'ready',
-        'start',
-        'wait',
-        'wait_decision',
-        'wait_user',
-      ].sort(),
+      ['cancelled', 'completed', 'creating', 'paused', 'ready', 'start', 'wait_user'].sort(),
     );
     expect(STATUS_LABELS.creating).toBe('创建中');
-    expect(STATUS_LABELS.draft).toBe('待开始');
     expect(STATUS_LABELS.ready).toBe('待开始');
-    expect(STATUS_LABELS.wait).toBe('待接取');
+    expect(STATUS_LABELS.wait_user).toBe('待用户');
     expect(STATUS_LABELS.cancelled).toBe('已取消');
   });
 });
@@ -157,50 +111,39 @@ describe('ATTEMPT_STATUS_LABELS（词表搬家后口径）', () => {
 });
 
 describe('isStartable / isTerminal（M3 收拢三处开始钮判据的状态窗口）', () => {
-  it('isStartable：任务/小任务「开始」钮 ready/draft 渲染（十态逐格；三十六轮 DA49 draft 并入待开始窗口）', () => {
+  it('isStartable：只有 ready 渲染「开始」钮（7 态逐格）', () => {
     expect(isStartable('ready')).toBe(true);
-    expect(isStartable('draft')).toBe(true);
-    expect(isStartable('wait')).toBe(false);
+    expect(isStartable('creating')).toBe(false);
     expect(isStartable('start')).toBe(false);
     expect(isStartable('paused')).toBe(false);
-    expect(isStartable('wait_decision')).toBe(false);
     expect(isStartable('wait_user')).toBe(false);
     expect(isStartable('completed')).toBe(false);
-    expect(isStartable('failed')).toBe(false);
     expect(isStartable('cancelled')).toBe(false);
   });
 
-  it('isTerminal：主任务「开始」钮终态（completed/cancelled）收钮，其余渲染', () => {
+  it('isTerminal：completed/cancelled 终态，其余渲染', () => {
     expect(isTerminal('completed')).toBe(true);
     expect(isTerminal('cancelled')).toBe(true);
-    expect(isTerminal('draft')).toBe(false);
+    expect(isTerminal('creating')).toBe(false);
     expect(isTerminal('ready')).toBe(false);
-    expect(isTerminal('wait')).toBe(false);
     expect(isTerminal('start')).toBe(false);
     expect(isTerminal('paused')).toBe(false);
-    expect(isTerminal('wait_decision')).toBe(false);
     expect(isTerminal('wait_user')).toBe(false);
-    expect(isTerminal('failed')).toBe(false);
     // 未知态（旧快照/词表外）非终态——开始钮照渲染（原 !== 串比较同口径）。
     expect(isTerminal('unknown_state')).toBe(false);
   });
 });
 
 describe('isGroupStartable（组开始钮判据扩位，docs/panelTaskCommission）', () => {
-  it('非终态且非创建中才渲染——creating 容器计划未定不渲染（与宿主 startGroupTask 同闸镜像）', () => {
+  it('非终态、非创建中、非已完成才渲染（大任务 completed 需先追加小任务回 ready）', () => {
     expect(isGroupStartable('ready')).toBe(true);
-    expect(isGroupStartable('draft')).toBe(true);
-    expect(isGroupStartable('wait')).toBe(true);
     expect(isGroupStartable('start')).toBe(true);
     expect(isGroupStartable('paused')).toBe(true);
-    expect(isGroupStartable('wait_decision')).toBe(true);
     expect(isGroupStartable('wait_user')).toBe(true);
-    expect(isGroupStartable('failed')).toBe(true);
-    // 创建中（面板手动建任务占位）与终态一律不渲染。
     expect(isGroupStartable('creating')).toBe(false);
     expect(isGroupStartable('completed')).toBe(false);
     expect(isGroupStartable('cancelled')).toBe(false);
-    // 未知态非终态非创建中——照渲染（原 !isTerminal 同口径）。
+    // 未知态非终态非创建中非已完成——照渲染（原 !isTerminal 同口径）。
     expect(isGroupStartable('unknown_state')).toBe(true);
   });
 });
@@ -213,16 +156,11 @@ describe('groupDisplayOf（组卡汇总优先级）', () => {
   it('error 优先：✕ n 项异常（err 红 + 首个异常 detail）', () => {
     const summary = groupDisplayOf([
       { status: 'start' },
-      { status: 'wait_decision', retryCount: 3 },
-      { status: 'failed' },
+      { status: 'wait_user', retryCount: 3 },
+      { status: 'cancelled' },
     ]);
-    // 首个异常小任务 = wait_decision（待决策）——detail 取它的词表文案。
-    expect(summary).toEqual({ label: '2 项异常', tone: 'err', icon: '✕', detail: '待决策' });
-  });
-
-  it('cancelled 同入异常计数（error 桶聚合语义）', () => {
-    const summary = groupDisplayOf([{ status: 'ready' }, { status: 'cancelled' }]);
-    expect(summary).toEqual({ label: '1 项异常', tone: 'err', icon: '✕', detail: '已取消' });
+    // 首个异常小任务 = wait_user（待用户）——detail 取它的词表文案。
+    expect(summary).toEqual({ label: '2 项异常', tone: 'err', icon: '✕', detail: '待用户' });
   });
 
   it('无异常含 doing → n 执行中（info）', () => {
@@ -230,21 +168,21 @@ describe('groupDisplayOf（组卡汇总优先级）', () => {
     expect(summary).toEqual({ label: '1 执行中', tone: 'info', icon: '', detail: '' });
   });
 
-  it('无异常无 doing 含 waiting → n 待接取（warn）', () => {
-    const summary = groupDisplayOf([{ status: 'ready' }, { status: 'draft' }, { status: 'wait' }]);
-    expect(summary).toEqual({ label: '1 待接取', tone: 'warn', icon: '', detail: '' });
+  it('无异常无 doing 含 waiting（paused）→ n 已挂起（warn）', () => {
+    const summary = groupDisplayOf([{ status: 'ready' }, { status: 'paused' }]);
+    expect(summary).toEqual({ label: '1 已挂起', tone: 'warn', icon: '', detail: '' });
   });
 
   it('全部 done → null（进度行已表达，不加 chip）', () => {
     expect(groupDisplayOf([{ status: 'completed' }, { status: 'completed' }])).toBeNull();
   });
 
-  it('其余（ready/draft 混合）→ null（用户迭代 2026-09-08：状态 pill 已表达待开始，chip 不重复画）', () => {
-    expect(groupDisplayOf([{ status: 'ready' }, { status: 'draft' }])).toBeNull();
+  it('其余（全 ready）→ null（用户迭代 2026-09-08：状态 pill 已表达待开始，chip 不重复画）', () => {
+    expect(groupDisplayOf([{ status: 'ready' }, { status: 'ready' }])).toBeNull();
   });
 });
 
-describe('STATUS_GROUPS（十一态一列键序规范，十一轮 DA24 后列表平铺无渲染方）', () => {
+describe('STATUS_GROUPS（7 态一列键序规范，十一轮 DA24 后列表平铺无渲染方）', () => {
   it('每态独立成组，label/tone 来自展示态表', () => {
     expect(STATUS_GROUPS.map((g) => g.id)).toEqual(Object.keys(STATUS_LABELS));
     for (const group of STATUS_GROUPS) {
@@ -252,6 +190,6 @@ describe('STATUS_GROUPS（十一态一列键序规范，十一轮 DA24 后列表
       expect(group.label).toBe(STATUS_LABELS[group.id]);
     }
     expect(STATUS_GROUPS.find((g) => g.id === 'ready')?.tone).toBe('info');
-    expect(STATUS_GROUPS.find((g) => g.id === 'failed')?.tone).toBe('err');
+    expect(STATUS_GROUPS.find((g) => g.id === 'wait_user')?.tone).toBe('warn');
   });
 });

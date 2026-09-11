@@ -694,7 +694,9 @@ export async function removeMember(
       if (attempt === undefined) continue;
       attempt.status = 'revoked';
       attempt.endedAt = now;
-      if (task.status === 'wait' || task.status === 'start') {
+      // 在办（start）或被派发待接取（ready + 在办 attempt）都归位 ready
+      // （用户迭代 2026-09-11：wait 已撤销，派发不再改状态）。
+      if (task.status === 'start' || task.status === 'ready') {
         applyTransition(task, 'ready', now);
         task.assignee = undefined;
       }
@@ -941,12 +943,7 @@ export async function deleteTeam(env: RuntimeEnv, captain: Agent, teamId: TeamKe
     // 运行中任务守卫（等价旧 phase 门控）：派发/执行/挂起/待决策中的任务
     // 先取消，再删队。
     const active = fresh.tasks.filter(
-      (t) =>
-        t.status === 'wait' ||
-        t.status === 'start' ||
-        t.status === 'paused' ||
-        t.status === 'wait_decision' ||
-        t.status === 'wait_user',
+      (t) => t.status === 'start' || t.status === 'paused' || t.status === 'wait_user',
     );
     if (active.length > 0) {
       throw new ETeamsError(

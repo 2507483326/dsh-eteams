@@ -15,10 +15,10 @@ import { Button } from '../../components/ui/button';
 import type { TaskView } from '../../lib/monitor';
 import { MUTED_CLASS, TASK_CARD_CLASS } from '../shared/styles';
 import { MarkdownDoc } from '../shared/markdownDoc';
-import { BlockedPill, TaskStatusPill } from '../shared/components';
+import { TaskStatusPill } from '../shared/components';
 import { readBodyOf } from './taskBody';
 
-/** 详情页头部卡（主任务/任务共用：#id 主题 + 展示态 pill + blocked + assignee）。
+/** 详情页头部卡（主任务/任务共用：#id 主题 + 展示态 pill + assignee）。
  * 二十轮 DA33：主任务详情页增 extra 槽——进度三计数/汇总 chip 收进卡内
  * （用户拍板「把团队成员放到上面去和任务标题放一起」）；成员罗列条曾随
  * extra 入卡，二十三轮 DA36 移出卡置卡下方（左竖线提示块）；任务详情页
@@ -87,7 +87,6 @@ export function TaskHeaderCard({
             <span className="min-w-0">{task.subject}</span>
           )}
           <TaskStatusPill status={task.status} retryCount={task.retryCount} />
-          {task.blocked && <BlockedPill blockedFrom={task.blockedFrom} />}
           {task.assignee !== null && <span className={MUTED_CLASS}>· {task.assignee}</span>}
         </div>
         {(actions !== undefined || arrowShow) && (

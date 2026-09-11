@@ -44,8 +44,11 @@ import { fallbackExecutionPrompt, PERSONA_FRAMEWORK_VERSION } from '../prompts/p
  * 无需 ALTER/回填，迁移仅版本号推进。
  * v12（主对话注入角色）：roles 补 is_root（保留角色 system=1 其余=0）——
  * system 的 persona_md 存注入主对话 system 提示词的原文（默认空），读端按
- * 标识取行；旧库 getDb 迁移回填。 */
-export const DB_SCHEMA_VERSION = 12;
+ * 标识取行；旧库 getDb 迁移回填。
+ * v13（任务状态精简，用户迭代 2026-09-11）：11 态 → 7 态——draft/ready/wait
+ * 并入 ready，wait_decision/failed 并入 wait_user（存量行状态回填）；
+ * blocked_from 列弃用不再读写（不 DROP）；task.status 列默认值改 ready。 */
+export const DB_SCHEMA_VERSION = 13;
 
 /**
  * 领队保留名（docs/27）：task_members 领队行 `name` 固定值。v8 起领队身份
@@ -152,6 +155,7 @@ export function getDb(stateRoot: string): DatabaseSync {
   migrateRouteProviderV9(db);
   migrateTeamMemberAvatarV10(db);
   migrateRootFlagV12(db);
+  migrateTaskStatusV13(db);
   connections.set(stateRoot, db);
   return db;
 }
@@ -801,6 +805,24 @@ function migrateRootFlagV12(db: DatabaseSync): void {
   db.exec(`UPDATE roles SET is_root = 1 WHERE role_name = '${ROOT_ROLE_NAME}'`);
 }
 
+/**
+ * v13 迁移（任务状态精简，用户迭代 2026-09-11）：11 态存量行回填到新 7 态
+ * ——`draft`/`wait` → `ready`（草稿与就绪同义、等待派发并入 start 语义），
+ * `wait_decision`/`failed` → `wait_user`（等用户统一）。blocked_from 列弃用，
+ * 存量物化标记一并清空（列保留在库里，不 DROP——DROP 是单向门）。纯 UPDATE
+ * 幂等自愈，重开重跑不报错、不显式开事务（随 v4/v5 先例）。 */
+function migrateTaskStatusV13(db: DatabaseSync): void {
+  const columns = (
+    db.prepare('PRAGMA table_info(task)').all() as Array<{ name: string }>
+  ).map((c) => c.name);
+  if (columns.length === 0) return; // task 不存在：不会发生（防御）
+  db.exec("UPDATE task SET status = 'ready' WHERE status IN ('draft','wait')");
+  db.exec("UPDATE task SET status = 'wait_user' WHERE status IN ('wait_decision','failed')");
+  if (columns.includes('blocked_from')) {
+    db.exec('UPDATE task SET blocked_from = NULL WHERE blocked_from IS NOT NULL');
+  }
+}
+
 /** 关闭并丢弃该状态根的缓存连接（测试收尾 / 状态根失效时用）。 */
 export function closeDb(stateRoot: string): void {
   const db = connections.get(stateRoot);
@@ -827,7 +849,7 @@ function loadSchemaSql(): string {
 
 // === SCHEMA_SQL BEGIN（由 schema.sql 生成，逐字一致） ===
 const SCHEMA_SQL = `-- =====================================================================
--- ETeams SQLite schema v12（db_schema_version = 12；v3 成员=角色合并：member
+-- ETeams SQLite schema v13（db_schema_version = 13；v3 成员=角色合并：member
 -- 表精简改名成 roles 角色库表（去 team_id/role_id/model/reasoning_effort，
 -- 新增 profile），班底另起 team_members 表，旧 roles 标签登记表删除；
 -- v4 班底行补 role_name/persona_md/profile 角色信息副本列；v5 任务行补主
@@ -845,7 +867,10 @@ const SCHEMA_SQL = `-- =========================================================
 -- 不在则转交主会话弹出；独立行 CRUD，不随 TeamState 整存整取重写；纯新表
 -- 由 DDL IF NOT EXISTS 直接建，无需 ALTER/回填）；v12 主对话注入角色：
 -- roles 补 is_root（保留角色 system=1 其余=0——system 的 persona_md 存注入
--- 主对话 system 提示词的原文，默认空；旧库经 getDb 迁移回填）
+-- 主对话 system 提示词的原文，默认空；旧库经 getDb 迁移回填）；v13 任务状态
+-- 精简（用户迭代 2026-09-11）：11 态 → 7 态——draft/ready/wait 并入 ready，
+-- wait_decision/failed 并入 wait_user（旧库经 getDb 迁移回填状态值）；
+-- task.blocked_from 列弃用不再读写（列保留不 DROP），status 列默认值改 ready
 -- 主键 = 每张表自己的编号列，统一 INTEGER 自增（schema_meta 例外：key 即主键）
 -- 时间列一律 *_time 结尾（Unix 毫秒）；每张表末尾 created_time / update_time
 -- 枚举 = TEXT（合法值写在列注释里）；JSON = TEXT 存 JSON 字符串
@@ -937,9 +962,10 @@ CREATE TABLE IF NOT EXISTS task (
   depend_tasks      TEXT NOT NULL DEFAULT '[]',  -- 依赖前置任务 ID 列表（JSON 数组；环检测由写入代码做）
   member_chain_list TEXT NOT NULL DEFAULT '[]',  -- 执行链站点列表（JSON 数组：[{member, stageBrief}]；v7 站点 member 写工号数字，迁移解析不到班底行的旧站点保留名字字符串并在渲染时标注 legacy）
   chain_cursor      INTEGER NOT NULL DEFAULT -1, -- -1=没开始；k=第 k 站完成；末站完成→completed
-  status            TEXT NOT NULL DEFAULT 'draft',
-                    -- creating / draft / ready / wait / start / paused /
-                    -- wait_decision / wait_user / completed / failed / cancelled
+  status            TEXT NOT NULL DEFAULT 'ready',
+                    -- creating / ready / start / paused / wait_user /
+                    -- completed / cancelled（用户迭代 2026-09-11 精简为 7 态；
+                    -- 大任务 completed 可回 ready）
   current_member    TEXT,                -- 当前执行成员名（松引用：成员移除也不影响这列）
   current_member_id INTEGER,             -- 当前执行成员 ID（v2 的 member.member_id 口径随 v3 合并废弃；写入代码恒置 NULL，物理残留列）
   main_session_id   TEXT,                -- 主会话 ID 快照（v5 落列 v6 改名：建任务时登记的主会话 ID，落库后不变；直查/展示用）

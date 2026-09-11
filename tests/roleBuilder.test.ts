@@ -465,6 +465,37 @@ describe('D18 对话式新增成员', () => {
     );
   });
 
+  it('访谈问题多选别名容错：multi_select / multiSelect 归一为 multi（2026-09-11 实况）', async () => {
+    await reportBuildProgress(stateRoot, { request: 'r4' });
+    await reportBuildProgress(stateRoot, {
+      step: '意图访谈',
+      interview: {
+        questions: [
+          { id: 'q1', question: '语气？', options: [{ label: 'A' }], multi_select: true },
+          { id: 'q2', question: '风格？', options: [{ label: 'B' }], multiSelect: true },
+        ],
+      } as never,
+    });
+    const questions = readBuildSession(stateRoot)?.interview?.questions ?? [];
+    expect(questions[0]?.multi).toBe(true);
+    expect(questions[1]?.multi).toBe(true);
+  });
+
+  it('访谈问题项 schema 放宽：additionalProperties=true（别名不再被宿主拒收）', () => {
+    const tools = createCaptainTools(ETeamsConfig({}) as ETeamsResolvedConfig, {} as Context);
+    const tool = tools.find((t) => t.name === 'eteams_build_report');
+    const params = tool?.parameters as {
+      properties?: {
+        interview?: {
+          properties?: { questions?: { items?: { additionalProperties?: boolean } } };
+        };
+      };
+    };
+    expect(params?.properties?.interview?.properties?.questions?.items?.additionalProperties).toBe(
+      true,
+    );
+  });
+
   it('spawn-time parent ref is remembered for later phase attribution (docs/19.16)', async () => {
     // 派发时记住主会话 id（一次性阶段代理的后续阶段归属）
     await setBuildParentSession(stateRoot, 'parent-1');

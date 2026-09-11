@@ -407,7 +407,11 @@ export function createCaptainTools(
                 },
                 multi: { type: 'boolean' as const, description: '允许多选（缺省单选）' },
               },
-              additionalProperties: false,
+              // 访谈问题项放宽（2026-09-11 实况）：模型常把多选字段漂移成
+              // multi_select/multiSelect，严格 additionalProperties:false 会让整次
+              // build_report 被宿主按 invalid arguments 拒收——别名在 interviewOf
+              // 归一为规范字段 multi，未知键忽略。
+              additionalProperties: true,
             },
           },
         },
@@ -932,7 +936,7 @@ export function createCaptainTools(
   const updateTaskTool = defineTool({
     name: 'eteams_update_task',
     description:
-      '更新未领取任务（draft/ready 可改）的合同/依赖/执行链；对话任务工作流里用它把问询结论写回主任务（任务单）description。已入执行（指派后）的任务合同冻结。',
+      '更新未领取任务（creating/ready 可改）的合同/依赖/执行链；对话任务工作流里用它把问询结论写回主任务（任务单）description。已入执行（指派后）的任务合同冻结。',
     parameters: {
       taskId: intR('任务号'),
       subject: str('新主题'),
@@ -970,7 +974,7 @@ export function createCaptainTools(
   const deleteTaskTool = defineTool({
     name: 'eteams_delete_task',
     description:
-      '删除未领取任务（draft/ready 可删；主任务级联删除其全部未领取小任务并清任务文件夹）。被依赖或已入执行的任务不可删。',
+      '删除未领取任务（creating/ready 可删；主任务级联删除其全部未领取小任务并清任务文件夹）。被依赖或已入执行的任务不可删。',
     parameters: { taskId: intR('任务号') },
     output: {
       schema: {
@@ -1060,7 +1064,7 @@ export function createCaptainTools(
   const reassignTaskTool = defineTool({
     name: 'eteams_reassign_task',
     description:
-      '改派进行中/待决策（wait_decision）任务：吊销当前 attempt（旧 token 立即失效），任务转新成员。链任务偏离需 deviationNote。也用于处置待决策任务。',
+      '改派进行中/待用户（wait_user）任务：吊销当前 attempt（旧 token 立即失效），任务转新成员。链任务偏离需 deviationNote。也用于处置待用户任务。',
     parameters: {
       taskId: intR('任务号'),
       member: str('新成员工号（缺省=原成员重派；同名成员必须用工号）'),
@@ -1095,7 +1099,7 @@ export function createCaptainTools(
   const suspendTaskTool = defineTool({
     name: 'eteams_suspend_task',
     description:
-      '挂起任务：进行中任务吊销 attempt 并通知成员停止（转 paused）；就绪任务转依赖阻塞（wait + blockedFrom，恢复时还原）。',
+      '挂起任务：吊销在办/待接取 attempt 并通知成员停止，任务转 paused；恢复走 eteams_resume_task（回到待开始待重新派发）。',
     parameters: { taskId: intR('任务号'), note: str('挂起原因') },
     output: {
       schema: {
@@ -1122,7 +1126,7 @@ export function createCaptainTools(
   const resumeTaskTool = defineTool({
     name: 'eteams_resume_task',
     description:
-      '恢复挂起任务：paused 任务给原成员开新一轮尝试（新 attempt）；依赖阻塞（wait + blockedFrom）任务还原阻塞前状态（无新 attempt）。',
+      '恢复挂起任务：paused 任务回待开始（ready）并给原成员开新一轮尝试（新 attempt）。',
     parameters: { taskId: intR('任务号') },
     output: {
       schema: {
@@ -1325,7 +1329,7 @@ export function createCaptainTools(
     name: 'eteams_task_board',
     description:
       '任务看板：领队看全部任务的合同摘要与执行记录（status 过滤可选）；成员看自己名下的任务与执行链进度。',
-    parameters: { status: str('按状态过滤（如 ready/wait/start/paused/wait_decision/completed）') },
+    parameters: { status: str('按状态过滤（如 ready/start/paused/wait_user/completed）') },
     output: {
       schema: {
         type: 'object' as const,
@@ -1357,8 +1361,9 @@ export function createCaptainTools(
         );
         // 角色/路线读班底行（docs/35 §3#5：人设/路线在班底，task_members=副本行）。
         const template = caller.team.members.find((m) => m.employeeId === me.employeeId);
-        // 当前任务口径（docs/36 建议 2）：wait/start/paused 三态；终态不算当前。
-        const current = mine.find((t) => ['wait', 'start', 'paused'].includes(t.status));
+        // 当前任务口径（docs/36 建议 2；用户迭代 2026-09-11 精简状态集）：
+        // start/paused/wait_user 算在办；ready 只是待派发、终态不算当前。
+        const current = mine.find((t) => ['start', 'paused', 'wait_user'].includes(t.status));
         const view = {
           member: me.name,
           employeeId: me.employeeId,
@@ -1438,7 +1443,7 @@ export function createCaptainTools(
 
   const deleteTeamTool = defineTool({
     name: 'eteams_delete_team',
-    description: '删除团队的全部状态（不可恢复）。仍有活跃任务（wait/start/paused/wait_decision/wait_user）时会被拒绝。',
+    description: '删除团队的全部状态（不可恢复）。仍有活跃任务（start/paused/wait_user）时会被拒绝。',
     parameters: { teamId: intR('团队 id') },
     output: {
       schema: {

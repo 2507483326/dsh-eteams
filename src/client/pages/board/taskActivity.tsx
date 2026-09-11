@@ -8,6 +8,10 @@
  * 渲染（DB11）。整卡点击进 /tasks/:taskId（routes.tsx location sync 回写
  * drawerTaskId，零新增接线）。依赖 features/tasks、lib/monitor、shared。
  *
+ * 用户迭代 2026-09-11「创建中不允许点进去，加上创建中 loading 效果」：
+ * creating 容器整卡禁点（与任务列表卡同口径——完善收口前进详情无意义）、
+ * 进度行换 CreatingLoadingRow（shared/components，两卡共用）。
+ *
  * @module dsh-eteams/client/pages/board/taskActivity
  */
 import type { ReactNode } from 'react';
@@ -16,7 +20,7 @@ import { executionOrderOf } from '../../features/tasks/taskAssignCore';
 import { groupDisplayOf } from '../../features/tasks/taskDisplayStatus';
 import { cn } from '../../lib/cn';
 import type { TaskView, TeamSnapshot } from '../../lib/monitor';
-import { BlockedPill, GroupSummaryChip, TaskStatusPill } from '../shared/components';
+import { CreatingLoadingRow, GroupSummaryChip, TaskStatusPill } from '../shared/components';
 import {
   LIST_COUNT_CLASS,
   LIST_TITLE_CLASS,
@@ -84,15 +88,26 @@ function BoardTaskTile({
     task.kind === 'group' && task.status === 'ready' && subs.length > 0
       ? groupDisplayOf(subs)
       : null;
+  // 创建中容器禁点（用户迭代 2026-09-11，与任务列表卡同口径）：完善收口前
+  // 进详情无意义。不可点卡身压掉常量里的 cursor-pointer（cn/tailwind-merge
+  // 以后者覆盖）。
+  const creating = task.status === 'creating';
   return (
-    <div className={cn('eteams-task-card', BOARD_TASK_CARD_CLASS)} onClick={onOpen}>
+    <div
+      className={cn('eteams-task-card', BOARD_TASK_CARD_CLASS, creating && 'cursor-default')}
+      onClick={creating ? undefined : onOpen}
+    >
       {/* 头行：主题截断（title 兜底全文）。 */}
       <div className="truncate text-sm font-semibold text-foreground" title={task.subject}>
         {task.subject}
       </div>
       {/* 进度行（主任务，列表卡三分计数同款：已完成 success 绿/未完成
           warning 琥珀）；顶层普通任务改指派行（DB9）。 */}
-      {task.kind === 'group' ? (
+      {creating ? (
+        // 创建中：子任务未落库、计数恒 0 无信息量，换加载行（2026-09-11，
+        // 任务列表卡同款 CreatingLoadingRow）。
+        <CreatingLoadingRow />
+      ) : task.kind === 'group' ? (
         <div className={LIST_COUNT_CLASS}>
           共 {subs.length} 个任务，已完成 <span className="text-success">{done}</span>
           ，未完成 <span className="text-warning">{subs.length - done}</span>
@@ -101,7 +116,6 @@ function BoardTaskTile({
         task.assignee !== null && <div className={MUTED_CLASS}>指派 {task.assignee}</div>
       )}
       {summary !== null && <GroupSummaryChip summary={summary} />}
-      {task.blocked && <BlockedPill blockedFrom={task.blockedFrom} />}
       {/* 小任务窗口（docs/47 DB3/DB5）：执行序前 4 行——状态 pill（重试
           计数随传）+ 序号 + 主题截断 + 指派灰注（非空守卫）；超出折叠为
           「还有 n 个小任务」灰字行。行不可点：点击落整卡进主任务详情。 */}

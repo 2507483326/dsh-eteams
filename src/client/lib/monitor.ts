@@ -100,9 +100,6 @@ export interface TaskView {
   contractMd: string | null;
   /** 幂等说明（重复执行的界定）；null = 无。 */
   idempotencyNote: string | null;
-  /** 物化阻塞（docs/36 建议 1）：wait + blockedFrom 非空 = 被前置任务阻塞。 */
-  blocked: boolean;
-  blockedFrom: number | null;
   /** 领队写回的状态说明；null = 无。 */
   statusNote: string | null;
   /** 主会话 ID 快照（task.main_session_id，v5 落列 v6 改名）：建任务时登记的主会话；null/缺省 = 未登记。 */

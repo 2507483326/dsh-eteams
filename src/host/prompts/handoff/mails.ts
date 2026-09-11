@@ -116,9 +116,9 @@ export function reportFailedMail(
     return `【失败·将重试】${opts.member} · 任务 ${task.id} ${task.subject}\n障碍：${opts.error}\n重试 ${opts.retryCount}/${opts.maxRetries}：已安排同成员立即重试。`;
   }
   return [
-    `【失败·需决策】${opts.member} · 任务 ${task.id} ${task.subject}`,
+    `【失败·待用户】${opts.member} · 任务 ${task.id} ${task.subject}`,
     `障碍：${opts.error}`,
-    `重试已达上限（${opts.retryCount}/${opts.maxRetries}）。任务进入 wait_decision（待决策）：请 eteams_reassign_task 换人、挂起待料，或向用户说明。`,
+    `重试已达上限（${opts.retryCount}/${opts.maxRetries}）。任务进入 wait_user（待用户）：请 eteams_reassign_task 换人、挂起待料，或向用户说明。`,
     `（attempt ${opts.attemptId}）`,
   ].join('\n');
 }

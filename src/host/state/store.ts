@@ -539,9 +539,11 @@ function loadTasks(
 ): { tasks: TaskRecord[]; pendingDecisions: DecisionRecord[] } {
   const taskRows = db
     .prepare(
+      // blocked_from 列弃用不读（用户迭代 2026-09-11：依赖阻塞不再物化，
+      // 列保留在库里不 DROP）。
       'SELECT task_id, parent_id, subject, description, depend_tasks, member_chain_list, ' +
         'chain_cursor, status, current_member, retry_count, status_note, contract_md, ' +
-        'idempotency_note, blocked_from, work_dir, main_session_id, completed_time, ' +
+        'idempotency_note, work_dir, main_session_id, completed_time, ' +
         'created_time, update_time FROM task WHERE team_id = ? ORDER BY task_id',
     )
     .all(teamId) as Array<{
@@ -558,7 +560,6 @@ function loadTasks(
     status_note: string | null;
     contract_md: string | null;
     idempotency_note: string | null;
-    blocked_from: string | null;
     work_dir: string | null;
     main_session_id: string | null;
     completed_time: number | null;
@@ -594,7 +595,6 @@ function loadTasks(
       ...(row.current_member !== null ? { assignee: row.current_member } : {}),
       attempts: attemptsByTask.get(row.task_id) ?? [],
       retryCount: row.retry_count,
-      ...(row.blocked_from !== null ? { blockedFrom: row.blocked_from as TaskStatus } : {}),
       ...(row.status_note !== null ? { statusNote: row.status_note } : {}),
       ...(row.work_dir !== null ? { workDir: row.work_dir } : {}),
       ...(row.main_session_id !== null ? { mainSessionId: row.main_session_id } : {}),
@@ -773,7 +773,8 @@ export function writeTeamInTx(tx: TeamTx, state: TeamState): void {
       t.statusNote ?? null,
       t.contractMd ?? null,
       t.idempotencyNote ?? null,
-      t.blockedFrom ?? null,
+      // blocked_from 弃用恒写 NULL（列保留不 DROP；用户迭代 2026-09-11）。
+      null,
       t.workDir ?? null,
       t.completedAt ?? null,
       t.createdAt,

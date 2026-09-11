@@ -153,7 +153,7 @@ describe('sessionTeamSection branches', () => {
   it('anchors to the main task: leaderless self-hosted增补 workflow (无领队)', () => {
     setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
     const band = sessionTeamSection('s-other', () =>
-      team({ hasLeader: false, tasks: [mainTask(5, 's-other', 'wait')] }),
+      team({ hasLeader: false, tasks: [mainTask(5, 's-other', 'start')] }),
     );
     expect(band).toContain('主任务 #5');
     expect(band).toContain('团队未设领队');
@@ -266,7 +266,7 @@ describe('anchoredMainTaskOf（锚定判据：本会话最新非终态主任务�
     const t = team({
       tasks: [
         mainTask(1, 's-other', 'ready'),
-        mainTask(4, 's-other', 'wait'),
+        mainTask(4, 's-other', 'start'),
       ],
     });
     expect(anchoredMainTaskOf(t, 's-other')?.id).toBe(4);
@@ -277,7 +277,7 @@ describe('anchoredMainTaskOf（锚定判据：本会话最新非终态主任务�
       tasks: [
         mainTask(1, 's-other', 'completed'),
         mainTask(2, 's-else', 'ready'),
-        { ...mainTask(3, 's-other', 'wait'), parentId: 2 },
+        { ...mainTask(3, 's-other', 'start'), parentId: 2 },
         mainTask(5, 's-other', 'cancelled'),
       ],
     });
@@ -288,18 +288,17 @@ describe('anchoredMainTaskOf（锚定判据：本会话最新非终态主任务�
     // 面板 start 路由派发时把主会话快照补章到任务行——带链的独立小任务
     // 因此也带 mainSessionId；容器由 createTask 校验保证不带链，据此区分。
     const t = team({
-      tasks: [{ ...mainTask(5, 's-other', 'wait'), chain: [{ member: 3, stageBrief: '做' }] }],
+      tasks: [{ ...mainTask(5, 's-other', 'start'), chain: [{ member: 3, stageBrief: '做' }] }],
     });
     expect(anchoredMainTaskOf(t, 's-other')).toBeUndefined();
   });
 
-  it('treats wait_decision / failed-superseded states as non-terminal anchors', () => {
-    // 阻塞/等待决策中的主任务仍在进行——继续锚定增补。
+  it('treats wait_user as a non-terminal anchor and skips terminal ones', () => {
+    // 等待用户中的主任务仍在进行——继续锚定增补；已成终态（cancelled）
+    // 的不锚（用户迭代 2026-09-11：failed 已并入 wait_user，终态只剩
+    // completed/cancelled）。
     const t = team({
-      tasks: [
-        mainTask(2, 's-other', 'wait_decision'),
-        mainTask(6, 's-other', 'failed'),
-      ],
+      tasks: [mainTask(2, 's-other', 'wait_user'), mainTask(6, 's-other', 'cancelled')],
     });
     expect(anchoredMainTaskOf(t, 's-other')?.id).toBe(2);
   });

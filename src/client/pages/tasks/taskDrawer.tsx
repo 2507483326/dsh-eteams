@@ -104,9 +104,6 @@ export function TaskDetailContent({
   }, [team.teamId, team.latestEvents.at(-1)?.seq, task.taskId]);
   return (
     <div className="text-sm leading-6 text-foreground">
-      {task.blocked && task.blockedFrom !== null && (
-        <div className="text-warning">阻塞中：前置任务 #{task.blockedFrom} 未完成。</div>
-      )}
       {task.statusNote !== null && <div className={LINE_CLASS}>状态说明：{task.statusNote}</div>}
       {task.idempotencyNote !== null && (
         <div className={MUTED_CLASS}>幂等说明：{task.idempotencyNote}</div>

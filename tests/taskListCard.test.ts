@@ -24,10 +24,8 @@ const taskOf = (overrides: Partial<TaskView> & { taskId: number }): TaskView => 
   description: null,
   contractMd: null,
   idempotencyNote: null,
-  blocked: false,
-  blockedFrom: null,
   statusNote: null,
-  status: 'draft',
+  status: 'ready',
   assignee: null,
   dependencies: [],
   chain: [],
@@ -49,18 +47,9 @@ const byId = (tasks: TaskView[], id: number): TaskView => {
 };
 
 describe('deletableOf（镜像 host deleteTask 守卫口径）', () => {
-  it('① 本身未领取才可删：creating/draft/ready ✓（creating 仅容器分支放宽），已入执行/终态 ✗（十一态逐格）', () => {
-    const deletableStates = ['creating', 'draft', 'ready'];
-    const undeletableStates = [
-      'wait',
-      'start',
-      'paused',
-      'wait_decision',
-      'wait_user',
-      'completed',
-      'failed',
-      'cancelled',
-    ];
+  it('① 本身未领取才可删：creating/ready ✓（creating 仅容器分支放宽），已入执行/终态 ✗（7 态逐格）', () => {
+    const deletableStates = ['creating', 'ready'];
+    const undeletableStates = ['start', 'paused', 'wait_user', 'completed', 'cancelled'];
     for (const status of [...deletableStates, ...undeletableStates]) {
       const tasks = [taskOf({ taskId: 1, status })];
       expect(deletableOf(byId(tasks, 1), tasks), status).toBe(
@@ -69,10 +58,10 @@ describe('deletableOf（镜像 host deleteTask 守卫口径）', () => {
     }
   });
 
-  it('② 主任务级联：全部小任务 draft/ready → 可删', () => {
+  it('② 主任务级联：全部小任务 ready → 可删', () => {
     const tasks = [
       taskOf({ taskId: 1, kind: 'group', status: 'ready' }),
-      taskOf({ taskId: 2, parentId: 1, status: 'draft' }),
+      taskOf({ taskId: 2, parentId: 1, status: 'ready' }),
       taskOf({ taskId: 3, parentId: 1, status: 'ready' }),
     ];
     expect(deletableOf(byId(tasks, 1), tasks)).toBe(true);
@@ -85,8 +74,8 @@ describe('deletableOf（镜像 host deleteTask 守卫口径）', () => {
     // 小任务分支不放宽：creating 容器下已有执行中小任务 → 整组不可删。
     const tasks = [
       taskOf({ taskId: 1, kind: 'group', status: 'creating' }),
-      taskOf({ taskId: 2, parentId: 1, status: 'draft' }),
-      taskOf({ taskId: 3, parentId: 1, status: 'wait' }),
+      taskOf({ taskId: 2, parentId: 1, status: 'ready' }),
+      taskOf({ taskId: 3, parentId: 1, status: 'start' }),
     ];
     expect(deletableOf(byId(tasks, 1), tasks)).toBe(false);
   });
@@ -94,15 +83,15 @@ describe('deletableOf（镜像 host deleteTask 守卫口径）', () => {
   it('② 主任务级联：任一小任务已入执行 → 整组不可删', () => {
     const tasks = [
       taskOf({ taskId: 1, kind: 'group', status: 'ready' }),
-      taskOf({ taskId: 2, parentId: 1, status: 'draft' }),
-      taskOf({ taskId: 3, parentId: 1, status: 'wait' }),
+      taskOf({ taskId: 2, parentId: 1, status: 'ready' }),
+      taskOf({ taskId: 3, parentId: 1, status: 'start' }),
     ];
     expect(deletableOf(byId(tasks, 1), tasks)).toBe(false);
   });
 
   it('③ 删除集被未入集任务依赖 → 不可删（自身被依赖）', () => {
     const tasks = [
-      taskOf({ taskId: 1, status: 'draft' }),
+      taskOf({ taskId: 1, status: 'ready' }),
       taskOf({ taskId: 2, status: 'ready', dependencies: [1] }),
     ];
     expect(deletableOf(byId(tasks, 1), tasks)).toBe(false);
@@ -111,7 +100,7 @@ describe('deletableOf（镜像 host deleteTask 守卫口径）', () => {
   it('③ 主任务的小任务被外部依赖 → 整组不可删（删除集含小任务）', () => {
     const tasks = [
       taskOf({ taskId: 1, kind: 'group', status: 'ready' }),
-      taskOf({ taskId: 2, parentId: 1, status: 'draft' }),
+      taskOf({ taskId: 2, parentId: 1, status: 'ready' }),
       taskOf({ taskId: 3, status: 'ready', dependencies: [2] }),
     ];
     expect(deletableOf(byId(tasks, 1), tasks)).toBe(false);
@@ -120,17 +109,17 @@ describe('deletableOf（镜像 host deleteTask 守卫口径）', () => {
   it('删除集内部互相依赖不影响（依赖方/被依赖方一同入删除集）', () => {
     const tasks = [
       taskOf({ taskId: 1, kind: 'group', status: 'ready' }),
-      taskOf({ taskId: 2, parentId: 1, status: 'draft' }),
-      taskOf({ taskId: 3, parentId: 1, status: 'draft', dependencies: [2] }),
+      taskOf({ taskId: 2, parentId: 1, status: 'ready' }),
+      taskOf({ taskId: 3, parentId: 1, status: 'ready', dependencies: [2] }),
     ];
     expect(deletableOf(byId(tasks, 1), tasks)).toBe(true);
   });
 
   it('外部任务依赖的是删除集之外的任务 → 不影响可删判定', () => {
     const tasks = [
-      taskOf({ taskId: 1, status: 'draft' }),
+      taskOf({ taskId: 1, status: 'ready' }),
       taskOf({ taskId: 2, status: 'ready' }),
-      taskOf({ taskId: 3, status: 'wait', dependencies: [2] }),
+      taskOf({ taskId: 3, status: 'start', dependencies: [2] }),
     ];
     expect(deletableOf(byId(tasks, 1), tasks)).toBe(true);
   });

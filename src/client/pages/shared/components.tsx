@@ -4,7 +4,8 @@
  * 搬出（纯移动、零行为变更）。类名常量与 tone 族拆居同目录 styles.ts
  * （pillClass/dotClass 经 import 消费）；各引用方按需改导入。
  * docs/47 DB10：任务展示态 pill 族（DisplayStatusPill/TaskStatusPill/
- * BlockedPill/GroupSummaryChip）自 pages/tasks/taskPills 纯移动入本文件——
+ * GroupSummaryChip；BlockedPill 已于 2026-09-11 随阻塞物化退役）自
+ * pages/tasks/taskPills 纯移动入本文件——
  * 看板「任务动态」分区成为第二个消费域，跨域复用落点规则归 shared/
  * （44.2.3），tasks 域四个消费位改导入、零行为变更（原注释逐字随迁）。
  *
@@ -20,7 +21,8 @@ import {
 import { BackButton } from '../../components/backButton';
 import { Alert } from '../../components/ui/alert';
 import { Badge } from '../../components/ui/badge';
-import { dotClass, MUTED_CLASS, pillClass, STATUS_PILL_CLASS } from './styles';
+import LoaderCircle from 'lucide-react/dist/esm/icons/loader-circle.mjs';
+import { dotClass, LIST_COUNT_CLASS, MUTED_CLASS, pillClass, STATUS_PILL_CLASS } from './styles';
 
 /** ================================== 主组件 ================================== */
 
@@ -64,6 +66,21 @@ export function FormErrorNote({
     >
       {children}
     </Alert>
+  );
+}
+
+/** 任务「创建中」加载行（用户迭代 2026-09-11「创建中不允许点进去，加上创建中
+ * loading 效果」）：面板手动创建的容器在完善收口前（status=creating）由列表卡
+ * 与看板任务卡替代进度计数行渲染——旋转 loader + 「正在完善任务…」。文案不带
+ * 「创建中」：状态语义已由底栏状态 pill 承担，本行只补「正在完善」的增量信息
+ * （派生元素不重复已可视状态）。动画走 Tailwind animate-spin（skeleton.tsx 的
+ * animate-pulse 同族）；两卡共用一处，避免字面值双轨。 */
+export function CreatingLoadingRow(): ReactNode {
+  return (
+    <div className={cn(LIST_COUNT_CLASS, 'flex items-center gap-1.5')}>
+      <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+      正在完善任务…
+    </div>
   );
 }
 
@@ -149,22 +166,8 @@ export function TaskStatusPill({
   );
 }
 
-/** 阻塞徽标（docs/36 建议 1）：wait + blockedFrom 非空的物化阻塞行内标记。
- * 十三轮 DA26：ml-1 不再内建——行内文字流场景（详情页）由调用位补 ml-1，
- * 列表卡独立行场景顶格与其它行对齐。 */
-export function BlockedPill({
-  blockedFrom,
-  className,
-}: {
-  blockedFrom: number | null;
-  className?: string;
-}): ReactNode {
-  return (
-    <span className={cn('inline-flex items-baseline whitespace-nowrap', className)}>
-      <Pill tone="warn">阻塞中{blockedFrom !== null ? ` · 前置 #${blockedFrom}` : ''}</Pill>
-    </span>
-  );
-}
+/* BlockedPill（物化阻塞徽标）随 wait 撤销退役（用户迭代 2026-09-11：依赖
+   未满足的任务保持 ready，不再物化出独立徽标）。 */
 
 /** 组卡汇总 chip（B.2 规则 2）：异常 chip 带前缀 ✕（「✕ n 项异常」，err 红
  * ——与行内 awaiting/needs_user pill 的 warning 黄同桶异色）+ 首个异常

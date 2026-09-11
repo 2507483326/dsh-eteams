@@ -126,7 +126,7 @@ describe('team snapshots', () => {
           dependencies: [],
           chain: [{ member: 'Bob', stageBrief: '产出映射表' }],
           chainCursor: 0,
-          status: 'wait',
+          status: 'start',
           // 主会话快照（task.main_session_id，v5 落列 v6 改名）：随快照整存整取。
           mainSessionId: 'cap-1',
           attempts: [],
@@ -151,7 +151,7 @@ describe('team snapshots', () => {
     expect(loaded?.taskMembers).toHaveLength(1);
     expect(loaded?.taskMembers[0]?.name).toBe(LEADER_NAME);
     expect(loaded?.tasks[0]?.subject).toBe('映射表');
-    expect(loaded?.tasks[0]?.status).toBe('wait');
+    expect(loaded?.tasks[0]?.status).toBe('start');
     expect(loaded?.tasks[0]?.mainSessionId).toBe('cap-1');
     expect(loaded?.tasks[0]?.chain[0]?.member).toBe('Bob');
     expect(loaded?.pendingDecisions).toEqual([]);
@@ -1122,6 +1122,69 @@ describe('v7→v8 领队标识迁移（roles/team_members/task_members.is_leader
       ).toBe(1);
       expect(
         (again.prepare('SELECT COUNT(*) AS n FROM task_members').get() as { n: number }).n,
+      ).toBe(3);
+      closeDb(legacyRoot);
+    } finally {
+      cleanupTempWorkspace(legacyRoot);
+    }
+  });
+});
+
+describe('v12→v13 任务状态精简迁移（用户迭代 2026-09-11：11 态 → 7 态）', () => {
+  const insertTask = (
+    db: ReturnType<typeof getDb>,
+    id: number,
+    status: string,
+    blockedFrom: string | null,
+  ): void => {
+    db.prepare(
+      'INSERT INTO task (task_id, team_id, subject, depend_tasks, member_chain_list, chain_cursor, ' +
+        'status, retry_count, blocked_from, created_time, update_time) ' +
+        "VALUES (?, 1, ?, '[]', '[]', -1, ?, 0, ?, 10, 11)",
+    ).run(id, `任务 ${id}`, status, blockedFrom);
+  };
+
+  it('maps draft/wait → ready, wait_decision/failed → wait_user and clears blocked_from on connect', () => {
+    const legacyRoot = mkdtempSync(join(tmpdir(), 'eteams-mig-v13-'));
+    try {
+      mkdirSync(dbDirOf(legacyRoot), { recursive: true });
+      getDb(legacyRoot); // 建当前全新库
+      closeDb(legacyRoot);
+      const legacy = new DatabaseSync(dbFileOf(legacyRoot));
+      // v12 存量行：11 态各自的代表值 + 物化阻塞标记。
+      insertTask(legacy, 1, 'draft', null);
+      insertTask(legacy, 2, 'wait', null);
+      insertTask(legacy, 3, 'wait', 'ready'); // 依赖阻塞物化行
+      insertTask(legacy, 4, 'wait_decision', null);
+      insertTask(legacy, 5, 'failed', null);
+      insertTask(legacy, 6, 'start', null); // 保留态原样
+      insertTask(legacy, 7, 'completed', null);
+      legacy
+        .prepare("UPDATE schema_meta SET value = '12' WHERE key = 'db_schema_version'")
+        .run();
+      legacy.exec('PRAGMA user_version = 12');
+      legacy.close();
+
+      const db = getDb(legacyRoot);
+      expect(
+        db.prepare('SELECT task_id, status, blocked_from FROM task ORDER BY task_id').all(),
+      ).toEqual([
+        { task_id: 1, status: 'ready', blocked_from: null },
+        { task_id: 2, status: 'ready', blocked_from: null },
+        { task_id: 3, status: 'ready', blocked_from: null },
+        { task_id: 4, status: 'wait_user', blocked_from: null },
+        { task_id: 5, status: 'wait_user', blocked_from: null },
+        { task_id: 6, status: 'start', blocked_from: null },
+        { task_id: 7, status: 'completed', blocked_from: null },
+      ]);
+
+      // 幂等：重开连接重跑迁移不报错、不重复改写。
+      closeDb(legacyRoot);
+      const again = getDb(legacyRoot);
+      expect(
+        (again.prepare("SELECT COUNT(*) AS n FROM task WHERE status = 'ready'").get() as {
+          n: number;
+        }).n,
       ).toBe(3);
       closeDb(legacyRoot);
     } finally {

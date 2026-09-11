@@ -23,6 +23,12 @@
  * useProjection 下发，kit 读取与本模块的 ctx.sessions 探测**同源**。本
  * 模块退居兜底：kit hook 缺席的轴（旧装配/未知运行时）用这里的探测接住。
  *
+ * 2026-09-11 扩面（面板「添加任务」改走新建对话）：同一探测面再加三件会话
+ * 动词——`createSession`（宿主建会话，New Session 流程同源）、
+ * `promptSession`（把任务描述作为新对话的首条消息投递）、`sessionCwdOf`
+ * （沿用来源对话的工作区）。三者都是结构化探测：能力缺失/调用失败一律
+ * 回 null/false，调用方自行降级，绝不抛错。
+ *
  * @module dsh-eteams/client/sessionState
  */
 
@@ -45,19 +51,22 @@ export interface ModelSelectionProjectionView {
   next?: ModelSelectionValue | null;
 }
 
+/** 会话行为动词的结构化投影（SessionFace：本模块只探我们用到的两件）。 */
+interface SessionFaceView {
+  /** Host-computed projection values by key（模型选择徽章用）。 */
+  projections?: {
+    faceOf?: (key: string) => SnapshotStoreFace<unknown> | undefined;
+  };
+  /** 往该会话投递一条用户消息（SessionFace.prompt 的正式动词）。 */
+  prompt?: (
+    content: { type: 'text'; text: string }[],
+    mode: 'queue' | 'steer',
+  ) => Promise<unknown>;
+}
+
 /** Client sessions 服务（Session Controller）的结构化读取面。 */
 interface SessionsFace {
-  binding?: (
-    sessionId: string,
-  ) =>
-    | {
-        session?: {
-          projections?: {
-            faceOf?: (key: string) => SnapshotStoreFace<unknown> | undefined;
-          };
-        };
-      }
-    | undefined;
+  binding?: (sessionId: string) => { session?: SessionFaceView } | undefined;
   subagentAddress?: (sessionId: string) => unknown;
   /** 会话列表快照（useSessions 标准数据源）：跳转前判定目标会话在不在列表。 */
   list?: {
@@ -65,6 +74,14 @@ interface SessionsFace {
   };
   /** 把某会话选为当前（列表外 id 会 fail loud——调用前先 canOpenSession）。 */
   open?: (sessionId: string) => void;
+  /**
+   * 宿主建会话（New Session 流程同源——Workspaces.connectWorkspace 走它）。
+   * 注意这**不在** ISessions 契约面上（在 SessionsPort 跨域面上），故按本仓
+   * 结构探测纪律读取：服务缺失/方法缺失/抛错一律 null，调用方自行降级。
+   * 返回形态兼容 SessionRuntime（直接回 SessionId 串）与 Manager（回
+   * RpcResult<{sessionId}>）两态。
+   */
+  create?: (opts?: { workspaceId?: string; cwd?: string }) => Promise<unknown>;
 }
 
 /** The client root context (structurally probed — the service is optional). */
@@ -134,11 +151,65 @@ export function canOpenSession(sessionId: string): boolean {
  * 方自行提示。任务页「跳转到会话」按钮的落点。
  */
 export function openSession(sessionId: string): boolean {
-  if (!canOpenSession(sessionId)) return false;
+  if (sessionId === '') return false;
   const open = sessionsFaceOf()?.open;
   if (typeof open !== 'function') return false;
   try {
     open(sessionId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 当前会话的工作目录（会话列表行快照的 cwd）：新建对话时沿用同一工作区，
+ * 避免新对话落到宿主默认目录而与来源对话不在一个工作区。缺服务/无该行/
+ * cwd 缺失一律 null，调用方按「宿主默认」兜底。
+ */
+export function sessionCwdOf(sessionId: string): string | null {
+  if (sessionId === '') return null;
+  const byId = sessionsFaceOf()?.list?.getSnapshot?.()?.byId;
+  const row = byId === undefined ? undefined : byId[sessionId];
+  const cwd = (row as { cwd?: unknown } | undefined)?.cwd;
+  return typeof cwd === 'string' && cwd !== '' ? cwd : null;
+}
+
+/**
+ * 宿主建一个新会话，返回新会话 id。新 id 在 resolve 时已在列表里（宿主契约：
+ * 建完即可 `open`/`binding`——草稿交接据此同步寻址）。能力缺失/建失败 → null，
+ * 调用方按错误处理（本仓探测纪律：旧运行时绝不抛错）。
+ */
+export async function createSession(opts?: { cwd?: string }): Promise<string | null> {
+  const create = sessionsFaceOf()?.create;
+  if (typeof create !== 'function') return null;
+  try {
+    const cwd = opts?.cwd;
+    const result = await create(cwd !== undefined && cwd !== '' ? { cwd } : undefined);
+    if (typeof result === 'string' && result !== '') return result;
+    const id = (result as { sessionId?: unknown } | null | undefined)?.sessionId;
+    return typeof id === 'string' && id !== '' ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 往指定会话投递一条用户消息（新对话把任务描述带过去）。缺服务/缺 binding/
+ * 缺 prompt 动词/宿主拒绝 → false；调用方据此给出可诊断提示，但不回滚会话
+ * （会话已建立，消息可重发）。
+ */
+export async function promptSession(sessionId: string, text: string): Promise<boolean> {
+  if (sessionId === '' || text.trim() === '') return false;
+  const prompt = sessionsFaceOf()?.binding?.(sessionId)?.session?.prompt;
+  if (typeof prompt !== 'function') return false;
+  try {
+    const result = await prompt([{ type: 'text', text }], 'queue');
+    if (result === null || result === undefined) return false;
+    if (typeof result === 'object' && 'ok' in result) {
+      return (result as { ok?: unknown }).ok === true;
+    }
+    // SessionRuntime 的会话动词直回业务值（无 RpcResult 包装）视作受理。
     return true;
   } catch {
     return false;

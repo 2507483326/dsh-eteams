@@ -28,7 +28,7 @@ import { Button } from '../../components/ui/button';
 import { readBodyOf } from './taskBody';
 import { TaskStations } from './taskDrawer';
 import { MarkdownDoc } from '../shared/markdownDoc';
-import { BlockedPill, FormErrorNote, TaskStatusPill } from '../shared/components';
+import { FormErrorNote, TaskStatusPill } from '../shared/components';
 import { MUTED_CLASS, TASK_CARD_CLASS } from '../shared/styles';
 
 /** 瞬态错误槽（assignError/reorderError/startError 同构：taskId 定位 + 行内展示）。 */
@@ -49,7 +49,7 @@ interface TaskErrorSlot {
 const SUBTASK_CARD_CLASS = `mt-1.5 ${TASK_CARD_CLASS}`;
 
 /** 小任务卡片（七轮 DA20 调序 + 十轮 DA23 把手化）：**只有左上 grip 把手
- * 可拖**（'eteams-subtask'，draft/ready 才可拖，不可编辑态把手淡化），
+ * 可拖**（'eteams-subtask'，ready 才可拖，不可编辑态把手淡化），
  * 卡身不可拖。二十五轮 DA38：整卡点击 = 进小任务详情页的口径撤除（用户
  * 拍板「小任务不需要再点击进入任务详情了」）——卡身只作为放置目标（同父
  * 兄弟卡才亮；drop 时 onReorder 以最新快照现算依赖改写补丁，非乐观更新）。
@@ -66,7 +66,7 @@ function SubtaskCard({
   /** DA41：就地编辑中禁拖（把手锁死，编辑器不与拖拽状态互扰）。 */
   editing?: boolean;
 }): ReactNode {
-  const editable = task.status === 'draft' || task.status === 'ready';
+  const editable = task.status === 'ready';
   const [{ isDragging }, dragRef] = useDrag<SubtaskDragItem, unknown, { isDragging: boolean }>(
     () => ({
       type: SUBTASK_DRAG_TYPE,
@@ -179,16 +179,15 @@ export function SubtaskItem({
       <SubtaskCard task={task} editing={editing} onReorder={onReorder}>
         <div className="flex items-center justify-between gap-2">
           {/* DA42：状态 pill 挪行头最前（用户拍板「把状态放到最前面……统一使用
-          主任务页面的状态样式」），BlockedPill 随簇连排；左组改 flex min-w-0
-          flex-wrap items-center + gap 承担间距（修内联基线/行高错位，与
-          detailHeader 信息组同构）。 */}
+          主任务页面的状态样式」）；左组改 flex min-w-0 flex-wrap items-center
+          + gap 承担间距（修内联基线/行高错位，与 detailHeader 信息组同构）。
+          BlockedPill 随物化阻塞退役（用户迭代 2026-09-11）。 */}
           <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
             <TaskStatusPill
               status={task.status}
               retryCount={task.retryCount}
               className="shrink-0"
             />
-            {task.blocked && <BlockedPill blockedFrom={task.blockedFrom} className="shrink-0" />}
             <span className={cn(MUTED_CLASS, 'shrink-0')}>{subIndex + 1}.</span>
             {/* DA43：主题原位编辑（编辑态行头 span↔Input 切换） */}
             {editing ? subjectEditor : <span className="min-w-0">{task.subject}</span>}

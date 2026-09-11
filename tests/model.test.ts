@@ -1,12 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyTransition,
+  canTransition,
   dependenciesSatisfied,
   dependentsOf,
   hasUpcomingStation,
   nextChainStation,
-  refreshDependencyStatus,
-  restoreBlocked,
   sanitizeKey,
   stationProgress,
   taskSlug,
@@ -35,7 +34,7 @@ function makeTask(overrides: Partial<TaskRecord> = {}): TaskRecord {
   };
 }
 
-describe('task state machine edges (11 态, docs/35 §4 映射方案 A + docs/panelTaskCommission)', () => {
+describe('task state machine edges (7 态, 用户迭代 2026-09-11)', () => {
   it('creating 收口与放弃：creating -> ready / cancelled 合法，不经转移进入', () => {
     // 面板手动建任务容器：完善收口（finalizeCommissionTask）转 ready、
     // 用户放弃转 cancelled——creating 只在创建时直接落状态，无入边。
@@ -47,20 +46,20 @@ describe('task state machine edges (11 态, docs/35 §4 映射方案 A + docs/pa
     expect(abandon.status).toBe('cancelled');
   });
 
-  it('creating 不直跳执行/等待语义态：start / wait 非法（计划未定不可开跑）', () => {
+  it('creating 不直跳执行/等人态：start / wait_user 非法（计划未定不可开跑）', () => {
     const task = makeTask({ status: 'creating' });
     expect(() => applyTransition(task, 'start', T0 + 1)).toThrow(TransitionError);
-    expect(() => applyTransition(task, 'wait', T0 + 1)).toThrow(TransitionError);
+    expect(() => applyTransition(task, 'wait_user', T0 + 1)).toThrow(TransitionError);
   });
 
-  it('follows the happy staged path', () => {
-    const task = makeTask({ status: 'draft' });
-    applyTransition(task, 'ready', T0 + 1);
-    applyTransition(task, 'wait', T0 + 2);
-    applyTransition(task, 'start', T0 + 3);
-    applyTransition(task, 'completed', T0 + 4);
+  it('follows the happy path（ready 派发后仍 ready，领取才 start）', () => {
+    // 用户迭代 2026-09-11：派发不改状态，成员领取 ready→start。
+    const task = makeTask({ status: 'ready' });
+    expect(canTransition('ready', 'start')).toBe(true);
+    applyTransition(task, 'start', T0 + 1);
+    applyTransition(task, 'completed', T0 + 2);
     expect(task.status).toBe('completed');
-    expect(task.completedAt).toBe(T0 + 4);
+    expect(task.completedAt).toBe(T0 + 2);
   });
 
   it('records a stage handoff as start -> ready', () => {
@@ -69,37 +68,48 @@ describe('task state machine edges (11 态, docs/35 §4 映射方案 A + docs/pa
     expect(task.status).toBe('ready');
   });
 
-  it('lets a childless container jump ready -> completed (对话任务组收口)', () => {
+  it('失败重试与改派归位：start -> ready；重试超限 start -> wait_user', () => {
+    const retry = makeTask({ status: 'start' });
+    applyTransition(retry, 'ready', T0 + 1);
+    expect(retry.status).toBe('ready');
+    const exhausted = makeTask({ status: 'start' });
+    applyTransition(exhausted, 'wait_user', T0 + 2);
+    expect(exhausted.status).toBe('wait_user');
+  });
+
+  it('挂起/恢复：ready -> paused -> ready', () => {
+    const task = makeTask({ status: 'ready' });
+    applyTransition(task, 'paused', T0 + 1);
+    expect(task.status).toBe('paused');
+    applyTransition(task, 'ready', T0 + 2);
+    expect(task.status).toBe('ready');
+  });
+
+  it('lets a container jump ready -> completed and back（大任务完成可续）', () => {
     const task = makeTask({ status: 'ready', parentId: null });
     applyTransition(task, 'completed', T0 + 1);
     expect(task.status).toBe('completed');
     expect(task.completedAt).toBe(T0 + 1);
+    // 用户迭代 2026-09-11「完成后还可以继续添加小任务继续」：追加小任务即回退。
+    applyTransition(task, 'ready', T0 + 2);
+    expect(task.status).toBe('ready');
+  });
+
+  it('小任务 completed 是终态（completed->ready 结构特例只给大任务）', () => {
+    const sub = makeTask({ status: 'completed', parentId: 7 });
+    expect(() => applyTransition(sub, 'ready', T0 + 1)).toThrow(TransitionError);
   });
 
   it('rejects illegal transitions with an actionable hint', () => {
     const task = makeTask({ status: 'completed' });
     expect(() => applyTransition(task, 'start', T0 + 1)).toThrow(TransitionError);
-    const ready = makeTask({ status: 'ready' });
-    expect(() => applyTransition(ready, 'start', T0 + 1)).toThrow(TransitionError);
-  });
-
-  it('bookkeeps blockedFrom on materialized blocked and clears it on exit', () => {
-    const task = makeTask({ status: 'wait', blockedFrom: 'ready' });
-    applyTransition(task, 'cancelled', T0 + 2);
-    expect(task.status).toBe('cancelled');
-    expect(task.blockedFrom).toBeUndefined();
-  });
-
-  it('restoreBlocked returns to ready only when deps recovered', () => {
-    const task = makeTask({ status: 'wait', blockedFrom: 'ready' });
-    expect(restoreBlocked(task, false, T0 + 1)).toBe('wait');
-    expect(task.blockedFrom).toBe('ready');
-    expect(restoreBlocked(task, true, T0 + 2)).toBe('ready');
-    expect(task.blockedFrom).toBeUndefined();
+    // ready->completed 不是小任务合法边（只大任务收口特例）。
+    const ready = makeTask({ status: 'ready', parentId: 9 });
+    expect(() => applyTransition(ready, 'completed', T0 + 1)).toThrow(TransitionError);
   });
 });
 
-describe('dependency derivation', () => {
+describe('dependency derivation（用户迭代 2026-09-11：不再物化，保持 ready）', () => {
   it('unsatisfied dependencies list non-completed deps', () => {
     const t1 = makeTask({ id: 1, status: 'start' });
     const t2 = makeTask({ id: 2, dependencies: [1] });
@@ -108,26 +118,15 @@ describe('dependency derivation', () => {
     expect(dependenciesSatisfied([t1, t2], t2)).toBe(true);
   });
 
-  it('refreshDependencyStatus materializes blocked and recovers it', () => {
+  it('依赖未完成的任务保持 ready（无物化状态、无事件）', () => {
     const t1 = makeTask({ id: 1, status: 'paused' });
     const t2 = makeTask({ id: 2, dependencies: [1], status: 'ready' });
-    expect(refreshDependencyStatus([t1, t2], t2, T0 + 1)).toBe(true);
-    expect(t2.status).toBe('wait');
-    expect(t2.blockedFrom).toBe('ready');
-    t1.status = 'completed';
-    expect(refreshDependencyStatus([t1, t2], t2, T0 + 2)).toBe(true);
+    expect(dependenciesSatisfied([t1, t2], t2)).toBe(false);
+    // 状态不被依赖派生改写——派发口据 dependenciesSatisfied 拒绝派发。
     expect(t2.status).toBe('ready');
-    expect(t2.blockedFrom).toBeUndefined();
-  });
-
-  it('leaves dispatched/running tasks alone (只有 ready 物化)', () => {
-    const t1 = makeTask({ id: 1, status: 'paused' });
-    const t2 = makeTask({ id: 2, dependencies: [1], status: 'paused' });
-    expect(refreshDependencyStatus([t1, t2], t2, T0 + 1)).toBe(false);
-    expect(t2.status).toBe('paused');
-    const t3 = makeTask({ id: 3, dependencies: [1], status: 'wait' });
-    expect(refreshDependencyStatus([t1, t3], t3, T0 + 1)).toBe(false);
-    expect(t3.status).toBe('wait');
+    t1.status = 'completed';
+    expect(dependenciesSatisfied([t1, t2], t2)).toBe(true);
+    expect(t2.status).toBe('ready');
   });
 
   it('dependentsOf finds direct consumers', () => {

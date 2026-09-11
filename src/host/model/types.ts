@@ -7,20 +7,29 @@
  * @module dsh-eteams/model/types
  */
 
-/** Task lifecycle status (docs/27 §27.9.11: 11 态收敛，docs/35 §4 映射方案 A).
- * `creating` = 面板手动创建的主任务容器占位（docs/panelTaskCommission）：已
- * 入册、待领队/主会话完善，完善收口转 ready。 */
+/** Task lifecycle status（用户迭代 2026-09-11 精简为 7 态）。
+ *
+ * 原 11 态的收敛（用户原话「draft 和 ready 和 wait 真合并」「三个都并进
+ * ready」「其实都是 wait_user，就合并为一个 wait_user 吧」）：
+ * - `draft` / `ready` / `wait` → `ready`：草稿与就绪同义；「等待派发」并入
+ *   start 语义（派发不改状态，成员领取才 ready→start），依赖阻塞也不再靠
+ *   wait 物化（被上游卡住就是 ready，派发时校验依赖）。
+ * - `wait_decision` / `failed` → `wait_user`：需要人介入（待回答问题/待决策/
+ *   重试超限/旧数据失败）统一为「待用户」。
+ * - `creating` = 面板手动创建的主任务容器占位（docs/panelTaskCommission）：
+ *   已入册、待领队/主会话完善，完善收口转 ready。
+ *
+ * 大任务（parentId === null）只用 creating/ready/start/paused + completed
+ * （completed 是可回退标识，不是终态死路；用户原话「完成后还可以继续添加
+ * 小任务继续，只是一个当前小任务都完成的标识」），无 cancelled（取消 = 取消
+ * 未完成小任务并回 ready，不要了走删除）。 */
 export type TaskStatus =
   | 'creating'
-  | 'draft'
   | 'ready'
-  | 'wait'
   | 'start'
   | 'paused'
-  | 'wait_decision'
   | 'wait_user'
   | 'completed'
-  | 'failed'
   | 'cancelled';
 
 /**
@@ -223,11 +232,8 @@ export interface TaskRecord {
   /** 执行尝试（attempts 表按 task_id 装回；docs/27 §27.6.2 唯一拆表数组）。 */
   attempts: AttemptRecord[];
   retryCount: number;
-  /**
-   * 阻塞前的状态（docs/35 §5#11）：wait 三义（已派待接取/重试排队/阻塞等
-   * 上游）由它区分——非空即「阻塞等上游」，解除时还原到它并清空。
-   */
-  blockedFrom?: TaskStatus;
+  /* blocked_from 列随 wait 撤销退役（用户迭代 2026-09-11：依赖阻塞 = ready
+     等待，不再物化）——列保留在库里不 DROP，内存与类型不再读写。 */
   /** 当前状态说明（task.status_note；挂起原因等并入这列）。 */
   statusNote?: string;
   /** 任务工作目录（相对工作区；分配后固定，旧任务按字面路径导入）。 */

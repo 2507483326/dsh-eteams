@@ -31,11 +31,12 @@ export interface ChainTaskLike {
 
 /**
  * 拖拽编辑窗口（DA6，比 host 的 updateTask 状态闸更严——E6 编辑矩阵：
- * 链未领取时才可整体编辑）：`draft/ready && chainCursor === -1`。
- * chainCursor≥0（链已开跑）或非 draft/ready（合同冻结）一律只读。
+ * 链未领取时才可整体编辑）：`ready && chainCursor === -1`（用户迭代
+ * 2026-09-11：draft 已并入 ready）。
+ * chainCursor≥0（链已开跑）或非 ready（合同冻结）一律只读。
  */
 export function isAssignEditable(task: ChainTaskLike): boolean {
-  return (task.status === 'draft' || task.status === 'ready') && task.chainCursor === -1;
+  return task.status === 'ready' && task.chainCursor === -1;
 }
 
 /**
@@ -164,7 +165,7 @@ export function boxCoversChain(task: ChainTaskLike): boolean {
 /**
  * 小任务卡片拖拽调执行顺序（2026-09-05 七轮拍板 DA20）所需的最小任务面：
  * TaskView 满足之，测试用 plain 对象即可构造。执行顺序 = **兄弟依赖链**
- * （host 靠 dependencies 物化阻塞 wait/blockedFrom 强制先后，docs/36），
+ * （host 靠 dependencies 在派发口校验先后，docs/36），
  * 故「卡片也能拖拽调执行顺序」落地为依赖改写补丁，不是新增排序通道。
  */
 export interface OrderableTaskLike {
@@ -180,9 +181,10 @@ export interface TaskDependencyPatch {
   dependencies: number[];
 }
 
-/** 执行顺序重排的可编辑窗口与 host updateTask 的依赖闸同口径：draft/ready。 */
+/** 执行顺序重排的可编辑窗口与 host updateTask 的依赖闸同口径：ready
+ * （用户迭代 2026-09-11：draft 已并入 ready）。 */
 function isOrderEditable(task: OrderableTaskLike): boolean {
-  return task.status === 'draft' || task.status === 'ready';
+  return task.status === 'ready';
 }
 
 /**
@@ -221,7 +223,7 @@ export function executionOrderOf<T extends OrderableTaskLike>(tasks: readonly T[
  *   目标位、其余顺移）；
  * - 按新执行序把兄弟依赖重写为**线性链**（第 k 位依赖第 k-1 位），各卡保留
  *   兄弟集外的外部依赖；
- * - 只返回 deps 实际变化且仍可编辑（draft/ready）的补丁——已领取/冻结的兄弟
+ * - 只返回 deps 实际变化且仍可编辑（ready）的补丁——已领取/冻结的兄弟
  *   不改写（host 会拒），其链位滑动属已知口径（docs/29 A.7）；
  * - 全部无变化 → null（不发请求）。
  */

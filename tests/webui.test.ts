@@ -318,8 +318,9 @@ describe('TeamSnapshot builder (docs/35 §5 面板快照)', () => {
     expect(snap).not.toHaveProperty('workDir');
     expect(snap).not.toHaveProperty('captainSessionId');
     expect(snap).not.toHaveProperty('leaderModelRoute');
-    // 进度只统计真实小任务（任务单容器不计入）。
-    expect(snap.progress).toEqual({ completed: 0, total: 2, cancelled: 0, active: 1 });
+    // 进度只统计真实小任务（任务单容器不计入）。用户迭代 2026-09-11：派发不
+    // 改状态（任务留 ready 待领取），「进行中」不计它——active 0。
+    expect(snap.progress).toEqual({ completed: 0, total: 2, cancelled: 0, active: 0 });
     const captain = snap.captain as {
       name: string;
       employeeId: string;
@@ -359,7 +360,8 @@ describe('TeamSnapshot builder (docs/35 §5 面板快照)', () => {
       outcome: string | null;
     }>;
     const v1 = tasks.find((t) => t.taskId === t1)!;
-    expect(v1.status).toBe('wait');
+    // 用户迭代 2026-09-11：派发不改状态，派发后仍是 ready（领取才 start）。
+    expect(v1.status).toBe('ready');
     expect(v1.assignee).toBe('Alice');
     expect(v1.kind).toBe('task');
     expect(v1.parentId).toBeNull();
@@ -1450,19 +1452,20 @@ describe('conversation task workflow (docs/26)', () => {
     expect(bareStart.code).toBe(400);
     expect(json<{ error: string }>(bareStart.body).error).toBe('需要选择成员');
 
-    // 有链：派发链首 Alice（ready → wait 待接取，首尝试 stage，成员起会话）。
+    // 有链：派发链首 Alice（用户迭代 2026-09-11：派发不改状态，仍是 ready
+    // 待成员接取；首尝试 stage，成员起会话）。
     const started = await h.post(`/eteams-api/team/${teamId}/task/${subId}/start`, {});
     expect(started.code).toBe(200);
     const subRec = readTeam(teamId).tasks.find((t) => t.id === subId)!;
-    expect(subRec.status).toBe('wait');
+    expect(subRec.status).toBe('ready');
     expect(subRec.attempts).toHaveLength(1);
     expect(subRec.attempts[0]!.member).toBe('Alice');
     expect(childIdOf(teamId, 'Alice')).not.toBe('');
 
-    // 已派发（wait）再点开始：派发核拒绝（只能指派 ready 任务）。
+    // 已派发待接取再点开始：派发核拒绝（防重复派发闸）。
     const again = await h.post(`/eteams-api/team/${teamId}/task/${subId}/start`, {});
     expect(again.code).toBe(400);
-    expect(json<{ error: string }>(again.body).error).toContain('只能指派 ready 任务');
+    expect(json<{ error: string }>(again.body).error).toContain('已有进行中的指派');
 
     // 未知任务 404。
     const missing = await h.post(`/eteams-api/team/${teamId}/task/99999/start`, {});
@@ -1495,8 +1498,8 @@ describe('conversation task workflow (docs/26)', () => {
 
     // 主任务「开始」= 链式接力发棒（二十七轮 DA40 收窄）：本例仅一张有链卡，
     // 派发成功（started=1）与二十五轮断言同值；无链的按卡跳过（原因
-    // 「需要选择成员」——用户拍板原话）。容器不转移（仍是 ready），小任务
-    // 进 wait 待接取。
+    // 「需要选择成员」——用户拍板原话）。用户迭代 2026-09-11：容器
+    // ready→start，小任务派发后仍 ready（待成员接取）。
     const started = await h.post(`/eteams-api/team/${teamId}/task/${group}/start`, {});
     expect(started.code).toBe(200);
     const body = json<{
@@ -1510,9 +1513,10 @@ describe('conversation task workflow (docs/26)', () => {
       { taskId: bareId, subject: '没选成员的小任务', reason: '需要选择成员' },
     ]);
     const team = readTeam(teamId);
-    expect(team.tasks.find((t) => t.id === chainedId)!.status).toBe('wait');
+    expect(team.tasks.find((t) => t.id === chainedId)!.status).toBe('ready');
     expect(team.tasks.find((t) => t.id === chainedId)!.attempts[0]!.member).toBe('Alice');
-    expect(team.tasks.find((t) => t.id === group)!.status).toBe('ready');
+    // 大任务整体开始：容器 ready→start（用户迭代 2026-09-11 大任务状态集）。
+    expect(team.tasks.find((t) => t.id === group)!.status).toBe('start');
     // 主会话快照（task.main_session_id，v5 落列 v6 改名）：面板建任务时客户端
     // 透传的主会话 ID（cap-conv）随行落库。
     expect(team.tasks.find((t) => t.id === group)!.mainSessionId).toBe('cap-conv');
@@ -1539,10 +1543,10 @@ describe('conversation task workflow (docs/26)', () => {
     expect(body2.skipped[0]!.reason).toBe('需要选择成员');
   });
 
-  it('starts a group task with legacy draft subs: dispatches first runnable（三十六轮 DA49）', async () => {
+  it('starts a group task: relay queue, dependency skip, single-task path（用户迭代 2026-09-11：draft/wait 并入 ready）', async () => {
     const h = await installFull();
     const created = await h.post('/eteams-api/team', {
-      name: '旧库草稿团队',
+      name: '接力跳过团队',
       sessionId: 'cap-conv',
     });
     const teamId = json<{ teamId: number }>(created.body).teamId;
@@ -1570,16 +1574,8 @@ describe('conversation task workflow (docs/26)', () => {
     });
     const bareId = json<{ taskId: number }>(bare.body).taskId;
 
-    // 旧库导入的 draft 小任务（v2 时期建任务即 draft；面板无晋升钮）：SQL
-    // 翻回 draft 模拟 legacy 现状。
-    const db = getDb(stateRoot());
-    for (const id of [firstId, secondId, bareId]) {
-      db.prepare('UPDATE task SET status = ? WHERE task_id = ?').run('draft', id);
-    }
-
-    // 整体开始：draft 卡同进发棒序——首棒 draft 晋升 ready 后派发（进
-    // wait 待接取）；无链卡照旧「需要选择成员」；后棒照旧「等待链式接力」
-    // ——不再是 started=0 skipped=[] 的静默零反馈。
+    // 整体开始：首棒派发（ready 待接取——用户迭代 2026-09-11 派发不改状态）；
+    // 无链卡「需要选择成员」；后棒「等待链式接力」——跳过原因如实透出。
     const started = await h.post(`/eteams-api/team/${teamId}/task/${group}/start`, {});
     expect(started.code).toBe(200);
     const body = json<{
@@ -1598,24 +1594,23 @@ describe('conversation task workflow (docs/26)', () => {
       { taskId: bareId, subject: '没选成员的小任务', reason: '需要选择成员' },
     ]);
     const team = readTeam(teamId);
-    expect(team.tasks.find((t) => t.id === firstId)!.status).toBe('wait');
+    expect(team.tasks.find((t) => t.id === firstId)!.status).toBe('ready');
     expect(team.tasks.find((t) => t.id === firstId)!.attempts[0]!.member).toBe('Alice');
-    expect(team.tasks.find((t) => t.id === secondId)!.status).toBe('draft');
+    expect(team.tasks.find((t) => t.id === secondId)!.status).toBe('ready');
 
-    // 单任务（非组）路径同理：draft 直接开始 = 派发核晋升 ready 后进 wait。
+    // 单任务（非组）路径同理：ready 直接开始 = 派发（attempt 记 Bob）。
     const single = await h.post(`/eteams-api/team/${teamId}/task`, {
       subject: '单杆小任务',
       chain: [{ member: 'Bob', stageBrief: '直接做' }],
     });
     const singleId = json<{ taskId: number }>(single.body).taskId;
-    db.prepare('UPDATE task SET status = ? WHERE task_id = ?').run('draft', singleId);
     const singleStart = await h.post(`/eteams-api/team/${teamId}/task/${singleId}/start`, {});
     expect(singleStart.code).toBe(200);
     const teamAfterSingle = readTeam(teamId);
-    expect(teamAfterSingle.tasks.find((t) => t.id === singleId)!.status).toBe('wait');
+    expect(teamAfterSingle.tasks.find((t) => t.id === singleId)!.status).toBe('ready');
     expect(teamAfterSingle.tasks.find((t) => t.id === singleId)!.attempts[0]!.member).toBe('Bob');
 
-    // 依赖未完成的 draft 卡：跳过原因诚实透出（依赖卡 wait 未完成 →
+    // 依赖未完成的小任务：跳过原因诚实透出（依赖卡未 completed →
     // 「依赖未完成」，不再被状态闸静默吞掉）。锁定语义下本会话（cap-conv）
     // 已有进行中的主任务容器 #1——先把第一个任务单落终态再开第二个
     // （一个对话同时只有一个进行中的主任务，docs/teamSessionLock）。
@@ -1632,7 +1627,6 @@ describe('conversation task workflow (docs/26)', () => {
       chain: [{ member: 'Bob', stageBrief: '等着' }],
     });
     const blockedId = json<{ taskId: number }>(blocked.body).taskId;
-    db.prepare('UPDATE task SET status = ? WHERE task_id = ?').run('draft', blockedId);
     const started3 = await h.post(`/eteams-api/team/${teamId}/task/${group3}/start`, {});
     expect(started3.code).toBe(200);
     const body3 = json<{ started: number; skipped: { taskId: number; reason: string }[] }>(
@@ -1686,7 +1680,7 @@ describe('conversation task workflow (docs/26)', () => {
     expect(body.started).toBe(1);
     expect(body.skipped).toEqual([]);
     const team = readTeam(teamId);
-    expect(team.tasks.find((t) => t.id === subId)!.status).toBe('wait');
+    expect(team.tasks.find((t) => t.id === subId)!.status).toBe('ready');
     expect(team.tasks.find((t) => t.id === subId)!.attempts[0]!.member).toBe('Alice');
     // 恢复的就是任务行快照派生的会话 ID（v6 锚点在 task 行）；补章把派发
     // 锚点登记到本任务行（快照语义：登记后不再改写）。
@@ -1702,7 +1696,8 @@ describe('conversation task workflow (docs/26)', () => {
     const singleStart = await h.post(`/eteams-api/team/${teamId}/task/${singleId}/start`, {});
     expect(singleStart.code).toBe(200);
     const teamAfterSingle = readTeam(teamId);
-    expect(teamAfterSingle.tasks.find((t) => t.id === singleId)!.status).toBe('wait');
+    // 用户迭代 2026-09-11：派发不改状态，仍是 ready（待接取）。
+    expect(teamAfterSingle.tasks.find((t) => t.id === singleId)!.status).toBe('ready');
     expect(resumed).toEqual(['cap-conv']);
   });
 
@@ -1775,7 +1770,7 @@ describe('conversation task workflow (docs/26)', () => {
     const started = await h.post(`/eteams-api/team/${teamId}/task/${subId}/start`, {});
     expect(started.code).toBe(200);
     const team = readTeam(teamId);
-    expect(team.tasks.find((t) => t.id === subId)!.status).toBe('wait');
+    expect(team.tasks.find((t) => t.id === subId)!.status).toBe('ready');
     expect(team.tasks.find((t) => t.id === subId)!.attempts[0]!.member).toBe('Alice');
     expect(childIdOf(teamId, 'Alice')).not.toBe('');
     // 补章：本任务行未登记快照时以本次派发锚点补登（cap-second）；已登记行
@@ -1841,7 +1836,8 @@ describe('conversation task workflow (docs/26)', () => {
     });
     expect(done.done).toBe(true);
     const team = readTeam(teamId);
-    expect(team.tasks.find((t) => t.id === secondId)!.status).toBe('wait');
+    // 用户迭代 2026-09-11：派发不改状态——续派也是 ready 待接取。
+    expect(team.tasks.find((t) => t.id === secondId)!.status).toBe('ready');
     expect(team.tasks.find((t) => t.id === secondId)!.attempts[0]!.member).toBe('Bob');
     expect(childIdOf(teamId, 'Bob')).not.toBe('');
   });
@@ -1907,7 +1903,7 @@ describe('conversation task workflow (docs/26)', () => {
     const started = await h.post(`/eteams-api/team/${teamId}/task/${subId}/start`, {});
     expect(started.code).toBe(200);
     const team = readTeam(teamId);
-    expect(team.tasks.find((t) => t.id === subId)!.status).toBe('wait');
+    expect(team.tasks.find((t) => t.id === subId)!.status).toBe('ready');
     const leaderRow = team.taskMembers.find((r) => r.mainTaskId === group && r.isLeader === true);
     expect(leaderRow).toBeDefined();
     // v8+：主持行取消——领队副本行只作会话锚（未派发保持空串）；派发锚点
@@ -2163,9 +2159,10 @@ describe('GET /board 跨团队聚合 (docs/35 §6 Q1/Q3/Q4/Q5/Q9)', () => {
       token: bobClaim.token,
       output: '映射表完成',
     });
-    // subD：Bob 再领一单（group3 → 第二条实例行）；停在 wait（看板第二列）。
+    // subD：Bob 再领一单（group3 → 第二条实例行）；用户迭代 2026-09-11：
+    // 派发不改状态——停在 ready（进看板就绪待派列）。
     await h.call!('eteams_assign_task', { taskId: subD, member: 'Bob' });
-    // subF：Alice 在另一支大任务上失败（重试预算 0 → wait_decision + 决策）。
+    // subF：Alice 在另一支大任务上失败（重试预算 0 → wait_user + 决策）。
     // 同一成员跨大任务各一行实例行（Q5 去重口径的数据形态）。
     await h.call!('eteams_assign_task', { taskId: subF, member: 'Alice' });
     const aliceClaim2 = await h.mem!(
@@ -2204,13 +2201,18 @@ describe('GET /board 跨团队聚合 (docs/35 §6 Q1/Q3/Q4/Q5/Q9)', () => {
 
     const a = teams.find((t) => t.teamId === teamA)!;
     expect(a.name).toBe('聚合甲');
-    expect(a.ready.map((t) => t.taskId)).toEqual([subE]);
-    expect(a.ready[0]!.subject).toBe('独立小任务');
+    // 就绪待派列：独立小任务 + 已派发待接取的 subD（用户迭代 2026-09-11：
+    // wait 撤销后派发不再出列，仍算待开始）。
+    expect([...a.ready.map((t) => t.taskId)].sort((x, y) => x - y)).toEqual(
+      [subD, subE].sort((x, y) => x - y),
+    );
+    expect(a.ready.find((t) => t.taskId === subE)!.subject).toBe('独立小任务');
     expect(a.columns.paused.map((t) => t.taskId)).toEqual([subA]);
-    expect(a.columns.wait.map((t) => t.taskId)).toEqual([subD]);
-    expect(a.columns.wait_decision.map((t) => t.taskId)).toEqual([subF]);
+    expect(a.columns.wait_user.map((t) => t.taskId)).toEqual([subF]);
     expect(a.columns.start).toEqual([]);
-    expect(a.columns.wait_user).toEqual([]);
+    // wait / wait_decision 列已随状态精简退役。
+    expect(a.columns.wait).toBeUndefined();
+    expect(a.columns.wait_decision).toBeUndefined();
     expect(a.groups.find((g) => g.taskId === group1)).toEqual({
       taskId: group1,
       subject: '主任务一',
@@ -2233,11 +2235,12 @@ describe('GET /board 跨团队聚合 (docs/35 §6 Q1/Q3/Q4/Q5/Q9)', () => {
     expect(aliceRows).toHaveLength(4);
     // 表自增（v7）：工号 = 班底行全局自增主键——甲领队 1、乙领队 2、Alice 3。
     expect(new Set(aliceRows.map((r) => r.employeeId))).toEqual(new Set([3]));
-    // activeTasks 按在办尝试归属副本行计（活跃五态任务上的 attempt 记录）：
-    // subA 挂起（paused）与 subF 失败进决策（wait_decision）虽已释放执行行，
-    // 尝试记录仍在案——Alice 计 2；Bob 的 subD 还在 wait，计 1。
+    // activeTasks 按在办尝试归属副本行计（活跃态 = start/paused/wait_user）：
+    // subA 挂起（paused）与 subF 失败进待用户（wait_user）虽已释放执行行，
+    // 尝试记录仍在案——Alice 计 2；Bob 只有 subD（ready 待接取，不算在办）
+    // 与已完成的 subC，计 0。
     expect(a.members.find((m) => m.name === 'Alice')!.activeTasks).toBe(2);
-    expect(a.members.find((m) => m.name === 'Bob')!.activeTasks).toBe(1);
+    expect(a.members.find((m) => m.name === 'Bob')!.activeTasks).toBe(0);
     expect(a.members.find((m) => m.name === 'Bob')!.isLeader).toBe(false);
     expect(a.members.find((m) => m.name === '项目牧羊人')!.isLeader).toBe(true);
     expect(a.members).toHaveLength(3);

@@ -25,7 +25,11 @@ v2 修订：按审核报告修正派发锚一层的事实错误（captainFor 是
 
 ### 1.2 任务状态机
 
-10 态：`draft/ready/wait/start/paused/wait_decision/wait_user/completed/failed/cancelled`，非法转移抛 `TransitionError`。`draft/ready` 在面板同显「待开始」。
+7 态（**用户迭代 2026-09-11 精简**，原 11 态收敛）：`creating/ready/start/paused/wait_user/completed/cancelled`，非法转移抛 `TransitionError`。
+- `draft/ready/wait` → `ready`（统一「待开始」）：草稿与就绪同义，「等待派发」并入 start 语义——**派发不改状态**（任务留 ready），成员领取才 `ready→start`；重试失败/改派也回 ready。
+- `wait_decision/failed` → `wait_user`（统一「待用户」）：待回答问题/待决策/重试超限。
+- 依赖阻塞不再物化（原 `wait + blocked_from` 退役）：被上游卡住的任务保持 ready，**派发口**用 `dependenciesSatisfied` 校验；`blocked_from` 列弃用（保留不 DROP）。
+- 大任务（容器，`parentId === null`）只用 `creating/ready/start/paused` + `completed`（**可回退标识**，追加小任务即回 ready；无 cancelled——取消 = 取消未完成小任务并回 ready）。
 
 ### 1.3 面板写端与锚点（关键事实）
 
@@ -253,3 +257,21 @@ team.hasLeader?
 6. **面板路径 parent 来源用例**：落在 tests/webui.test.ts 的无领队唤醒用例（installFull 桩补 followup，断言 `anchor.followup` 收到带任务 #id 与描述原话的完善指令），代替 5 里「captainDispatch.test.ts 补面板路径用例」的原设想；另有 commission 路由五用例（成功派发 / 无锚不回滚 / 绑定他队拒投 / 无领队唤醒 / 入参校验）。
 
 待手工验收（需在 DSH 桌面端实际操作）：5 里「手工验收链」——面板建任务（有领队队 / 无领队队）→「创建中」+ 旋转图标 → 完善（含问询弹窗）→ 转「待开始」且主题回写 → 派发失败分支提示 + 可删除。
+
+---
+
+## 9. 客户端改走「新建对话」（用户迭代 2026-09-11，本文档客户端侧口径作废）
+
+用户拍板：面板「添加任务」不再产小任务、也不再走本文的 commission 建「创建中」容器，而是**新开一个对话**，把描述和所选团队带过去。原因（用户原话）：添加任务是「从零建立一个任务单」，且希望在新的对话窗口里跟团队交互。
+
+改动（只动客户端调用点，宿主 §3 的 commission 链路**原样保留**，暂未退役）：
+
+- `addTaskDialog.tsx`：目标团队下拉改为带**首字徽章**的团队行（复用 `TEAM_CHIP_CLASS`，观感对齐对话里 `teamsButton` 弹层的团队选择）；描述文案改为「新开一个对话…」。
+- `tasksPage.tsx`：`openAddDialog` 的目标团队默认值改为**当前会话绑定的团队**（`fetchSessionTeam` 宿主真相源，异步回填且不打断用户手选；取不到或该队不在池里落队首）。`submitAddTask` 改调 `lib/taskConversation` 的 `openTaskConversation`；整页团队页表面（覆盖层形态）成功后广播 `requestCloseTeamsPage()` 收页。
+- 新增 `lib/taskConversation.ts`：编排「建会话（沿用来源会话 cwd）→ 绑团队（`POST /session-team`）→ 投递描述（`SessionFace.prompt`，queue）→ `sessions.open` 切过去」。顺序有语义：绑团队必须早于投递，否则首轮系统提示词组装时团队 band 尚未生效。
+- `lib/sessionState.ts`：探测面扩展 `createSession` / `promptSession` / `sessionCwdOf`。`sessions.create` **不在** `ISessions` 契约面上（在 `SessionsPort` 跨域面上，DSH 自己的 New Session 流程走它），故按本仓结构探测纪律读取：能力缺失/失败一律 `null`/`false`，调用方降级不抛。
+- `lib/api.ts`：`createTaskCommission` 已无消费位，删除（宿主 `/task/commission` 路由与其测试保留）。
+
+任务单仍由「两步走」建立：新对话无锚定主任务，团队绑定 band 走 `prompts/system/sessionTeam.ts` 的「先 `eteams_submit_task` 建任务单 → 再 `eteams_dispatch_captain` 转交领队」分支（未设领队的团队由该会话直接主持）——与用户在对话里直接提任务完全同源，宿主零改动。
+
+失败分层：建会话失败 / 绑团队失败 → 弹窗内就地报错（不静默成功）；描述未投递或未能切换 → 新对话照常打开并 toast 说明（消息可重发）。

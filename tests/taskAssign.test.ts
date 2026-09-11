@@ -32,9 +32,9 @@ const st = (member: string, stageBrief = ''): { member: string; stageBrief: stri
   stageBrief,
 });
 
-describe('isAssignEditable（DA6 客户端守卫：draft/ready && chainCursor===-1）', () => {
-  const base: ChainTaskLike = { status: 'draft', chain: [], chainCursor: -1 };
-  it('draft/ready 未领取可编辑', () => {
+describe('isAssignEditable（DA6 客户端守卫：ready && chainCursor===-1）', () => {
+  const base: ChainTaskLike = { status: 'ready', chain: [], chainCursor: -1 };
+  it('ready 未领取可编辑（用户迭代 2026-09-11：draft 并入 ready）', () => {
     expect(isAssignEditable(base)).toBe(true);
     expect(isAssignEditable({ ...base, status: 'ready' })).toBe(true);
   });
@@ -42,8 +42,8 @@ describe('isAssignEditable（DA6 客户端守卫：draft/ready && chainCursor===
     expect(isAssignEditable({ ...base, status: 'ready', chainCursor: 0 })).toBe(false);
     expect(isAssignEditable({ ...base, status: 'ready', chainCursor: 2 })).toBe(false);
   });
-  it('非 draft/ready（合同冻结）不可编辑', () => {
-    for (const status of ['assigned', 'in_progress', 'retrying', 'completed', 'failed']) {
+  it('非 ready（合同冻结）不可编辑', () => {
+    for (const status of ['start', 'paused', 'wait_user', 'completed', 'cancelled']) {
       expect(isAssignEditable({ ...base, status })).toBe(false);
     }
   });
@@ -143,7 +143,7 @@ describe('chainAfterInsert（三十五轮 DA48：松手放置判位插入）', (
   });
 
   it('空链：任意 index 夹取 → 单站链（拖入=追加即放置）', () => {
-    const task: ChainTaskLike = { status: 'draft', chain: [], chainCursor: -1 };
+    const task: ChainTaskLike = { status: 'ready', chain: [], chainCursor: -1 };
     expect(chainAfterInsert(task, '张三', 0)).toEqual([st('张三', '')]);
     expect(chainAfterInsert(task, '张三', 7)).toEqual([st('张三', '')]);
   });
@@ -151,7 +151,7 @@ describe('chainAfterInsert（三十五轮 DA48：松手放置判位插入）', (
 
 describe('canRemoveStation / chainAfterRemove（chip ×：DA13 逐站移除）', () => {
   it('可编辑窗口内任意站可移除；开跑/冻结不可', () => {
-    expect(canRemoveStation({ status: 'draft', chain: [st('张三')], chainCursor: -1 })).toBe(true);
+    expect(canRemoveStation({ status: 'ready', chain: [st('张三')], chainCursor: -1 })).toBe(true);
     expect(
       canRemoveStation({ status: 'ready', chain: [st('张三'), st('李四')], chainCursor: -1 }),
     ).toBe(true);
@@ -172,7 +172,7 @@ describe('canRemoveStation / chainAfterRemove（chip ×：DA13 逐站移除）',
 
   it('移除末站/首站同理；移除后空链 = 整链重发空链（回领队自由指派，docs/06 §6.7）', () => {
     const task: ChainTaskLike = {
-      status: 'draft',
+      status: 'ready',
       chain: [st('张三', '设计'), st('李四', '实现')],
       chainCursor: -1,
     };
@@ -213,12 +213,12 @@ describe('readonlyStationMember（只读框展示，A.5.1）', () => {
 describe('boxCoversChain（可编辑框承整链 → 抑制 TaskStations，DA5/DA13）', () => {
   it('可编辑 + 非空链：承整链（抑制站点行）', () => {
     expect(
-      boxCoversChain({ status: 'draft', chain: [st('张三'), st('李四')], chainCursor: -1 }),
+      boxCoversChain({ status: 'ready', chain: [st('张三'), st('李四')], chainCursor: -1 }),
     ).toBe(true);
     expect(boxCoversChain({ status: 'ready', chain: [st('张三')], chainCursor: -1 })).toBe(true);
   });
   it('可编辑 + 空链：false（TaskStations 本就渲染 null，无需抑制）', () => {
-    expect(boxCoversChain({ status: 'draft', chain: [], chainCursor: -1 })).toBe(false);
+    expect(boxCoversChain({ status: 'ready', chain: [], chainCursor: -1 })).toBe(false);
   });
   it('开跑/冻结：false（框只承单站，站点行照常）', () => {
     expect(
@@ -332,7 +332,7 @@ describe('chainAfterAppendMany（「＋」多选追加，六轮 DA19）', () => 
   });
   it('空勾选 → null；只读窗口 → null', () => {
     const task: ChainTaskLike = {
-      status: 'draft',
+      status: 'ready',
       chain: [],
       chainCursor: -1,
     };

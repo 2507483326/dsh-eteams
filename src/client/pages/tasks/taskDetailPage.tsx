@@ -6,7 +6,9 @@
  * 用户拍板「将任务做成任务详情页面和任务列表页面，点击到详情再编排整个
  * 任务」；store 持久层回写由 routes.tsx 的 location sync 承担——ui model
  * 语义不变）；选中任务被删（快照里已无此 id）自动回落列表页（原 tasksTab
- * 分支注记口径，navigate('/tasks') 落地）。
+ * 分支注记口径，navigate('/tasks') 落地）；创建中容器同样不进详情
+ * （用户迭代 2026-09-11「创建中不允许点进去」——点击门在列表卡/看板卡，
+ * 本页兜持久层恢复旁路，见 enterable 注）。
  * 主任务（group）详情 = **整个任务的编排面**：新增小任务 + 小任务卡片全套
  * （taskSubtaskItem：执行序号/卡槽/把手拖拽调序——十轮 DA23 把手化/改删/
  * 展开/就地编辑）+ 成员罗列条；任务/小任务：详情正文（taskDrawer 的
@@ -100,10 +102,13 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
   // 自动回落列表页（原 tasksTab 分支注记口径）：拆页前该窗口原地回落列表
   // 渲染，拆页后 navigate('/tasks')——渲染一帧空即跳列表（拆页显式接受的
   // 差异，见 46 清单 M3 验收注记）。
-  const taskFound = selected !== null;
+  // 用户迭代 2026-09-11「创建中不允许点进去」：创建中容器同判——列表卡/看板
+  // 卡的点击门已挡（含「详情」钮），这里兜住持久层旁路（ETeamsRouter 按
+  // drawerTaskId 恢复上次详情时可能落在创建中任务上），口径与 not-found 同款。
+  const enterable = selected !== null && selected.status !== 'creating';
   useEffect(() => {
-    if (!taskFound) navigate('/tasks');
-  }, [taskFound, navigate]);
+    if (!enterable) navigate('/tasks');
+  }, [enterable, navigate]);
   const [editTarget, setEditTarget] = useState<TaskEditTarget | null>(null);
   const [editSubject, setEditSubject] = useState('');
   const [editDesc, setEditDesc] = useState('');
@@ -273,7 +278,7 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
   // 拖卡调执行顺序（七轮 DA20；十轮 DA23 订正：拖拽只在小任务卡把手——
   // 任务列表页无拖拽）：补丁由 depPatchesForReorder 以全量 team.tasks 现算
   // （兄弟集按同 parentId 从传入数组取），线性链改写只含 deps 实际变化且
-  // draft/ready 的卡，按序逐发 updateTeamTask({dependencies})——非乐观更新；
+  // ready 的卡，按序逐发 updateTeamTask({dependencies})——非乐观更新；
   // 部分失败也回拉快照对齐。
   const submitReorder = async (fromTaskId: number, toTaskId: number): Promise<void> => {
     const patches = depPatchesForReorder(team.tasks, fromTaskId, toTaskId);
@@ -325,10 +330,11 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
     }
   };
 
-  if (selected === null) {
-    // 防御位：:taskId 在快照里查无此任务（被删/非法段）——回列表导航已在
-    // 上方 effect 落地，本帧渲染空（roster/rosterDetailPage 同款先例，
-    // 名册回拉/导航到位即恢复）。
+  if (selected === null || selected.status === 'creating') {
+    // 防御位：:taskId 在快照里查无此任务（被删/非法段）或任务还在创建中
+    // （2026-09-11 口径，见上方 enterable 注）——回列表导航已在上方 effect
+    // 落地，本帧渲染空（roster/rosterDetailPage 同款先例，名册回拉/导航
+    // 到位即恢复）。
     return null;
   }
 
@@ -337,7 +343,7 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
   // 导航回 /tasks——drawerTaskId 由 routes.tsx 的 location sync 回写（持久
   // 层终态与拆页前逐位一致）。
   // 详情页成员罗列条（八轮 DA21：编排收进详情，罗列条随编排走——仅
-  // 存在可放置任务（draft/ready）时渲染，作为卡槽的拖拽源）。二十四轮
+  // 存在可放置任务（ready）时渲染，作为卡槽的拖拽源）。二十四轮
   // DA37：指派提示拆出 StripAssignHint（与罗列条同判据另行渲染）。
   const detailStrip = (show: boolean): ReactNode => (show ? <TeamMemberStrip team={team} /> : null);
 
@@ -405,24 +411,21 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
     const done = subs.filter((t) => t.status === 'completed').length;
     // docs/panelTaskCommission：就地编辑入口判据加 creating（与宿主
     // updateTask 白名单对齐——创建中的容器可边完善边改主题/说明）。
-    const mutable =
-      selected.status === 'creating' ||
-      selected.status === 'draft' ||
-      selected.status === 'ready';
+    // 用户迭代 2026-09-11：draft 并入 ready。
+    const mutable = selected.status === 'creating' || selected.status === 'ready';
     // 三十一轮 DA44⑥：头部卡主题原位编辑态（与任务详情页头部卡同构——本任务
     // + scope='header' 才开编辑器）。
     const headerEditing =
       inlineEdit !== null && inlineEdit.taskId === selected.taskId && inlineEdit.scope === 'header';
     // docs/29 B.2 组卡汇总：ready 且有小任务时叠加汇总 chip。
     const summary = selected.status === 'ready' && subs.length > 0 ? groupDisplayOf(subs) : null;
-    // 罗列条/指派提示块渲染判据（八轮 DA21 口径）：存在可放置任务
-    // （draft/ready）才渲染，仍是卡槽拖拽源。docs/panelTaskCommission：
-    // creating 占位也显示罗列条（成员随完善全程可见，仅展示无卡槽可放）；
-    // 指派提示块仍要求存在可放置任务——无小任务时不提示拖拽。
-    const stripShow =
-      selected.status === 'creating' ||
-      subs.some((t) => t.status === 'draft' || t.status === 'ready');
-    const assignHintShow = subs.some((t) => t.status === 'draft' || t.status === 'ready');
+    // 罗列条/指派提示块渲染判据（八轮 DA21 口径；用户迭代 2026-09-11：
+    // draft 并入 ready）：存在可放置任务（ready）才渲染，仍是卡槽拖拽源。
+    // docs/panelTaskCommission：creating 占位也显示罗列条（成员随完善全程
+    // 可见，仅展示无卡槽可放）；指派提示块仍要求存在可放置任务——无小任务
+    // 时不提示拖拽。
+    const stripShow = selected.status === 'creating' || subs.some((t) => t.status === 'ready');
+    const assignHintShow = subs.some((t) => t.status === 'ready');
     return (
       <TaskDndProvider>
         <div>
@@ -507,7 +510,7 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
             }
           />
           {/* 二十四轮 DA37：指派提示块置头部卡下方（左小竖线；渲染判据与
-            罗列条同源——存在 draft/ready 小任务才渲染）。二十八轮 DA41：
+            罗列条同源——存在 ready 小任务才渲染）。二十八轮 DA41：
             主任务开始的行内提示槽同步上移到头部卡之后、提示块之前（跳过的
             小任务按卡列原因；单小任务路径错误也走同槽，语义不变）。 */}
           {startError !== null && startError.taskId === selected.taskId && (
@@ -550,7 +553,7 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
             onValueChange={(v) => setExpandedSubIds(v.map(Number))}
           >
             {subs.map((t, subIndex) => {
-              const subMutable = t.status === 'draft' || t.status === 'ready';
+              const subMutable = t.status === 'ready';
               // DA42：本卡正处小任务卡编辑（可编辑 + 本卡 + scope 对上）——
               // 展开区换编辑器，行头钮簇/卡槽保持常显。
               const editing =
@@ -625,11 +628,9 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
       ? (team.tasks.find((t) => t.taskId === selected.parentId) ?? null)
       : null;
   // docs/panelTaskCommission：就地编辑入口判据加 creating（与 group 分支
-  // mutable 及宿主 updateTask 白名单对齐——创建中的任务边完善边改）。
-  const subMutable =
-    selected.status === 'creating' ||
-    selected.status === 'draft' ||
-    selected.status === 'ready';
+  // mutable 及宿主 updateTask 白名单对齐——创建中的任务边完善边改）；
+  // 用户迭代 2026-09-11：draft 并入 ready。
+  const subMutable = selected.status === 'creating' || selected.status === 'ready';
   // DA41 头部卡就地编辑态：本任务 + scope='header' 才开编辑器。
   const headerEditing =
     inlineEdit !== null && inlineEdit.taskId === selected.taskId && inlineEdit.scope === 'header';

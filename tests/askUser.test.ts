@@ -246,6 +246,34 @@ describe('eteams_ask_user 统一路径（弹窗落在提问子对话）', () => 
       callAsk(askArgs(), agentOf('stranger-1'), fakeCtx({ userQuestions: { ask: fakeAsk('A') } })),
     ).rejects.toThrow(/不在任何 eteams 团队中/);
   });
+
+  it('多选别名容错：multi_select / multi 归一为 multiSelect（2026-09-11 实况）', async () => {
+    // 模型常把规范字段写成 multi_select，或沿用构建访谈的旧名 multi——两者
+    // 都必须归一为 multiSelect，否则多选语义丢失（严格 schema 曾整包拒收调用）。
+    seedTeam();
+    const ask = fakeAsk('A');
+    await callAsk(
+      {
+        questions: [
+          { id: 'q1', question: '甲？', options: [{ label: 'A' }], multi_select: true },
+          { id: 'q2', question: '乙？', options: [{ label: 'B' }], multi: true },
+        ],
+      },
+      agentOf('member-1'),
+      fakeCtx({ userQuestions: { ask } }),
+    );
+    const sent = (ask.mock.calls[0]![0] as { questions: Record<string, unknown>[] }).questions;
+    expect(sent[0]).toMatchObject({ id: 'q1', multiSelect: true });
+    expect(sent[1]).toMatchObject({ id: 'q2', multiSelect: true });
+  });
+
+  it('问题项 schema 放宽：additionalProperties=true（别名不再被宿主拒收）', () => {
+    const tool = createAskUserTools(config, fakeCtx()).find((t) => t.name === 'eteams_ask_user');
+    const params = tool?.parameters as {
+      properties?: { questions?: { items?: { additionalProperties?: boolean } } };
+    };
+    expect(params?.properties?.questions?.items?.additionalProperties).toBe(true);
+  });
 });
 
 // ---------- 弹窗目标=主对话（原生弹窗直接弹在用户正在的窗口） ----------

@@ -13,9 +13,10 @@
  * 地态：folderBusy/folderError（文件夹打开）、startBusy/startError（组卡
  * 开始）、deleteTarget/deleteBusy/deleteError（删除确认）。导航状态不在
  * 本页：详情选中的任务 id 走 :taskId 路由参数。依赖 features/tasks 与
- * shared、taskListCard、taskDialogs。面板手动建任务（docs/panelTask
- * Commission）：头部行「＋ 添加任务」按钮 + addTaskDialog 弹窗（描述 +
- * 选团队）——提交走宿主 commission 路由建「创建中」容器交完善者（仅
+ * shared、taskListCard、taskDialogs。面板手动建任务（用户迭代 2026-09-11）：
+ * 头部行「＋ 添加任务」按钮 + addTaskDialog 弹窗（描述 + 选团队）——提交
+ * **新开一个对话**并把描述与团队带过去（lib/taskConversation 编排），任务单
+ * 由该对话的团队工作流从零建立；目标团队默认当前会话绑定的团队（仅
  * 有团队可选时渲染按钮）。
  *
  * @module dsh-eteams/client/pages/tasks/tasksPage
@@ -23,11 +24,13 @@
 import { useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Plus from 'lucide-react/dist/esm/icons/plus.mjs';
-import { createTaskCommission, deleteTeamTask, openTaskFolder, startTeamTask } from '../../lib/api';
+import { deleteTeamTask, fetchSessionTeam, openTaskFolder, startTeamTask } from '../../lib/api';
+import { requestCloseTeamsPage } from '../../lib/bridge';
 import { cn } from '../../lib/cn';
 import { errorMessageOf, runWithBusy } from '../../lib/errors';
 import { refreshActivitySoon, type TaskView, type TeamSnapshot } from '../../lib/monitor';
 import { canOpenSession, openSession } from '../../lib/sessionState';
+import { openTaskConversation } from '../../lib/taskConversation';
 import { toast } from '../../hooks/useToast';
 import { TaskDndProvider } from '../../features/tasks/taskAssign';
 import { Card } from '../../components/ui/card';
@@ -65,9 +68,9 @@ export interface TasksPageProps {
  * 可点进详情；其它 = 跳转会话钮 + 卡身不可点）。编辑/删除弹窗为组件内
  * 瞬态 useState（编辑弹窗入口在详情页，本页仅删除确认可达），删除成功后
  * refreshActivitySoon 回拉快照；folderError/startError 瞬态错误行内就地
- * 显示（槽在 TaskListCard）。添加任务弹窗（docs/panelTaskCommission）同为
- * 瞬态 useState：open/description/teamId/busy/error，头部行按钮打开（仅
- * 有团队可选时渲染）、teamId 默认队首（每次打开重置，防残留）。
+ * 显示（槽在 TaskListCard）。添加任务弹窗同为瞬态 useState：open/
+ * description/teamId/busy/error，头部行按钮打开（仅有团队可选时渲染）、
+ * teamId 默认当前会话绑定团队（每次打开重置，防残留）。
  */
 export function TasksPage({ pool, sessionId }: TasksPageProps): ReactNode {
   const navigate = useNavigate();
@@ -86,7 +89,8 @@ export function TasksPage({ pool, sessionId }: TasksPageProps): ReactNode {
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   // 添加任务弹窗：open/description/teamId/busy/error 瞬态组——teamId 默认
-  // 队首（open 即回填，池变化不残留悬空 id）；busy/error 壳走 runWithBusy。
+  // 当前会话绑定团队（异步回填，取不到落队首；池变化不残留悬空 id）；
+  // busy/error 壳走 runWithBusy。
   const [addOpen, setAddOpen] = useState(false);
   const [addDesc, setAddDesc] = useState('');
   const [addTeamId, setAddTeamId] = useState('');
@@ -95,38 +99,51 @@ export function TasksPage({ pool, sessionId }: TasksPageProps): ReactNode {
 
   /* —— 事件处理 —— */
 
-  // 打开弹窗：描述清空、目标团队回填队首（每次打开重置，防上一次草稿/
-  // 悬空团队 id 残留）。
+  // 打开弹窗：描述清空、目标团队回填当前会话绑定的团队（取不到落队首）——
+  // 每次打开重置，防上一次草稿/悬空团队 id 残留。
   const openAddDialog = (): void => {
+    const fallback = pool[0]?.teamId ?? '';
     setAddDesc('');
-    setAddTeamId(pool[0]?.teamId ?? '');
+    setAddTeamId(fallback);
     setAddError(null);
     setAddOpen(true);
+    // 绑定团队是宿主真相源（fetchSessionTeam）：先落队首让弹窗即刻可用，回填
+    // 回来时只覆盖「还是队首」的态——用户已手动改选就不动他（异步回填不打乱
+    // 用户操作）。绑定队不在池里（已删）不认，避免 Select 落到无匹配的悬空值。
+    if (sessionId === undefined || sessionId === '') return;
+    void fetchSessionTeam(sessionId)
+      .then((bound) => {
+        if (bound === null || !pool.some((t) => t.teamId === bound.teamId)) return;
+        setAddTeamId((cur) => (cur === fallback ? bound.teamId : cur));
+      })
+      .catch(() => undefined);
   };
 
-  // 提交手动建任务（docs/panelTaskCommission §4.2）：宿主建「创建中」容器
-  // 并交完善者（有领队 = 领队子代理；无领队 = 主会话唤醒）。成功关弹窗 +
-  // 回拉快照——统一任务列表下新卡就地出现（主会话快照命中 = 本会话徽标，
-  // 不再需要跨队切选中团队）。dispatched:false = 任务仍创建成功、完善者
-  // 未送达（无锚/绑定他队）——toast 提示原因，卡片保留创建中可删（逃生
-  // 门）。失败吃 400 原文就地显示在弹窗内。
+  // 提交手动建任务（用户迭代 2026-09-11）：不再是面板 commission 建「创建中」
+  // 容器，而是**新开一个对话**——描述作为新对话首条消息、所选团队绑定到新
+  // 对话（编排见 lib/taskConversation）。新对话无锚定主任务，团队绑定 band
+  // 走「两步走」分工（先建任务单再转交领队；无领队由该会话直接主持），
+  // 「从零建立一个任务单」因此由对话流程天然完成。
+  // 成功关弹窗；部分降级（描述未投递/未切换）走 toast 提示，不再把用户困在
+  // 旧对话。失败吃原文就地显示在弹窗内。整页团队页表面（sessionId
+  // undefined）= 覆盖层形态——新对话已切过去，覆盖层会挡住它，成功即广播
+  // 关页信号收页（对话内 tab 场景无人监听，零副作用）。
   const submitAddTask = async (): Promise<void> => {
     if (addBusy || addTeamId === '' || addDesc.trim() === '') return;
     await runWithBusy(
       async () => {
-        const result = await createTaskCommission(addTeamId, {
+        const outcome = await openTaskConversation({
           description: addDesc.trim(),
-          ...(sessionId !== undefined && sessionId !== '' ? { sessionId } : {}),
+          teamId: addTeamId,
+          ...(sessionId !== undefined && sessionId !== '' ? { fromSessionId: sessionId } : {}),
         });
+        if (!outcome.ok) throw new Error(outcome.error);
         setAddOpen(false);
         setAddDesc('');
-        if (!result.dispatched) {
-          toast({
-            title: '任务已创建，完善者未送达',
-            description: result.detail ?? '该团队暂无可托管完善的主会话锚点，任务保留为创建中，可删除后重试。',
-          });
+        if (sessionId === undefined || sessionId === '') requestCloseTeamsPage();
+        if (outcome.warning !== undefined) {
+          toast({ title: '新对话已打开', description: outcome.warning });
         }
-        refreshActivitySoon();
       },
       setAddBusy,
       setAddError,
@@ -216,8 +233,8 @@ export function TasksPage({ pool, sessionId }: TasksPageProps): ReactNode {
   // 卡槽「修改」）都在详情页，editTarget 恒 null、编辑弹窗不渲染——编辑
   // 侧 props 以惰性值占位（瞬态 useState 不入 ui model；host 校验合同冻结
   // （领取后），错误就地显示）。三十一轮 DA44④：弹窗 JSX 抽 taskDialogs
-  // （TaskDialogs），状态/提交回调在此。添加任务弹窗（docs/panelTask
-  // Commission）同挂此节点：描述 + 团队 Select，提交回调 submitAddTask。
+  // （TaskDialogs），状态/提交回调在此。添加任务弹窗同挂此节点：描述 +
+  // 团队 Select，提交回调 submitAddTask（新开对话编排）。
   const dialogs = (
     <>
       <TaskDialogs
@@ -286,7 +303,7 @@ export function TasksPage({ pool, sessionId }: TasksPageProps): ReactNode {
               </div>
               {mainTasks.length === 0 ? (
                 <div className={EMPTY_CLASS}>
-                  还没有任务。在对话中把任务交给团队，或计划批准后任务会出现在这里；也可以点右上角「添加任务」手动创建。
+                  还没有任务。在对话中把任务交给团队，或计划批准后任务会出现在这里；也可以点右上角「添加任务」开一个新对话，把任务交给团队从零建立。
                 </div>
               ) : (
                 <div className={cn(TASK_GRID_CLASS, 'min-h-0 flex-1 content-start overflow-y-auto')}>

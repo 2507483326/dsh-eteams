@@ -340,7 +340,7 @@ export function StripAssignHint(): ReactNode {
 /**
  * 小任务成员卡槽（A.5.1，二轮 DA13 多人接力槽位；四轮 DA17 起置于任务行
  * 下方独立一行；五轮 DA18 横向单行 + 圆角 4px；六轮 DA19 链编排全收进卡槽）：
- * drop target。可编辑窗口（DA6：`draft/ready && chainCursor===-1`）内框承
+ * drop target。可编辑窗口（DA6：`ready && chainCursor===-1`）内框承
  * 整链——空链时容器即空槽（拖入或点击多选=追加站点，不设上限，DA15 已废止）；
  * 有链时容器横向单行排布站点 chips（Avatar 26px + 名字，工号入悬浮提示）+
  * 行尾「＋」多选按钮，成员拖入=松手放置**判位插入**（三十五轮 DA48：按落

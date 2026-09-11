@@ -10,6 +10,12 @@
  * 钮位换成「跳转会话」钮（canJump = 目标会话在会话列表里，经客户端
  * sessions.open 切换；目标不在列表/无会话快照的卡两钮皆无、纯展示）。
  *
+ * 用户迭代 2026-09-11「创建中不允许点进去，加上创建中 loading 效果」：
+ * creating 容器（面板手动创建、待完善收口）整卡禁点——完善中进详情无意义
+ * （子任务尚未落库，收口瞬间结构可能塌缩成普通任务面，成员条/小任务列表
+ * 一起消失）；进度计数行换 CreatingLoadingRow（loader + 「正在完善任务…」）。
+ * 删除钮照旧保留：创建中是手动建任务占位的逃生门（docs/panelTaskCommission）。
+ *
  * @module dsh-eteams/client/pages/tasks/taskListCard
  */
 import type { ReactNode } from 'react';
@@ -19,9 +25,13 @@ import { groupDisplayOf, isGroupStartable } from '../../features/tasks/taskDispl
 import { DeleteButton } from '../../components/deleteButton';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
-import { BlockedPill, FormErrorNote, GroupSummaryChip, TaskStatusPill } from '../shared/components';
+import {
+  CreatingLoadingRow,
+  FormErrorNote,
+  GroupSummaryChip,
+  TaskStatusPill,
+} from '../shared/components';
 import { LIST_COUNT_CLASS } from '../shared/styles';
-import LoaderCircle from 'lucide-react/dist/esm/icons/loader-circle.mjs';
 
 /** 列表页任务小卡（十一轮 DA24 与团队列表小卡同款三段式，十二轮 DA25 修订：
  * 头行（主题截断，**无 #id 前缀**）、信息**逐行分行**（进度行/汇总 chip 行/
@@ -32,23 +42,24 @@ import LoaderCircle from 'lucide-react/dist/esm/icons/loader-circle.mjs';
  * （数字着色）、文件夹行「工作目录」标签钮；十五轮 DA28 修订：状态 pill
  * 描边压平 hover、工作目录改幽灵文字钮；底色/边框/悬停由 .eteams-task-card
  * 样式表接管，p-3.5 = 卡内高度呼吸感）。cursor-pointer 移出常量——
- * 2026-09-10 起只有当前会话卡整卡可点（其它任务卡不可点进详情，见头注）。 */
+ * 2026-09-10 起只有当前会话卡整卡可点（其它任务卡不可点进详情，见头注）；
+ * 2026-09-11 起创建中卡也不可点（见头注）。 */
 const TASK_CARD_CLASS = 'flex min-w-0 flex-col gap-2 rounded-xl p-3.5';
 
 /** 列表卡删除按钮显隐判据（十二轮 DA25，用户拍板「仅可删除的卡显示」）——
- * 与 host deleteTask 守卫（assignment.ts）同口径：本身 draft/ready/creating
+ * 与 host deleteTask 守卫（assignment.ts）同口径：本身 creating/ready
  * （docs/panelTaskCommission：creating 仅容器分支放宽——创建中的容器是
  * 手动建任务占位、计划未定，删除 = 逃生门；小任务分支判据不动）；主任务
- * 级联删除要求全部小任务 draft/ready；删除集（自身 + 小任务）不得被任何
+ * 级联删除要求全部小任务 ready；删除集（自身 + 小任务）不得被任何
  * 未入集任务依赖。host 仍是最终裁决，弹窗内就地显示拒绝原因。
  * （M3：改具名导出供 tests/taskListCard.test.ts 锁定镜像口径——判定式
  * 一字未动。） */
 export function deletableOf(t: TaskView, tasks: readonly TaskView[]): boolean {
-  if (t.status !== 'creating' && t.status !== 'draft' && t.status !== 'ready') return false;
+  if (t.status !== 'creating' && t.status !== 'ready') return false;
   const doomedIds = new Set<number>([t.taskId]);
   for (const sub of tasks) {
     if (sub.parentId !== t.taskId) continue;
-    if (sub.status !== 'draft' && sub.status !== 'ready') return false;
+    if (sub.status !== 'ready') return false;
     doomedIds.add(sub.taskId);
   }
   for (const other of tasks) {
@@ -96,7 +107,7 @@ export function TaskListCard({
   onStart: () => void;
 }): ReactNode {
   // 组卡进度：小任务计数与汇总（九轮 DA22 概览口径——只计数
-  // 不列明细；draft 只显示个数，ready 且有明细时叠加汇总）。
+  // 不列明细；ready 且有明细时叠加汇总）。
   const subs = task.kind === 'group' ? allTasks.filter((s) => s.parentId === task.taskId) : [];
   const done = subs.filter((s) => s.status === 'completed').length;
   const summary =
@@ -117,12 +128,18 @@ export function TaskListCard({
     </>
   );
   const deletable = deletableOf(task, allTasks);
+  // 创建中容器禁点（用户迭代 2026-09-11「创建中不允许点进去」）：完善收口前
+  // 进详情无意义（见头注）；删除钮照旧（逃生门）。判据在卡内现算，调用位只
+  // 需照旧传 onOpen（不新增 props，禁止进详情的规则收口在本卡）。
+  const creating = task.status === 'creating';
+  const openable = currentSession && !creating;
   return (
-    // 整卡点击只对当前会话卡生效（其它任务不进详情——2026-09-10 口径）；
-    // 不可点卡身不加 cursor-pointer（悬停语义与行为一致）。
+    // 整卡点击只对可进的当前会话卡生效（其它任务不进详情——2026-09-10 口径；
+    // 创建中禁点——2026-09-11 口径）；不可点卡身不加 cursor-pointer
+    // （悬停语义与行为一致）。
     <div
-      className={cn('eteams-task-card', TASK_CARD_CLASS, currentSession ? 'cursor-pointer' : 'cursor-default')}
-      onClick={currentSession ? onOpen : undefined}
+      className={cn('eteams-task-card', TASK_CARD_CLASS, openable ? 'cursor-pointer' : 'cursor-default')}
+      onClick={openable ? onOpen : undefined}
     >
       {/* 头行：主题（十四轮 DA27：展示态 pill 挪出头部——用户
           「状态挪到卡片的左边下面」，入底栏左侧；十二轮 DA25
@@ -139,10 +156,11 @@ export function TaskListCard({
       </div>
       {/* 信息分行（十二轮 DA25 分行 + 十三轮 DA26 统一渲染）：
         进度/汇总 chip/阻塞各自独立行，每卡都有进度行（对齐）。 */}
-      {/* 进度行（M7-11 计数行档收编 shared LIST_COUNT_CLASS，原内联同值）。 */}
-      <div className={LIST_COUNT_CLASS}>{progress}</div>
+      {/* 进度行（M7-11 计数行档收编 shared LIST_COUNT_CLASS，原内联同值）；
+          创建中换加载行（2026-09-11）：完善收口前子任务未落库、计数恒 0
+          无信息量，改用 CreatingLoadingRow 交代「正在完善」。 */}
+      {creating ? <CreatingLoadingRow /> : <div className={LIST_COUNT_CLASS}>{progress}</div>}
       {summary !== null && <GroupSummaryChip summary={summary} />}
-      {task.blocked && <BlockedPill blockedFrom={task.blockedFrom} />}
       {/* 文件夹行（十二轮 DA25 可点击 + 十三轮 DA26 目录标签 +
           十四轮 DA27 工作目录标签钮 + 十五轮 DA28 融入卡片）：
           十四轮用户「就显示工作目录就行，别显示具体路径了，
@@ -194,15 +212,10 @@ export function TaskListCard({
         className="mt-auto flex items-center justify-between gap-2 border-t border-solid pt-2"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* 状态 pill + 创建中 loading（docs/panelTaskCommission）：creating
-        卡在 pill 旁渲染 14px 旋转 loader（Tailwind animate-spin 自带动画）——
-        领队/主会话完善进行中的即时观感。 */}
-        <span className="flex items-center gap-1.5">
-          <TaskStatusPill status={task.status} retryCount={task.retryCount} />
-          {task.status === 'creating' && (
-            <LoaderCircle className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-          )}
-        </span>
+        {/* 状态 pill（docs/panelTaskCommission）。用户迭代 2026-09-11：原 pill
+        旁 14px 小 loader 撤除——创建中加载观感上移到卡身进度行
+        CreatingLoadingRow（同一加载信号不留两处冗余呈现，pill 只担状态文案）。 */}
+        <TaskStatusPill status={task.status} retryCount={task.retryCount} />
         <div className="flex items-center gap-1.5">
           {/* 二十六轮 DA39：主任务卡「开始」按钮（用户拍板
             「主任务需要加开始按钮，没看到加在那里」——DA38
@@ -221,8 +234,10 @@ export function TaskListCard({
             容器（手动建任务占位）计划未定不渲染开始钮（与宿主 startGroup
             Task 同闸镜像），终态照旧收。2026-09-10：「详情」钮仅当前
             会话卡渲染；其它会话卡同位渲染「跳转会话」钮（canJump 门控
-            ——目标会话已不在会话列表的卡无此钮，纯展示）。 */}
-          {currentSession && task.kind !== 'group' && (
+            ——目标会话已不在会话列表的卡无此钮，纯展示）。2026-09-11：
+            详情钮同禁创建中（显式闸——creating 恒为 group 分支本就无此
+            钮，闸在此防 kind 判据将来变动时漏出进详情的旁路）。 */}
+          {currentSession && task.kind !== 'group' && !creating && (
             <Button type="button" variant="outline" size="sm" onClick={onOpen}>
               详情
             </Button>

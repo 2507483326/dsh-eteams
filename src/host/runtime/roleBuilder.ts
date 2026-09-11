@@ -432,9 +432,18 @@ export async function reportBuildProgress(
 }
 
 /** Project a report's interview payload onto the session shape (questions
- * only — answers live exclusively in the answer paths). */
+ * only — answers live exclusively in the answer paths). 多选字段别名容错
+ * （2026-09-11 实况）：模型会漂移到 multi_select/multiSelect，落盘前统一归
+ * 一为规范字段 multi（问题项 schema 已在 captainTools 放宽）。 */
 function interviewOf(report: BuildReport): { questions: InterviewQuestion[] } {
-  return { questions: report.interview!.questions };
+  return {
+    questions: report.interview!.questions.map((q) => {
+      const o = q as unknown as Record<string, unknown>;
+      return o['multi'] === true || o['multi_select'] === true || o['multiSelect'] === true
+        ? { ...q, multi: true }
+        : q;
+    }),
+  };
 }
 
 /**

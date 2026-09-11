@@ -122,8 +122,9 @@ export interface StationView {
   stationStatus: 'done' | 'current' | 'pending';
 }
 
-/** 看板「进行中」五态（docs/27 §27.9#11 十态收敛；ready 是待派单列不算进行中）。 */
-const ACTIVE_STATUSES: TaskStatus[] = ['wait', 'start', 'paused', 'wait_decision', 'wait_user'];
+/** 「进行中」态（用户迭代 2026-09-11 精简状态集：wait/wait_decision 已并入
+ * ready/wait_user；ready 是待派单列不算进行中）。 */
+const ACTIVE_STATUSES: TaskStatus[] = ['start', 'paused', 'wait_user'];
 
 /** commission 主题截断长度（描述首行占位主题，完善者收口时回写真主题）。 */
 const COMMISSION_SUBJECT_MAX = 24;
@@ -206,10 +207,15 @@ function memberView(team: TeamState, m: MemberRecord) {
       .map((r) => r.id),
   );
   const currentTask = team.tasks.find((t) => {
-    if (!ACTIVE_STATUSES.includes(t.status)) return false;
     const last = t.attempts.at(-1);
     if (last === undefined) return t.assignee === m.name;
-    return last.taskMemberId !== undefined ? rowIds.has(last.taskMemberId) : last.member === m.name;
+    const mine =
+      last.taskMemberId !== undefined ? rowIds.has(last.taskMemberId) : last.member === m.name;
+    // 「当前任务」= 该成员手里有在办/待接取尝试的任务（用户迭代 2026-09-11：
+    // 派发不改状态，不能再按 ACTIVE_STATUSES 筛——已派发待接取的任务是
+    // ready，仍是他的手头活；paused 已吊销 attempt、wait_user 的 attempt 已
+    // 失败，都不算在办）。
+    return mine && (last.status === 'pending_accept' || last.status === 'running');
   });
   const row = latestInstanceRow(team, m.employeeId ?? m.name);
   return {
@@ -265,9 +271,8 @@ function taskView(t: TaskRecord, team: TeamState, groupOutcomes?: Map<number, st
     // （docs/35 §3#7）。
     contractMd: t.contractMd ?? null,
     idempotencyNote: t.idempotencyNote ?? null,
-    // 阻塞徽标（docs/36 建议 1）：wait + blockedFrom 非空 = 物化阻塞。
-    blocked: t.blockedFrom !== undefined,
-    blockedFrom: t.blockedFrom ?? null,
+    // 依赖阻塞不再物化（用户迭代 2026-09-11「就 ready 等待就行」）：
+    // blocked/blockedFrom 快照字段随 wait 撤销退役，依赖由派发口校验。
     statusNote: t.statusNote ?? null,
     workDir: t.workDir ?? null,
     // 主会话 ID 快照（task.main_session_id，v5 落列 v6 改名）：建任务时登记
@@ -455,11 +460,7 @@ export function summarizeEvent(e: EventRecord): string {
     case 'task.cancelled':
       return `${task} 已取消`;
     case 'decision.requested':
-      return `${task} 需决策：${String(p.error ?? '')}`;
-    case 'task.blocked':
-      return `${task} 被上游阻断`;
-    case 'task.unblocked':
-      return `${task} 解除阻断`;
+      return `${task} 待用户处理：${String(p.error ?? '')}`;
     case 'mail.queued':
       return `邮件入箱 → ${String(p.to ?? '')}`;
     default:
@@ -1353,7 +1354,7 @@ export function installWebSurface(
             // ---------- conversation task workflow (docs/26) ----------
             // POST /team/<id>/task — panel 小任务 CRUD（docs/26 审阅步骤）：
             // 用户在任务页修改/删除拆解出的小任务、新增小任务；任务一经领取
-            // （updateTask/deleteTask 校验 draft/ready）即冻结。
+            // （updateTask/deleteTask 校验 creating/ready）即冻结。
             if (
               req.method === 'POST' &&
               segments[0] === 'team' &&
