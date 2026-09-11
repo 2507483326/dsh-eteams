@@ -27,7 +27,7 @@
 | system/roleBuilder.ts | 角色构建师常驻段 ROLE_BUILDER_SECTION、激活前缀 ACTIVATION_PREFIX | host/index.ts（order 106）、commands/eteam.ts |
 | system/sessionPersona.ts | 角色接管 band 文本组装、neutralizeInterpolation | runtime/sessionPersona.ts 薄壳 |
 | system/sessionTeam.ts | 团队绑定 band 文本组装 | runtime/sessionTeam.ts 薄壳 |
-| spawn/captainChild.ts | 领队子代理人格 + 手册拼装 | tools/captainDispatch.ts |
+| spawn/captainChild.ts | 领队子代理人格（含回合决策表，经 persona 系统段 + eteams_captain_guide 的 render 模型通道同文返回）+ 一句话回合提示词 captainTurnBrief（任务/现状/父会话等所需内容全部经规程与工具面获取）+ 手册拼装 | tools/captainDispatch.ts、tools/captainTools.ts、runtime/captainAgent.ts |
 | spawn/builderPhases.ts | 构建回合提示词（全相位同一句「身份 + 调 eteams_build_guide 领规程」——任务/快照/父会话等所需内容全部经规程与工具面获取，docs/19.16 持续构建子代理） | runtime/builderPhases.ts |
 | spawn/member.ts | 成员欢迎包（规则 + 工具表） | runtime/members.ts |
 | handoff/mails.ts | 指派 / 汇报 / 婉拒 / 挂起 / 取消模板 | runtime/assignment.ts、runtime/members.ts、runtime/docs.ts、tools/memberTools.ts |
@@ -37,4 +37,4 @@
 | personas/builder.ts | 角色构建师预设 + 持续构建子代理人格（构建纪律全文 = 回合决策表 + 可用接口清单，经 persona 系统段注入 + eteams_build_guide 的 render 模型通道同文返回；回合提示词只指路不复述） | runtime/builderPhases.ts、personas/presets.ts |
 | personas/roleDocs.ts | ROLE_DOCS 逐字角色手册（scripts/gen-role-docs.cjs 生成） | personas/presets.ts、personas/builder.ts、personas/captain.ts |
 | steering/interview.ts | 访谈发布唤醒主对话的 steer 文本 | tools/captainTools.ts |
-| steering/dispatch.ts | dispatch 受理确认 + 领队子代理首轮 prompt 组装 | tools/captainDispatch.ts |
+| steering/dispatch.ts | dispatch 受理确认 + 面板完善指令（正文 captainCommissionMessage 随回合 sidecar 进 guide 快照；无领队主会话路径保留带自取现状指令的完整 prompt） | tools/captainDispatch.ts、runtime/webui.ts |

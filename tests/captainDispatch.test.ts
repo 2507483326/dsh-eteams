@@ -2,10 +2,12 @@
  * eteams_dispatch_captain (docs/26 用户迭代 2026-09-03): the relay tool that
  * hands a conversation task to the 持续领队子代理 (persistent continuable
  * child) — captain-only gate, first-dispatch spawn contract
- * (label/persona+leader handbook/deny/prompt snapshot) with the durable
- * child id persisted on the task_members 领队行, followup continuation on
- * later dispatches, fallback to a fresh child when the lineage no longer
- * matches, and the subagent-service guard. Plus the 团队现状精简 teamView.
+ * (label/persona+leader handbook/deny/一句话领规程 prompt + 回合 sidecar)
+ * with the durable child id persisted on the task_members 领队行, followup
+ * continuation on later dispatches, fallback to a fresh child when the
+ * lineage no longer matches, and the subagent-service guard. Plus
+ * eteams_captain_guide (用户迭代 2026-09-10 领取完成流程：guide/turn/snapshot
+ * 经 render 模型通道送达) and the 团队现状精简 teamView.
  */
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -15,15 +17,22 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import { resolveConfig, type ETeamsResolvedConfig } from '../src/host/config';
 import { createCaptainDispatchTool } from '../src/host/tools/captainDispatch';
-import { captainChildPersona } from '../src/host/prompts/spawn/captainChild';
+import {
+  CAPTAIN_CHILD_PERSONA,
+  captainChildPersona,
+  captainTurnBrief,
+} from '../src/host/prompts/spawn/captainChild';
 import { composeCaptainPersona } from '../src/host/prompts/personas/captain';
 import {
   CAPTAIN_CHILD_DENIED_TOOLS,
   captainChildTeamOf,
   leaderHandbookForChild,
+  readCaptainTurn,
   registerCaptainChild,
   unregisterCaptainChild,
 } from '../src/host/runtime/captainAgent';
+import { MEMBER_DENIED_TOOLS } from '../src/host/runtime/members';
+import { createCaptainTools } from '../src/host/tools/captainTools';
 import { resolveCaller } from '../src/host/tools/identity';
 import { insertTeamRow, readTeamSync, withTeamTx, writeTeamInTx } from '../src/host/state/store';
 import { appendMail } from '../src/host/state/events';
@@ -253,14 +262,12 @@ describe('eteams_dispatch_captain', () => {
     expect(spec.request.parent).toBe(captain);
     expect(spec.request.prompt).toHaveLength(1);
     const promptText = spec.request.prompt.map((p) => p.text).join('\n');
-    // prompt 只带现状自取指令 + 用户消息（现状 JSON 与手册原文都不内嵌，
-    // 手册走 persona 系统段）。
-    expect(promptText).toContain('【团队现状】');
-    expect(promptText).toContain('eteams_team_status');
-    expect(promptText).not.toContain('"members"');
-    expect(promptText).not.toContain('【领队手册');
-    expect(promptText).toContain('【用户/主对话最新消息】');
-    expect(promptText).toContain('帮我做一个导出功能');
+    // 可见 prompt 只剩一句话领规程（用户迭代 2026-09-10「领取完成流程」）：
+    // 转交内容写回合 sidecar，子代理经 eteams_captain_guide 自取——不随消息
+    // 组装（现状 JSON、手册原文、用户原话都不进 prompt）。
+    expect(promptText).toBe(captainTurnBrief());
+    expect(promptText).not.toContain('帮我做一个导出功能');
+    expect(promptText).not.toContain('【团队现状】');
 
     // Identity registry + durable child id persisted on the 领队副本行（调用
     // 方预留 childId 被兑现——registry 以预留 id 为键，先登记后 spawn）。
@@ -277,6 +284,13 @@ describe('eteams_dispatch_captain', () => {
     const caller = await resolveCaller(envFor(ws), agentOf(childId));
     expect(caller.kind).toBe('captain');
     if (caller.kind === 'captain') expect(caller.team.id).toBe(seeded.id);
+    // 回合 sidecar（guide 工具的凭据，先落盘再投递）：turn=dispatch + 转交
+    // 原文 + 父会话 id。
+    expect(readCaptainTurn(root, '1')).toEqual({
+      turn: 'dispatch',
+      message: '帮我做一个导出功能',
+      parentSessionId: 'cap-1',
+    });
   });
 
   it('continues the same child via followup on later dispatches', async () => {
@@ -290,8 +304,14 @@ describe('eteams_dispatch_captain', () => {
     expect(runtime.starts).toHaveLength(0);
     expect(runtime.followups).toHaveLength(1);
     expect(runtime.followups[0]!.childId).toBe('sess-child-1');
-    expect(runtime.followups[0]!.text).toContain('改成导出 Excel');
-    expect(runtime.followups[0]!.text).toContain('eteams_team_status');
+    // 续聊的可见文本同样是一句话领规程：转交内容只进回合 sidecar。
+    expect(runtime.followups[0]!.text).toBe(captainTurnBrief());
+    expect(runtime.followups[0]!.text).not.toContain('改成导出 Excel');
+    expect(readCaptainTurn(root, '1')).toEqual({
+      turn: 'dispatch',
+      message: '改成导出 Excel',
+      parentSessionId: 'cap-1',
+    });
     expect(captainChildTeamOf('sess-child-1')).toBe(String(seeded.id));
     const persisted = readTeamSync(root, seeded.id);
     expect(persisted?.taskMembers.find((r) => r.mainTaskId === 1 && r.isLeader === true)?.sessionId).toBe(
@@ -460,6 +480,93 @@ describe('eteams_dispatch_captain', () => {
         { agent: captain, signal: undefined } as never,
       ) as Promise<unknown>,
     ).rejects.toThrow('子代理服务不可用');
+  });
+});
+
+describe('eteams_captain_guide (用户迭代 2026-09-10 领取完成流程)', () => {
+  function findGuideTool() {
+    const guide = createCaptainTools(config, runtime.ctx).find(
+      (t) => t.name === 'eteams_captain_guide',
+    );
+    expect(guide).toBeDefined();
+    return guide!;
+  }
+
+  it('delivers guide, turn and snapshot through the model-facing render', async () => {
+    const marker = '# 领队手册标记 CPT789';
+    seedTeam({ leaderChild: 'sess-child-1', leaderHandbook: marker });
+    // 先派发一次：回合 sidecar 写入 + 注册表登记（guide 的凭据与身份解析前提）。
+    await tool.execute(
+      { message: '改成导出 Excel' } as never,
+      { agent: captain, signal: undefined } as never,
+    );
+    const guide = findGuideTool();
+    const out = (await guide.execute(
+      {},
+      { agent: agentOf('sess-child-1'), signal: undefined } as never,
+    )) as { ok: boolean; guide: string; turn: string; snapshot: string };
+    expect(out.ok).toBe(true);
+    expect(out.turn).toBe('dispatch');
+    // 规程 = persona 全文 + 领队手册副本行缓存实文（工具返回不经宿主插槽替换，
+    // 与 persona 系统段同一手册来源）。
+    expect(out.guide).toContain(CAPTAIN_CHILD_PERSONA);
+    expect(out.guide).toContain(marker);
+    const snap = JSON.parse(out.snapshot) as {
+      taskId: number;
+      teamStatus: Record<string, unknown>;
+      latestMessage: string;
+      parentSessionId: string | null;
+    };
+    expect(snap.taskId).toBe(1);
+    expect(snap.latestMessage).toBe('改成导出 Excel');
+    expect(snap.parentSessionId).toBe('cap-1');
+    expect(Array.isArray((snap.teamStatus as { members: unknown[] }).members)).toBe(true);
+    expect(snap.teamStatus).toHaveProperty('构建会话');
+    // render 是模型可见通道（dsh-tools 契约，presentResult 只是用户卡片）：
+    // 规程全文 / turn / 快照必须出现在 render 内容里，模型才拿得到载荷。
+    const blocks = guide.output.render({}, out as never) as Array<{
+      type: string;
+      text?: string;
+    }>;
+    const rendered = blocks.map((b) => b.text ?? '').join('');
+    expect(rendered).toContain(CAPTAIN_CHILD_PERSONA);
+    expect(rendered).toContain(marker);
+    expect(rendered).toContain('turn=dispatch');
+    expect(rendered).toContain('"latestMessage":"改成导出 Excel"');
+    // 用户卡片收敛为一行，不把整包规程与快照铺进用户视野。
+    const card = guide.presentResult?.({}, { isError: false } as never) as { title: string };
+    expect(card.title).toBe('已领取领队规程');
+  });
+
+  it('returns turn=none with an empty latestMessage when nothing was dispatched', async () => {
+    seedTeam({ leaderChild: 'sess-child-1' });
+    const guide = findGuideTool();
+    const out = (await guide.execute(
+      {},
+      { agent: agentOf('sess-child-1'), signal: undefined } as never,
+    )) as { turn: string; snapshot: string };
+    expect(out.turn).toBe('none');
+    const snap = JSON.parse(out.snapshot) as {
+      taskId: number;
+      latestMessage: string;
+      parentSessionId: string | null;
+    };
+    expect(snap.taskId).toBe(1);
+    expect(snap.latestMessage).toBe('');
+    expect(snap.parentSessionId).toBeNull();
+  });
+
+  it('rejects member callers (只有领队身份可以领取团队规程)', async () => {
+    seedTeam({ memberChild: 'm-1' });
+    const guide = findGuideTool();
+    await expect(
+      guide.execute({}, { agent: agentOf('m-1'), signal: undefined } as never) as Promise<unknown>,
+    ).rejects.toThrow('只有领队身份可以领取团队规程');
+  });
+
+  it('is member-denied and captain-child-visible (单向可见性)', () => {
+    expect(MEMBER_DENIED_TOOLS).toContain('eteams_captain_guide');
+    expect(CAPTAIN_CHILD_DENIED_TOOLS).not.toContain('eteams_captain_guide');
   });
 });
 

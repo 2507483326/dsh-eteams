@@ -86,7 +86,7 @@ import {
   setSessionTeam,
 } from './sessionTeam.js';
 import { dispatchCaptainCore } from './captainAgent.js';
-import { captainCommissionPrompt } from '../prompts/steering/dispatch.js';
+import { captainCommissionMessage, captainCommissionPrompt } from '../prompts/steering/dispatch.js';
 import { readUsageCalendar, readAppUsageCalendar } from './usage.js';
 import {
   findRosterMemberAcrossWorkspaces,
@@ -1468,19 +1468,27 @@ export function installWebSurface(
                 if (anchor === undefined) {
                   return '未找到主会话锚点（会话不在线且无法冷恢复；在对应团队对话中绑定后重试）';
                 }
-                const prompt = captainCommissionPrompt(task.id, task.subject, description);
                 if (team.hasLeader) {
                   try {
-                    await dispatchCaptainCore(env, config, anchor, team, task.id, prompt);
+                    // 有领队：完善指令走回合 sidecar，子代理经
+                    // eteams_captain_guide 自取（可见 prompt 一句话领规程）。
+                    await dispatchCaptainCore(env, config, anchor, team, task.id, {
+                      kind: 'commission',
+                      message: captainCommissionMessage(task.id, task.subject, description),
+                    });
                     return '';
                   } catch (e) {
                     return `领队子代理派发失败：${e instanceof Error ? e.message : String(e)}`;
                   }
                 }
                 try {
+                  // 无领队：完善指令直接进主对话（主会话不在 guide 工具的
+                  // 收件人语义里，保留自取现状指令的完整 prompt）。
                   anchor.followup(
                     createUserMessage({
-                      content: [{ type: 'text', text: prompt }],
+                      content: [
+                        { type: 'text', text: captainCommissionPrompt(task.id, task.subject, description) },
+                      ],
                       source: { kind: 'plugin', plugin: 'dsh-eteams' },
                     }),
                   );

@@ -30,7 +30,6 @@ import type { TeamState } from '../model/types.js';
 import { readTeamSync } from '../state/store.js';
 import { envForAgent, resolveCaller } from './identity.js';
 import { dispatchCaptainCore } from '../runtime/captainAgent.js';
-import { captainDispatchPrompt } from '../prompts/steering/dispatch.js';
 
 /** JSON-schema snippet helpers (mirror captainTools). */
 const strR = (description: string) => ({
@@ -91,12 +90,18 @@ export function createCaptainDispatchTool(
         (args.taskId !== undefined ? mainTasks.find((t) => t.id === args.taskId) : undefined) ??
         [...mainTasks].sort((a, b) => b.id - a.id)[0];
       if (!task) throw new ETeamsError('团队还没有主任务——先用 eteams_submit_task 建任务，再转交领队');
-      // 现状不随 prompt 内嵌（用户迭代 2026-09-08）：子代理先调
-      // eteams_team_status 自取（快照永远现读，单一事实源）。
-      const prompt = captainDispatchPrompt(args.message);
-      // 派发核（锚定本任务的领队副本行，随任务生灭）：与面板手动建任务路
-      // 径共用同一链路（docs/panelTaskCommission）。
-      return dispatchCaptainCore(env, config, exec.agent, team, task.id, prompt, exec.signal);
+      // 现状与转交内容都不随 prompt 携带（用户迭代 2026-09-10「领取完成流
+      // 程」）：可见 prompt 只剩一句话领规程，转交内容由派发核写进回合
+      // sidecar、子代理经 eteams_captain_guide 自取。
+      return dispatchCaptainCore(
+        env,
+        config,
+        exec.agent,
+        team,
+        task.id,
+        { kind: 'dispatch', message: args.message },
+        exec.signal,
+      );
     },
   });
 }

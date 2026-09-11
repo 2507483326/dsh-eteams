@@ -21,7 +21,7 @@
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import { useDispatch } from 'react-redux';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import type { PrefillOutcome } from '../../lib/addPeople';
 import type { RosterMember } from '../../lib/api';
 import { navIdOfPath, navPathOfId } from '../../lib/status';
@@ -73,6 +73,30 @@ export interface ETeamsRoutesProps {
 }
 
 /** ================================== 子组件 ================================== */
+
+/**
+ * 任务详情路由（2026-09-10 任务页改全团队聚合平铺后）：详情页仍吃「任务
+ * 归属团队」的快照（内部按 team.tasks 取数）——按 ：taskId 在 pool 里现查
+ * 归属团队（当前会话任务可能建在任何队，选中团队快照不再是可靠上下文）；
+ * 池里找不到（任务已删/尚无团队）回落原选中团队快照，team undefined 守卫
+ * 原样保留（渲染一帧空即跳列表的 not-found 口径不变）。
+ */
+function TaskDetailRoute({
+  pool,
+  fallbackTeam,
+  now,
+}: {
+  pool: TeamSnapshot[];
+  fallbackTeam: TeamSnapshot | undefined;
+  now: number;
+}): ReactNode {
+  const { taskId } = useParams();
+  const id = taskId === undefined ? null : Number(taskId);
+  const owner =
+    id === null ? undefined : pool.find((t) => t.tasks.some((task) => task.taskId === id));
+  const team = owner ?? fallbackTeam;
+  return team === undefined ? null : <TaskDetailPage team={team} now={now} />;
+}
 
 /**
  * 面板路由根（每表面一棵，44.2.1）：内存历史挂载时由 ui model 持久值推导
@@ -210,28 +234,17 @@ export function ETeamsViewRoutes(props: ETeamsRoutesProps): ReactNode {
       />
       {/* 任务域（M3 拆页）：/tasks 列表 + /tasks/:taskId 详情（:taskId 路由
           参数即选中任务 id）。react-router v6 路由排序静态段优先，/tasks 不
-          会被 /tasks/:taskId 吞掉；team undefined 守卫原样保留。面板手动建
-          任务（docs/panelTaskCommission）：/tasks 透传 pool/sessionId/
-          onSelectTeam——添加任务弹窗的团队选项与 commission 会话锚。 */}
-      <Route
-        path="/tasks"
-        element={
-          props.team !== undefined ? (
-            <TasksPage
-              team={props.team}
-              pool={props.pool}
-              sessionId={props.sessionId}
-              onSelectTeam={props.onSelectTeam}
-            />
-          ) : null
-        }
-      />
+          会被 /tasks/:taskId 吞掉。2026-09-10 任务列表改全团队聚合平铺
+          （用户拍板「直接显示所有任务」）——列表页不再吃选中团队快照，无
+          team undefined 守卫（空池渲染页内空态）；详情路由经 TaskDetailRoute
+          按任务归属团队解析快照。面板手动建任务（docs/panelTaskCommission）：
+          /tasks 透传 pool/sessionId——添加任务弹窗的团队选项与 commission
+          会话锚。 */}
+      <Route path="/tasks" element={<TasksPage pool={props.pool} sessionId={props.sessionId} />} />
       <Route
         path="/tasks/:taskId"
         element={
-          props.team !== undefined ? (
-            <TaskDetailPage team={props.team} now={props.now} />
-          ) : null
+          <TaskDetailRoute pool={props.pool} fallbackTeam={props.team} now={props.now} />
         }
       />
       {/* 未知路径兜底：落看板（原 activeTab 畸形兜底 'board' 同口径；正常

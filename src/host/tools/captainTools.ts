@@ -49,6 +49,12 @@ import {
   type BuildDraft,
 } from '../runtime/roleBuilder.js';
 import { startBuilderChild } from '../runtime/builderPhases.js';
+import {
+  captainChildTaskOf,
+  leaderHandbookForChild,
+  readCaptainTurn,
+} from '../runtime/captainAgent.js';
+import { captainChildPersona } from '../prompts/spawn/captainChild.js';
 import { stationPointsTo, stationProgress } from '../model/taskMachine.js';
 import { renderContract } from '../prompts/handoff/mails.js';
 import { ROLE_BUILDER_CHILD_PERSONA } from '../prompts/personas/builder.js';
@@ -1236,6 +1242,85 @@ export function createCaptainTools(
     },
   });
 
+  // 领队子代理的领取面（用户迭代 2026-09-10「领取完成流程」，与角色构建师
+  // 的 eteams_build_guide 同款）：可见回合提示词只剩一句话指路，工作流程
+  // 全文、本回合任务与团队现状全部经本工具进模型上下文。成员拒见
+  // （MEMBER_DENIED_TOOLS）；领队子代理不加 deny（CAPTAIN_CHILD_DENIED_TOOLS）。
+  const captainGuideTool = defineTool({
+    name: 'eteams_captain_guide',
+    description:
+      '领取领队规程与本回合任务（领队子代理每回合第一步先调本工具）：返回 guide=工作流程全文（含回合决策表 + 角色手册）、turn=本回合种类（dispatch=主对话转交 / commission=面板任务完善 / none=无待处理转交）、snapshot=快照 JSON（taskId 锚定主任务 / teamStatus 团队现状 / latestMessage 本回合转交内容 / parentSessionId 发起会话 id）。只读幂等，可重复领取。',
+    parameters: {},
+    output: {
+      schema: {
+        type: 'object' as const,
+        properties: {
+          ok: bool('是否成功'),
+          guide: str('领队工作流程全文（含回合决策表与角色手册）'),
+          turn: str('本回合种类：dispatch=主对话转交 / commission=面板任务完善 / none=无待处理转交'),
+          snapshot: str(
+            '会话快照 JSON（taskId 锚定主任务 / teamStatus 团队现状 / latestMessage 本回合转交内容 / parentSessionId 发起会话 id）',
+          ),
+        },
+        additionalProperties: false as const,
+      },
+      // render = 模型可见内容（dsh-tools 契约，与 eteams_build_guide 同理：
+      // presentResult 只是用户卡片）——规程/turn/快照必须全文铺进模型内容。
+      render: (_a, v) =>
+        text(
+          `【领队规程】\n${v.guide}\n\n【本回合任务】turn=${v.turn}\n【会话快照】${v.snapshot}`,
+        ),
+    },
+    // 用户卡片收敛为一行：整包规程与快照只进模型上下文，不铺进用户视野。
+    presentCall: () => ({ card: 'generic' as const, title: '领取领队规程' }),
+    presentResult: (_args, result) => {
+      if (result.isError) return undefined;
+      return { card: 'generic' as const, title: '已领取领队规程', content: [] };
+    },
+    // 无状态只读：turn/message 来自派发核写的回合 sidecar（<stateRoot>/
+    // captain-turn/<taskId>.json）；锚定主任务按领队副本行（sessionId=本子
+    // 会话且 is_leader）解析，注册表兜底；手册 = 副本行缓存实文（与 persona
+    // 系统段插槽同一来源，经 leaderHandbookForChild 解析、缺省内置兜底）。
+    execute: async (_args, exec) => {
+      if (!exec.agent) throw new ETeamsError('无法识别调用者（exec.agent 缺失）');
+      const env = envForAgent(config, runtime, exec.agent, exec.signal);
+      const root = stateRootOf(env);
+      const childId = String(exec.agent.id);
+      const caller = await resolveCaller(env, exec.agent);
+      if (caller.kind !== 'captain') {
+        throw new ETeamsError('只有领队身份可以领取团队规程（eteams_captain_guide）');
+      }
+      // 锚定主任务：领队副本行（本子会话锚）优先，派发注册表兜底（重启后
+      // followup 重登记的窗口）。
+      const replicaTaskId = caller.team.taskMembers.find(
+        (r) => r.isLeader === true && r.sessionId === childId,
+      )?.mainTaskId;
+      const registryTaskId = captainChildTaskOf(childId);
+      const anchoredTaskId =
+        replicaTaskId ?? (registryTaskId !== undefined ? Number(registryTaskId) : null);
+      const turnRec =
+        anchoredTaskId !== null ? readCaptainTurn(root, String(anchoredTaskId)) : null;
+      // 团队现状快照与 eteams_team_status 同一视图（含构建会话行）。
+      const view = teamView(env, caller.team);
+      const build = readBuildSession(root);
+      (view as Record<string, unknown>)['构建会话'] =
+        build === null
+          ? null
+          : `${build.status} · ${build.step}${build.draft?.name ? ` · ${build.draft.name}` : ''}（更新于 ${Math.max(0, Math.round((Date.now() - build.updatedAt) / 1000))} 秒前）`;
+      return {
+        ok: true as const,
+        guide: captainChildPersona(leaderHandbookForChild(config, childId)),
+        turn: turnRec === null ? 'none' : turnRec.turn,
+        snapshot: JSON.stringify({
+          ...(anchoredTaskId !== null ? { taskId: anchoredTaskId } : {}),
+          teamStatus: view,
+          latestMessage: turnRec?.message ?? '',
+          parentSessionId: turnRec?.parentSessionId ?? null,
+        }),
+      };
+    },
+  });
+
   const taskBoardTool = defineTool({
     name: 'eteams_task_board',
     description:
@@ -1418,6 +1503,7 @@ export function createCaptainTools(
     buildGuideTool,
     buildWaitTool,
     buildDispatchTool,
+    captainGuideTool,
     removeMemberTool,
     updateMemberTool,
     submitTaskTool,

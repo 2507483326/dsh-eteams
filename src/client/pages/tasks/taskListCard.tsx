@@ -4,6 +4,12 @@
  * 列表卡身（头行/信息行/文件夹行/底栏）；subs 统计与 deletable 判据在卡内
  * 现算（task/allTasks 进 props）。原注释逐字随迁（纯移动、零行为变更）。
  *
+ * 用户迭代 2026-09-10「任务页平铺全部任务（跨队聚合）」：卡身带会话归属
+ * 语义——当前会话创建的任务（currentSession）头行前置「本会话」徽标、
+ * 整卡点击进详情；其它任务（其它会话建的）点击**不进**详情，底栏「详情」
+ * 钮位换成「跳转会话」钮（canJump = 目标会话在会话列表里，经客户端
+ * sessions.open 切换；目标不在列表/无会话快照的卡两钮皆无、纯展示）。
+ *
  * @module dsh-eteams/client/pages/tasks/taskListCard
  */
 import type { ReactNode } from 'react';
@@ -11,6 +17,7 @@ import { cn } from '../../lib/cn';
 import type { TaskView } from '../../lib/monitor';
 import { groupDisplayOf, isGroupStartable } from '../../features/tasks/taskDisplayStatus';
 import { DeleteButton } from '../../components/deleteButton';
+import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { BlockedPill, FormErrorNote, GroupSummaryChip, TaskStatusPill } from '../shared/components';
 import { LIST_COUNT_CLASS } from '../shared/styles';
@@ -24,8 +31,9 @@ import LoaderCircle from 'lucide-react/dist/esm/icons/loader-circle.mjs';
  * 右详情/删除钮（删除仍仅可删的卡渲染）、进度行改共/已完成/未完成三计数
  * （数字着色）、文件夹行「工作目录」标签钮；十五轮 DA28 修订：状态 pill
  * 描边压平 hover、工作目录改幽灵文字钮；底色/边框/悬停由 .eteams-task-card
- * 样式表接管，p-3.5 = 卡内高度呼吸感）。 */
-const TASK_CARD_CLASS = 'flex min-w-0 cursor-pointer flex-col gap-2 rounded-xl p-3.5';
+ * 样式表接管，p-3.5 = 卡内高度呼吸感）。cursor-pointer 移出常量——
+ * 2026-09-10 起只有当前会话卡整卡可点（其它任务卡不可点进详情，见头注）。 */
+const TASK_CARD_CLASS = 'flex min-w-0 flex-col gap-2 rounded-xl p-3.5';
 
 /** 列表卡删除按钮显隐判据（十二轮 DA25，用户拍板「仅可删除的卡显示」）——
  * 与 host deleteTask 守卫（assignment.ts）同口径：本身 draft/ready/creating
@@ -52,26 +60,37 @@ export function deletableOf(t: TaskView, tasks: readonly TaskView[]): boolean {
 
 /** 列表页任务小卡（DA44④ 自 tasksTab 列表卡身抽离）：整卡点击 onOpen、
  * 文件夹行 onOpenFolder（宿主拉系统文件管理器）、删除 onDelete、组卡开始
- * onStart；folderError/startError 行内就地显示（瞬态槽在 tasksTab）。 */
+ * onStart；folderError/startError 行内就地显示（瞬态槽在 tasksTab）。
+ * 2026-09-10 会话归属语义：currentSession 卡（当前会话建的）整卡可点 +
+ * 头行「本会话」徽标；其它卡整卡不可点，「详情」钮位换「跳转会话」钮
+ * （canJump 门控，onJump 经 sessions.open 落地）。 */
 export function TaskListCard({
   task,
   allTasks,
+  currentSession,
+  canJump,
   folderBusy,
   folderError,
   startError,
   startBusy,
   onOpen,
+  onJump,
   onOpenFolder,
   onDelete,
   onStart,
 }: {
   task: TaskView;
   allTasks: TaskView[];
+  /** 本卡是否为当前会话创建的任务（面板 sessionId 与任务主会话快照比对）。 */
+  currentSession: boolean;
+  /** 目标会话是否可跳转（在客户端会话列表里）——仅非当前会话卡消费。 */
+  canJump: boolean;
   folderBusy: number | null;
   folderError: { taskId: number; message: string } | null;
   startError: { taskId: number; message: string } | null;
   startBusy: number | null;
   onOpen: () => void;
+  onJump: () => void;
   onOpenFolder: (taskId: number) => void;
   onDelete: () => void;
   onStart: () => void;
@@ -99,11 +118,25 @@ export function TaskListCard({
   );
   const deletable = deletableOf(task, allTasks);
   return (
-    <div className={cn('eteams-task-card', TASK_CARD_CLASS)} onClick={onOpen}>
+    // 整卡点击只对当前会话卡生效（其它任务不进详情——2026-09-10 口径）；
+    // 不可点卡身不加 cursor-pointer（悬停语义与行为一致）。
+    <div
+      className={cn('eteams-task-card', TASK_CARD_CLASS, currentSession ? 'cursor-pointer' : 'cursor-default')}
+      onClick={currentSession ? onOpen : undefined}
+    >
       {/* 头行：主题（十四轮 DA27：展示态 pill 挪出头部——用户
           「状态挪到卡片的左边下面」，入底栏左侧；十二轮 DA25
-          已去 #id 前缀）。 */}
-      <div className="truncate text-sm font-semibold text-foreground">{task.subject}</div>
+          已去 #id 前缀）。2026-09-10：当前会话卡在主题前挂
+          「本会话」徽标（compact 档——shrink-0 防挤压换行，
+          主题本体 truncate 收窄）。 */}
+      <div className="flex min-w-0 items-center gap-1.5">
+        {currentSession && (
+          <Badge variant="default" className="shrink-0 rounded-[2px] px-1.5 py-0 text-[10px] font-medium">
+            本会话
+          </Badge>
+        )}
+        <div className="truncate text-sm font-semibold text-foreground">{task.subject}</div>
+      </div>
       {/* 信息分行（十二轮 DA25 分行 + 十三轮 DA26 统一渲染）：
         进度/汇总 chip/阻塞各自独立行，每卡都有进度行（对齐）。 */}
       {/* 进度行（M7-11 计数行档收编 shared LIST_COUNT_CLASS，原内联同值）。 */}
@@ -186,10 +219,17 @@ export function TaskListCard({
             （用户「主任务不需要详情按钮」），开始钮挪到最右。
             docs/panelTaskCommission：判据收拢 isGroupStartable——creating
             容器（手动建任务占位）计划未定不渲染开始钮（与宿主 startGroup
-            Task 同闸镜像），终态照旧收。 */}
-          {task.kind !== 'group' && (
+            Task 同闸镜像），终态照旧收。2026-09-10：「详情」钮仅当前
+            会话卡渲染；其它会话卡同位渲染「跳转会话」钮（canJump 门控
+            ——目标会话已不在会话列表的卡无此钮，纯展示）。 */}
+          {currentSession && task.kind !== 'group' && (
             <Button type="button" variant="outline" size="sm" onClick={onOpen}>
               详情
+            </Button>
+          )}
+          {!currentSession && canJump && (
+            <Button type="button" variant="outline" size="sm" onClick={onJump}>
+              跳转会话
             </Button>
           )}
           {/* 删除（M7-4 收口 components/deleteButton，destructive 默认档）。 */}

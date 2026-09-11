@@ -59,6 +59,12 @@ interface SessionsFace {
       }
     | undefined;
   subagentAddress?: (sessionId: string) => unknown;
+  /** 会话列表快照（useSessions 标准数据源）：跳转前判定目标会话在不在列表。 */
+  list?: {
+    getSnapshot?: () => { byId?: Record<string, unknown> } | undefined;
+  };
+  /** 把某会话选为当前（列表外 id 会 fail loud——调用前先 canOpenSession）。 */
+  open?: (sessionId: string) => void;
 }
 
 /** The client root context (structurally probed — the service is optional). */
@@ -107,4 +113,34 @@ export function isAddressedSubagentSession(sessionId: string): boolean {
   const face = sessionsFaceOf();
   if (typeof face?.subagentAddress !== 'function') return false;
   return face.subagentAddress(sessionId) !== undefined;
+}
+
+/**
+ * 会话列表里有没有这个会话（跳转按钮的显隐判据）：`open()` 对列表外 id
+ * fail loud，必须先经这里判定。缺服务/未知结构 → false（按钮不渲染）。
+ */
+export function canOpenSession(sessionId: string): boolean {
+  if (sessionId === '') return false;
+  const list = sessionsFaceOf()?.list;
+  const getSnapshot = typeof list?.getSnapshot === 'function' ? list.getSnapshot : undefined;
+  const byId = getSnapshot?.()?.byId;
+  if (typeof byId !== 'object' || byId === null) return false;
+  return Object.hasOwn(byId, sessionId);
+}
+
+/**
+ * 跳转到会话（SessionRuntime.open——把目标会话选为当前，宿主布局即切换）。
+ * 仅对列表内的会话生效；失败（缺服务/不在列表/fail loud）返回 false，调用
+ * 方自行提示。任务页「跳转到会话」按钮的落点。
+ */
+export function openSession(sessionId: string): boolean {
+  if (!canOpenSession(sessionId)) return false;
+  const open = sessionsFaceOf()?.open;
+  if (typeof open !== 'function') return false;
+  try {
+    open(sessionId);
+    return true;
+  } catch {
+    return false;
+  }
 }

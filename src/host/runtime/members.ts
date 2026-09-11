@@ -79,6 +79,7 @@ export const MEMBER_DENIED_TOOLS: readonly string[] = [
   'eteams_cancel_task',
   'eteams_delete_team',
   'eteams_dispatch_captain',
+  'eteams_captain_guide',
 ];
 
 /**

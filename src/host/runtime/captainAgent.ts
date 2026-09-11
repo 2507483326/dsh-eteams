@@ -25,6 +25,8 @@
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import { SessionId } from '@deepseek-ai/dsh-session';
 import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { ETeamsResolvedConfig } from '../config.js';
 import {
   deliverToChild,
@@ -34,13 +36,17 @@ import {
   stateRootOf,
   type RuntimeEnv,
 } from './base.js';
-import { insertTaskMemberRow, readTeamSync, withTeamTx } from '../state/store.js';
+import { atomicWriteText, insertTaskMemberRow, readTeamSync, withTeamTx } from '../state/store.js';
 import { getDb } from '../state/db.js';
 import { locks, teamLockKey } from '../state/lock.js';
 import { leaderRouteOf } from './notifier.js';
 import { LEADER_NAME } from './roster.js';
 import { composeCaptainPersona } from '../prompts/personas/captain.js';
-import { captainChildPersona } from '../prompts/spawn/captainChild.js';
+import {
+  captainChildPersona,
+  captainTurnBrief,
+  type CaptainTurnKind,
+} from '../prompts/spawn/captainChild.js';
 import { dispatchAck } from '../prompts/steering/dispatch.js';
 import type { TaskMemberRecord, TeamState } from '../model/types.js';
 
@@ -133,6 +139,61 @@ export const CAPTAIN_CHILD_DENIED_TOOLS: readonly string[] = [
   'eteams_complete_task',
   'eteams_fail_task',
 ];
+
+/** ================================== 领队回合 sidecar（用户迭代 2026-09-10「领取完成流程」） ================================== */
+
+/** 本回合派发凭据：eteams_captain_guide 的 turn 与 snapshot.latestMessage 来源。 */
+export interface CaptainTurnDispatch {
+  /** 回合种类：dispatch=主对话转交 / commission=面板任务完善。 */
+  turn: CaptainTurnKind;
+  /** 本回合转交内容（用户原话或完善指令）。 */
+  message: string;
+  /** 发起会话 id（子代理回传 send_message 的目标，与 harness 附加段同源）。 */
+  parentSessionId?: string;
+}
+
+/**
+ * 回合 sidecar 文件：`<stateRoot>/captain-turn/<taskId>.json`。键按锚定主
+ * 任务号——每任务的领队子代理只消费自己的转交，多团队/多任务并发派发互
+ * 不踩（task id 全库自增，state root 内无歧义）。
+ */
+function captainTurnFile(root: string, taskId: string): string {
+  return join(root, 'captain-turn', `${taskId}.json`);
+}
+
+/**
+ * 派发/续聊前把本回合任务写进 sidecar——**先落盘再投递**：子代理收到唤醒
+ * 后第一步领规程，必须已经读得到本回合的 turn/message。写失败不致命
+ * （子代理领到 turn=none 收束回合，主对话可重派），只落诊断日志。
+ */
+export async function markCaptainTurn(
+  root: string,
+  taskId: string,
+  turn: CaptainTurnDispatch,
+): Promise<void> {
+  const file = captainTurnFile(root, taskId);
+  mkdirSync(dirname(file), { recursive: true });
+  await atomicWriteText(file, `${JSON.stringify({ ...turn, updatedAt: Date.now() }, null, 2)}\n`);
+}
+
+/** 读回合 sidecar：缺文件/内容残缺一律 null（旧派发或半写入视同无待处理转交）。 */
+export function readCaptainTurn(root: string, taskId: string): CaptainTurnDispatch | null {
+  const file = captainTurnFile(root, taskId);
+  if (!existsSync(file)) return null;
+  try {
+    const raw = JSON.parse(readFileSync(file, 'utf8')) as Partial<CaptainTurnDispatch>;
+    if ((raw.turn !== 'dispatch' && raw.turn !== 'commission') || typeof raw.message !== 'string') {
+      return null;
+    }
+    return {
+      turn: raw.turn,
+      message: raw.message,
+      ...(typeof raw.parentSessionId === 'string' ? { parentSessionId: raw.parentSessionId } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
 
 /** ================================== 派发核（docs/panelTaskCommission 自 tools/captainDispatch 下沉） ================================== */
 
@@ -243,14 +304,15 @@ async function persistReplicaSession(
  * 失（老任务）先补铺（手册 = 主持行缓存 → 班底 → 内置 依次兜底）并直接落
  * 预留子会话；session 已有 → followup 续聊（含宿主重启冷恢复），失败清锚
  * 重建；session 空（createTask 铺的新副本）→ startContinuable 建立子代理
- * 后回写 session。prompt 由调用方组装（对话 = captainDispatchPrompt；面板
- * 完善 = captainCommissionPrompt，两者都自带现状自取指令）。领队手册经
+ * 后回写 session。可见 prompt 一律是一句话领规程（captainTurnBrief）——
+ * 本回合任务（{@link CaptainTurnDispatch}）在投递前写进回合 sidecar，由
+ * 子代理经 eteams_captain_guide 自取（用户迭代 2026-09-10）。领队手册经
  * persona 系统段的 {{eteams_leader_handbook}} 插槽进入子代理上下文。
  * @param parent 派发父代理（lineage 直接父）：对话路径 = exec.agent；面板
  *   路径 = captainFor 解析的主会话代理。两者只是来源不同，语义同一层。
  * @param taskId 锚定的大任务号（对话路径由 band 要求主会话先建任务再转交
  *   时透传；面板完善 = 被完善的主任务号）。
- * @param prompt 组装好的完整 prompt 文本（现状自取指令 + 用户消息）。
+ * @param turn 本回合任务（kind + 转交内容），写 sidecar 供 guide 工具返回。
  */
 export async function dispatchCaptainCore(
   env: RuntimeEnv,
@@ -258,7 +320,7 @@ export async function dispatchCaptainCore(
   parent: Agent,
   team: TeamState,
   taskId: number,
-  prompt: string,
+  turn: { kind: CaptainTurnKind; message: string },
   signal?: AbortSignal,
 ): Promise<{ ok: boolean; relayed: string }> {
   const subagents = env.ctx.subagents;
@@ -334,6 +396,24 @@ export async function dispatchCaptainCore(
   };
   const replica = await ensureReplica();
   const persona = captainPersonaOf(env, config, team, taskId);
+
+  // 回合 sidecar 先落盘再投递（eteams_captain_guide 的凭据，先写后投——
+  // 子代理收到唤醒后第一步领规程就必须读得到本回合任务）。写失败不阻塞
+  // 派发：guide 返回 turn=none 子代理收束回合，主对话可重派。
+  const prompt = captainTurnBrief();
+  try {
+    await markCaptainTurn(root, taskKey, {
+      turn: turn.kind,
+      message: turn.message,
+      parentSessionId: String(parent.id),
+    });
+  } catch (error) {
+    env.ctx.logger.warn(
+      `eteams: 领队回合 sidecar 写入失败（task=${taskKey}）：${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
 
   // session 已有 → followup 续聊（含宿主重启后的冷恢复）；注册表**先**登记
   // 再续聊——续聊触发的首轮装配就在子代理上下文里读手册插槽，登记滞后会

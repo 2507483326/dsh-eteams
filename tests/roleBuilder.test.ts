@@ -178,10 +178,15 @@ describe('D18 对话式新增成员', () => {
     expect(ROLE_BUILDER_CHILD_PERSONA).toContain('multiSelect');
     expect(ROLE_BUILDER_CHILD_PERSONA).not.toContain('multi_select');
     expect(ROLE_BUILDER_CHILD_PERSONA).toContain('一次报全');
-    // 不指路状态文件（全局/相对状态根布局子代理无从得知，猜路径只会误判）、
-    // 不向父会话发结果（harness 附加的 send_message 提示对本子代理不适用）。
+    // 不指路状态文件（全局/相对状态根布局子代理无从得知，猜路径只会误判）；
+    // harness 附加的父代理指引收编进规程：send_message 回传父会话的语义
+    // （自包含、不结束回合、提前回传）以中文在【父会话回传】里交代。
     expect(ROLE_BUILDER_CHILD_PERSONA).not.toContain('rolebuilder.json');
-    expect(ROLE_BUILDER_CHILD_PERSONA).toContain('不要用 send_message');
+    expect(ROLE_BUILDER_CHILD_PERSONA).toContain('【父会话回传】');
+    expect(ROLE_BUILDER_CHILD_PERSONA).toContain('send_message({ agent_id');
+    expect(ROLE_BUILDER_CHILD_PERSONA).toContain('snapshot.parentSessionId');
+    expect(ROLE_BUILDER_CHILD_PERSONA).toContain('不会自动收到你的对话记录');
+    expect(ROLE_BUILDER_CHILD_PERSONA).toContain('发消息不结束回合');
   });
 
   it('eteams_build_guide delivers guide, turn and snapshot through the model-facing render (用户迭代 2026-09-10)', async () => {
