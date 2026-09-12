@@ -395,10 +395,16 @@ export async function updateTask(
 }
 
 /**
- * 完善收口（docs/panelTaskCommission）：面板手动创建的「创建中」主任务容器
- * 经领队/主会话完善后一次性落定——回写主题/说明/合同 + creating→ready 转移
- * + 目录改名。必须独立成函数：updateTask 自己开事务无法与状态转移拼装在一
- * 个事务里，工具层（captainTools）按分层纪律不手写转移。
+ * 创建收口（docs/panelTaskCommission）：面板手动创建 / 对话新提交的主任务
+ * 容器（status=creating）经完善者（领队子代理 / 主会话）拆解后一次性落定——
+ * 回写主题/说明/合同 + creating→ready 转移 + 目录改名。必须独立成函数：
+ * updateTask 自己开事务无法与状态转移拼装在一个事务里，工具层
+ * （captainTools）按分层纪律不手写转移。
+ *
+ * 用户迭代 2026-09-12：对话 `eteams_submit_task`（不传 taskId）建的主任务
+ * 也先落 creating（面板显示「创建中」动画/状态/禁点），拆解全部完成后由
+ * `eteams_submit_task(taskId=N)` 调本函数收口转 ready——与面板 commission
+ * 同一条收口口径。
  */
 export async function finalizeCommissionTask(
   env: RuntimeEnv,

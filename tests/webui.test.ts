@@ -136,6 +136,8 @@ interface SurfaceHarness {
   /** ctx.agents 引用（三十七轮 DA50 冷恢复用例往上面挂 fake resume）。 */
   agents?: { get: (id: string) => unknown };
   call?: (name: string, args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  /** 原始工具调用（不补收口）——观察「创建中」窗口的用例用它。 */
+  callRaw?: (name: string, args: Record<string, unknown>) => Promise<Record<string, unknown>>;
   mem?: (
     agent: { id: string },
     name: string,
@@ -228,7 +230,7 @@ async function installFull(overrides: Partial<ETeamsResolvedConfig> = {}): Promi
     id: childId,
     session: { header: { cwd: workspace } },
   });
-  const call = async (
+  const callRaw = async (
     name: string,
     args: Record<string, unknown>,
   ): Promise<Record<string, unknown>> => {
@@ -241,6 +243,24 @@ async function installFull(overrides: Partial<ETeamsResolvedConfig> = {}): Promi
         signal: undefined,
       } as never,
     )) as Record<string, unknown>;
+  };
+  // 用户迭代 2026-09-12：对话建的主任务先落「创建中」（面板显示创建中/动画/
+  // 禁点），拆解完成后才由 eteams_submit_task(taskId) 收口转「待开始」。多数
+  // 用例要的是可直接开跑的 ready 主任务——call 对不带 taskId 的提交自动补一次
+  // 收口；需要观察「创建中」窗口的用例用 callRaw（见 docs/26 循环用例）。
+  const call = async (
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> => {
+    const result = await callRaw(name, args);
+    if (name === 'eteams_submit_task' && args.taskId === undefined) {
+      await callRaw('eteams_submit_task', {
+        taskId: result.taskId,
+        subject: args.subject,
+        ...(args.description !== undefined ? { description: args.description } : {}),
+      });
+    }
+    return result;
   };
   const mem = async (
     agent: { id: string },
@@ -263,6 +283,7 @@ async function installFull(overrides: Partial<ETeamsResolvedConfig> = {}): Promi
     captains,
     agents: (ctx as unknown as { agents: { get: (id: string) => unknown } }).agents,
     call,
+    callRaw,
     mem,
     memberAgent,
   };
@@ -1256,14 +1277,16 @@ describe('conversation task workflow (docs/26)', () => {
     await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Alice', role: 'researcher' });
     await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Bob', role: 'engineer' });
 
-    // 1. 对话提交：立即生成任务单（group 容器，新建即 ready）+ 专属文件夹。
-    const submitted = await h.call!('eteams_submit_task', {
+    // 1. 对话提交：立即生成任务单（group 容器）+ 专属文件夹；先落「创建中」
+    //    （2026-09-12：面板显示「创建中」动画/状态且不可点进），拆解完后由
+    //    eteams_submit_task(taskId) 收口转「待开始」。
+    const submitted = await h.callRaw!('eteams_submit_task', {
       subject: '官网迁移',
       description: '把官网迁到新域名',
       questionnaire: ['交付形式？', '验收偏好？'],
     });
     expect(submitted.ok).toBe(true);
-    expect(submitted.status).toBe('ready');
+    expect(submitted.status).toBe('creating');
     let team = readTeam(teamId);
     const group = team.tasks[0]!;
     expect(group.parentId).toBeNull();
@@ -1271,6 +1294,14 @@ describe('conversation task workflow (docs/26)', () => {
     expect(submitted.folder).toBe(group.workDir);
     expect(existsSync(join(workspace, group.workDir!, 'contract.md'))).toBe(true);
     expect(existsSync(join(workspace, group.workDir!, 'notes.md'))).toBe(true);
+
+    // 1b. 收口：拆解完成后把「创建中」转「待开始」（收口前 startGroupTask 拒绝）。
+    const finalized = await h.callRaw!('eteams_submit_task', {
+      taskId: group.id,
+      subject: '官网迁移',
+      description: '把官网迁到新域名',
+    });
+    expect(finalized.status).toBe('ready');
 
     // 2. 面板拆解：parentTaskId（数字串）挂任务单；chain 站点 = 成员槽。
     const sub = await h.post(`/eteams-api/team/${teamId}/task`, {

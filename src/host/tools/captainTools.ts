@@ -858,9 +858,11 @@ export function createCaptainTools(
   const submitTaskTool = defineTool({
     name: 'eteams_submit_task',
     description:
-      '对话任务入口（docs/26）：用户在对话中把一个任务交给团队时先调它——立即生成任务 ID（主任务/任务单容器）与专属任务文件夹，面板「任务」页立刻可见。提交后按工作流推进：先向用户问询明确目标（结论用 eteams_update_task 写回本主任务 description），再用 eteams_create_task（带 parentTaskId）把任务拆解成多个小任务（每个小任务 chain 站点即成员槽）。完善面板手动创建的任务（docs/panelTaskCommission）时不新建：传 taskId 指向「创建中」的主任务容器，本工具一次性回写主题/说明并把创建中转就绪。',
+      '对话任务入口（docs/26）：用户在对话中把一个任务交给团队时先调它——立即生成任务 ID（主任务/任务单容器）与专属任务文件夹，面板「任务」页立刻以「创建中」显示（旋转动画 + 状态「创建中」+ 不可点进）。提交后按工作流推进：先向用户问询明确目标（结论用 eteams_update_task 写回本主任务 description），再用 eteams_create_task（带 parentTaskId）把任务拆解成多个小任务（每个小任务 chain 站点即成员槽）；拆解全部完成后**必须**再调本工具带 taskId 收口：回写主题/说明并把「创建中」转「待开始」（面板随即可开跑）。面板手动创建的任务（docs/panelTaskCommission）同样传 taskId 收口。',
     parameters: {
-      taskId: int('收口目标主任务号（面板手动创建的「创建中」容器；不传 = 新建主任务容器）'),
+      taskId: int(
+        '收口目标主任务号（不带 = 新建主任务容器，先落「创建中」待拆解收口；带 = 拆解完成后收口，把「创建中」转「待开始」）',
+      ),
       subject: strR('任务主题（一句话）'),
       description: str('当前对任务的理解/背景（问询后更新）'),
       questionnaire: strArr('计划向用户问询的问题（留档；答案更新进 description）'),
@@ -915,7 +917,17 @@ export function createCaptainTools(
         task = await createTask(
           env,
           who,
-          { subject: args.subject, description: args.description, kind: 'group' },
+          {
+            subject: args.subject,
+            description: args.description,
+            kind: 'group',
+            // 用户迭代 2026-09-12「任务创建中时我希望有一个创建中的动画，而且状态
+            // 显示创建中，且不能点进去」：对话建的主任务先落「创建中」（面板显示
+            // 动画/状态/禁点），拆解全部完成后由 eteams_submit_task(taskId) 收口
+            // （finalizeCommissionTask）转「待开始」——与面板 commission 同一条
+            // 收口口径。
+            status: 'creating',
+          },
         );
         if (args.questionnaire !== undefined && args.questionnaire.length > 0) {
           await recordEvent(stateRootOf(env), caller.team.id, caller.actor, 'plan.questionnaire', {

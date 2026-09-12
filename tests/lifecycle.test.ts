@@ -253,9 +253,17 @@ describe('lifecycle (offline full flow)', () => {
         questionnaire: ['交付格式？', '验收偏好？'],
       },
     );
-    expect(submitted.status).toBe('ready');
+    // 用户迭代 2026-09-12：对话建的主任务先落「创建中」（面板显示创建中/动画/禁点），
+    // 拆解完后由 eteams_submit_task(taskId) 收口转「待开始」。
+    expect(submitted.status).toBe('creating');
     expect(submitted.folder).toMatch(/^teams\//);
     const groupId = submitted.taskId;
+    const finalized = await cap<{ ok: true; status: string }>('eteams_submit_task', {
+      taskId: groupId,
+      subject: '调研导出方案并实现',
+      description: '先调研 CSV/JSON 方案，再实现导出模块',
+    });
+    expect(finalized.status).toBe('ready');
 
     // 4. 拆解：小任务挂到任务单下（chain 站点即成员槽）+ 依赖小任务
     const task = await cap<{ ok: true; taskId: number; status: string }>('eteams_create_task', {
@@ -1035,6 +1043,8 @@ describe('大任务状态语义 + 依赖派发闸（用户迭代 2026-09-11 精�
       teamId,
     });
     const group = await cap<{ taskId: number }>('eteams_submit_task', { subject: '中断主任务' });
+    // 收口转 ready（2026-09-12：对话建的主任务先落「创建中」）。
+    await cap('eteams_submit_task', { taskId: group.taskId, subject: '中断主任务' });
     const sub = await cap<{ taskId: number }>('eteams_create_task', {
       subject: '两站任务',
       parentTaskId: group.taskId,
@@ -1089,6 +1099,8 @@ describe('大任务状态语义 + 依赖派发闸（用户迭代 2026-09-11 精�
       teamId,
     });
     const group = await cap<{ taskId: number }>('eteams_submit_task', { subject: '重发主任务' });
+    // 收口转 ready（2026-09-12：对话建的主任务先落「创建中」）。
+    await cap('eteams_submit_task', { taskId: group.taskId, subject: '重发主任务' });
     const sub = await cap<{ taskId: number }>('eteams_create_task', {
       subject: '单站任务',
       parentTaskId: group.taskId,
@@ -1177,6 +1189,8 @@ describe('大任务状态语义 + 依赖派发闸（用户迭代 2026-09-11 精�
       teamId,
     });
     const group = await cap<{ taskId: number }>('eteams_submit_task', { subject: '暂停主任务' });
+    // 收口转 ready（2026-09-12：对话建的主任务先落「创建中」）。
+    await cap('eteams_submit_task', { taskId: group.taskId, subject: '暂停主任务' });
     const first = await cap<{ taskId: number }>('eteams_create_task', {
       subject: '第一棒',
       parentTaskId: group.taskId,
@@ -1240,6 +1254,8 @@ describe('大任务状态语义 + 依赖派发闸（用户迭代 2026-09-11 精�
       teamId,
     });
     const group = await cap<{ taskId: number }>('eteams_submit_task', { subject: '同步挂起主任务' });
+    // 收口转 ready（2026-09-12：对话建的主任务先落「创建中」）。
+    await cap('eteams_submit_task', { taskId: group.taskId, subject: '同步挂起主任务' });
     const sub = await cap<{ taskId: number }>('eteams_create_task', {
       subject: '在跑小任务',
       parentTaskId: group.taskId,
@@ -1281,6 +1297,8 @@ describe('大任务状态语义 + 依赖派发闸（用户迭代 2026-09-11 精�
       teamId,
     });
     const group = await cap<{ taskId: number }>('eteams_submit_task', { subject: '主任务' });
+    // 收口转 ready（2026-09-12：对话建的主任务先落「创建中」）。
+    await cap('eteams_submit_task', { taskId: group.taskId, subject: '主任务' });
     const sub = await cap<{ taskId: number }>('eteams_create_task', {
       subject: '单站任务',
       parentTaskId: group.taskId,

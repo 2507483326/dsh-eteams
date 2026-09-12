@@ -72,9 +72,9 @@ export function sessionTeamBand(team: SessionTeamBandInput): string {
         ...liveHeader(team.name, team.taskCount),
         '',
         `分工（本对话已有进行中的主任务 #${taskId}，团队未设领队——由本会话直接主持）：`,
-        `1. 用户提出任何新的任务/工作请求（含全新事项）→ 需要澄清就先 ask_user_question 问询，结论用 eteams_update_task 写回主任务 #${taskId}，然后 eteams_create_task（parentTaskId=${taskId}）在主任务下增补小任务（chain 站点即成员卡槽，拆解时按工号为卡槽填人）；`,
-        `2. 不要再 eteams_submit_task 新建主任务——本对话同时只有一个进行中的主任务，新工作一律以增补小任务进入 #${taskId}；`,
-        `3. 红线：只做计划与拆解，不自批开跑——指派（eteams_assign_task）等用户批准后再做；不要直接调用 eteams_submit_task 与 eteams_dispatch_captain；写代码/改文件/跑命令等执行动作由小任务派发给成员，本会话不动手执行。`,
+        `1. 用户提出任何新的任务/工作请求（含全新事项）→ 需要澄清就先 ask_user_question 问询，结论用 eteams_update_task 写回主任务 #${taskId}，然后 eteams_create_task（parentTaskId=${taskId}）在主任务下增补小任务（chain 站点即成员卡槽，拆解时按工号为卡槽填人）；拆解全部完成后用 eteams_submit_task（taskId=${taskId}, subject, description）收口，把「创建中」转「待开始」；`,
+        `2. 不要再 eteams_submit_task 新建主任务（本任务 #${taskId} 的收口提交除外）——本对话同时只有一个进行中的主任务，新工作一律以增补小任务进入 #${taskId}；`,
+        `3. 红线：只做计划与拆解，不自批开跑——指派（eteams_assign_task）等用户批准后再做；不要调用 eteams_dispatch_captain；写代码/改文件/跑命令等执行动作由小任务派发给成员，本会话不动手执行。`,
       ].join('\n');
     }
     return [
@@ -93,7 +93,7 @@ export function sessionTeamBand(team: SessionTeamBandInput): string {
       ...liveHeader(team.name, team.taskCount),
       '',
       '分工：本团队未设领队——团队工作流（提交任务单、问询、拆解、汇报）由本会话直接主持：',
-      '1. 用户提出任何任务/工作请求 → 直接 eteams_submit_task 建主任务（任务单：subject 把用户原话简化成一句话标题），再问询明确目标（结论 eteams_update_task 写回）、eteams_create_task（带 parentTaskId）拆解小任务；',
+      '1. 用户提出任何任务/工作请求 → 直接 eteams_submit_task 建主任务（任务单：subject 把用户原话简化成一句话标题；先落「创建中」），再问询明确目标（结论 eteams_update_task 写回）、eteams_create_task（带 parentTaskId）拆解小任务；拆解全部完成后调 eteams_submit_task（taskId=主任务号，subject/description）收口，把「创建中」转「待开始」（收口前面板显示「创建中」、不可点进）；',
       '2. 问询用 ask_user_question 弹窗直接弹给用户；每轮进展简短汇报给用户；',
       '3. 红线：只做计划与拆解，不自批开跑——指派（eteams_assign_task）等用户批准后再做；写代码/改文件/跑命令等执行动作由小任务派发给成员，本会话不动手执行。',
     ].join('\n');
@@ -104,7 +104,7 @@ export function sessionTeamBand(team: SessionTeamBandInput): string {
     // 用户迭代 2026-09-07 两步走：第一步主会话先建主任务（标题由模型简化，
     // 成员随建任务落位），第二步判断领队并转交持续领队子代理分解分配。
     '分工（对话任务工作流两步走）：',
-    '1. 第一步·建任务：用户提出新的任务/工作请求 → 立即 eteams_submit_task 建主任务（任务单）：subject 把用户原话简化成一句话任务标题（不要照抄原话），description 记录用户原话与背景；团队成员已随主任务自动落位，不要重复拉人；',
+    '1. 第一步·建任务：用户提出新的任务/工作请求 → 立即 eteams_submit_task 建主任务（任务单）：subject 把用户原话简化成一句话任务标题（不要照抄原话），description 记录用户原话与背景；团队成员已随主任务自动落位，不要重复拉人；主任务先落「创建中」（面板显示创建中/不可点进），由领队拆解完后收口转「待开始」；',
     '2. 第二步·转交：建好主任务后立即 eteams_dispatch_captain（taskId=主任务号，message=用户原话）转交持续领队子代理（以领队的名字命名）——问询、拆解（eteams_create_task 挂主任务，chain 站点即成员卡槽，拆解时按工号为卡槽填人）与指派（eteams_assign_task，等你批准开跑后才做）全部由领队子代理主持，本会话不自己动手执行；',
     '3. 领队的后续互动照旧经本对话转交：用户答复领队的问询、或收到团队邮件/面板通知 → 同样 eteams_dispatch_captain（taskId=对应主任务号，message=答复原文或通知要点），不要再建新任务；',
     '4. dispatch 立即返回受理确认；领队的问询（原生弹窗直接弹在本对话）与汇报（「Background subagent … reported:」子代理消息）随后直接到达本对话——原样展示给用户即可（或一句简短确认），不要复述全文、不要替领队补充或回答；',
