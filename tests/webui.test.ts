@@ -21,7 +21,7 @@ import {
   setBuildParentSession,
 } from '../src/host/runtime/roleBuilder';
 import { joinPath } from '../src/host/runtime/base';
-import { unregisterCaptainChild } from '../src/host/runtime/captainAgent';
+import { readCaptainTurn, unregisterCaptainChild } from '../src/host/runtime/captainAgent';
 import { clearSessionTeam } from '../src/host/runtime/sessionTeam';
 import { getDb } from '../src/host/state/db';
 import { recordUsage, type UsageRecord } from '../src/host/state/usageStore';
@@ -1446,6 +1446,9 @@ describe('conversation task workflow (docs/26)', () => {
     });
     const bareId = json<{ taskId: number }>(bare.body).taskId;
 
+    // 本用例走无领队宿主直派路径（有领队走领队的路径见下方 leaderful 用例）。
+    await h.post(`/eteams-api/team/${teamId}/leader/remove`, {});
+
     // 空链：开始被「需要选择成员」闸住（用户拍板原话——客户端对空链卡不
     // 渲染按钮，此处兜底）。
     const bareStart = await h.post(`/eteams-api/team/${teamId}/task/${bareId}/start`, {});
@@ -1462,14 +1465,125 @@ describe('conversation task workflow (docs/26)', () => {
     expect(subRec.attempts[0]!.member).toBe('Alice');
     expect(childIdOf(teamId, 'Alice')).not.toBe('');
 
-    // 已派发待接取再点开始：派发核拒绝（防重复派发闸）。
+    // 已派发待接取再点开始（用户迭代 2026-09-11 回归修复）：不再被防重复派发
+    // 闸拒成 400——幂等重发指派信、不新开 attempt、不改状态（死按钮复活；
+    // 成员回合被中断留下的僵尸指派靠这条解开）。
     const again = await h.post(`/eteams-api/team/${teamId}/task/${subId}/start`, {});
-    expect(again.code).toBe(400);
-    expect(json<{ error: string }>(again.body).error).toContain('已有进行中的指派');
+    expect(again.code).toBe(200);
+    const resent = readTeam(teamId).tasks.find((t) => t.id === subId)!;
+    expect(resent.status).toBe('ready');
+    expect(resent.attempts).toHaveLength(1);
+    expect(resent.attempts[0]!.status).toBe('pending_accept');
 
     // 未知任务 404。
     const missing = await h.post(`/eteams-api/team/${teamId}/task/99999/start`, {});
     expect(missing.code).toBe(404);
+  });
+
+  it('pauses a running group from the panel via POST /task/:taskId/pause（2026-09-11）', async () => {
+    // 用户迭代：主任务开始后按钮变「暂停」——挂起在跑小任务 + 容器，再点
+    // 「开始」从原站续跑。
+    const h = await installFull();
+    const created = await h.post('/eteams-api/team', { name: '暂停团队', sessionId: 'cap-conv' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Alice', role: 'researcher' });
+    const group = (
+      (await h.call!('eteams_submit_task', { subject: '主任务' })) as { taskId: number }
+    ).taskId;
+    const sub = json<{ taskId: number }>(
+      (
+        await h.post(`/eteams-api/team/${teamId}/task`, {
+          subject: '接力小任务',
+          parentTaskId: String(group),
+          chain: [{ member: 'Alice', stageBrief: '先做' }],
+        })
+      ).body,
+    ).taskId;
+
+    // 本用例走无领队宿主直派路径（有领队走领队的路径见下方 leaderful 用例）。
+    await h.post(`/eteams-api/team/${teamId}/leader/remove`, {});
+
+    const started = await h.post(`/eteams-api/team/${teamId}/task/${group}/start`, {});
+    expect(started.code).toBe(200);
+    // 领取小任务 → 执行中（容器随整体开始 → start）。
+    const claim = await h.mem!(h.memberAgent!(childIdOf(teamId, 'Alice')), 'eteams_claim_task', {
+      taskId: sub,
+    });
+    expect(claim.token).not.toBe('');
+    expect(readTeam(teamId).tasks.find((t) => t.id === group)!.status).toBe('start');
+
+    // 暂停：小任务 + 容器一起 paused。
+    const paused = await h.post(`/eteams-api/team/${teamId}/task/${group}/pause`, {});
+    expect(paused.code).toBe(200);
+    const pausedTeam = readTeam(teamId);
+    expect(pausedTeam.tasks.find((t) => t.id === sub)!.status).toBe('paused');
+    expect(pausedTeam.tasks.find((t) => t.id === group)!.status).toBe('paused');
+
+    // 再开始：从原站续跑（新 attempt 待接取），容器回 start。
+    const again = await h.post(`/eteams-api/team/${teamId}/task/${group}/start`, {});
+    expect(again.code).toBe(200);
+    const backTeam = readTeam(teamId);
+    expect(backTeam.tasks.find((t) => t.id === sub)!.status).toBe('ready');
+    expect(backTeam.tasks.find((t) => t.id === sub)!.attempts.at(-1)!.status).toBe(
+      'pending_accept',
+    );
+    expect(backTeam.tasks.find((t) => t.id === group)!.status).toBe('start');
+
+    // 未知任务 404。
+    const missing = await h.post(`/eteams-api/team/${teamId}/task/99999/pause`, {});
+    expect(missing.code).toBe(404);
+  });
+
+  it('容器没有在办小任务时快照回落「待开始」（读取侧兜底，2026-09-11）', async () => {
+    // 用户迭代「没有正在执行的小任务，主任务应该也是待开始状态，没有同步过来」：
+    // 容器 start 只应由「有在办小任务」支撑；历史构建留下的陈旧 start 在展示层
+    // 回落 ready，避免面板显示执行中却没有任何小任务在跑。
+    const h = await installFull();
+    const created = await h.post('/eteams-api/team', { name: '容器兜底', sessionId: 'cap-conv' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Alice', role: 'researcher' });
+    const group = (
+      (await h.call!('eteams_submit_task', { subject: '主任务' })) as { taskId: number }
+    ).taskId;
+    const sub = json<{ taskId: number }>(
+      (
+        await h.post(`/eteams-api/team/${teamId}/task`, {
+          subject: '小任务',
+          parentTaskId: String(group),
+          chain: [{ member: 'Alice', stageBrief: '做' }],
+        })
+      ).body,
+    ).taskId;
+
+    const statusOf = (id: number): string =>
+      (teamSnapshot(readTeam(teamId), workspace, config).tasks as Array<{
+        taskId: number;
+        status: string;
+      }>).find((t) => t.taskId === id)!.status;
+
+    // 直接落一个陈旧 start（模拟历史构建中断后未同步的残留）。
+    getDb(stateRoot())
+      .prepare("UPDATE task SET status = 'start' WHERE task_id = ?")
+      .run(group);
+    expect(statusOf(group)).toBe('ready');
+
+    // 陈旧 start + 小任务已挂起（历史中断未回写的另一种残留）→ 快照报 paused，
+    // 不漏「小任务挂起」（用户迭代「小任务挂起之后，主任务也同步挂起」）。
+    getDb(stateRoot())
+      .prepare("UPDATE task SET status = 'paused' WHERE task_id = ?")
+      .run(sub);
+    expect(statusOf(group)).toBe('paused');
+    getDb(stateRoot())
+      .prepare("UPDATE task SET status = 'ready' WHERE task_id = ?")
+      .run(sub);
+
+    // 本用例走无领队宿主直派路径（有领队走领队的路径见下方 leaderful 用例）。
+    await h.post(`/eteams-api/team/${teamId}/leader/remove`, {});
+
+    // 有小任务在办（待接取）→ 快照如实报 start。
+    await h.post(`/eteams-api/team/${teamId}/task/${group}/start`, {});
+    expect(statusOf(sub)).toBe('ready');
+    expect(statusOf(group)).toBe('start');
   });
 
   it('starts a group task: dispatches ready chained subs, skips the rest（二十五轮 DA38）', async () => {
@@ -1495,6 +1609,9 @@ describe('conversation task workflow (docs/26)', () => {
       parentTaskId: String(group),
     });
     const bareId = json<{ taskId: number }>(bare.body).taskId;
+
+    // 本用例走无领队宿主直派路径（有领队走领队的路径见下方 leaderful 用例）。
+    await h.post(`/eteams-api/team/${teamId}/leader/remove`, {});
 
     // 主任务「开始」= 链式接力发棒（二十七轮 DA40 收窄）：本例仅一张有链卡，
     // 派发成功（started=1）与二十五轮断言同值；无链的按卡跳过（原因
@@ -1573,6 +1690,9 @@ describe('conversation task workflow (docs/26)', () => {
       parentTaskId: String(group),
     });
     const bareId = json<{ taskId: number }>(bare.body).taskId;
+
+    // 本用例走无领队宿主直派路径（有领队走领队的路径见下方 leaderful 用例）。
+    await h.post(`/eteams-api/team/${teamId}/leader/remove`, {});
 
     // 整体开始：首棒派发（ready 待接取——用户迭代 2026-09-11 派发不改状态）；
     // 无链卡「需要选择成员」；后棒「等待链式接力」——跳过原因如实透出。
@@ -1674,6 +1794,9 @@ describe('conversation task workflow (docs/26)', () => {
       return { agent: revived };
     };
 
+    // 本用例走无领队宿主直派路径（有领队走领队的路径见下方 leaderful 用例）。
+    await h.post(`/eteams-api/team/${teamId}/leader/remove`, {});
+
     const started = await h.post(`/eteams-api/team/${teamId}/task/${group}/start`, {});
     expect(started.code).toBe(200);
     const body = json<{ started: number; skipped: unknown[] }>(started.body);
@@ -1725,6 +1848,9 @@ describe('conversation task workflow (docs/26)', () => {
     agents.resume = async () => {
       throw new Error('session record reclaimed');
     };
+
+    // 本用例走无领队宿主直派路径（有领队走领队的路径见下方 leaderful 用例）。
+    await h.post(`/eteams-api/team/${teamId}/leader/remove`, {});
 
     const started = await h.post(`/eteams-api/team/${teamId}/task/${group}/start`, {});
     expect(started.code).toBe(200);
@@ -1805,6 +1931,9 @@ describe('conversation task workflow (docs/26)', () => {
     });
     const secondId = json<{ taskId: number }>(second.body).taskId;
 
+    // 本用例走无领队宿主直派路径（有领队走领队的路径见下方 leaderful 用例）。
+    await h.post(`/eteams-api/team/${teamId}/leader/remove`, {});
+
     // 整体开始 = 链式接力发棒：一次只派第一棒（第二棒进接力队列，原因透出，
     // 状态仍是 ready 等交棒）。
     const started = await h.post(`/eteams-api/team/${teamId}/task/${group}/start`, {});
@@ -1856,6 +1985,9 @@ describe('conversation task workflow (docs/26)', () => {
       chain: [{ member: 'Alice', stageBrief: '先做' }],
     });
     const subId = json<{ taskId: number }>(sub.body).taskId;
+    // 本用例走无领队宿主直派路径（有领队走领队的路径见下方 leaderful 用例）。
+    await h.post(`/eteams-api/team/${teamId}/leader/remove`, {});
+
     const started = await h.post(`/eteams-api/team/${teamId}/task/${group}/start`, {});
     expect(started.code).toBe(200);
     const alice = h.memberAgent!(childIdOf(teamId, 'Alice'));
@@ -1876,7 +2008,7 @@ describe('conversation task workflow (docs/26)', () => {
     expect(json<{ error: string }>(again.body).error).toContain('已完成，无法整体开始');
   });
 
-  it('falls back to presence even for a leaderful team whose leader session is gone（二十七轮 DA40）', async () => {
+  it('routes panel 开始 through the leader (presence anchor fallback)（2026-09-12）', async () => {
     const h = await installFull();
     const created = await h.post('/eteams-api/team', {
       name: '领队在册团队',
@@ -1894,22 +2026,70 @@ describe('conversation task workflow (docs/26)', () => {
     });
     const subId = json<{ taskId: number }>(sub.body).taskId;
 
-    // 领队在册（未移出）但其主会话已关；心跳指向另一在册会话——不存在
-    // 「领队会话离线」报错态（用户拍板「不存在领队会话离线啊」）：锚点
-    // 统一走 任务行快照 → 心跳定位 梯度，照常起人。
+    // 用户 2026-09-12「任务重新开始有领队的情况下怎么没有走领队了，开始之前需要
+    // 先唤醒一下主对话」：有领队的团队点开始不再由宿直派成员——宿主静默解析/
+    // 复活主会话锚点（原主会话 cap-conv 已关，退到心跳 cap-second），再把本大任务
+    // 的领队子代理唤醒（turn=start），由领队按执行链指派。
     h.captains.delete('cap-conv');
     const presence = await h.post('/eteams-api/presence', { sessionId: 'cap-second' });
     expect(presence.code).toBe(200);
+
     const started = await h.post(`/eteams-api/team/${teamId}/task/${subId}/start`, {});
     expect(started.code).toBe(200);
+    expect(json<{ started: number }>(started.body).started).toBe(0);
     const team = readTeam(teamId);
+    // 宿主不直派：小任务保持 ready、无 attempt，等领队指派。
     expect(team.tasks.find((t) => t.id === subId)!.status).toBe('ready');
+    expect(team.tasks.find((t) => t.id === subId)!.attempts).toHaveLength(0);
+    // 领队副本行（本大任务）已起会话（dispatchCaptainCore 首次派发）。
     const leaderRow = team.taskMembers.find((r) => r.mainTaskId === group && r.isLeader === true);
     expect(leaderRow).toBeDefined();
-    // v8+：主持行取消——领队副本行只作会话锚（未派发保持空串）；派发锚点
-    // 补章在任务行（本行未登记 → cap-second）。
-    expect(leaderRow!.sessionId).toBe('');
-    expect(team.tasks.find((t) => t.id === subId)!.mainSessionId).toBe('cap-second');
+    expect(leaderRow!.sessionId).not.toBe('');
+    // 回合 sidecar 记的是开跑批准，父会话 = 心跳兜底锚（cap-second）。
+    const turn = readCaptainTurn(stateRoot(), String(group));
+    expect(turn?.turn).toBe('start');
+    expect(turn?.parentSessionId).toBe('cap-second');
+  });
+
+  it('routes panel 开始/继续 through the leader for a leaderful team（2026-09-12）', async () => {
+    const h = await installFull();
+    const created = await h.post('/eteams-api/team', { name: '领队开跑团队', sessionId: 'cap-conv' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Alice', role: 'researcher' });
+    const group = (
+      (await h.call!('eteams_submit_task', { subject: '主任务' })) as { taskId: number }
+    ).taskId;
+    const sub = await h.post(`/eteams-api/team/${teamId}/task`, {
+      subject: '接力小任务',
+      parentTaskId: String(group),
+      chain: [{ member: 'Alice', stageBrief: '先做' }],
+    });
+    const subId = json<{ taskId: number }>(sub.body).taskId;
+
+    // 首次开始：主任务整体开始也交领队（宿主不直派第一棒）。
+    const started = await h.post(`/eteams-api/team/${teamId}/task/${group}/start`, {});
+    expect(started.code).toBe(200);
+    expect(json<{ started: number }>(started.body).started).toBe(0);
+    let team = readTeam(teamId);
+    expect(team.tasks.find((t) => t.id === subId)!.status).toBe('ready');
+    expect(team.tasks.find((t) => t.id === subId)!.attempts).toHaveLength(0);
+    const leaderRow = team.taskMembers.find((r) => r.mainTaskId === group && r.isLeader === true);
+    expect(leaderRow).toBeDefined();
+    expect(leaderRow!.sessionId).not.toBe('');
+    let turn = readCaptainTurn(stateRoot(), String(group));
+    expect(turn?.turn).toBe('start');
+    expect(turn?.message).toContain('用户批准开跑');
+
+    // 暂停后重新开始：同样走领队（续跑口径，不改状态、不直派）。
+    getDb(stateRoot()).prepare("UPDATE task SET status = 'paused' WHERE task_id = ?").run(subId);
+    const resumed = await h.post(`/eteams-api/team/${teamId}/task/${subId}/start`, {});
+    expect(resumed.code).toBe(200);
+    expect(json<{ started: number }>(resumed.body).started).toBe(0);
+    team = readTeam(teamId);
+    expect(team.tasks.find((t) => t.id === subId)!.attempts).toHaveLength(0);
+    turn = readCaptainTurn(stateRoot(), String(group));
+    expect(turn?.turn).toBe('start');
+    expect(turn?.message).toContain('恢复');
   });
 });
 
@@ -2162,7 +2342,7 @@ describe('GET /board 跨团队聚合 (docs/35 §6 Q1/Q3/Q4/Q5/Q9)', () => {
     // subD：Bob 再领一单（group3 → 第二条实例行）；用户迭代 2026-09-11：
     // 派发不改状态——停在 ready（进看板就绪待派列）。
     await h.call!('eteams_assign_task', { taskId: subD, member: 'Bob' });
-    // subF：Alice 在另一支大任务上失败（重试预算 0 → wait_user + 决策）。
+    // subF：Alice 在另一支大任务上失败（重试预算 0 → 落 wait 待领队）。
     // 同一成员跨大任务各一行实例行（Q5 去重口径的数据形态）。
     await h.call!('eteams_assign_task', { taskId: subF, member: 'Alice' });
     const aliceClaim2 = await h.mem!(
@@ -2177,6 +2357,23 @@ describe('GET /board 跨团队聚合 (docs/35 §6 Q1/Q3/Q4/Q5/Q9)', () => {
       error: '上游接口超时',
     });
     expect(failed.retried).toBe(false);
+    // 失败超限落 wait（待领队分诊），不进 wait_user、不开决策（用户迭代
+    // 2026-09-11）——看板出现 wait 列、decisions 为空。
+    expect(readTeam(teamA).tasks.find((t) => t.id === subF)!.status).toBe('wait');
+    const boardWait = json<{
+      teams: Array<{
+        teamId: number;
+        columns: Record<string, { taskId: number }[]>;
+        decisions: unknown[];
+      }>;
+    }>((await h.get('/eteams-api/board')).body).teams;
+    const aw = boardWait.find((t) => t.teamId === teamA)!;
+    expect(aw.columns.wait.map((t) => t.taskId)).toEqual([subF]);
+    expect(aw.columns.wait_user).toEqual([]);
+    expect(aw.decisions).toEqual([]);
+    // 领队升级（流程问题分支）→ wait_user + 开决策。
+    await h.call!('eteams_escalate_task', { taskId: subF, note: '上游接口超时' });
+    expect(readTeam(teamA).tasks.find((t) => t.id === subF)!.status).toBe('wait_user');
 
     // 乙队：一个就绪任务，无决策。
     await h.post(`/eteams-api/team/${teamB}/task`, { subject: '独立任务' });
@@ -2210,8 +2407,8 @@ describe('GET /board 跨团队聚合 (docs/35 §6 Q1/Q3/Q4/Q5/Q9)', () => {
     expect(a.columns.paused.map((t) => t.taskId)).toEqual([subA]);
     expect(a.columns.wait_user.map((t) => t.taskId)).toEqual([subF]);
     expect(a.columns.start).toEqual([]);
-    // wait / wait_decision 列已随状态精简退役。
-    expect(a.columns.wait).toBeUndefined();
+    // wait 列存在但已空（subF 被领队升级为 wait_user）；wait_decision 已退役。
+    expect(a.columns.wait).toEqual([]);
     expect(a.columns.wait_decision).toBeUndefined();
     expect(a.groups.find((g) => g.taskId === group1)).toEqual({
       taskId: group1,

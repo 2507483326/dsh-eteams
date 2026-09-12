@@ -144,7 +144,7 @@ export const CAPTAIN_CHILD_DENIED_TOOLS: readonly string[] = [
 
 /** 本回合派发凭据：eteams_captain_guide 的 turn 与 snapshot.latestMessage 来源。 */
 export interface CaptainTurnDispatch {
-  /** 回合种类：dispatch=主对话转交 / commission=面板任务完善。 */
+  /** 回合种类：dispatch=主对话转交 / commission=面板任务完善 / start=面板开始批准。 */
   turn: CaptainTurnKind;
   /** 本回合转交内容（用户原话或完善指令）。 */
   message: string;
@@ -182,7 +182,10 @@ export function readCaptainTurn(root: string, taskId: string): CaptainTurnDispat
   if (!existsSync(file)) return null;
   try {
     const raw = JSON.parse(readFileSync(file, 'utf8')) as Partial<CaptainTurnDispatch>;
-    if ((raw.turn !== 'dispatch' && raw.turn !== 'commission') || typeof raw.message !== 'string') {
+    if (
+      (raw.turn !== 'dispatch' && raw.turn !== 'commission' && raw.turn !== 'start') ||
+      typeof raw.message !== 'string'
+    ) {
       return null;
     }
     return {

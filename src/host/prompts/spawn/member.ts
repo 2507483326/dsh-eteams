@@ -13,7 +13,7 @@ export const MEMBER_RULES = [
   '婉拒：接不了（能力/负载/前置缺失）→ eteams_decline_task，写明原因；领队改派。',
   '进度：开工即 eteams_append_progress；阶段节点（方案定了/主路径通了/发现风险）再记；文本 ≤200 字。',
   '完成：交付完成 → eteams_complete_task（output 写清做了什么/改了哪些文件/如何验证）；产出同步写入任务 notes.md。',
-  '失败：做不下去 → eteams_fail_task（error 写具体障碍与已尝试方案）；领队安排重试或升级。',
+  '失败：做不下去 → eteams_fail_task（error 写具体障碍与已尝试方案）；自动重试超限后落待领队，由领队分诊（重新指派 loop 或升级用户）。',
   '求助：需要决策/跨任务信息 → eteams_send_message 问领队；不要自行扩大范围。',
   '纪律：一个 attempt 一个 token；token 失效（被改派/取消）立即停止，重新等指派；空闲后等待领队调度。',
 ];
@@ -31,20 +31,52 @@ export const MEMBER_TOOL_SHEET = [
 ].join('\n');
 
 /**
+ * 通用成员简报（用户迭代 2026-09-11）：每个任务成员的出生包与每次指派信都
+ * 由本模板包住，固定写明三件事——①工作目录（绝对路径）②领队（无领队=主
+ * 会话）③三节点实时汇报（开工/遇问题/完成）。抽成纯文本函数供两路复用，
+ * 避免字面值双轨（runtime 侧组装好三个值后传参，本函数不读盘）。
+ */
+export function memberBriefing(opts: {
+  teamName: string;
+  /** 汇报对象名：有领队 = 领队名；无领队 = 「主会话（用户对话窗口）」。 */
+  leaderName: string;
+  /** 任务文件夹绝对路径（taskDirAbs）。 */
+  workDir: string;
+}): string {
+  return [
+    '## 你的工作目录',
+    `- ${opts.workDir}`,
+    '- 产出（代码 / 文档 / notes.md）都写在这里；会话当前目录 = 工作区根。',
+    '',
+    '## 你的领队',
+    `- 领队：${opts.leaderName}。汇报、求助、决策请求都发给他。`,
+    '',
+    '## 实时汇报（必须发给领队）',
+    '1. 开工即报：接取后 eteams_append_progress 记计划，并 eteams_send_message to="captain" 报「已开工 + 计划」。',
+    '2. 遇问题即报：障碍 / 需决策 / 发现风险，立即 eteams_send_message to="captain"，不要静默硬扛。',
+    '3. 完成 / 失败必报：eteams_complete_task（产出/改动/验证）、eteams_fail_task（障碍），自动送达领队。',
+  ].join('\n');
+}
+
+/**
  * The spawn welcome: full persona + rules + tool sheet + first context.
  * `template` 是同名班底模板行（docs/35 §5#12 成员=纯模板），人设从它读；
  * 缺省（无模板行）给极简开场。目标行随 docs/35 §3#1 砍掉——目标不再入库。
+ * `briefing` 是通用成员简报（工作目录/领队/三节点汇报，用户迭代
+ * 2026-09-11）——出生即有，缺省不注入（旧调用兼容）。
  */
 export function memberWelcome(
   team: TeamState,
   name: string,
   template?: MemberRecord,
+  briefing?: string,
 ): string {
   const persona = template?.persona;
   const role = template?.role ?? '成员';
   return [
     `你已被领队拉入团队「${team.name}」，任 ${name}（${role}）。`,
     '',
+    ...(briefing !== undefined && briefing.trim() !== '' ? [briefing, ''] : []),
     ...(persona !== undefined
       ? [renderPersonaBlock(persona, name), personaDigest(persona, name)]
       : [`# 人设 · ${name}`]),

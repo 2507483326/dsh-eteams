@@ -479,6 +479,17 @@ export async function startTeamTask(
   };
 }
 
+/** Pause a task from the panel（用户迭代 2026-09-11：主任务开始后按钮变
+ * 「暂停」）：容器挂起全部在跑小任务 + 容器本身，单任务直接挂起；再点「开始」
+ * 由宿主续跑（进度不丢）。 */
+export async function pauseTeamTask(teamId: string, taskId: number): Promise<void> {
+  await requestJson(`${API_BASE}/team/${encodeURIComponent(teamId)}/task/${taskId}/pause`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+}
+
 // ---------- role-builder build session (docs/19.6, D18) ----------
 
 /** One persona draft — field names align with eteams_member_save params. */

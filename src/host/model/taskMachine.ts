@@ -1,6 +1,7 @@
 /**
- * Task state machine（用户迭代 2026-09-11 由 11 态精简为 7 态：
- * creating/ready/start/paused/wait_user/completed/cancelled）— pure functions,
+ * Task state machine（用户迭代 2026-09-11：11 态精简为 7 态后又恢复独立
+ * `wait`（待领队分诊）= 8 态：creating/ready/start/wait/paused/wait_user/
+ * completed/cancelled）— pure functions,
  * no I/O, no cordis. Illegal transitions throw `TransitionError`; the tool layer
  * converts them into actionable Chinese error text.
  *
@@ -39,8 +40,12 @@ export class TransitionError extends Error {
 const EDGES: Record<TaskStatus, readonly TaskStatus[]> = {
   creating: ['ready', 'cancelled'],
   ready: ['start', 'paused', 'wait_user', 'cancelled'],
-  // 严格顺序执行：start 可回 ready（失败重试/改派/中间站交接）。
-  start: ['ready', 'completed', 'paused', 'wait_user', 'cancelled'],
+  // 严格顺序执行：start 可回 ready（失败重试/改派/中间站交接）、落 wait
+  // （自动重试超限，待领队分诊——用户迭代 2026-09-11）。
+  start: ['ready', 'completed', 'wait', 'paused', 'wait_user', 'cancelled'],
+  // 待领队分诊：小 bug 重新指派 loop → ready；流程问题升级 → wait_user；
+  // 挂起 → paused；取消 → cancelled。
+  wait: ['ready', 'start', 'paused', 'wait_user', 'cancelled'],
   paused: ['ready', 'start', 'wait_user', 'cancelled'],
   wait_user: ['ready', 'start', 'paused', 'cancelled'],
   completed: [],

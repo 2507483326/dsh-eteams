@@ -69,11 +69,13 @@ dsh plugin --profile desktop add C:\eTeam   # 安装到 DSH profile（live link�
 
 ### 任务状态机（`src/host/model/taskMachine.ts`）
 
-10 态收敛：`draft / ready / wait / start / paused / wait_decision / wait_user / completed / failed / cancelled`。非法转移抛 `TransitionError`（带可执行中文 hint，工具层转成 actionable 错误文案）。关键设计：
+8 态：`creating / ready / start / wait / paused / wait_user / completed / cancelled`。非法转移抛 `TransitionError`（带可执行中文 hint，工具层转成 actionable 错误文案）。关键设计：
 
-- **阻塞不是独立状态**：物化为 `wait + blockedFrom`（记录阻塞前状态），恢复走 `restoreBlocked()` 并重验依赖是否真已恢复。
-- **依赖毒化**：`paused / failed / wait_decision / wait_user` 毒化下游，下游物化进 `wait + blockedFrom`。
-- 大任务（容器，`parent_id` 为空）不带执行链/依赖；对话任务组不经执行链，全部小任务完成时由插件直接 `ready → completed`（标准边之外的唯一特例，写在 `applyTransition` 里）。
+- **阻塞不是独立状态**：依赖未满足的任务保持 `ready`，派发口用 `dependenciesSatisfied` 校验（原 `wait + blockedFrom` 物化已退役）。
+- **`wait` = 待领队分诊**（用户迭代 2026-09-11）：成员失败按 `maxRetries` 自动重试，超限落 `wait`；领队分诊——小 bug `eteams_reassign_task` 重新指派 loop（wait→ready），流程/环境问题 `eteams_escalate_task` 升级 `wait_user`（wait→wait_user），挂起 `paused`、取消 `cancelled`。
+- `ready` 派发不改状态，成员领取才 `ready→start`；`start` 可回 `ready`（失败重试/改派/中间站交接）。
+- `creating` = 面板手动创建的主任务容器占位（完善收口转 ready）。
+- 大任务（容器，`parent_id` 为空）只用 creating/ready/start/paused + completed（completed 是可回退标识，追加小任务即回 ready；无 cancelled），不加 `wait`。
 
 ### 成员=角色（数据模型核心）
 

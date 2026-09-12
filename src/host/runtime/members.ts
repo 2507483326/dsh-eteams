@@ -17,9 +17,11 @@ import type { TeamTx } from '../state/store.js';
 import { sessionDefaultRouteOf, type RuntimeEnv } from './base.js';
 import { makeMail, memberBoxOf, memberRefId, type Wake, wakeMember } from './notifier.js';
 import { assignmentMail } from '../prompts/handoff/mails.js';
-import { memberWelcome } from '../prompts/spawn/member.js';
+import { fallbackTeamMemberPersona } from '../prompts/personas/framework.js';
+import { memberBriefing, memberWelcome } from '../prompts/spawn/member.js';
 import { neutralizeInterpolation } from './sessionPersona.js';
 import { registerMemberSession } from './usage.js';
+import { taskDirAbs } from './docs.js';
 
 /** Label prefix identifying eteams member children. */
 export const MEMBER_LABEL_PREFIX = 'eteams-member:';
@@ -74,6 +76,7 @@ export const MEMBER_DENIED_TOOLS: readonly string[] = [
   'eteams_assign_task',
   'eteams_advance_task',
   'eteams_reassign_task',
+  'eteams_escalate_task',
   'eteams_suspend_task',
   'eteams_resume_task',
   'eteams_cancel_task',
@@ -94,6 +97,23 @@ export function memberTemplateOf(team: TeamState, ref: string | number): MemberR
 }
 
 /**
+ * 通用成员简报组装（用户迭代 2026-09-11）：runtime 侧现读三个值——任务
+ * 文件夹绝对路径（taskDirAbs）、领队名（班底 is_leader 行，无领队时是主
+ * 会话）、团队名——交给纯文本 memberBriefing。出生包与每次指派信共用，
+ * 保证「工作目录 / 领队 / 三节点汇报」始终在成员上下文里。
+ */
+export function taskBriefing(env: RuntimeEnv, team: TeamState, task: TaskRecord): string {
+  const leader = team.hasLeader
+    ? (team.members.find((m) => m.isLeader === true)?.name ?? '领队')
+    : '主会话（用户对话窗口）';
+  return memberBriefing({
+    teamName: team.name,
+    leaderName: leader,
+    workDir: taskDirAbs(env.workspace, team, task),
+  });
+}
+
+/**
  * Spawn one member child as a durable continuable child of the captain（首派
  * 按链起人路径调用，docs/35 §5#3）。原子性：start 失败直接抛，调用方尚未
  * 改任何状态；成功返回 childId，由调用方在事务内回填实例行。
@@ -101,23 +121,27 @@ export function memberTemplateOf(team: TeamState, ref: string | number): MemberR
  * 宿主会话默认模型（sessionDefaultRouteOf，settings agent-default-model），
  * 不再继承领队会话模型；有值 = override（provider 固定用
  * config.memberProvider，路由只挑模型——docs/35 §3#5 既有口径）。
+ * `task` 用于组装通用简报（工作目录/领队，用户迭代 2026-09-11）。
  */
 export async function spawnMember(
   env: RuntimeEnv,
   team: TeamState,
   row: TaskMemberRecord,
   captain: Agent,
+  task: TaskRecord,
 ): Promise<string> {
   const template = memberTemplateOf(team, row.employeeId ?? row.name);
   const persona = template?.persona;
   // 人设手册全文（docs/36 建议 4）：personaMd 有烘全文时用它，结构字段不
-  // 再渲染进 persona；无手册（旧数据）退回 executionPrompt。进 persona 前
-  // 经 neutralizeInterpolation 转义——宿主对系统提示段做严格 {{变量}} 插值，
-  // 用户 md 里的花括号引用会让整段装配抛错（sessionPersona band 同口径）。
+  // 再渲染进 persona；无手册（旧数据）退回 executionPrompt，再缺则用
+  // prompts/personas 的兜底人设（文本原样，2026-09-12 归位人设平面）。进
+  // persona 前经 neutralizeInterpolation 转义——宿主对系统提示段做严格
+  // {{变量}} 插值，用户 md 里的花括号引用会让整段装配抛错（sessionPersona
+  // band 同口径）。
   const personaText = neutralizeInterpolation(
     persona?.personaMd !== undefined && persona.personaMd.trim() !== ''
       ? persona.personaMd
-      : (persona?.executionPrompt ?? `你是「${row.name}」，以团队成员身份为团队交付。`),
+      : (persona?.executionPrompt ?? fallbackTeamMemberPersona(row.name)),
   );
   const route = template?.modelRoute;
   // 路线解析（模板覆盖 / 会话默认）提取成变量供 request 使用；spawn 成功后
@@ -143,7 +167,7 @@ export async function spawnMember(
     // v7 标签带任务作用域：副本行 = (工号, 大任务)，各是各的子会话。
     label: buildMemberLabel(String(team.id), row.mainTaskId ?? 0, row.employeeId ?? 0),
     request: {
-      prompt: [{ type: 'text', text: memberWelcome(team, row.name, template) }],
+      prompt: [{ type: 'text', text: memberWelcome(team, row.name, template, taskBriefing(env, team, task)) }],
       parent: captain,
       persona: personaText,
       toolFilter: { deny: [...MEMBER_DENIED_TOOLS] },
@@ -212,7 +236,13 @@ export function sendAssignmentInTx(
   opts: { stageBrief?: string; handoff?: string } = {},
 ): Wake {
   const isStation = task.chain.length > 0;
-  const content = assignmentMail(task, { teamName: team.name, attemptId, isStation, ...opts });
+  const content = assignmentMail(task, {
+    teamName: team.name,
+    attemptId,
+    isStation,
+    briefing: taskBriefing(env, team, task),
+    ...opts,
+  });
   const box = memberBoxOf(row);
   insertMailInTx(
     tx,

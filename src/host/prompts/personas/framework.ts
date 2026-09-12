@@ -23,12 +23,23 @@ export const PERSONA_BASELINE_RULES: readonly string[] = [
 /**
  * 回退执行提示（四处同形统一：defaultPersonaFor / roster / state/db
  * personaFromMd / state/import personaFromFields）。原文本三处同形为
- * `你是「${name}」，以 ${role} 的身份为团队交付。`；members.ts 的变体
- * 「以团队成员身份为团队交付」形态不同，保留原样不并入（零行为铁律，
- * docs/38 §D）。
+ * `你是「${name}」，以 ${role} 的身份为团队交付。`；
+ * {@link fallbackTeamMemberPersona} 是形态不同的成员出生包变体，保留原样
+ * 不并入（零行为铁律，docs/38 §D）。
  */
 export function fallbackExecutionPrompt(name: string, role: string): string {
   return `你是「${name}」，以 ${role} 的身份为团队交付。`;
+}
+
+/**
+ * 成员出生包的兜底执行提示（原内联在 runtime/members.ts，2026-09-12 迁入
+ * 人设平面）：模板行既无手册也无 executionPrompt 时用它兜底。文本形态与
+ * {@link fallbackExecutionPrompt} 不同（「以团队成员身份为团队交付」，不带
+ * 角色名），按零行为铁律保留原样、不与三角色变体合并（docs/38 §D）——本次
+ * 只做位置归位，文案一字未改。
+ */
+export function fallbackTeamMemberPersona(name: string): string {
+  return `你是「${name}」，以团队成员身份为团队交付。`;
 }
 
 /** Field-level persona merge (docs/11.2 update_member): fixed framework, patched content. */

@@ -1,0 +1,17 @@
+/**
+ * 问答降级指引（统一问答 2026-09-10）：eteams_ask_user 两次弹窗都被拒/弹窗
+ * 服务缺失时，运行时返回 mode=degraded，本指引随工具结果透传给提问子代理
+ * ——明确要求不要重试弹窗，改以文本把问题（连同推荐项）直接问用户。属
+ * 「运行时中途发给模型的定向文本」，归 steering/ 平面（原内联在
+ * runtime/askUser.ts，2026-09-12 归位，文案零改动）。
+ *
+ * @module dsh-eteams/prompts/steering/askFallback
+ */
+
+/** 降级指引正文（工具层透传给提问子代理；既有兜底路径的口径）。 */
+export function askDegradeHint(reason: string): string {
+  return [
+    `问答不可用（${reason}）。`,
+    '不要重试弹窗：把问题连同推荐项写进你的汇报/下一条消息，直接以文本向用户提问（推荐项放首位并标注「（推荐）」），用户答复会经对话转回。',
+  ].join('\n');
+}

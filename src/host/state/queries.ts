@@ -6,8 +6,9 @@
  * 落地的 Q（docs/27 §27.7 编号）：
  * - Q1 团队列表（idx_team_update_time，update_time DESC）；
  * - Q3 大任务进度（idx_task_parent：每条大任务 N 个小任务 / 完成 M）；
- * - Q4 看板按状态分列（idx_task_status：三列 start/paused/wait_user；
- *   ready 就绪待派单列一栏，不进三列——用户迭代 2026-09-11 精简状态集）；
+ * - Q4 看板按状态分列（idx_task_status：四列 start/wait/paused/wait_user；
+ *   ready 就绪待派单列一栏，不进四列——用户迭代 2026-09-11：精简后又恢复
+ *   独立 wait（待领队分诊））；
  * - Q5 成员待派统计（idx_task_members_team，带 tm.team_id 过滤；v7 副本行
  *   建任务即全员在——聚合按工号成组，行数不当人数）；
  * - Q9 待决策横幅（idx_decisions_open，status='open'）。
@@ -18,12 +19,17 @@ import type { DatabaseSync } from 'node:sqlite';
 import { getDb } from './db.js';
 import { ensureWorkspaceReady } from './import.js';
 
-/** 看板列（Q4；ready 单列待派，不入本列）。用户迭代 2026-09-11 精简状态集：
- * `wait`/`wait_decision` 已并入 `ready`/`wait_user`。 */
-export type BoardColumnStatus = 'start' | 'paused' | 'wait_user';
+/** 看板列（Q4；ready 单列待派，不入本列）。用户迭代 2026-09-11：精简状态集
+ * 后又恢复独立 `wait`（待领队分诊）——进看板列。 */
+export type BoardColumnStatus = 'start' | 'wait' | 'paused' | 'wait_user';
 
 /** 看板列头顺序（Q4 的 IN 列表顺序）。 */
-export const BOARD_COLUMNS: readonly BoardColumnStatus[] = ['start', 'paused', 'wait_user'];
+export const BOARD_COLUMNS: readonly BoardColumnStatus[] = [
+  'start',
+  'wait',
+  'paused',
+  'wait_user',
+];
 
 /** 一行看板任务（Q4 SELECT 的 camelCase 投影）。 */
 export interface BoardTaskRow {
@@ -54,7 +60,7 @@ export interface BoardMemberRow {
   name: string;
   /** 班底工号（v7 身份键；孤儿副本行 NULL——按名兜底成组）。 */
   employeeId: number | null;
-  /** 该成员当前承担的活跃任务数（start/paused/wait_user）。 */
+  /** 该成员当前承担的活跃任务数（start/wait/paused/wait_user）。 */
   activeTasks: number;
   /** 是否领队（v8 按标识：组内含 is_leader=1 的行——不再按主持行判据）。 */
   isLeader: boolean;
@@ -143,13 +149,14 @@ export function boardTeam(db: DatabaseSync, teamId: number): BoardTeamSummary {
   const rows = db
     .prepare(
       "SELECT task_id, subject, status, current_member, member_chain_list, chain_cursor, update_time " +
-        "FROM task WHERE team_id = ?1 AND status IN ('ready','start','paused','wait_user') " +
+        "FROM task WHERE team_id = ?1 AND status IN ('ready','start','wait','paused','wait_user') " +
         'ORDER BY update_time DESC',
     )
     .all(teamId) as Array<Parameters<typeof taskRowOf>[0]>;
   const ready: BoardTaskRow[] = [];
   const columns: Record<BoardColumnStatus, BoardTaskRow[]> = {
     start: [],
+    wait: [],
     paused: [],
     wait_user: [],
   };
@@ -206,7 +213,7 @@ export function boardTeam(db: DatabaseSync, teamId: number): BoardTeamSummary {
       "SELECT a.task_member_id AS rid, COUNT(DISTINCT a.task_id) AS active_tasks FROM attempts a " +
         "JOIN task t ON t.task_id = a.task_id " +
         "WHERE a.team_id = ?1 AND a.task_member_id IS NOT NULL " +
-        "AND t.status IN ('start','paused','wait_user') " +
+        "AND t.status IN ('start','wait','paused','wait_user') " +
         'GROUP BY a.task_member_id',
     )
     .all(teamId) as Array<{ rid: number; active_tasks: number }>) {

@@ -5,10 +5,12 @@
  * 现算（task/allTasks 进 props）。原注释逐字随迁（纯移动、零行为变更）。
  *
  * 用户迭代 2026-09-10「任务页平铺全部任务（跨队聚合）」：卡身带会话归属
- * 语义——当前会话创建的任务（currentSession）头行前置「本会话」徽标、
- * 整卡点击进详情；其它任务（其它会话建的）点击**不进**详情，底栏「详情」
- * 钮位换成「跳转会话」钮（canJump = 目标会话在会话列表里，经客户端
- * sessions.open 切换；目标不在列表/无会话快照的卡两钮皆无、纯展示）。
+ * 语义——当前会话创建的任务（currentSession）整卡点击进详情；其它任务
+ * （其它会话建的）点击**不进**详情，底栏「详情」钮位换成「跳转会话」钮
+ * （canJump = 目标会话在会话列表里，经客户端 sessions.open 切换；目标不在
+ * 列表/无会话快照的卡两钮皆无、纯展示）。用户迭代 2026-09-12：当前会话
+ * 卡头行「本会话」徽标撤除——会话归属改由任务列表页的「本会话」分区线
+ * 标示（一区一线，不再逐卡挂徽章）。
  *
  * 用户迭代 2026-09-11「创建中不允许点进去，加上创建中 loading 效果」：
  * creating 容器（面板手动创建、待完善收口）整卡禁点——完善中进详情无意义
@@ -23,7 +25,6 @@ import { cn } from '../../lib/cn';
 import type { TaskView } from '../../lib/monitor';
 import { groupDisplayOf, isGroupStartable } from '../../features/tasks/taskDisplayStatus';
 import { DeleteButton } from '../../components/deleteButton';
-import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import {
   CreatingLoadingRow,
@@ -72,9 +73,10 @@ export function deletableOf(t: TaskView, tasks: readonly TaskView[]): boolean {
 /** 列表页任务小卡（DA44④ 自 tasksTab 列表卡身抽离）：整卡点击 onOpen、
  * 文件夹行 onOpenFolder（宿主拉系统文件管理器）、删除 onDelete、组卡开始
  * onStart；folderError/startError 行内就地显示（瞬态槽在 tasksTab）。
- * 2026-09-10 会话归属语义：currentSession 卡（当前会话建的）整卡可点 +
- * 头行「本会话」徽标；其它卡整卡不可点，「详情」钮位换「跳转会话」钮
- * （canJump 门控，onJump 经 sessions.open 落地）。 */
+ * 2026-09-10 会话归属语义：currentSession 卡（当前会话建的）整卡可点；
+ * 其它卡整卡不可点，「详情」钮位换「跳转会话」钮（canJump 门控，onJump
+ * 经 sessions.open 落地）。2026-09-12：卡内「本会话」徽标撤除（归属由
+ * 任务列表页「本会话」分区线标示）。 */
 export function TaskListCard({
   task,
   allTasks,
@@ -89,6 +91,7 @@ export function TaskListCard({
   onOpenFolder,
   onDelete,
   onStart,
+  onPause,
 }: {
   task: TaskView;
   allTasks: TaskView[];
@@ -105,6 +108,8 @@ export function TaskListCard({
   onOpenFolder: (taskId: number) => void;
   onDelete: () => void;
   onStart: () => void;
+  /** 主任务暂停（用户迭代 2026-09-11：跑起来后「开始」变「暂停」）。 */
+  onPause: () => void;
 }): ReactNode {
   // 组卡进度：小任务计数与汇总（九轮 DA22 概览口径——只计数
   // 不列明细；ready 且有明细时叠加汇总）。
@@ -143,15 +148,9 @@ export function TaskListCard({
     >
       {/* 头行：主题（十四轮 DA27：展示态 pill 挪出头部——用户
           「状态挪到卡片的左边下面」，入底栏左侧；十二轮 DA25
-          已去 #id 前缀）。2026-09-10：当前会话卡在主题前挂
-          「本会话」徽标（compact 档——shrink-0 防挤压换行，
-          主题本体 truncate 收窄）。 */}
+          已去 #id 前缀）。2026-09-12：原「本会话」徽标撤除——
+          会话归属由列表页「本会话」分区线标示，卡内不再重复。 */}
       <div className="flex min-w-0 items-center gap-1.5">
-        {currentSession && (
-          <Badge variant="default" className="shrink-0 rounded-[2px] px-1.5 py-0 text-[10px] font-medium">
-            本会话
-          </Badge>
-        )}
         <div className="truncate text-sm font-semibold text-foreground">{task.subject}</div>
       </div>
       {/* 信息分行（十二轮 DA25 分行 + 十三轮 DA26 统一渲染）：
@@ -249,11 +248,34 @@ export function TaskListCard({
           )}
           {/* 删除（M7-4 收口 components/deleteButton，destructive 默认档）。 */}
           {deletable && <DeleteButton label="删除" onClick={onDelete} />}
-          {task.kind === 'group' && isGroupStartable(task.status) && subs.length > 0 && (
-            <Button type="button" size="sm" disabled={startBusy === task.taskId} onClick={onStart}>
-              开始
-            </Button>
-          )}
+          {/* 主任务动作（用户迭代 2026-09-11）：跑起来（start）渲染「暂停」
+              （挂起在跑小任务 + 容器），否则非终态且有小任务渲染「开始」。
+              docs/panelTaskCommission：creating 容器不渲染开始钮（计划未定，
+              与宿主 startGroupTask 同闸镜像），终态照旧收。 */}
+          {task.kind === 'group' &&
+            subs.length > 0 &&
+            (task.status === 'start' ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={startBusy === task.taskId}
+                onClick={onPause}
+              >
+                暂停
+              </Button>
+            ) : (
+              isGroupStartable(task.status) && (
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={startBusy === task.taskId}
+                  onClick={onStart}
+                >
+                  开始
+                </Button>
+              )
+            ))}
         </div>
       </div>
     </div>

@@ -43,7 +43,7 @@ describe('isAssignEditable（DA6 客户端守卫：ready && chainCursor===-1）'
     expect(isAssignEditable({ ...base, status: 'ready', chainCursor: 2 })).toBe(false);
   });
   it('非 ready（合同冻结）不可编辑', () => {
-    for (const status of ['start', 'paused', 'wait_user', 'completed', 'cancelled']) {
+    for (const status of ['start', 'wait', 'paused', 'wait_user', 'completed', 'cancelled']) {
       expect(isAssignEditable({ ...base, status })).toBe(false);
     }
   });

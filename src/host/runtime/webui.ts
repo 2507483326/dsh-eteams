@@ -57,7 +57,10 @@ import {
   captainFor,
   createTask,
   deleteTask,
+  redeliverAssignment,
+  resumeTask,
   startGroupTask,
+  suspendGroupTask,
   taskOutcome,
   updateTask,
 } from './assignment.js';
@@ -86,7 +89,11 @@ import {
   setSessionTeam,
 } from './sessionTeam.js';
 import { dispatchCaptainCore } from './captainAgent.js';
-import { captainCommissionMessage, captainCommissionPrompt } from '../prompts/steering/dispatch.js';
+import {
+  captainCommissionMessage,
+  captainCommissionPrompt,
+  captainStartMessage,
+} from '../prompts/steering/dispatch.js';
 import { readUsageCalendar, readAppUsageCalendar } from './usage.js';
 import {
   findRosterMemberAcrossWorkspaces,
@@ -122,9 +129,9 @@ export interface StationView {
   stationStatus: 'done' | 'current' | 'pending';
 }
 
-/** 「进行中」态（用户迭代 2026-09-11 精简状态集：wait/wait_decision 已并入
- * ready/wait_user；ready 是待派单列不算进行中）。 */
-const ACTIVE_STATUSES: TaskStatus[] = ['start', 'paused', 'wait_user'];
+/** 「进行中」态（用户迭代 2026-09-11：精简状态集后又恢复独立 `wait`=待领队
+ * 分诊；ready 是待派单列不算进行中）。 */
+const ACTIVE_STATUSES: TaskStatus[] = ['start', 'wait', 'paused', 'wait_user'];
 
 /** commission 主题截断长度（描述首行占位主题，完善者收口时回写真主题）。 */
 const COMMISSION_SUBJECT_MAX = 24;
@@ -243,6 +250,30 @@ function memberView(team: TeamState, m: MemberRecord) {
   };
 }
 
+/**
+ * 容器（大任务）的有效状态（用户迭代 2026-09-11「没有正在执行的小任务，主任务
+ * 应该也是待开始状态，没有同步过来」）：容器的 `start` 只应由「有在办小任务」
+ * 支撑，容器 `start` 但有小任务挂起时应报 `paused`。写入侧由
+ * `assignment.syncGroupStatusInTx` 在每次小任务变动后维护同一不变量；本函数是
+ * **读取侧兜底**——历史构建里中断未同步留下的陈旧 start 在展示层回落 ready /
+ * paused（面板不再出现「执行中但没有任何小任务在跑」，也不漏「小任务已挂起」
+ * ——用户迭代「小任务挂起之后，主任务也同步挂起」），不落盘。显式 paused 容器
+ * 保持 paused（用户显式挂起的语义不被读取侧冲掉）。
+ */
+function containerStatusOf(t: TaskRecord, team: TeamState): TaskStatus {
+  if (t.parentId !== null) return t.status;
+  if (t.status !== 'start' && t.status !== 'paused') return t.status;
+  const subs = team.tasks.filter((s) => s.parentId === t.id);
+  const active = subs.some(
+    (s) =>
+      s.status === 'start' ||
+      s.attempts.some((a) => a.status === 'pending_accept' || a.status === 'running'),
+  );
+  if (active) return 'start';
+  if (t.status === 'paused') return 'paused';
+  return subs.some((s) => s.status === 'paused') ? 'paused' : 'ready';
+}
+
 /** Per-task view row with chain station marks and a compact attempt summary.
  * @param groupOutcomes 组容器的收口产出（docs/26）：组自身没有 attempts，
  * 产出由 completeGroupIfDoneInTx 聚合进 task.completed 事件
@@ -278,7 +309,7 @@ function taskView(t: TaskRecord, team: TeamState, groupOutcomes?: Map<number, st
     // 主会话 ID 快照（task.main_session_id，v5 落列 v6 改名）：建任务时登记
     // 的主会话（增量字段，客户端可选消费）。
     sessionId: t.mainSessionId ?? null,
-    status: t.status,
+    status: containerStatusOf(t, team),
     assignee: t.assignee ?? null,
     dependencies: t.dependencies,
     chain: t.chain.map((s, i): StationView => ({
@@ -1639,6 +1670,37 @@ export function installWebSurface(
                 sendError(res, 404, `任务 #${startTaskId} 不存在`);
                 return;
               }
+              // 有领队：开始/继续交领队主持（用户 2026-09-12 拍板「静默唤醒主
+              // 对话，然后走领队」）——宿主静默解析/复活主会话锚点（captainFor，
+              // 无用户可见消息），再把本大任务的领队子代理唤醒
+              // （dispatchCaptainCore，turn=start），由领队按执行链指派；不再由
+              // 宿直接把成员派出去而绕过领队。无领队团队保持下方宿主直派路径
+              // 不变（承载「需要选择成员」等就地跳过反馈）。
+              if (team.hasLeader) {
+                const leaderEnv = envFor(ctx, config, workspacePath);
+                const rootTaskId = task.parentId ?? task.id;
+                const anchor = await captainFor(leaderEnv, team, task);
+                if (anchor === undefined) {
+                  sendError(res, 400, '未找到主会话锚点（领队派发父锚），无法把开始交给领队');
+                  return;
+                }
+                try {
+                  await dispatchCaptainCore(leaderEnv, config, anchor, team, rootTaskId, {
+                    kind: 'start',
+                    message: captainStartMessage(
+                      task.id,
+                      task.subject,
+                      rootTaskId,
+                      task.status === 'paused',
+                    ),
+                  });
+                } catch (e) {
+                  sendError(res, 400, e instanceof Error ? e.message : String(e));
+                  return;
+                }
+                sendJson(res, 200, { ok: true, started: 0, skipped: [] });
+                return;
+              }
               // 二十五轮 DA38：主任务（容器）分支——「开始」= 逐个派发全部
               // ready 小任务（用户拍板「主任务启动就代表着小任务需要逐个
               // 开始执行了」）。每卡独立走派发核，无链（「需要选择成员」）/
@@ -1661,6 +1723,23 @@ export function installWebSurface(
                 }
                 return;
               }
+              // 用户迭代 2026-09-11：挂起（成员回合被中断）的任务点「开始」=
+              // 恢复——resumeTask 按上一次尝试的成员续跑（站号 = chainCursor+1），
+              // 与 startGroupTask 的挂起卡分支同口径；不再撞「只能指派 ready 任务」。
+              if (task.status === 'paused') {
+                try {
+                  await resumeTask(
+                    envFor(ctx, config, workspacePath),
+                    { teamId: team.id, actor: { kind: 'user', name: '用户' } },
+                    startTaskId,
+                  );
+                } catch (e) {
+                  sendError(res, 400, e instanceof Error ? e.message : String(e));
+                  return;
+                }
+                sendJson(res, 200, { ok: true });
+                return;
+              }
               const next = task.chain[task.chainCursor + 1];
               if (next === undefined) {
                 sendError(
@@ -1673,10 +1752,60 @@ export function installWebSurface(
                 return;
               }
               try {
-                await assignTask(
+                // 僵尸指派（ready + 待接取尝试）幂等重发——成员回合被中断后
+                // 尝试停在待接取、任务留在 ready，防重复派发闸会把「开始」拒死
+                // （用户迭代 2026-09-11 回归：任务 27 点开始没反应）。重发直接
+                // 重投指派信+唤醒，不新开 attempt；无僵尸指派才走正常派发。
+                const redelivered = await redeliverAssignment(
                   envFor(ctx, config, workspacePath),
                   { teamId: team.id, actor: { kind: 'user', name: '用户' } },
-                  { taskId: startTaskId, member: next.member },
+                  startTaskId,
+                );
+                if (redelivered === undefined) {
+                  await assignTask(
+                    envFor(ctx, config, workspacePath),
+                    { teamId: team.id, actor: { kind: 'user', name: '用户' } },
+                    { taskId: startTaskId, member: next.member },
+                  );
+                }
+              } catch (e) {
+                sendError(res, 400, e instanceof Error ? e.message : String(e));
+                return;
+              }
+              sendJson(res, 200, { ok: true });
+              return;
+            }
+            // POST /team/<id>/task/<taskId>/pause — 面板暂停任务（用户迭代
+            // 2026-09-11：主任务开始后按钮应变为「暂停」）：容器挂起全部在跑
+            // 小任务 + 容器本身；单任务走 suspendTask。再点「开始」由
+            // startGroupTask / resumeTask 续跑。
+            if (
+              req.method === 'POST' &&
+              segments[0] === 'team' &&
+              segments.length === 5 &&
+              segments[2] === 'task' &&
+              segments[4] === 'pause'
+            ) {
+              const located = locateTeam(ctx, config, segments[1]!);
+              if (!located) {
+                sendError(res, 404, `团队 ${segments[1]} 不存在`);
+                return;
+              }
+              const { team, workspacePath } = located;
+              const pauseTaskId = Number.parseInt(segments[3] ?? '', 10);
+              if (!Number.isFinite(pauseTaskId)) {
+                sendError(res, 400, `任务号无效：${segments[3]}`);
+                return;
+              }
+              if (!team.tasks.some((t) => t.id === pauseTaskId)) {
+                sendError(res, 404, `任务 #${pauseTaskId} 不存在`);
+                return;
+              }
+              try {
+                await suspendGroupTask(
+                  envFor(ctx, config, workspacePath),
+                  { teamId: team.id, actor: { kind: 'user', name: '用户' } },
+                  pauseTaskId,
                 );
               } catch (e) {
                 sendError(res, 400, e instanceof Error ? e.message : String(e));
@@ -1685,7 +1814,6 @@ export function installWebSurface(
               sendJson(res, 200, { ok: true });
               return;
             }
-            // POST /team/<id>/task/<taskId>/folder/open — 打开任务文件夹（十二轮
             // DA25：列表卡文件夹路径可点击，系统文件管理器中打开）。目录由
             // workspacePath + 任务 work_dir 现算（taskDirAbs），缺失 400；
             // 打开器可经 WebSurfaceOptions 注入（测试不真拉 explorer）。

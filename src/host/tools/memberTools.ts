@@ -178,7 +178,7 @@ export function createMemberTools(
   const failTool = defineTool({
     name: 'eteams_fail_task',
     description:
-      '上报失败：error 写具体障碍与已尝试方案。未超重试上限会自动安排同成员重试；超限进入领队决策。',
+      '上报失败：error 写具体障碍与已尝试方案。未超重试上限会自动安排同成员重试；超限落 wait（待领队）由领队分诊——小 bug 重新指派 loop、流程问题升级用户。',
     parameters: {
       taskId: intR('任务号'),
       attemptId: intR('attempt id'),
@@ -200,7 +200,7 @@ export function createMemberTools(
         text(
           v.retried
             ? `将重试（${v.retryCount}/${v.maxRetries}），注意查收新指派`
-            : '已达重试上限，交由领队决策',
+            : '已达重试上限，任务转待领队分诊',
         ),
     },
     execute: async (args, exec) => {

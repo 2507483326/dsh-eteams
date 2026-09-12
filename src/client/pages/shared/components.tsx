@@ -146,7 +146,9 @@ function DisplayStatusPill({
 }
 
 /** DA44⑥：三处统一状态 pill——DisplayStatusPill + STATUS_PILL_CLASS 封装
- * （DA28/DA42 口径），调用位不再各自传 pillClassName。 */
+ * （DA28/DA42 口径），调用位不再各自传 pillClassName。执行中成员头像曾于
+ * 2026-09-11 短暂进过徽章，同日用户拍板撤除（「徽章只显示状态文本」）——
+ * 「谁在执行」由执行链卡片行承担（taskDrawer.TaskStations）。 */
 export function TaskStatusPill({
   status,
   retryCount = 0,

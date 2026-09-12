@@ -85,6 +85,7 @@ import {
   SELECT_TEAM_EVENT,
 } from '../../lib/bridge';
 import { navIdOfPath } from '../../lib/status';
+import { rootSessionIdOf } from '../../lib/sessionState';
 import { errorMessageOf } from '../../lib/errors';
 import { ClientErrorBoundary, recordClientDiag } from '../../lib/diagnostics';
 import { Toaster } from '../../components/ui/toaster';
@@ -284,6 +285,13 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
   // 畸形 activeNav 兜底同口径）；rail 高亮的 activeTab 由 PanelRail 自查
   // （同源同值，见 rail.tsx）。
   const activeTab = navIdOfPath(location.pathname);
+  // 会话树根（2026-09-11「切到主会话的子会话不显示本会话」修复）：面板挂在
+  // session 作用域槽位上，切进成员/领队/构建师子会话时 props.sessionId 是子
+  // 会话 id，而任务行 main_session_id 登记的是主对话快照——直接比对永远等
+  // 不上（「本会话」徽标消失、卡不可点、新建对话默认团队取不到绑定）。统一
+  // 上溯到根（主对话）再下发，整面板的会话归属都按主对话口径；覆盖层表面
+  // sessionId undefined 原样透传。
+  const sessionId = rootSessionIdOf(props.sessionId);
 
   const refreshRoster = useCallback((): void => {
     // S10：直接 await api 的调用点改 dispatch。失败由 effect 落
@@ -384,7 +392,7 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
             now={now}
             fetchedAt={state.fetchedAt}
             error={state.error}
-            sessionId={props.sessionId}
+            sessionId={sessionId}
             pool={pool}
             roster={roster}
             memberCap={state.maxMembers}

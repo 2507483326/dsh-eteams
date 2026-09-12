@@ -1,11 +1,12 @@
 /**
- * 任务展示态派生层（用户迭代 2026-09-11 精简为 7 态）：底层状态机
- * （types.ts TaskStatus：creating/ready/start/paused/wait_user/completed/
- * cancelled）是调度/重试/依赖校验的运行依据，本模块提供三套展示词表与
- * tone——纯函数、读取时计算、不落盘、不写状态机。
+ * 任务展示态派生层（用户迭代 2026-09-11：精简为 7 态后又恢复独立
+ * `wait`=待领队分诊 = 8 态）：底层状态机（types.ts TaskStatus：
+ * creating/ready/start/wait/paused/wait_user/completed/cancelled）是调度/重试/
+ * 依赖校验的运行依据，本模块提供三套展示词表与 tone——纯函数、读取时计算、
+ * 不落盘、不写状态机。
  *
  * 同时是任务展示 tone 与词表的共同家：
- * - `STATUS_LABELS`：任务 7 态精确词表（八轮 DA21 页面化后无直接渲染方，
+ * - `STATUS_LABELS`：任务 8 态精确词表（八轮 DA21 页面化后无直接渲染方，
  *   仅作态键序的规范来源——STATUS_GROUPS 按其键序展开）。
  * - `ATTEMPT_STATUS_LABELS`：尝试（AttemptStatus 六态）词表——尝试行状态与
  *   任务态不同源，不复用任务词表。
@@ -20,13 +21,15 @@
 /** Semantic tone — every status color flows through these five buckets. */
 export type Tone = 'info' | 'ok' | 'warn' | 'err' | 'muted';
 
-/** 任务 7 态精确词表（用户迭代 2026-09-11 精简：draft/ready/wait 并入
- * ready——「待开始」，wait_decision/failed 并入 wait_user——「待用户」；
- * creating = 面板手动创建占位「创建中」，键序在最前）。 */
+/** 任务 8 态精确词表（用户迭代 2026-09-11：draft/ready/wait 并入 ready——
+ * 「待开始」，wait_decision/failed 并入 wait_user——「待用户」；creating =
+ * 面板手动创建占位「创建中」，键序在最前；后又恢复独立 `wait`=「待领队」，
+ * 紧跟在 start 之后）。 */
 export const STATUS_LABELS: Record<string, string> = {
   creating: '创建中',
   ready: '待开始',
   start: '执行中',
+  wait: '待领队',
   paused: '已挂起',
   wait_user: '待用户',
   completed: '已完成',
@@ -84,6 +87,7 @@ const DISPLAY_STATUS_TABLE: Record<string, { key: DisplayStatusKey; label: strin
   creating: { key: 'init', label: '创建中', tone: 'info' },
   ready: { key: 'created', label: '待开始', tone: 'info' },
   start: { key: 'doing', label: '执行中', tone: 'info' },
+  wait: { key: 'error', label: '待领队', tone: 'warn' },
   paused: { key: 'waiting', label: '已挂起', tone: 'warn' },
   wait_user: { key: 'error', label: '待用户', tone: 'warn' },
   completed: { key: 'done', label: '已完成', tone: 'ok' },
@@ -106,12 +110,14 @@ export function displayStatusOf(status: string, retryCount = 0): DisplayStatus {
 /**
  * 任务/小任务「开始」钮状态判据（docs/44 44.2.2，M3 自 tasks/taskSubtaskItem
  * 行头与任务详情页头收拢）：状态窗口 = ready（用户迭代 2026-09-11：draft/wait
- * 撤销并入 ready，唯一待开始态）。链是否为空（无链 = 行内「需要选择成员」
- * 提示面）是数据判据，调用位与状态判据并列消费。
+ * 撤销并入 ready，唯一待开始态）或 paused（成员回合被中断后落下的「已挂起」，
+ * 点「开始」= 宿主 resumeTask 续跑，用户迭代 2026-09-11「点击任务开始不知道
+ * 怎么进行」）。链是否为空（无链 = 行内「需要选择成员」提示面）是数据判据，
+ * 调用位与状态判据并列消费——挂起任务按上一次尝试的成员续跑，不依赖链。
  */
 export function isStartable(status: string): boolean {
-  // 用户迭代 2026-09-11：draft/wait 并入 ready，唯一待开始态就是 ready。
-  return status === 'ready';
+  // 用户迭代 2026-09-11：draft/wait 并入 ready；paused（中断挂起）也可续跑。
+  return status === 'ready' || status === 'paused';
 }
 
 /**

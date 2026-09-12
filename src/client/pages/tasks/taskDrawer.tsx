@@ -15,11 +15,12 @@
  * @module dsh-eteams/client/pages/tasks/taskDrawer
  */
 import { useEffect, useState, type ReactNode } from 'react';
+import LoaderCircle from 'lucide-react/dist/esm/icons/loader-circle.mjs';
 import { ATTEMPT_STATUS_LABELS } from '../../features/tasks/taskDisplayStatus';
 import { cn } from '../../lib/cn';
-import { relativeTime, type TaskView, type TeamSnapshot } from '../../lib/monitor';
+import { employeeIdNumberOf, relativeTime, type MemberView, type TaskView, type TeamSnapshot } from '../../lib/monitor';
+import { Avatar } from '../../features/avatar/avatar';
 import { BORDER_L1_CLASS, LINE_CLASS, MUTED_CLASS } from '../shared/styles';
-import { StepGlyph } from '../../components/stepGlyph';
 
 /** 原 styles.attempt（执行线路尝试条目：--border 左描边）。M7-11 统一
  * token 口径：border-border 即 border-[color:var(--border)]（tailwind.config
@@ -43,29 +44,75 @@ interface TrackBody {
   }[];
 }
 
-/** S13：执行链站点行——✔/●/◌ 结构原样保留，仅样式改 Tailwind 类。D22f：
- * 字形三态调色查表（StepGlyph 三态档），站点名/meta 走 12px/20 小字档。
- * 末站完成即 completed（chainCursor 不再推进，docs/35 §5#10）——完成态按
- * 满进度口径显示站点计数。 */
-export function TaskStations({ task }: { task: TaskView }): ReactNode {
+/* 执行链站点卡片（用户迭代 2026-09-11「执行链还是和之前一样的卡片，正在执行
+   的蓝色框，卡片里面的前面加一个小的蓝色转圈圈」）：每个站点一张成员卡
+   （头像 + 名字），正在执行的那张加业务蓝描边 + 蓝转圈；完成/未到用透明度
+   区分。完整字面量映射（21.5.1 禁拼接纪律）。
+   用户迭代 2026-09-12「小任务里面的成员卡片有些大有些小，都统一一下」：
+   尺寸口径对齐任务内既有成员卡（taskAssign 的 BOX_CHIP/STRIP_CHIP/
+   CAPTAIN_CHIP 一族：h-32px / min-w-96px / rounded-4px / 头像 26），原
+   30px + 头像 20 + 圆角 6px 是唯一出格档。 */
+const STATION_CARD_CLASS =
+  'inline-flex h-[32px] min-w-[96px] shrink-0 items-center gap-1.5 rounded-[4px] border border-solid border-[color:var(--border)] bg-[color:var(--eteams-pill-bg)] px-2 text-xs font-medium text-[color:var(--eteams-pill-ink)]';
+const STATION_CARD_ACTIVE_CLASS = 'border-business';
+const STATION_CARD_DONE_CLASS = 'opacity-70';
+const STATION_CARD_PENDING_CLASS = 'opacity-50';
+
+/** 站点引用 → 成员行（v7 反查：工号数字串按工号找，旧名字串按名找）。 */
+function stationMemberOf(members: readonly MemberView[], ref: string): MemberView | undefined {
+  const trimmed = ref.trim();
+  const numeric = Number.parseInt(trimmed, 10);
+  if (Number.isFinite(numeric) && String(numeric) === trimmed) {
+    return members.find((m) => employeeIdNumberOf(m.employeeId) === numeric);
+  }
+  return members.find((m) => m.name === trimmed);
+}
+
+/** 执行链（用户迭代 2026-09-11 由字形文本行改回卡片行）：每站一张成员卡，
+ * 正在执行（任务 start 且本站为当前站）的那张带蓝色描边 + 蓝转圈。末站完成
+ * 即 completed（chainCursor 不再推进，docs/35 §5#10）——完成态站点走 done
+ * 档透明度。 */
+export function TaskStations({
+  task,
+  members = [],
+}: {
+  task: TaskView;
+  members?: readonly MemberView[];
+}): ReactNode {
   if (task.chainLength === 0) return null;
-  const doneCursor = task.status === 'completed' ? task.chainLength : task.chainCursor + 1;
+  const executing = task.status === 'start';
   return (
-    <div className="mt-1">
-      {task.chain.map((s, i) => (
-        <span key={i} className="mr-1.5 text-xs leading-5 text-muted-foreground">
-          {/* 字形（M7-6 收口 components/stepGlyph：三态调色随组件，未知态
-          回落 pending 档——原查表口径一致）。v7：站点显示名走 memberLabel
-          （工号站点 = T{n}-ET{xxxx}（名字）），旧快照缺省回落 member。 */}
-          <StepGlyph state={s.stationStatus} className="font-semibold" />{' '}
-          {s.memberLabel ?? s.member}
-          {i < task.chain.length - 1 ? ' →' : ''}
-        </span>
-      ))}
-      <span className={MUTED_CLASS}>
-        {' '}
-        站点 {Math.min(Math.max(doneCursor, 0), task.chainLength)}/{task.chainLength}
-      </span>
+    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+      {task.chain.map((s, i) => {
+        const record = stationMemberOf(members, s.member);
+        const display = record?.name ?? s.memberLabel ?? s.member;
+        const active = executing && s.stationStatus === 'current';
+        return (
+          <div
+            key={i}
+            title={`站点 ${i + 1}：${s.memberLabel ?? s.member}${
+              s.stageBrief ? ` — ${s.stageBrief}` : ''
+            }`}
+            className={cn(
+              STATION_CARD_CLASS,
+              active && STATION_CARD_ACTIVE_CLASS,
+              s.stationStatus === 'done' && STATION_CARD_DONE_CLASS,
+              s.stationStatus === 'pending' && STATION_CARD_PENDING_CLASS,
+            )}
+          >
+            {active && (
+              <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin text-business" />
+            )}
+            <Avatar
+              name={display}
+              seed={record?.avatar?.seed}
+              salt={record?.avatar?.salt}
+              size={26}
+            />
+            <span>{display}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }

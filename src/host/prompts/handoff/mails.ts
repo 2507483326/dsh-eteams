@@ -33,7 +33,9 @@ export function stationLabel(ref: string | number): string {
     : ref;
 }
 
-/** Assignment / stage-handoff mail body (docs/07.3.1 模板；attempt_id 整数号). */
+/** Assignment / stage-handoff mail body (docs/07.3.1 模板；attempt_id 整数号).
+ * `briefing` = 通用成员简报（工作目录/领队/三节点汇报，用户迭代 2026-09-11）
+ * ——每次指派都随信带上，保证成员始终被同一套模板包住。 */
 export function assignmentMail(
   task: TaskRecord,
   opts: {
@@ -43,6 +45,7 @@ export function assignmentMail(
     attemptId: number;
     isStation: boolean;
     stationIndex?: number;
+    briefing?: string;
   },
 ): string {
   const station = stationProgress(task);
@@ -55,6 +58,9 @@ export function assignmentMail(
     opts.isStation && opts.stageBrief ? `本站简报：${opts.stageBrief}` : undefined,
     opts.handoff ? `上一站交接：\n${opts.handoff}` : undefined,
     '',
+    ...(opts.briefing !== undefined && opts.briefing.trim() !== ''
+      ? [opts.briefing, '']
+      : []),
     '执行要求：',
     '1. eteams_claim_task 接取（获得 attempt_id 与 token）；接不了就 eteams_decline_task 并说明原因。',
     '2. 开工与阶段节点用 eteams_append_progress 记录。',
@@ -100,7 +106,8 @@ export function reportCompletedMail(
   return lines.filter((l) => l !== undefined).join('\n');
 }
 
-/** Failure report body → captain. */
+/** Failure report body → captain. 超限分支落 `wait`（待领队分诊，用户迭代
+ * 2026-09-11）：小 bug 领队直接重新指派 loop，流程/环境问题升级给用户。 */
 export function reportFailedMail(
   task: TaskRecord,
   opts: {
@@ -116,9 +123,11 @@ export function reportFailedMail(
     return `【失败·将重试】${opts.member} · 任务 ${task.id} ${task.subject}\n障碍：${opts.error}\n重试 ${opts.retryCount}/${opts.maxRetries}：已安排同成员立即重试。`;
   }
   return [
-    `【失败·待用户】${opts.member} · 任务 ${task.id} ${task.subject}`,
+    `【失败·待领队】${opts.member} · 任务 ${task.id} ${task.subject}`,
     `障碍：${opts.error}`,
-    `重试已达上限（${opts.retryCount}/${opts.maxRetries}）。任务进入 wait_user（待用户）：请 eteams_reassign_task 换人、挂起待料，或向用户说明。`,
+    `自动重试已达上限（${opts.retryCount}/${opts.maxRetries}），任务转入 wait（待领队分诊）：`,
+    '- 小 bug：直接 eteams_reassign_task 重新派人 loop（可同人续跑或换人），任务回 ready 再执行；',
+    '- 流程/环境问题：用 eteams_escalate_task 升级为「待用户」，把问题写进 report 问用户。',
     `（attempt ${opts.attemptId}）`,
   ].join('\n');
 }

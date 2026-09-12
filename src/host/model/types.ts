@@ -7,7 +7,7 @@
  * @module dsh-eteams/model/types
  */
 
-/** Task lifecycle status（用户迭代 2026-09-11 精简为 7 态）。
+/** Task lifecycle status（用户迭代 2026-09-11：7 态 + 恢复 `wait` = 8 态）。
  *
  * 原 11 态的收敛（用户原话「draft 和 ready 和 wait 真合并」「三个都并进
  * ready」「其实都是 wait_user，就合并为一个 wait_user 吧」）：
@@ -19,6 +19,10 @@
  * - `creating` = 面板手动创建的主任务容器占位（docs/panelTaskCommission）：
  *   已入册、待领队/主会话完善，完善收口转 ready。
  *
+ * 2026-09-11 用户迭代**重新引入独立 `wait`**（待领队分诊，与旧合并语义不同）：
+ * 成员失败自动重试超限后落 `wait`，由领队分诊——小 bug 重新指派 loop
+ * （wait→ready）、流程/环境问题升级 `wait_user` 问用户（wait→wait_user）。
+ *
  * 大任务（parentId === null）只用 creating/ready/start/paused + completed
  * （completed 是可回退标识，不是终态死路；用户原话「完成后还可以继续添加
  * 小任务继续，只是一个当前小任务都完成的标识」），无 cancelled（取消 = 取消
@@ -27,6 +31,7 @@ export type TaskStatus =
   | 'creating'
   | 'ready'
   | 'start'
+  | 'wait'
   | 'paused'
   | 'wait_user'
   | 'completed'

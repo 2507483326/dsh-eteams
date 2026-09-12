@@ -20,8 +20,9 @@ import type {
   TeamState,
 } from '../model/types.js';
 import { deliverToChild, ETeamsError, PLUGIN_ACTOR, stateRootOf, type RuntimeEnv } from './base.js';
-import { registerMemberSession } from './usage.js';
+import { lookupMemberSession, registerMemberSession } from './usage.js';
 import { readBuildPresence } from './roleBuilder.js';
+import type { Agent } from '@deepseek-ai/dsh-agent';
 
 /** 提交后的最佳努力唤醒动作（事务内登记、COMMIT 后执行）。 */
 export type Wake = () => Promise<boolean>;
@@ -219,8 +220,71 @@ export function rootTaskIdOf(task: Pick<TaskRecord, 'id' | 'parentId'>): number 
 // --------------------------------------------------------------------------
 
 /**
- * Wake one member: 按任务行快照/心跳派生的领队代理向该成员实例行的
- * sessionId 续投消息。未起会话（session_id 为空）不唤醒——邮件留在邮箱，
+ * 唤醒锚点解析（2026-09-11 修复「成员收不到指派」）：按优先级取活代理，全
+ * 离线时对首个非空 id 走 `agents.resume` 冷恢复——与 `captainFor` 同一套
+ * 三级梯度（活代理 → 心跳 → 冷恢复）。
+ *
+ * 根因：原先一律用 `teamMainSessionOf(team)`（= 本队**任务号最小**那条任务
+ * 的主会话快照）当父锚。同一团队的历史任务各记各的快照，最早那条往往早已
+ * 关闭——锚点解析不到活代理，唤醒只打一条 warn 就返回 false（不做冷恢复），
+ * 指派信静默留在邮箱、成员永不接取，表现即「点开始没反应」。
+ */
+async function resolveAnchorAgent(
+  env: RuntimeEnv,
+  ids: readonly (string | undefined)[],
+): Promise<Agent | undefined> {
+  const candidates = ids.filter((id): id is string => typeof id === 'string' && id !== '');
+  for (const id of candidates) {
+    const live = env.ctx.agents.get(id);
+    if (live !== undefined) return live;
+  }
+  const first = candidates[0];
+  if (first === undefined) return undefined;
+  try {
+    const handle = await env.ctx.agents.resume?.({
+      resumeSessionId: first as unknown as SessionId,
+      signal: env.signal,
+    });
+    if (handle !== undefined) {
+      env.ctx.logger.warn(`eteams: 唤醒锚点离线，已冷恢复会话（${first}）`);
+      return handle.agent;
+    }
+  } catch (error) {
+    env.ctx.logger.warn(`eteams: 唤醒锚点冷恢复失败（${first}）：${String(error)}`);
+  }
+  return undefined;
+}
+
+/** 该大任务自己登记的主会话快照（唤醒锚点第一优先；无则 undefined）。 */
+function taskMainSessionOf(team: TeamState, mainTaskId: number | null): string | undefined {
+  if (mainTaskId === null) return undefined;
+  const hit = team.tasks.find((t) => t.id === mainTaskId && (t.mainSessionId ?? '') !== '');
+  return hit?.mainSessionId;
+}
+
+/**
+ * 成员实例行的锚点解析（唤醒/打断共用）：spawn 直接父（登记表）→ 本大任务主
+ * 会话快照 → 全队主会话快照 → 面板心跳，全离线走冷恢复。挂起路径用它拿活代理
+ * 后调 interruptMember 打断在跑回合，不再靠唤醒消息（用户 2026-09-12「点击
+ * 暂停没有用，对话还是在进行」）。
+ */
+export async function resolveMemberAnchorAgent(
+  env: RuntimeEnv,
+  team: TeamState,
+  row: TaskMemberRecord,
+): Promise<Agent | undefined> {
+  return resolveAnchorAgent(env, [
+    lookupMemberSession(row.sessionId)?.parentSessionId,
+    taskMainSessionOf(team, row.mainTaskId),
+    teamMainSessionOf(team),
+    readBuildPresence(stateRootOf(env))?.sessionId,
+  ]);
+}
+
+/**
+ * Wake one member: 按「该成员 spawn 时的直接父（登记表）→ 本任务主会话快照
+ * → 全队主会话快照 → 面板心跳」解析活锚点（全离线冷恢复），向该成员实例行
+ * 的 sessionId 续投消息。未起会话（session_id 为空）不唤醒——邮件留在邮箱，
  * 起会话后随派发消息送达。
  */
 export async function wakeMember(
@@ -230,13 +294,9 @@ export async function wakeMember(
   text: string,
 ): Promise<boolean> {
   if (row.sessionId === '') return false;
-  // 主会话锚点（v6 派生）：任务行快照，缺时用心跳定位用户正在看的对话。
-  const anchorId = teamMainSessionOf(team) || readBuildPresence(stateRootOf(env))?.sessionId || '';
-  const captain = anchorId !== '' ? env.ctx.agents.get(anchorId) : undefined;
-  if (!captain) {
-    env.ctx.logger.warn(
-      `eteams: 领队会话不在线（${anchorId || '未登记'}），成员 ${row.name} 的邮件留在邮箱`,
-    );
+  const captain = await resolveMemberAnchorAgent(env, team, row);
+  if (captain === undefined) {
+    env.ctx.logger.warn(`eteams: 领队会话不在线且无法冷恢复，成员 ${row.name} 的邮件留在邮箱`);
     return false;
   }
   try {
@@ -262,18 +322,58 @@ export async function wakeMember(
   }
 }
 
-/** 领队唤醒（纯会话侧 followup；邮件落库由调用方负责）。 */
-function wakeCaptain(env: RuntimeEnv, team: TeamState, content: string): boolean {
-  const anchorId = teamMainSessionOf(team) || readBuildPresence(stateRootOf(env))?.sessionId || '';
-  const captain = anchorId !== '' ? env.ctx.agents.get(anchorId) : undefined;
-  if (!captain) {
-    env.ctx.logger.warn('eteams: 领队会话不在线，汇报留在领队邮箱');
+/**
+ * 领队唤醒（用户迭代 2026-09-11「汇报直达领队」）：有领队（team.hasLeader）
+ * 且能定位到该 root 任务的领队子代理副本行（is_leader=1 且已起会话）时，
+ * 汇报直接投给领队子代理；否则（无领队 / 领队子代理未起会话 / 投递失败）退
+ * 回主会话 followup。parent 仍取主会话（领队子代理的直接父），投递按宿主
+ * 能力探测分发（deliverToChild）。邮件落库由调用方负责。
+ */
+async function wakeCaptain(
+  env: RuntimeEnv,
+  team: TeamState,
+  content: string,
+  taskId?: number,
+): Promise<boolean> {
+  // 锚点优先用本任务自己的主会话快照（teamMainSessionOf 取的是全队最早任务
+  // 的快照，历史对话常已关闭——2026-09-11 同 wakeMember 的根因修复）。
+  const captain = await resolveAnchorAgent(env, [
+    taskMainSessionOf(team, taskId ?? null),
+    teamMainSessionOf(team),
+    readBuildPresence(stateRootOf(env))?.sessionId,
+  ]);
+  if (captain === undefined) {
+    env.ctx.logger.warn('eteams: 领队会话不在线且无法冷恢复，汇报留在领队邮箱');
     return false;
+  }
+  const blocks = [{ type: 'text' as const, text: content }];
+  if (team.hasLeader && taskId !== undefined) {
+    const task = team.tasks.find((t) => t.id === taskId);
+    const root = task !== undefined ? (task.parentId ?? task.id) : taskId;
+    const leaderRow = team.taskMembers.find(
+      (r) => r.isLeader === true && r.mainTaskId === root && r.sessionId !== '',
+    );
+    if (leaderRow !== undefined) {
+      try {
+        await deliverToChild(
+          env.ctx.subagents,
+          captain,
+          leaderRow.sessionId as unknown as SessionId,
+          blocks,
+          env.signal,
+        );
+        return true;
+      } catch (error) {
+        env.ctx.logger.warn(
+          `eteams: wake to leader child failed, fallback to main session: ${String(error)}`,
+        );
+      }
+    }
   }
   try {
     captain.followup(
       createUserMessage({
-        content: [{ type: 'text', text: content }],
+        content: blocks,
         source: { kind: 'plugin', plugin: 'dsh-eteams' },
       }),
     );
@@ -300,7 +400,7 @@ export async function notifyCaptain(
     'captain',
     makeMail(PLUGIN_ACTOR, { kind: 'captain', name: '领队' }, 'report', content, refs),
   );
-  return wakeCaptain(env, team, content);
+  return wakeCaptain(env, team, content, refs.taskId);
 }
 
 /** 事务内落库给领队的通知邮件；返回提交后的唤醒动作。 */
@@ -317,7 +417,7 @@ export function notifyCaptainInTx(
     'captain',
     makeMail(PLUGIN_ACTOR, { kind: 'captain', name: '领队' }, 'report', content, refs),
   );
-  return () => Promise.resolve(wakeCaptain(env, team, content));
+  return () => wakeCaptain(env, team, content, refs.taskId);
 }
 
 /** 事务内入队一封通知邮件（无唤醒；提交后由派发/唤醒路径补投）。displayName

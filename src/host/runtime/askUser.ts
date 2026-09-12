@@ -89,14 +89,6 @@ export type AskOutcome =
   | { mode: 'self'; askId: string; answers: AskAnswer[] }
   | { mode: 'degraded'; askId?: string; reason: string };
 
-/** 降级指引（工具层透传给提问子代理；既有兜底路径的口径）。 */
-export function askDegradeHint(reason: string): string {
-  return [
-    `问答不可用（${reason}）。`,
-    '不要重试弹窗：把问题连同推荐项写进你的汇报/下一条消息，直接以文本向用户提问（推荐项放首位并标注「（推荐）」），用户答复会经对话转回。',
-  ].join('\n');
-}
-
 /**
  * 执行一次用户问答（统一路径，2026-09-10）：落审计行 → 主对话弹原生问答
  * 弹窗（阻塞；主对话不在线退回提问会话自身）→ 答案落行回传。主对话代理经

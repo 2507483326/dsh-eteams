@@ -1162,6 +1162,9 @@ describe('v12→v13 任务状态精简迁移（用户迭代 2026-09-11：11 态 
       legacy
         .prepare("UPDATE schema_meta SET value = '12' WHERE key = 'db_schema_version'")
         .run();
+      // 真 v12 库没有 v13 一次性标记：清掉它才模拟得对（标记由首开时写入，
+      // 见下方「迁移只跑一次」用例）。
+      legacy.prepare("DELETE FROM schema_meta WHERE key = 'v13_task_status_migrated'").run();
       legacy.exec('PRAGMA user_version = 12');
       legacy.close();
 
@@ -1189,6 +1192,41 @@ describe('v12→v13 任务状态精简迁移（用户迭代 2026-09-11：11 态 
       closeDb(legacyRoot);
     } finally {
       cleanupTempWorkspace(legacyRoot);
+    }
+  });
+
+  it('迁移只跑一次：新语义 wait（待领队）不会被重开洗成 ready（2026-09-11 回归）', () => {
+    // 根因：migrateTaskStatusV13 原先每次 getDb 无条件执行，把重新引入的
+    // wait（待领队分诊）行洗成 ready——失败任务落 wait 后一重启宿主就变回
+    // ready、领队分诊入口消失。修复=按 v9 先例落一次性 marker。
+    const root = mkdtempSync(join(tmpdir(), 'eteams-mig-v13-once-'));
+    try {
+      getDb(root); // 首开：迁移跑一次并落 marker（此刻库为空，无行可改）
+      closeDb(root);
+
+      const raw = new DatabaseSync(dbFileOf(root));
+      expect(
+        (
+          raw
+            .prepare(
+              "SELECT COUNT(*) AS n FROM schema_meta WHERE key = 'v13_task_status_migrated'",
+            )
+            .get() as { n: number }
+        ).n,
+      ).toBe(1);
+      insertTask(raw, 11, 'wait', null); // 新语义：待领队分诊
+      insertTask(raw, 12, 'wait_decision', null); // 旧值：本不该再被处理
+      raw.close();
+
+      // 重开：marker 已在，迁移不重跑——wait 原样保留。
+      const db = getDb(root);
+      expect(db.prepare('SELECT task_id, status FROM task ORDER BY task_id').all()).toEqual([
+        { task_id: 11, status: 'wait' },
+        { task_id: 12, status: 'wait_decision' },
+      ]);
+      closeDb(root);
+    } finally {
+      cleanupTempWorkspace(root);
     }
   });
 });

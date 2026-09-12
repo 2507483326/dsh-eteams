@@ -46,7 +46,14 @@ import {
   type TeamTx,
 } from '../state/store.js';
 import { locks, teamLockKey } from '../state/lock.js';
-import { ETeamsError, generateToken, memberActor, stateRootOf, type RuntimeEnv } from './base.js';
+import {
+  ETeamsError,
+  generateToken,
+  memberActor,
+  PLUGIN_ACTOR,
+  stateRootOf,
+  type RuntimeEnv,
+} from './base.js';
 import {
   findInstanceRow,
   latestInstanceRow,
@@ -56,6 +63,7 @@ import {
   queueNoticeInTx,
   readBox,
   requireMember,
+  resolveMemberAnchorAgent,
   rootTaskIdOf,
   teamMainSessionOf,
   wakeMember,
@@ -737,9 +745,26 @@ export async function startGroupTask(
   }
   const result: GroupStartResult = { started: 0, skipped: [] };
   for (const sub of subExecutionOrder(team.tasks.filter((t) => t.parentId === group.id))) {
-    // 只有待开始（ready）小任务进发棒序；draft 已并入 ready（用户迭代
-    // 2026-09-11）。
-    if (sub.status !== 'ready') continue;
+    // 终态小任务不参与发棒（completed 已收口 / cancelled 已取消），也不进跳过
+    // 清单——否则每个完成卡都刷一条无意义提示。
+    if (sub.status === 'completed' || sub.status === 'cancelled') continue;
+    // 可接力窗口 = 待开始（ready）或已挂起（paused：成员回合被中断后落下的态，
+    // 用户迭代 2026-09-11）。其余非终态（start 未收尾 / wait 待领队分诊 /
+    // wait_user 等人）不能从面板直接续跑，进跳过清单带原因——原实现对非 ready
+    // 静默 continue，started:0 + skipped:[] 让面板毫无反馈，正是「点击任务开始
+    // 不知道怎么进行」的根因。
+    if (sub.status !== 'ready' && sub.status !== 'paused') {
+      const notRunnable: Record<string, string> = {
+        start: '执行中，等本回合收尾',
+        wait: '待领队分诊（小 bug 会重新指派 loop）',
+      };
+      result.skipped.push({
+        taskId: sub.id,
+        subject: sub.subject,
+        reason: notRunnable[sub.status] ?? '待用户处理',
+      });
+      continue;
+    }
     const next = sub.chain[sub.chainCursor + 1];
     if (next === undefined) {
       result.skipped.push({
@@ -749,7 +774,7 @@ export async function startGroupTask(
       });
       continue;
     }
-    // 链式接力：一次只发一棒；已发过棒的余下 ready 卡进接力队列。
+    // 链式接力：一次只发一棒；已发过棒的余下可跑卡进接力队列。
     if (result.started > 0) {
       result.skipped.push({
         taskId: sub.id,
@@ -759,7 +784,19 @@ export async function startGroupTask(
       continue;
     }
     try {
-      await assignTask(env, who, { taskId: sub.id, member: next.member });
+      // 挂起卡走恢复（paused→ready + 原成员新一轮尝试，站号 = chainCursor+1），
+      // 待开始卡走首派——两者都从执行链下一站继续，进度不丢。
+      if (sub.status === 'paused') {
+        await resumeTask(env, who, sub.id);
+      } else {
+        // 僵尸指派（ready + 待接取尝试，成员从没接到）幂等重发，不新开
+        // attempt——否则防重复派发闸会把它拒成 skipped（用户迭代 2026-09-11
+        // 回归：成员中断后小任务卡持久卡死、「开始」点了没反应）。
+        const redelivered = await redeliverAssignment(env, who, sub.id);
+        if (redelivered === undefined) {
+          await assignTask(env, who, { taskId: sub.id, member: next.member });
+        }
+      }
       result.started += 1;
     } catch (e) {
       result.skipped.push({
@@ -769,20 +806,13 @@ export async function startGroupTask(
       });
     }
   }
-  // 大任务整体开始：真有棒发出去时容器 ready/paused→start（用户迭代
-  // 2026-09-11 大任务状态集）。全跳过（无链/成员未就绪等）不改容器——
-  // 计划还没真跑起来，保持待开始并让调用位把跳过原因就地提示。
-  // 链式续派（小任务完成后再进本函数）容器已在 start，applyTransition 幂等。
-  if (result.started > 0) {
-    // withTeam 锁内现读现写（上面的 assignTask 已写过盘，本地 team 快照已陈旧）。
-    await withTeam(env, team.id, (freshTeam, _root, tx) => {
-      const fresh = requireTask(freshTeam, taskId);
-      if (fresh.status !== 'start') {
-        applyTransition(fresh, 'start', tx.now);
-        emit(tx, team.id, who.actor, 'task.started', { taskId: fresh.id });
-      }
-    });
-  }
+  // 大任务整体开始/续派后同步容器状态（用户迭代 2026-09-11）：有棒发出
+  // （小任务已派发待接取或已在跑）→ 容器 start；全跳过（无链/成员未就绪等）
+  // 则保持 ready 不动——计划还没真跑起来，让调用位把跳过原因就地提示。
+  // withTeam 锁内现读现写（上面的 assignTask 已写过盘，本地 team 快照已陈旧）。
+  await withTeam(env, team.id, (freshTeam, _root, tx) => {
+    syncGroupStatusInTx(tx, freshTeam, requireTask(freshTeam, taskId), who.actor);
+  });
   return result;
 }
 
@@ -981,7 +1011,7 @@ async function ensureSpawned(
     task.mainSessionId = String(captain.id);
   }
   try {
-    row.sessionId = await spawnMember(env, team, row, captain);
+    row.sessionId = await spawnMember(env, team, row, captain, task);
   } catch (error) {
     throw new ETeamsError(
       `成员「${row.name}」启动失败：${String(error)}`,
@@ -1034,6 +1064,8 @@ function applyAssignment(
       ...(opts.handoff !== undefined ? { handoff: opts.handoff } : {}),
     }),
   );
+  // 容器同步（首派/链推进/改派共用本落笔）：新尝试在办 → 容器 start。
+  syncGroupOfSubtaskInTx(tx, team, task);
   return { task, attempt };
 }
 
@@ -1089,12 +1121,24 @@ export async function reassignTask(
       const current = liveAttemptOf(task) ?? task.attempts.find((a) => a.status === 'paused');
       if (
         current === undefined &&
-        !['ready', 'start', 'paused', 'wait_user'].includes(task.status)
+        !['ready', 'start', 'wait', 'paused', 'wait_user'].includes(task.status)
       ) {
         throw new ETeamsError(`任务 ${task.id} 处于 ${task.status}，无法改派`);
       }
-      const target = params.member ?? task.assignee;
-      if (target === undefined) throw new ETeamsError('未指定改派目标成员');
+      // 改派目标缺省：先取当前执行者，再退最近一次尝试的副本行成员
+      // （wait 态失败已 freeMember 清 assignee——用户迭代 2026-09-11 领队
+      // 从 wait 直接 loop 重派时不必显式指定成员）。
+      let target: number | string | undefined = params.member ?? task.assignee;
+      if (target === undefined) {
+        const last = task.attempts[task.attempts.length - 1];
+        const row =
+          last?.taskMemberId !== undefined
+            ? team.taskMembers.find((r) => r.id === last.taskMemberId)
+            : undefined;
+        target = row?.employeeId ?? last?.member;
+      }
+      if (target === undefined)
+        throw new ETeamsError('未指定改派目标成员', '用 eteams_reassign_task 的 member 参数指定成员');
       return prepareAssignment(env, team, captain, {
         taskId: task.id,
         member: target,
@@ -1152,11 +1196,18 @@ export async function suspendTask(
 ): Promise<TaskRecord> {
   const out = await withTeam(env, who.teamId, (team, _root, tx) => {
     const task = requireTask(team, taskId);
-    if (!['ready', 'start'].includes(task.status)) {
+    // 已在挂起态：幂等——只更新挂起原因，不重复吊销尝试/发事件（挂起小任务
+    // 会把容器同步派生到 paused，suspendGroupTask 的收尾挂起即走此支；
+    // 用户迭代 2026-09-11「小任务挂起之后，主任务也同步挂起」）。
+    if (task.status === 'paused') {
+      task.statusNote = note;
+      task.updatedAt = tx.now;
+      return { team, task, interruptRow: undefined };
+    }
+    if (!['ready', 'start', 'wait'].includes(task.status)) {
       throw new ETeamsError(`任务 ${task.id} 处于 ${task.status}，无法挂起`);
     }
-    const wakes: Wake[] = [];
-    // 释放前留档执行者：freeMember 会清 assignee，通知按它投递。
+    // 释放前留档执行者：freeMember 会清 assignee，通知/打断按它定位成员实例行。
     const assignee = task.assignee;
     // ready（含已派待接取）与 start 一律吊销在办/待接取尝试 → paused（原
     // 「就绪挂起搭车物化 wait+blockedFrom」随 wait 撤销退役，用户迭代
@@ -1165,18 +1216,160 @@ export async function suspendTask(
     applyTransition(task, 'paused', tx.now);
     task.statusNote = note;
     freeMember(team, task);
-    if (assignee !== undefined) {
-      wakes.push(notifyMemberSuspendedInTx(env, tx, team, task, assignee, note));
-    }
+    // 通知只入箱留档、提交后打断在跑回合（用户 2026-09-12「点击暂停没有用，
+    // 对话还是在进行」）：原实现只发一封唤醒消息，成员视图里的对话照旧跑完。
+    const interruptRow = notifyMemberSuspendedInTx(tx, team, task, assignee, note);
     emit(tx, team.id, who.actor, 'task.suspended', {
       taskId: task.id,
       payload: { note },
     });
-    return { team, task, wakes };
+    // 容器同步：挂起小任务后若无在办小任务，容器同步落 paused（用户迭代
+    // 2026-09-11「小任务挂起之后，主任务也同步挂起」）；恢复走 resumeTask
+    // ——有在办小任务时容器回 start。
+    syncGroupOfSubtaskInTx(tx, team, task);
+    return { team, task, interruptRow };
   });
   renderTeamDocs(env.workspace, out.team, (msg) => env.ctx.logger.warn(msg));
-  await runWakes(out.wakes);
+  // 提交后打断被挂起成员的在跑回合（激活保留；恢复走 resumeTask 重新指派）。
+  if (out.interruptRow !== undefined) {
+    await interruptSuspendedMember(env, out.team, out.interruptRow);
+  }
   return out.task;
+}
+
+/**
+ * 升级任务给用户（领队分诊的「流程/环境问题」分支，用户迭代 2026-09-11）：
+ * wait（待领队）→ wait_user（待用户），开一条 DecisionRecord（面板「待用户」
+ * 与决策横幅的数据源），事件 task.escalated + decision.requested。领队随后用
+ * report 把问题讲给用户；用户答复经主对话再次转交。**小 bug 走 loop 分支**
+ * （{@link reassignTask}），只有流程/环境问题才升级。
+ */
+export async function escalateTask(
+  env: RuntimeEnv,
+  who: OpActor,
+  taskId: number,
+  note?: string,
+): Promise<TaskRecord> {
+  const out = await withTeam(env, who.teamId, (team, _root, tx) => {
+    const task = requireTask(team, taskId);
+    if (task.status !== 'wait') {
+      throw new ETeamsError(
+        `任务 ${task.id} 处于 ${task.status}，只有待领队（wait）任务可升级`,
+        '小 bug 用 eteams_reassign_task 重新指派 loop；只有流程/环境问题才升级',
+      );
+    }
+    applyTransition(task, 'wait_user', tx.now);
+    task.statusNote = note;
+    const decision: DecisionRecord = {
+      id: nextAutoincrementId(tx.db, 'decisions'),
+      taskId: task.id,
+      error: note ?? '需要用户决策',
+      retryCount: task.retryCount,
+      status: 'open',
+      createdAt: tx.now,
+    };
+    team.pendingDecisions.push(decision);
+    emit(tx, team.id, who.actor, 'task.escalated', {
+      taskId: task.id,
+      payload: { decisionId: decision.id, note },
+    });
+    emit(tx, team.id, who.actor, 'decision.requested', {
+      taskId: task.id,
+      payload: { decisionId: decision.id },
+    });
+    // 容器同步：升级为待用户（无在办）→ 容器退回 ready。
+    syncGroupOfSubtaskInTx(tx, team, task);
+    return { team, task };
+  });
+  renderTeamDocs(env.workspace, out.team, (msg) => env.ctx.logger.warn(msg));
+  return out.task;
+}
+
+/**
+ * 暂停主任务（用户迭代 2026-09-11）：容器「开始」后主任务按钮应变为「暂停」
+ * ——本函数把容器及其**正在跑**的小任务一起挂起（有在办/待接取尝试的子任务
+ * → paused；尚未开跑的 ready 子任务不动，它们本来就没在跑），容器 → paused。
+ * 再点「开始」由既有 {@link startGroupTask} 的挂起卡分支 resumeTask 续跑，
+ * 站号与进度不丢。
+ *
+ * 非容器任务退化为单任务挂起（{@link suspendTask}），调用方一条路由两用。
+ */
+export async function suspendGroupTask(
+  env: RuntimeEnv,
+  who: OpActor,
+  taskId: number,
+  note?: string,
+): Promise<TaskRecord> {
+  const team = readTeamSync(stateRootOf(env), who.teamId);
+  if (team === undefined) throw new ETeamsError(`团队「${String(who.teamId)}」不存在`);
+  const group = requireTask(team, taskId);
+  if (group.parentId !== null) return suspendTask(env, who, taskId, note);
+  for (const sub of team.tasks.filter((t) => t.parentId === group.id)) {
+    if (sub.status === 'completed' || sub.status === 'cancelled') continue;
+    const hasLive = sub.attempts.some(
+      (a) => a.status === 'pending_accept' || a.status === 'running',
+    );
+    // 只挂「真在跑」的子任务：ready 且无在办尝试的子任务留原样（续跑时本就会
+    // 正常派发），避免给它们造出无执行成员的挂起态（resumeTask 会无从取人）。
+    if (sub.status === 'start' || sub.status === 'wait' || hasLive) {
+      await suspendTask(env, who, sub.id, note);
+    }
+  }
+  return suspendTask(env, who, taskId, note);
+}
+
+/**
+ * 成员回合被中断（手动停止 / 宿主崩溃补记）→ 任务挂起（用户迭代 2026-09-11
+ * 「小任务的状态应该是暂停状态而不是 ready 状态」）。
+ *
+ * 手动停止子代理发生在宿主侧，插件看不到操作本身；宿主以
+ * `turn/end{reason.kind:'aborted'}` 收尾被中断的回合（崩溃补记为
+ * 'interrupted'）。此前无人消费该事件，任务的在办尝试永远停在
+ * pending_accept/running、任务卡在 ready/start——面板显示不出「已挂起」，
+ * 「开始」也无从续跑。本函数由 interruption 观察者按会话 id 反查副本行调用：
+ * 只认「该会话持有在办/待接取尝试的任务」，吊销该尝试（站号留在
+ * attempt.station_index，chain_cursor 保持「已完成站」语义不动）→ 任务
+ * ready/start → paused，继续走既有 {@link resumeTask}（下一站 =
+ * chainCursor+1，进度不丢）。
+ *
+ * 不是用户可见操作，actor 用插件身份；查不到会话/任务/在办尝试一律 no-op
+ * （删除团队、移出成员等自愈路径已先吊销尝试，这里不会误伤）。
+ */
+export async function pauseTaskOnInterrupt(
+  env: RuntimeEnv,
+  teamId: TeamKey,
+  sessionId: string,
+  reason: string,
+): Promise<number | undefined> {
+  const out = await withTeam(env, teamId, (team, _root, tx) => {
+    const row = team.taskMembers.find((r) => r.sessionId === sessionId);
+    if (row === undefined || row.nowTaskId === null) return { changed: false as const };
+    const task = team.tasks.find((t) => t.id === row.nowTaskId);
+    if (task === undefined) return { changed: false as const };
+    if (task.status !== 'ready' && task.status !== 'start') return { changed: false as const };
+    const live = task.attempts.find(
+      (a) =>
+        (a.status === 'pending_accept' || a.status === 'running') &&
+        (a.taskMemberId !== undefined ? a.taskMemberId === row.id : a.member === row.name),
+    );
+    if (live === undefined) return { changed: false as const };
+    revokeCurrentAttempt(tx, team, PLUGIN_ACTOR, task, 'member.interrupted');
+    applyTransition(task, 'paused', tx.now);
+    task.statusNote =
+      reason === 'aborted' ? '成员回合被中断，任务已挂起（点「开始」继续）' : '成员会话异常中断，任务已挂起';
+    freeMember(team, task);
+    emit(tx, team.id, PLUGIN_ACTOR, 'task.suspended', {
+      taskId: task.id,
+      payload: { reason, sessionId, via: 'member.interrupted' },
+    });
+    // 容器同步（用户迭代 2026-09-11「没有正在执行的小任务，主任务应该也是
+    // 待开始状态」）：中断即吊销尝试，若这是容器里最后一个在办小任务，容器
+    // 立刻退回 ready（面板「开始」钮出现），不再停在 start。
+    syncGroupOfSubtaskInTx(tx, team, task);
+    return { changed: true as const, taskId: task.id, team };
+  });
+  if (out.changed) renderTeamDocs(env.workspace, out.team, (msg) => env.ctx.logger.warn(msg));
+  return out.changed ? out.taskId : undefined;
 }
 
 /**
@@ -1238,6 +1431,8 @@ export async function resumeTask(
             : {}),
         }),
       );
+      // 容器同步：恢复即重新派发（新在办尝试）→ 容器回 start。
+      syncGroupOfSubtaskInTx(tx, team, task);
       writeTeamInTx(tx, team);
       return fresh;
     });
@@ -1249,6 +1444,65 @@ export async function resumeTask(
 
 function thrower(message: string): never {
   throw new ETeamsError(message);
+}
+
+/**
+ * 幂等重发指派（用户迭代 2026-09-11 回归修复）：任务处于「已有待接取尝试、
+ * 但成员从没接到」的僵尸态时，「开始」不再被防重复派发闸拒死——**重投指派
+ * 信并再唤醒一次**，不新开 attempt、不动状态、不占额外资源。
+ *
+ * 僵尸态的成因（实测）：成员子会话被创建后，其回合被手动中断（`turn/end
+ * aborted`），在未有中断观察者的构建里不会落 paused——任务留在 ready、尝试
+ * 停在 pending_accept，副本行 now_task_id 被占用；此后「开始」被
+ * {@link prepareAssignment} 的防重复派发闸拒绝（「已有进行中的指派」），
+ * 面板点开始等于无操作。重发是唯一不丢进度又让卡片复活的动作。
+ *
+ * @returns 有僵尸指派且已重发 → 任务记录；无僵尸指派 → undefined（调用方走
+ * 正常派发/整体开始）。
+ */
+export async function redeliverAssignment(
+  env: RuntimeEnv,
+  who: OpActor,
+  taskId: number,
+): Promise<TaskRecord | undefined> {
+  const out = await withTeam(env, who.teamId, (team, _root, tx) => {
+    const task = requireTask(team, taskId);
+    const live = liveAttemptOf(task);
+    if (live === undefined || live.status !== 'pending_accept') {
+      return { team, task, redelivered: false as const, wakes: [] as Wake[] };
+    }
+    const row = rowOfAttempt(team, live);
+    // 会话尚未起（首派在 spawn 后崩掉）：无唤醒来路，交调用方走正常派发。
+    if (row === undefined || row.sessionId === '') {
+      return { team, task, redelivered: false as const, wakes: [] as Wake[] };
+    }
+    const next = nextChainStation(task);
+    const wakes: Wake[] = [
+      sendAssignmentInTx(env, tx, team, row, task, live.id, {
+        ...(next !== undefined ? { stageBrief: next.stageBrief } : {}),
+        handoff: '上一次指派未送达/未完成，请重新接取开工。',
+      }),
+    ];
+    emit(tx, team.id, who.actor, 'task.redelivered', {
+      taskId: task.id,
+      attemptId: live.id,
+      payload: { member: row.name },
+    });
+    return { team, task, redelivered: true as const, wakes };
+  });
+  if (!out.redelivered) return undefined;
+  renderTeamDocs(env.workspace, out.team, (msg) => env.ctx.logger.warn(msg));
+  await runWakes(out.wakes);
+  return out.task;
+}
+
+/** 尝试归属的副本行（v7：taskMemberId 精确定位；legacy 退按名 + 大任务锚）。 */
+function rowOfAttempt(team: TeamState, attempt: AttemptRecord): TaskMemberRecord | undefined {
+  if (attempt.taskMemberId !== undefined) {
+    const byId = team.taskMembers.find((r) => r.id === attempt.taskMemberId);
+    if (byId !== undefined) return byId;
+  }
+  return latestInstanceRow(team, attempt.member);
 }
 
 /** 单任务取消落笔（事务内）：吊销在办/待接取尝试 → 释放执行者 → 置
@@ -1278,6 +1532,9 @@ function cancelSingleInTx(
     taskId: task.id,
     payload: { reason },
   });
+  // 容器同步：取消即吊销尝试 → 无在办小任务时容器退回 ready（用户迭代
+  // 2026-09-11：取消 = 计划作废、容器回待开始，不走 cancelled）。
+  syncGroupOfSubtaskInTx(tx, team, task);
   return notifyMemberCancelledInTx(env, tx, team, task, assignee, reason);
 }
 
@@ -1358,6 +1615,8 @@ export async function claimTask(
       taskId: task.id,
       attemptId: attempt.id,
     });
+    // 容器同步：小任务真跑起来了（start）→ 容器 start。
+    syncGroupOfSubtaskInTx(tx, fresh, task);
     const box = memberBoxOf(member);
     const inbox = readBoxQuiet(env, fresh.id, box.box);
     const inboxPreview = inbox.slice(-5).map((m) => `[${m.kind}] ${m.content.slice(0, 160)}`);
@@ -1398,6 +1657,8 @@ export async function declineTask(
       attemptId: attempt.id,
       payload: { reason },
     });
+    // 容器同步：婉拒即吊销尝试——若无其他在办小任务，容器退回 ready。
+    syncGroupOfSubtaskInTx(tx, fresh, task);
     const wakes: Wake[] = [
       notifyCaptainInTx(tx, env, fresh, declineMail(task, member.name, reason), {
         taskId: task.id,
@@ -1486,6 +1747,9 @@ export async function completeTask(
           { taskId: task.id, attemptId: attempt.id },
         ),
       );
+      // 容器同步：中间站完成即回 ready（等领队推进下一站），无在办小任务时
+      // 容器退回 ready（面板「开始」钮回来）。
+      syncGroupOfSubtaskInTx(tx, fresh, task);
       return { team: fresh, task, done: false, wakes, actor: memberActor(member) };
     }
     // Final station or chainless: task completed (docs/35 §5#10：产出不落列，
@@ -1502,6 +1766,9 @@ export async function completeTask(
     });
     // docs/26：组任务收口——末个小任务完成且全组 completed 时自动落组状态。
     completeGroupIfDoneInTx(tx, fresh, memberActor(member), task);
+    // 容器同步：小任务完成收工，若无其他在办小任务 → 容器退回 ready（未收口
+    // 时）；已全完成的收口在上一行落 completed，本同步对终态短路。
+    syncGroupOfSubtaskInTx(tx, fresh, task);
     wakes.push(
       notifyCaptainInTx(
         tx,
@@ -1585,31 +1852,23 @@ export async function failTask(
           handoff: `重试 ${task.retryCount}/${maxRetries}。上次失败：${attempt.error}`,
         }),
       );
+      // 容器同步：重试已重新派发（新在办尝试）→ 容器保持/回到 start。
+      syncGroupOfSubtaskInTx(tx, fresh, task);
       return { team: fresh, task, retried: true, retryCount: task.retryCount, maxRetries, wakes };
     }
-    // Retries exhausted → wait_user + DecisionRecord（docs/08；用户迭代
-    // 2026-09-11「其实都是 wait_user，就合并为一个 wait_user 吧」）。
-    applyTransition(task, 'wait_user', tx.now);
-    const decision: DecisionRecord = {
-      id: nextAutoincrementId(tx.db, 'decisions'),
+    // 自动重试超限 → wait（待领队分诊，用户迭代 2026-09-11）：领队收到失败
+    // 汇报后分诊——小 bug 直接 reassign 重新派人 loop；流程/环境问题用
+    // escalate 升级为 wait_user 问用户。不再开 DecisionRecord（那是「待用户」
+    // 的载体，这里先交领队）。
+    applyTransition(task, 'wait', tx.now);
+    emit(tx, fresh.id, memberActor(member), 'task.wait', {
       taskId: task.id,
       attemptId: attempt.id,
-      error: attempt.error,
-      retryCount: task.retryCount,
-      status: 'open',
-      createdAt: tx.now,
-    };
-    fresh.pendingDecisions.push(decision);
-    emit(tx, fresh.id, memberActor(member), 'task.wait_user', {
-      taskId: task.id,
-      attemptId: attempt.id,
-      payload: { decisionId: decision.id, retryCount: task.retryCount },
+      payload: { retryCount: task.retryCount },
     });
-    emit(tx, fresh.id, memberActor(member), 'decision.requested', {
-      taskId: task.id,
-      attemptId: attempt.id,
-      payload: { decisionId: decision.id },
-    });
+    // 容器同步：失败落 wait（无在办）→ 容器退回 ready（待领队分诊的卡片
+    // 挂着，容器不再假装在执行）。
+    syncGroupOfSubtaskInTx(tx, fresh, task);
     wakes.push(
       notifyCaptainInTx(
         tx,
@@ -1757,6 +2016,71 @@ function freeMember(team: TeamState, task: TaskRecord): void {
 }
 
 /**
+ * 容器状态同步（用户迭代 2026-09-11「没有正在执行的小任务，主任务应该也是
+ * 待开始状态，没有同步过来」）：容器的 `start` 只表示「有小任务真在跑、或已
+ * 派发待成员接取」。任何影响小任务状态/尝试的动作之后调用本助手重算：
+ *
+ * - 有在办小任务（`start`，或存在 pending_accept/running 尝试）→ 容器 `start`；
+ * - 没有在办小任务但有小任务挂起（`paused`）→ 容器同步 `paused`（用户迭代
+ *   2026-09-11「小任务挂起之后，主任务也同步挂起」）：主任务 pill 与面板
+ *   口径一致，点「开始」走 startGroupTask 的挂起卡分支续跑；
+ * - 一个都没有（无在办也无挂起）而容器还在 `start` → 退回 `ready`（待开始：
+ *   面板回到「开始」钮，按钮与真实进度一致）；
+ * - 显式 `paused` 容器无在办、无挂起小任务时保持 `paused`（用户显式挂起的
+ *   语义不被冲掉）；有在办小任务时回 `start`（挂起后点「开始」续跑即此路径）；
+ * - `completed`/`cancelled`/`creating` 不参与（终态与完善期各有闸）。
+ */
+function syncGroupStatusInTx(tx: TeamTx, team: TeamState, group: TaskRecord, actor: Actor): void {
+  if (group.parentId !== null) return;
+  if (
+    group.status === 'completed' ||
+    group.status === 'cancelled' ||
+    group.status === 'creating'
+  )
+    return;
+  const subs = team.tasks.filter((t) => t.parentId === group.id);
+  const active = subs.some(
+    (t) =>
+      t.status === 'start' ||
+      t.attempts.some((a) => a.status === 'pending_accept' || a.status === 'running'),
+  );
+  if (active) {
+    if (group.status !== 'start') {
+      applyTransition(group, 'start', tx.now);
+      emit(tx, team.id, actor, 'task.started', { taskId: group.id });
+    }
+    return;
+  }
+  // 用户迭代 2026-09-11：没有在跑的小任务、但有小任务挂着 → 容器同步挂起
+  // （显式挂起的容器本就 paused，此支只补「从挂起小任务派生」的路径）。
+  if (subs.some((t) => t.status === 'paused')) {
+    if (group.status !== 'paused') {
+      applyTransition(group, 'paused', tx.now);
+      emit(tx, team.id, actor, 'task.suspended', {
+        taskId: group.id,
+        payload: { via: 'subtask.paused' },
+      });
+    }
+    return;
+  }
+  if (group.status === 'start') {
+    applyTransition(group, 'ready', tx.now);
+    emit(tx, team.id, actor, 'task.reopened', {
+      taskId: group.id,
+      payload: { via: 'no-active-subtask' },
+    });
+  }
+}
+
+/** 小任务变动后的容器同步（解析父容器；非容器子任务 no-op）。 */
+function syncGroupOfSubtaskInTx(tx: TeamTx, team: TeamState, subtask: TaskRecord): void {
+  if (subtask.parentId === null) return;
+  const parent = team.tasks.find((t) => t.id === subtask.parentId);
+  if (parent === undefined) return;
+  syncGroupStatusInTx(tx, team, parent, PLUGIN_ACTOR);
+}
+
+/**
  * 对话任务组收口（docs/26）：小任务完成时检查父组——组内小任务全部
  * completed 即把组任务 → completed（applyTransition 的大任务特例边）；
  * 产出汇总各小任务的 attempts 最新成功行（{@link taskOutcome}，不落列）。
@@ -1802,22 +2126,44 @@ export function taskOutcome(task: TaskRecord): string | undefined {
   return undefined;
 }
 
-/** 挂起通知（事务内入箱；提交后唤醒，成员不在线则下轮轮询可见）。
- * v7：箱键 = 工号十进制串（同名不串箱），展示名仍是成员名。 */
+/**
+ * 挂起通知（事务内入箱、**不唤醒**）：挂起靠提交后的 interrupt 真正停机（见
+ * {@link interruptSuspendedMember}），不再经 wakeMember 投递——后者对 idle
+ * 成员会开新回合、对 running 成员只在 step 边界入列，两者都停不下对话（用户
+ * 2026-09-12「点击暂停没有用，对话还是在进行」）。通知只留档在成员邮箱。
+ * 返回该成员实例行供调用方打断其在跑回合；成员不存在时 undefined。
+ * v7：箱键 = 工号十进制串（同名不串箱），展示名仍是成员名。
+ */
 function notifyMemberSuspendedInTx(
-  env: RuntimeEnv,
   tx: TeamTx,
   team: TeamState,
   task: TaskRecord,
   name: string | undefined,
   note?: string,
-): Wake {
-  if (name === undefined) return noWake;
+): TaskMemberRecord | undefined {
+  if (name === undefined) return undefined;
   const row = latestInstanceRow(team, name) ?? requireMember(team, name);
   const box = memberBoxOf(row);
   const text = suspendedNotice(task, note);
   queueNoticeInTx(tx, team.id, box.box, text, { taskId: task.id }, row.name);
-  return () => wakeMember(env, team, row, text);
+  return row;
+}
+
+/**
+ * 提交后打断被挂起成员的当前回合（用户 2026-09-12「点击暂停没有用，对话还是
+ * 在进行」）：挂起原实现只改库状态 + 发一封「停止工作」通知，成员视图里的
+ * 对话照旧跑完——按宿主 interrupt 原语真正停机（激活保留，恢复走 resumeTask
+ * 重新指派）。锚点解析与唤醒同一套梯度；解析不到活代理则不盲打。
+ */
+async function interruptSuspendedMember(
+  env: RuntimeEnv,
+  team: TeamState,
+  row: TaskMemberRecord,
+): Promise<void> {
+  if (row.sessionId === '') return;
+  const anchor = await resolveMemberAnchorAgent(env, team, row);
+  if (anchor === undefined) return;
+  interruptMember(env, row, anchor);
 }
 
 /** 取消通知（事务内入箱；提交后唤醒）。v7 分箱同上。 */

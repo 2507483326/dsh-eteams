@@ -471,9 +471,11 @@ export function TaskAssignDropBox({
     }
   };
 
-  // 只读：chip 静态渲染（不注册 drop target、无 ×；终态灰化）。承单站：
-  // assignee 优先，无则下一待执行站（越界回末站）；均无 → 框不渲染。
+  // 只读：用户迭代 2026-09-11 起**有执行链的任务不再渲染只读单成员框**——
+  // 执行链整链已由 TaskStations 的成员卡行呈现（含正在执行那张的高亮），
+  // 单成员框与之重复。无链任务仍保留（它是唯一「谁在执行」的指示面）。
   if (!editable) {
+    if (task.chainLength > 0) return null;
     const stationMember = readonlyStationMember(task);
     if (stationMember === null) return null;
     // v7 反查：assignee 是名字，链站点引用是工号数字串（或旧名字串）——

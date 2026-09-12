@@ -29,6 +29,13 @@
  * （沿用来源对话的工作区）。三者都是结构化探测：能力缺失/调用失败一律
  * 回 null/false，调用方自行降级，绝不抛错。
  *
+ * 2026-09-11 会话树根（面板「切到主会话的子会话不显示本会话」修复）：
+ * `rootSessionIdOf` 沿 `subagentAddress` / 会话列表行的 `parentId` 上溯到
+ * 最顶层会话——任务行 `main_session_id` 登记的是**主对话**快照，面板在
+ * 子会话（成员/领队/构建师子代理）里打开时直接拿子会话 id 比对永远等不
+ * 上（「本会话」徽标消失、卡不可点），故会话归属一律按主对话口径判定。
+ * 同为结构化探测：服务缺失/无父链/畸形结构原样返回入参（退化为旧行为）。
+ *
  * @module dsh-eteams/client/sessionState
  */
 
@@ -130,6 +137,41 @@ export function isAddressedSubagentSession(sessionId: string): boolean {
   const face = sessionsFaceOf();
   if (typeof face?.subagentAddress !== 'function') return false;
   return face.subagentAddress(sessionId) !== undefined;
+}
+
+/** 一个会话的父会话 id（子代理寻址优先，退会话列表行的 parentId）。 */
+function parentSessionIdOf(sessionId: string): string | null {
+  const face = sessionsFaceOf();
+  const address = face?.subagentAddress?.(sessionId) as { parentSessionId?: unknown } | undefined;
+  const fromAddress = address?.parentSessionId;
+  if (typeof fromAddress === 'string' && fromAddress !== '') return fromAddress;
+  const byId = face?.list?.getSnapshot?.()?.byId;
+  const row = byId === undefined ? undefined : byId[sessionId];
+  const fromRow = (row as { parentId?: unknown } | undefined)?.parentId;
+  return typeof fromRow === 'string' && fromRow !== '' ? fromRow : null;
+}
+
+/**
+ * 会话树根 id（2026-09-11「切到主会话的子会话不显示本会话」修复）：沿
+ * `subagentAddress` / 会话列表行 `parentId` 逐级上溯到最顶层会话——已寻址
+ * 子代理会话（成员/领队/构建师）回主对话 id，主会话回自身。
+ *
+ * 面板的会话归属判定消费它：任务行 `main_session_id` 登记的是主对话快照，
+ * 面板在子会话里打开时直接拿子会话 id 比对永远等不上。结构化探测纪律同本
+ * 模块其余读取面——服务缺失/无父链/畸形结构一律原样返回入参（退化为旧
+ * 行为），成环时截断防死循环，绝不抛错。
+ */
+export function rootSessionIdOf(sessionId: string | null | undefined): string | undefined {
+  if (sessionId === null || sessionId === undefined || sessionId === '') return undefined;
+  let current = sessionId;
+  const seen = new Set<string>([current]);
+  for (;;) {
+    const parent = parentSessionIdOf(current);
+    if (parent === null || parent === current || seen.has(parent)) break;
+    seen.add(parent);
+    current = parent;
+  }
+  return current;
 }
 
 /**

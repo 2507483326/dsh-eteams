@@ -21,13 +21,17 @@ import {
   cancelTask,
   createTask,
   finalizeCommissionTask,
+  pauseTaskOnInterrupt,
+  redeliverAssignment,
   startGroupTask,
+  suspendGroupTask,
   type OpActor,
 } from '../src/host/runtime/assignment';
 import { joinPath, type RuntimeEnv } from '../src/host/runtime/base';
 import { getDb } from '../src/host/state/db';
 import { readTeamSync } from '../src/host/state/store';
 import { readEventsSync, readMailboxSync } from '../src/host/state/events';
+import { wakeMember } from '../src/host/runtime/notifier';
 import type { TeamState } from '../src/host/model/types';
 import { cleanupTempWorkspace } from './support/tmpWorkspace';
 
@@ -426,8 +430,10 @@ describe('lifecycle (offline full flow)', () => {
     });
     expect(docAssign.ok).toBe(true);
 
-    // 12. 失败重试链：Bob fail ×4（maxRetries=3）→ 第 4 次进 wait_decision
-    // （重试指派为 pending_accept，成员需重新 claim 才能再次上报）
+    // 12. 失败重试链：Bob fail ×4（maxRetries=3）→ 第 4 次落 wait（待领队
+    // 分诊，用户迭代 2026-09-11）——不再进 wait_user/DecisionRecord，改由
+    // 领队 reassign loop 或 escalate 升级（重试指派为 pending_accept，成员
+    // 需重新 claim 才能再次上报）。
     const docAgent = memberAgent(childByEmployee(bob.employeeId).childId);
     const failOnce = async (expectRetried: boolean) => {
       const claim = await mem<{ token: string; attemptId: number }>(docAgent, 'eteams_claim_task', {
@@ -450,7 +456,7 @@ describe('lifecycle (offline full flow)', () => {
     await failOnce(true); // 第 1 次失败 → 同成员立即重试（attempt kind=retry）
     team = readTeam(teamId);
     let docTask = team.tasks.find((t) => t.id === doc.taskId)!;
-    // 用户迭代 2026-09-11：重试排队归位 ready（wait 已撤销）。
+    // 用户迭代 2026-09-11：重试排队归位 ready。
     expect(docTask.status).toBe('ready');
     expect(docTask.attempts.at(-1)!.kind).toBe('retry');
     expect(docTask.attempts.at(-1)!.member).toBe('Bob');
@@ -458,19 +464,49 @@ describe('lifecycle (offline full flow)', () => {
 
     await failOnce(true);
     await failOnce(true);
-    await failOnce(false); // 第 4 次失败：retryCount 4 > maxRetries 3 → 待决策
+    await failOnce(false); // 第 4 次失败：retryCount 4 > maxRetries 3 → wait
     team = readTeam(teamId);
     docTask = team.tasks.find((t) => t.id === doc.taskId)!;
-    // 用户迭代 2026-09-11：wait_decision 并入 wait_user。
-    expect(docTask.status).toBe('wait_user');
+    expect(docTask.status).toBe('wait');
     expect(docTask.retryCount).toBe(4);
+    // 失败不再开决策（那是待用户的载体）——先交领队分诊。
+    expect(team.pendingDecisions).toHaveLength(0);
+    const failedBox = await cap<{ ok: true; messages: { content: string }[] }>('eteams_mailbox', {});
+    expect(failedBox.messages.at(-1)!.content).toContain('待领队');
+
+    // 12b. 领队从 wait 重新指派 loop（小 bug 分支）：member 缺省=最近执行者
+    // Bob，任务回 ready、开新 attempt。
+    const looped = await cap<{ ok: true; member: string; attemptId: number }>(
+      'eteams_reassign_task',
+      { taskId: doc.taskId, member: bobId },
+    );
+    expect(looped.member).toBe('Bob');
+    team = readTeam(teamId);
+    docTask = team.tasks.find((t) => t.id === doc.taskId)!;
+    expect(docTask.status).toBe('ready');
+
+    // 12c. 再失败一次超限（retryCount 5）→ 落 wait，再用 eteams_escalate_task
+    // 升级为 wait_user + 开决策（流程/环境问题分支）。
+    await failOnce(false); // 第 5 次失败：5 > 3 → 直接 wait（不重试）
+    team = readTeam(teamId);
+    docTask = team.tasks.find((t) => t.id === doc.taskId)!;
+    expect(docTask.status).toBe('wait');
+    expect(docTask.retryCount).toBe(5);
+    const escalated = await cap<{ ok: true; taskId: number }>('eteams_escalate_task', {
+      taskId: doc.taskId,
+      note: '环境缺少依赖，需要用户决策',
+    });
+    expect(escalated.ok).toBe(true);
+    team = readTeam(teamId);
+    docTask = team.tasks.find((t) => t.id === doc.taskId)!;
+    expect(docTask.status).toBe('wait_user');
     expect(team.pendingDecisions).toHaveLength(1);
     expect(team.pendingDecisions[0]!.status).toBe('open');
     const decisionBox = await cap<{ ok: true; messages: { content: string }[] }>(
       'eteams_mailbox',
       {},
     );
-    expect(decisionBox.messages.at(-1)!.content).toContain('待用户');
+    expect(decisionBox.messages.at(-1)!.content).toContain('待领队');
 
     // 13. 事件一致性（SQLite events 表；偏离在 task.assigned payload，
     // chain.deviated 事件已随波次 2 下线）
@@ -485,6 +521,8 @@ describe('lifecycle (offline full flow)', () => {
       'task.stage_completed',
       'task.completed',
       'task.retrying',
+      'task.wait',
+      'task.escalated',
       'decision.requested',
     ]) {
       expect(types).toContain(expected);
@@ -981,5 +1019,285 @@ describe('大任务状态语义 + 依赖派发闸（用户迭代 2026-09-11 精�
     );
     // 依赖被拒不改写状态：任务仍是 ready 等着（无物化 wait）。
     expect(readTeam(teamId).tasks.find((t) => t.id === second.id)!.status).toBe('ready');
+  });
+
+  it('成员回合中断 → 小任务挂起（attempt 吊销、站号不丢），整体开始自动恢复续跑', async () => {
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '中断团队' });
+    const teamId = created.teamId;
+    const alice = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: 'Alice',
+      role: 'engineer',
+      teamId,
+    });
+    const bob = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: 'Bob',
+      role: 'engineer',
+      teamId,
+    });
+    const group = await cap<{ taskId: number }>('eteams_submit_task', { subject: '中断主任务' });
+    const sub = await cap<{ taskId: number }>('eteams_create_task', {
+      subject: '两站任务',
+      parentTaskId: group.taskId,
+      chain: [
+        { member: String(alice.employeeId), stageBrief: '调研' },
+        { member: String(bob.employeeId), stageBrief: '实现' },
+      ],
+    });
+    const started = await startGroupTask(runtimeEnvFor(), who(teamId), group.taskId);
+    expect(started.started).toBe(1);
+    // 派发不改状态：任务留 ready，首站 attempt 待接取，成员会话已起。
+    const row = readTeam(teamId).taskMembers.find(
+      (r) => r.mainTaskId === group.taskId && r.employeeId === alice.employeeId,
+    )!;
+    expect(row.sessionId).not.toBe('');
+
+    // 模拟手动停止 Alice 回合（宿主 turn/end{reason.kind:'aborted'}）→ 任务挂起。
+    const pausedId = await pauseTaskOnInterrupt(runtimeEnvFor(), teamId, row.sessionId, 'aborted');
+    expect(pausedId).toBe(sub.taskId);
+    const paused = readTeam(teamId).tasks.find((t) => t.id === sub.taskId)!;
+    expect(paused.status).toBe('paused');
+    // chain_cursor 保持「已完成站」语义：首站未完成 → -1；进行中站在撤销的
+    // attempt.station_index 上（进度不丢的依据）。
+    expect(paused.chainCursor).toBe(-1);
+    expect(paused.attempts.at(-1)!.status).toBe('revoked');
+    expect(paused.attempts.at(-1)!.stationIndex).toBe(0);
+    // 容器同步（用户迭代 2026-09-11「小任务挂起之后，主任务也同步挂起」）：
+    // 唯一小任务被中断挂起、没有在办小任务 → 容器同步落 paused（主任务 pill
+    // 显示「已挂起」；面板按钮回「开始」，点它续跑）。
+    expect(readTeam(teamId).tasks.find((t) => t.id === group.taskId)!.status).toBe('paused');
+
+    // 再点大任务「开始」→ 自动恢复并从同一站续派（不再静默无反馈）。
+    const resumed = await startGroupTask(runtimeEnvFor(), who(teamId), group.taskId);
+    expect(resumed.started).toBe(1);
+    const back = readTeam(teamId).tasks.find((t) => t.id === sub.taskId)!;
+    expect(back.status).toBe('ready');
+    expect(back.attempts.at(-1)!.status).toBe('pending_accept');
+    expect(back.attempts.at(-1)!.stationIndex).toBe(0);
+    // 续派即在办 → 容器回 start。
+    expect(readTeam(teamId).tasks.find((t) => t.id === group.taskId)!.status).toBe('start');
+  });
+
+  it('僵尸指派（ready + 待接取）：开始被闸拒死 → 幂等重发复活（2026-09-11 回归）', async () => {
+    // 实测根因：成员回合被中断的那一轮若没有落 paused（旧构建），任务留在
+    // ready、尝试停在 pending_accept、副本行被占用——此后「开始」被防重复
+    // 派发闸拒绝（「已有进行中的指派」），面板点开始等于无操作。修复=重发。
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '僵尸指派' });
+    const teamId = created.teamId;
+    const alice = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: 'Alice',
+      role: 'engineer',
+      teamId,
+    });
+    const group = await cap<{ taskId: number }>('eteams_submit_task', { subject: '重发主任务' });
+    const sub = await cap<{ taskId: number }>('eteams_create_task', {
+      subject: '单站任务',
+      parentTaskId: group.taskId,
+      chain: [{ member: String(alice.employeeId), stageBrief: '实现' }],
+    });
+    const env = runtimeEnvFor();
+    await assignTask(env, who(teamId), { taskId: sub.taskId, member: alice.employeeId });
+
+    const before = readTeam(teamId).tasks.find((t) => t.id === sub.taskId)!;
+    const attemptsBefore = before.attempts.length;
+    const mailsBefore = readMailboxSync(root, teamId, String(alice.employeeId)).length;
+
+    // 旧行为：防重复派发闸拒绝（死按钮）。
+    await expect(
+      assignTask(env, who(teamId), { taskId: sub.taskId, member: alice.employeeId }),
+    ).rejects.toThrow(/已有进行中的指派/);
+
+    // 新行为：重发不新开 attempt、不改状态，只再投一封指派信。
+    const redelivered = await redeliverAssignment(env, who(teamId), sub.taskId);
+    expect(redelivered?.id).toBe(sub.taskId);
+    const after = readTeam(teamId).tasks.find((t) => t.id === sub.taskId)!;
+    expect(after.attempts).toHaveLength(attemptsBefore);
+    expect(after.status).toBe('ready');
+    expect(after.attempts.at(-1)!.status).toBe('pending_accept');
+    const mailsAfter = readMailboxSync(root, teamId, String(alice.employeeId));
+    expect(mailsAfter.length).toBe(mailsBefore + 1);
+    expect(mailsAfter.at(-1)!.content).toContain('请重新接取开工');
+
+    // 无僵尸指派 → 返回 undefined（调用方走正常派发，不误吞首派）。
+    const clean = await cap<{ taskId: number }>('eteams_create_task', {
+      subject: '干净任务',
+      parentTaskId: group.taskId,
+      chain: [{ member: String(alice.employeeId), stageBrief: '实现' }],
+    });
+    expect(await redeliverAssignment(env, who(teamId), clean.taskId)).toBeUndefined();
+
+    // 整体开始也走重发：僵尸卡不再被拒成 skipped。
+    const started = await startGroupTask(env, who(teamId), group.taskId);
+    expect(started.started).toBe(1);
+    expect(started.skipped.some((s) => s.taskId === sub.taskId)).toBe(false);
+  });
+
+  it('唤醒锚点用成员登记的直接父，不被全队最早任务的陈旧快照毒化（2026-09-11 回归）', async () => {
+    // 根因：wakeMember 原先一律用 teamMainSessionOf（本队任务号最小的那条
+    // 任务的主会话快照）。团队的历史任务各记各的快照，最早那条早已关闭 →
+    // 拿不到活锚点、又不冷恢复，指派信静默留在邮箱（「点开始没反应」）。
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '锚点团队' });
+    const teamId = created.teamId;
+    const alice = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: 'Alice',
+      role: 'engineer',
+      teamId,
+    });
+    const task = await cap<{ taskId: number }>('eteams_create_task', {
+      subject: '锚点任务',
+      chain: [{ member: String(alice.employeeId), stageBrief: '做' }],
+    });
+    const env = runtimeEnvFor();
+    await assignTask(env, who(teamId), { taskId: task.taskId, member: alice.employeeId });
+
+    // 制造分歧：任务行快照指向一个早已关闭的旧会话（全队最早快照同样陈旧）
+    // ——成员登记表里的直接父仍是活着的 cap-1。
+    getDb(root)
+      .prepare('UPDATE task SET main_session_id = ? WHERE task_id = ?')
+      .run('offline-old-session', task.taskId);
+    const team = readTeam(teamId);
+    expect(team.tasks.find((t) => t.id === task.taskId)!.mainSessionId).toBe('offline-old-session');
+    const row = team.taskMembers.find(
+      (r) => r.mainTaskId === task.taskId && r.employeeId === alice.employeeId,
+    )!;
+    expect(row.sessionId).not.toBe('');
+
+    const delivered = await wakeMember(env, team, row, '【重发】指派信');
+    expect(delivered).toBe(true);
+    expect(runtime.deliveries.at(-1)!.text).toBe('【重发】指派信');
+  });
+
+  it('主任务暂停/继续：在跑小任务挂起 + 容器 paused，再开始从原站续跑（2026-09-11）', async () => {
+    // 用户迭代：主任务开始后按钮应变「暂停」——暂停 = 挂起在跑小任务 + 容器，
+    // 未开跑的小任务保持 ready（它们本来就没在跑）。
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '暂停团队' });
+    const teamId = created.teamId;
+    const alice = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: 'Alice',
+      role: 'engineer',
+      teamId,
+    });
+    const group = await cap<{ taskId: number }>('eteams_submit_task', { subject: '暂停主任务' });
+    const first = await cap<{ taskId: number }>('eteams_create_task', {
+      subject: '第一棒',
+      parentTaskId: group.taskId,
+      chain: [{ member: String(alice.employeeId), stageBrief: '做' }],
+    });
+    const second = await cap<{ taskId: number }>('eteams_create_task', {
+      subject: '第二棒',
+      parentTaskId: group.taskId,
+      chain: [{ member: String(alice.employeeId), stageBrief: '再做' }],
+    });
+    const env = runtimeEnvFor();
+    const started = await startGroupTask(env, who(teamId), group.taskId);
+    expect(started.started).toBe(1);
+    // 领取第一棒 → start（执行中）。
+    const claim = await mem<{ token: string; attemptId: number }>(
+      memberAgent(childByEmployee(alice.employeeId).childId),
+      'eteams_claim_task',
+      { taskId: first.taskId },
+    );
+    expect(claim.token).not.toBe('');
+    expect(readTeam(teamId).tasks.find((t) => t.id === first.taskId)!.status).toBe('start');
+    expect(readTeam(teamId).tasks.find((t) => t.id === group.taskId)!.status).toBe('start');
+
+    // 暂停：在跑的第一棒 → paused，容器 → paused；未跑的第二棒留 ready。
+    await suspendGroupTask(env, who(teamId), group.taskId);
+    const pausedTeam = readTeam(teamId);
+    expect(pausedTeam.tasks.find((t) => t.id === first.taskId)!.status).toBe('paused');
+    expect(pausedTeam.tasks.find((t) => t.id === group.taskId)!.status).toBe('paused');
+    expect(pausedTeam.tasks.find((t) => t.id === second.taskId)!.status).toBe('ready');
+    // 暂停要真停机（用户 2026-09-12「点击暂停没有用，对话还是在进行」）：按副本行
+    // session_id 打断在跑成员的回合，而不是只发一封唤醒通知。
+    const firstTask = pausedTeam.tasks.find((t) => t.id === first.taskId)!;
+    const firstRow = pausedTeam.taskMembers.find(
+      (r) => r.id === firstTask.attempts.at(-1)!.taskMemberId,
+    )!;
+    expect(firstRow.sessionId).not.toBe('');
+    expect(runtime.interrupts).toContain(firstRow.sessionId);
+    // 挂起通知只留档（邮箱），不再唤醒投递——唤醒会把对话重新开起来。
+    expect(runtime.deliveries.some((d) => d.text.includes('【挂起】'))).toBe(false);
+
+    // 再开始：第一棒从原站续跑（新 attempt 待接取），容器回 start。
+    const resumed = await startGroupTask(env, who(teamId), group.taskId);
+    expect(resumed.started).toBe(1);
+    const backTeam = readTeam(teamId);
+    const back = backTeam.tasks.find((t) => t.id === first.taskId)!;
+    expect(back.status).toBe('ready');
+    expect(back.attempts.at(-1)!.status).toBe('pending_accept');
+    expect(back.attempts.at(-1)!.stationIndex).toBe(0);
+    expect(backTeam.tasks.find((t) => t.id === group.taskId)!.status).toBe('start');
+  });
+
+  it('小任务挂起 → 主任务同步挂起（2026-09-11）', async () => {
+    // 用户迭代「主任务好像没有挂起状态……小任务挂起之后，主任务也同步挂起」：
+    // 领队单独挂起一个在跑小任务（非整体暂停），容器也应同步落 paused——面板
+    // 主任务 pill 显示「已挂起」，点「开始」与整体暂停一样原站续跑。
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '同步挂起' });
+    const teamId = created.teamId;
+    const alice = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: 'Alice',
+      role: 'engineer',
+      teamId,
+    });
+    const group = await cap<{ taskId: number }>('eteams_submit_task', { subject: '同步挂起主任务' });
+    const sub = await cap<{ taskId: number }>('eteams_create_task', {
+      subject: '在跑小任务',
+      parentTaskId: group.taskId,
+      chain: [{ member: String(alice.employeeId), stageBrief: '做' }],
+    });
+    const env = runtimeEnvFor();
+    await startGroupTask(env, who(teamId), group.taskId);
+    const claim = await mem<{ token: string; attemptId: number }>(
+      memberAgent(childByEmployee(alice.employeeId).childId),
+      'eteams_claim_task',
+      { taskId: sub.taskId },
+    );
+    expect(claim.token).not.toBe('');
+    expect(readTeam(teamId).tasks.find((t) => t.id === group.taskId)!.status).toBe('start');
+
+    // 单独挂起小任务：attempt 吊销、小任务 paused，容器同步 paused（不再停在 start）。
+    await cap('eteams_suspend_task', { taskId: sub.taskId, note: '单独挂起' });
+    const pausedTeam = readTeam(teamId);
+    expect(pausedTeam.tasks.find((t) => t.id === sub.taskId)!.status).toBe('paused');
+    expect(pausedTeam.tasks.find((t) => t.id === group.taskId)!.status).toBe('paused');
+
+    // 主任务「开始」→ 挂起小任务原站续跑（新 attempt 待接取），容器回 start。
+    const resumed = await startGroupTask(env, who(teamId), group.taskId);
+    expect(resumed.started).toBe(1);
+    const backTeam = readTeam(teamId);
+    const back = backTeam.tasks.find((t) => t.id === sub.taskId)!;
+    expect(back.status).toBe('ready');
+    expect(back.attempts.at(-1)!.status).toBe('pending_accept');
+    expect(back.attempts.at(-1)!.stationIndex).toBe(0);
+    expect(backTeam.tasks.find((t) => t.id === group.taskId)!.status).toBe('start');
+  });
+
+  it('整体开始：start 未收尾的小任务进跳过清单带原因（原静默 continue 无反馈）', async () => {
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '反馈团队' });
+    const teamId = created.teamId;
+    const alice = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: 'Alice',
+      role: 'engineer',
+      teamId,
+    });
+    const group = await cap<{ taskId: number }>('eteams_submit_task', { subject: '主任务' });
+    const sub = await cap<{ taskId: number }>('eteams_create_task', {
+      subject: '单站任务',
+      parentTaskId: group.taskId,
+      chain: [{ member: String(alice.employeeId), stageBrief: '做' }],
+    });
+    await startGroupTask(runtimeEnvFor(), who(teamId), group.taskId);
+    // 成员接取 → 小任务进入 start（执行中）。
+    const agent = memberAgent(childByEmployee(alice.employeeId).childId);
+    await mem(agent, 'eteams_claim_task', { taskId: sub.taskId });
+    expect(readTeam(teamId).tasks.find((t) => t.id === sub.taskId)!.status).toBe('start');
+
+    const again = await startGroupTask(runtimeEnvFor(), who(teamId), group.taskId);
+    expect(again.started).toBe(0);
+    expect(again.skipped).toContainEqual({
+      taskId: sub.taskId,
+      subject: '单站任务',
+      reason: '执行中，等本回合收尾',
+    });
   });
 });

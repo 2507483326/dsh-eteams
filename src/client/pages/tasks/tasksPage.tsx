@@ -14,17 +14,25 @@
  * 开始）、deleteTarget/deleteBusy/deleteError（删除确认）。导航状态不在
  * 本页：详情选中的任务 id 走 :taskId 路由参数。依赖 features/tasks 与
  * shared、taskListCard、taskDialogs。面板手动建任务（用户迭代 2026-09-11）：
- * 头部行「＋ 添加任务」按钮 + addTaskDialog 弹窗（描述 + 选团队）——提交
+ * ＋「添加任务」按钮 + addTaskDialog 弹窗（描述 + 选团队）——提交
  * **新开一个对话**并把描述与团队带过去（lib/taskConversation 编排），任务单
  * 由该对话的团队工作流从零建立；目标团队默认当前会话绑定的团队（仅
  * 有团队可选时渲染按钮）。
+ *
+ * 用户迭代 2026-09-12「任务列表直接加线将本会话和其它会话隔离开来」：
+ * 列表按会话归属分两段——本会话一段（「本会话」分区线 + 其下本会话卡/
+ * 添加按钮）、其它会话一段（「其它会话」分区线 + 其下其它卡），两段
+ * **各自独立栅格**、纵向堆叠（同段卡片横排，两段不混行）；本会话无任务
+ * 时其分区线下即「＋ 添加任务」按钮（一个会话只挂一个任务：本会话已有
+ * 任务就不再给添加入口），标题行的添加按钮撤除。原卡内「本会话」徽标
+ * 随之撤除（归属由分区线表达，卡内不再重复）。
  *
  * @module dsh-eteams/client/pages/tasks/tasksPage
  */
 import { useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Plus from 'lucide-react/dist/esm/icons/plus.mjs';
-import { deleteTeamTask, fetchSessionTeam, openTaskFolder, startTeamTask } from '../../lib/api';
+import { deleteTeamTask, fetchSessionTeam, openTaskFolder, pauseTeamTask, startTeamTask } from '../../lib/api';
 import { requestCloseTeamsPage } from '../../lib/bridge';
 import { cn } from '../../lib/cn';
 import { errorMessageOf, runWithBusy } from '../../lib/errors';
@@ -182,6 +190,23 @@ export function TasksPage({ pool, sessionId }: TasksPageProps): ReactNode {
     }
   };
 
+  // 主任务暂停（用户迭代 2026-09-11：跑起来后「开始」变「暂停」）——容器
+  // 挂起在跑小任务 + 容器本身；与 submitStart 共用 busy/error 瞬态槽。
+  const submitPause = async (taskId: number): Promise<void> => {
+    const owner = ownerByTaskId.get(taskId);
+    if (owner === undefined) return;
+    setStartBusy(taskId);
+    setStartError((cur) => (cur !== null && cur.taskId === taskId ? null : cur));
+    try {
+      await pauseTeamTask(owner.teamId, taskId);
+      refreshActivitySoon();
+    } catch (e) {
+      setStartError({ taskId, message: errorMessageOf(e) });
+    } finally {
+      setStartBusy(null);
+    }
+  };
+
   // 打开任务文件夹（列表卡文件夹路径点击）。非乐观：成功无回执 UI（文件
   // 管理器窗口即回执），失败按卡行内 FormErrorNote。按归属团队派发。
   const openFolder = async (taskId: number): Promise<void> => {
@@ -274,6 +299,57 @@ export function TasksPage({ pool, sessionId }: TasksPageProps): ReactNode {
     </>
   );
 
+  // 列表数据源（原内联 IIFE 上提——本会话分区需先分组再渲染）。mainTasks =
+  // 各队顶层任务（主任务 + 顶层普通任务）按快照序拼接（跨队同列，一卡一
+  // 任务）。会话归属（2026-09-10）：任务主会话快照命中当前面板会话 = 本
+  // 会话任务；否则若目标会话在客户端会话列表里 = 可跳转。面板无会话上下文
+  // （整页覆盖层 sessionId undefined）时不分区，全部按其它会话处理。
+  const mainTasks = pool.flatMap((t) => t.tasks.filter((task) => task.parentId === null));
+  const hasSession = sessionId !== undefined && sessionId !== '';
+  const isCurrentSession = (t: TaskView): boolean => hasSession && t.sessionId === sessionId;
+  const sessionTasks = hasSession ? mainTasks.filter(isCurrentSession) : [];
+  const otherTasks = hasSession ? mainTasks.filter((t) => !isCurrentSession(t)) : mainTasks;
+  // 一个会话只挂一个任务（用户迭代 2026-09-12）：本会话已有任务即不再给
+  // 添加入口（按钮落分区线下，见渲染处）；无可选团队开弹窗无意义亦不渲染。
+  const canAddTask = hasSession && pool.length > 0 && sessionTasks.length === 0;
+  const showEmpty = mainTasks.length === 0 && !canAddTask;
+
+  // 三十一轮 DA44④：列表卡身抽 taskListCard（TaskListCard）——subs 统计/
+  // deletable 判据随迁卡内现算（task/allTasks 进 props，allTasks 取归属团队
+  // 的任务全集）。会话归属（2026-09-10）随卡下发；2026-09-12 起卡内不再画
+  // 「本会话」徽标（归属由分区线表达，见 SessionDivider）。
+  const renderCard = (t: TaskView): ReactNode => {
+    const currentSession = isCurrentSession(t);
+    const canJump =
+      !currentSession &&
+      typeof t.sessionId === 'string' &&
+      t.sessionId !== '' &&
+      canOpenSession(t.sessionId);
+    return (
+      <TaskListCard
+        key={t.taskId}
+        task={t}
+        allTasks={ownerByTaskId.get(t.taskId)?.tasks ?? []}
+        currentSession={currentSession}
+        canJump={canJump}
+        folderBusy={folderBusy}
+        folderError={folderError}
+        startError={startError}
+        startBusy={startBusy}
+        // M3 拆页：整卡点击进详情改导航——drawerTaskId 由 routes.tsx 的
+        // location sync 回写（仅本会话卡可点，见卡内判据）。
+        onOpen={() => navigate(`/tasks/${t.taskId}`)}
+        onJump={() => {
+          if (typeof t.sessionId === 'string') jumpToSession(t.sessionId);
+        }}
+        onOpenFolder={(taskId) => void openFolder(taskId)}
+        onDelete={() => setDeleteTarget(t)}
+        onStart={() => void submitStart(t.taskId)}
+        onPause={() => void submitPause(t.taskId)}
+      />
+    );
+  };
+
   // docs/29 DA2：DndProvider 只包本页（消费面唯一，单实例单 Provider，随页
   // 卸载销毁；1s 轮询只换数据不重挂 Provider）。列表/详情页各包各的。
   return (
@@ -282,77 +358,57 @@ export function TasksPage({ pool, sessionId }: TasksPageProps): ReactNode {
       拉满、栅格 min-h-0 内部滚动（卡满高、页头常驻可视）。 */}
       <div className="flex min-h-0 flex-1 flex-col">
         {/* 平铺小卡栅格（十一…十五轮 DA24…DA28 视觉口径不变；2026-09-10
-        用户拍板「直接显示所有任务」）：撤掉按选中团队过滤——**全团队顶层
-        任务（主任务 + 顶层普通任务）聚合平铺**（pool 快照序拼接，跨队同列
-        ，一卡一任务）；会话归属语义见 taskListCard 头注（本会话徽标/其它
-        卡跳转会话）。Card 与头部行常驻（空态也在卡内）；「添加任务」钮
-        仅在有团队可选时渲染（无可选团队开弹窗无意义）。 */}
-        {(() => {
-          const mainTasks = pool.flatMap((t) => t.tasks.filter((task) => task.parentId === null));
-          return (
-            <Card className={cn(PANEL_CARD_CLASS, 'pb-3 flex min-h-0 flex-1 flex-col')}>
-              <div className="mb-2.5 flex items-center gap-2">
-                <h3 className={LIST_TITLE_CLASS}>任务</h3>
-                <span className={LIST_COUNT_CLASS}>{mainTasks.length} 个</span>
-                {pool.length > 0 && (
-                  <Button type="button" size="sm" className="ml-auto" onClick={openAddDialog}>
-                    <Plus className="h-3.5 w-3.5" />
-                    添加任务
-                  </Button>
-                )}
+        用户拍板「直接显示所有任务」）。2026-09-12 会话归属分区（用户
+        「任务列表直接加线将本会话和其它会话隔离开来」）：本会话一段
+        （「本会话」分区线 + 其下本会话卡/添加按钮）、其它会话一段
+        （「其它会话」分区线 + 其下其它卡），**两段各自独立栅格**——同段
+        卡片横排、两段纵向堆叠，不让本会话卡与其它卡混进同一行。 */}
+        <Card className={cn(PANEL_CARD_CLASS, 'pb-3 flex min-h-0 flex-1 flex-col')}>
+          <div className="mb-2.5 flex items-center gap-2">
+            <h3 className={LIST_TITLE_CLASS}>任务</h3>
+            <span className={LIST_COUNT_CLASS}>{mainTasks.length} 个</span>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {hasSession && <SessionDivider label="本会话" />}
+            {/* 一个会话只挂一个任务：本会话已有任务就不再给添加入口；无任务
+                时分区线下即添加按钮（无可选团队不渲染）。 */}
+            {canAddTask && (
+              <Button type="button" variant="outline" className="w-full" onClick={openAddDialog}>
+                <Plus className="h-3.5 w-3.5" />
+                添加任务
+              </Button>
+            )}
+            {sessionTasks.length > 0 && (
+              <div className={TASK_GRID_CLASS}>{sessionTasks.map(renderCard)}</div>
+            )}
+            {hasSession && otherTasks.length > 0 && (
+              <SessionDivider label="其它会话" className="mt-5" />
+            )}
+            {otherTasks.length > 0 && (
+              <div className={TASK_GRID_CLASS}>{otherTasks.map(renderCard)}</div>
+            )}
+            {showEmpty && (
+              <div className={EMPTY_CLASS}>
+                还没有任务。在对话中把任务交给团队，或计划批准后任务会出现在这里。
               </div>
-              {mainTasks.length === 0 ? (
-                <div className={EMPTY_CLASS}>
-                  还没有任务。在对话中把任务交给团队，或计划批准后任务会出现在这里；也可以点右上角「添加任务」开一个新对话，把任务交给团队从零建立。
-                </div>
-              ) : (
-                <div className={cn(TASK_GRID_CLASS, 'min-h-0 flex-1 content-start overflow-y-auto')}>
-                  {mainTasks.map((t) => {
-                    // 会话归属（2026-09-10）：任务主会话快照命中当前面板
-                    // 会话 = 本会话卡（徽标 + 可点进详情）；否则若目标会话
-                    // 在客户端会话列表里 = 可跳转。面板无会话上下文（整页
-                    // 覆盖层 sessionId undefined）时一律按其它会话处理。
-                    const currentSession =
-                      sessionId !== undefined && sessionId !== '' && t.sessionId === sessionId;
-                    const canJump =
-                      !currentSession &&
-                      typeof t.sessionId === 'string' &&
-                      t.sessionId !== '' &&
-                      canOpenSession(t.sessionId);
-                    return (
-                      // 三十一轮 DA44④：列表卡身抽 taskListCard（TaskListCard）——
-                      // subs 统计/deletable 判据随迁卡内现算（task/allTasks 进
-                      // props，allTasks 取归属团队的任务全集）。
-                      <TaskListCard
-                        key={t.taskId}
-                        task={t}
-                        allTasks={ownerByTaskId.get(t.taskId)?.tasks ?? []}
-                        currentSession={currentSession}
-                        canJump={canJump}
-                        folderBusy={folderBusy}
-                        folderError={folderError}
-                        startError={startError}
-                        startBusy={startBusy}
-                        // M3 拆页：整卡点击进详情改导航——drawerTaskId 由
-                        // routes.tsx 的 location sync 回写（仅本会话卡可点，
-                        // 见卡内判据）。
-                        onOpen={() => navigate(`/tasks/${t.taskId}`)}
-                        onJump={() => {
-                          if (typeof t.sessionId === 'string') jumpToSession(t.sessionId);
-                        }}
-                        onOpenFolder={(taskId) => void openFolder(taskId)}
-                        onDelete={() => setDeleteTarget(t)}
-                        onStart={() => void submitStart(t.taskId)}
-                      />
-                    );
-                  })}
-                </div>
-              )}
-            </Card>
-          );
-        })()}
+            )}
+          </div>
+        </Card>
         {dialogs}
       </div>
     </TaskDndProvider>
+  );
+}
+
+/** 会话分区线（用户迭代 2026-09-12「-本会话-------」）：任务列表按会话归属
+ * 分段的标题线——短横线夹标签、右侧长横线收尾（Separator 同款 bg-border
+ * token）。两段各一条（label=本会话 / 其它会话），线在段上、内容在段下。 */
+function SessionDivider({ label, className }: { label: string; className?: string }): ReactNode {
+  return (
+    <div className={cn('mb-2.5 flex items-center gap-2', className)}>
+      <span className="h-px w-4 shrink-0 bg-border" />
+      <span className="shrink-0 text-xs font-medium text-muted-foreground">{label}</span>
+      <span className="h-px flex-1 bg-border" />
+    </div>
   );
 }

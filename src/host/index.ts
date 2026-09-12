@@ -30,6 +30,7 @@ import { createCaptainDispatchTool } from './tools/captainDispatch.js';
 import { createAskUserTools } from './tools/askUserTools.js';
 import { createMemberTools } from './tools/memberTools.js';
 import { installUsageMeter } from './runtime/usage.js';
+import { installInterruptionWatcher } from './runtime/interruption.js';
 import { installWebSurface, locateTeam } from './runtime/webui.js';
 import { stateRootFor } from './runtime/base.js';
 import { leaderHandbookForChild } from './runtime/captainAgent.js';
@@ -143,6 +144,16 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
     log.info('eteams: usage meter installed');
   } catch (error) {
     log.warn('eteams: usage meter install failed (calendar stays empty): %s', String(error));
+  }
+
+  // 2c) 中断观察者（用户迭代 2026-09-11）：成员回合被手动停止/崩溃中断时，把
+  //     其绑定的任务挂起（ready/start → paused），让面板能显示「已挂起」并由
+  //     大任务「开始」续跑。失败不外抛（绝不因观察者影响会话或装机）。
+  try {
+    installInterruptionWatcher(ctx, config);
+    log.info('eteams: interruption watcher installed');
+  } catch (error) {
+    log.warn('eteams: interruption watcher install failed: %s', String(error));
   }
 
   // 3) Captain standing prompt (compact section, tools guidance band).

@@ -19,7 +19,9 @@
 -- roles 补 is_root（保留角色 system=1 其余=0——system 的 persona_md 存注入
 -- 主对话 system 提示词的原文，默认空；旧库经 getDb 迁移回填）；v13 任务状态
 -- 精简（用户迭代 2026-09-11）：11 态 → 7 态——draft/ready/wait 并入 ready，
--- wait_decision/failed 并入 wait_user（旧库经 getDb 迁移回填状态值）；
+-- wait_decision/failed 并入 wait_user（旧库经 getDb 迁移回填状态值）；随后
+-- 又恢复独立 wait=待领队分诊（8 态，语义与旧 wait 不同：失败自动重试超限落
+-- wait，领队分诊后 loop 回 ready 或升级 wait_user——TEXT 枚举无结构变更）；
 -- task.blocked_from 列弃用不再读写（列保留不 DROP），status 列默认值改 ready
 -- 主键 = 每张表自己的编号列，统一 INTEGER 自增（schema_meta 例外：key 即主键）
 -- 时间列一律 *_time 结尾（Unix 毫秒）；每张表末尾 created_time / update_time
@@ -113,9 +115,9 @@ CREATE TABLE IF NOT EXISTS task (
   member_chain_list TEXT NOT NULL DEFAULT '[]',  -- 执行链站点列表（JSON 数组：[{member, stageBrief}]；v7 站点 member 写工号数字，迁移解析不到班底行的旧站点保留名字字符串并在渲染时标注 legacy）
   chain_cursor      INTEGER NOT NULL DEFAULT -1, -- -1=没开始；k=第 k 站完成；末站完成→completed
   status            TEXT NOT NULL DEFAULT 'ready',
-                    -- creating / ready / start / paused / wait_user /
-                    -- completed / cancelled（用户迭代 2026-09-11 精简为 7 态；
-                    -- 大任务 completed 可回 ready）
+                    -- creating / ready / start / wait / paused / wait_user /
+                    -- completed / cancelled（用户迭代 2026-09-11：精简为 7 态后
+                    -- 又恢复独立 wait=待领队分诊 = 8 态；大任务 completed 可回 ready）
   current_member    TEXT,                -- 当前执行成员名（松引用：成员移除也不影响这列）
   current_member_id INTEGER,             -- 当前执行成员 ID（v2 的 member.member_id 口径随 v3 合并废弃；写入代码恒置 NULL，物理残留列）
   main_session_id   TEXT,                -- 主会话 ID 快照（v5 落列 v6 改名：建任务时登记的主会话 ID，落库后不变；直查/展示用）

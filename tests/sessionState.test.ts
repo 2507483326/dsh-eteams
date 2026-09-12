@@ -4,6 +4,9 @@
  * 方法缺失、形态不符、宿主拒绝、抛错一律回 null/false，绝不外抛（本仓对
  * 宿主可选服务的降级契约：旧运行时只降级不崩）。
  *
+ * rootSessionIdOf（2026-09-11「切到主会话的子会话不显示本会话」修复）：
+ * 沿 subagentAddress / 会话列表行 parentId 上溯到根，同上降级纪律。
+ *
  * @module dsh-eteams/tests/sessionState
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -11,6 +14,7 @@ import {
   createSession,
   installSessionState,
   promptSession,
+  rootSessionIdOf,
   sessionCwdOf,
 } from '../src/client/lib/sessionState';
 
@@ -121,5 +125,56 @@ describe('sessionCwdOf（新对话沿用来源会话工作区）', () => {
     expect(sessionCwdOf('')).toBeNull();
     install({});
     expect(sessionCwdOf('s1')).toBeNull();
+  });
+});
+
+describe('rootSessionIdOf（面板会话归属：子会话上溯到主对话）', () => {
+  it('主会话（无父链）→ 自身；null/undefined/空串 → undefined；缺服务 → 原样返回', () => {
+    install({});
+    expect(rootSessionIdOf('main')).toBe('main');
+    expect(rootSessionIdOf(null)).toBeUndefined();
+    expect(rootSessionIdOf(undefined)).toBeUndefined();
+    expect(rootSessionIdOf('')).toBeUndefined();
+    installSessionState(null);
+    expect(rootSessionIdOf('main')).toBe('main');
+  });
+
+  it('已寻址子代理会话：subagentAddress 父链（含多级）上溯到根', () => {
+    const parents: Record<string, string> = {
+      child: 'main',
+      'grand-child': 'child',
+    };
+    install({
+      subagentAddress: (id: string) =>
+        parents[id] === undefined ? undefined : { parentSessionId: parents[id] },
+    });
+    expect(rootSessionIdOf('child')).toBe('main');
+    expect(rootSessionIdOf('grand-child')).toBe('main');
+  });
+
+  it('无 subagentAddress 时退会话列表行 parentId 上溯；subagentAddress 优先', () => {
+    install({
+      subagentAddress: (id: string) =>
+        id === 'child' ? { parentSessionId: 'from-address' } : undefined,
+      list: {
+        getSnapshot: () => ({
+          byId: { child: { parentId: 'from-row' }, other: { parentId: 'main' } },
+        }),
+      },
+    });
+    expect(rootSessionIdOf('child')).toBe('from-address');
+    expect(rootSessionIdOf('other')).toBe('main');
+  });
+
+  it('畸形父值（非串/空串）不上溯；成环截断不死循环', () => {
+    install({
+      subagentAddress: (id: string) =>
+        ({ odd: { parentSessionId: 42 }, blank: { parentSessionId: '' } })[id],
+      list: { getSnapshot: () => ({ byId: { a: { parentId: 'b' }, b: { parentId: 'a' } } }) },
+    });
+    expect(rootSessionIdOf('odd')).toBe('odd');
+    expect(rootSessionIdOf('blank')).toBe('blank');
+    // a↔b 成环：seen 截断，返回首个重复前的节点（b），不挂死。
+    expect(rootSessionIdOf('a')).toBe('b');
   });
 });

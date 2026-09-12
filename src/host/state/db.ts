@@ -47,7 +47,10 @@ import { fallbackExecutionPrompt, PERSONA_FRAMEWORK_VERSION } from '../prompts/p
  * 标识取行；旧库 getDb 迁移回填。
  * v13（任务状态精简，用户迭代 2026-09-11）：11 态 → 7 态——draft/ready/wait
  * 并入 ready，wait_decision/failed 并入 wait_user（存量行状态回填）；
- * blocked_from 列弃用不再读写（不 DROP）；task.status 列默认值改 ready。 */
+ * blocked_from 列弃用不再读写（不 DROP）；task.status 列默认值改 ready。
+ * 注：随后用户迭代又恢复独立 `wait`=待领队分诊（8 态，语义与旧 wait 不同），
+ * 纯 TEXT 枚举无结构变更——本迁移只在 version < 13 的旧库执行一次，不会
+ * 触碰新语义的 wait 行。 */
 export const DB_SCHEMA_VERSION = 13;
 
 /**
@@ -809,18 +812,34 @@ function migrateRootFlagV12(db: DatabaseSync): void {
  * v13 迁移（任务状态精简，用户迭代 2026-09-11）：11 态存量行回填到新 7 态
  * ——`draft`/`wait` → `ready`（草稿与就绪同义、等待派发并入 start 语义），
  * `wait_decision`/`failed` → `wait_user`（等用户统一）。blocked_from 列弃用，
- * 存量物化标记一并清空（列保留在库里，不 DROP——DROP 是单向门）。纯 UPDATE
- * 幂等自愈，重开重跑不报错、不显式开事务（随 v4/v5 先例）。 */
+ * 存量物化标记一并清空（列保留在库里，不 DROP——DROP 是单向门）。纯 UPDATE，
+ * 不显式开事务（随 v4/v5 先例）。
+ *
+ * **必须一次性**（2026-09-11 回归修复）：`wait` 随后被重新引入（语义变为
+ * 「待领队分诊」），若本迁移继续每次开库无条件执行，会把新语义的 wait 行
+ * 洗成 ready——实测症状为任务失败落 wait 后一重启宿主就变回 ready、领队
+ * 分诊入口消失。故按 v9 先例在 schema_meta 落一次性标记
+ * `v13_task_status_migrated`，只跑一次；旧 wait 已在本标记写入前的那一轮
+ * 处理完，新 wait 此后不再被触碰。
+ */
 function migrateTaskStatusV13(db: DatabaseSync): void {
   const columns = (
     db.prepare('PRAGMA table_info(task)').all() as Array<{ name: string }>
   ).map((c) => c.name);
   if (columns.length === 0) return; // task 不存在：不会发生（防御）
+  const marker = db
+    .prepare("SELECT value FROM schema_meta WHERE key = 'v13_task_status_migrated'")
+    .get() as { value: string } | undefined;
+  if (marker !== undefined) return;
   db.exec("UPDATE task SET status = 'ready' WHERE status IN ('draft','wait')");
   db.exec("UPDATE task SET status = 'wait_user' WHERE status IN ('wait_decision','failed')");
   if (columns.includes('blocked_from')) {
     db.exec('UPDATE task SET blocked_from = NULL WHERE blocked_from IS NOT NULL');
   }
+  const now = Date.now();
+  db.prepare(
+    "INSERT INTO schema_meta (key, value, created_time, update_time) VALUES (?, '1', ?, ?)",
+  ).run('v13_task_status_migrated', now, now);
 }
 
 /** 关闭并丢弃该状态根的缓存连接（测试收尾 / 状态根失效时用）。 */
@@ -869,7 +888,9 @@ const SCHEMA_SQL = `-- =========================================================
 -- roles 补 is_root（保留角色 system=1 其余=0——system 的 persona_md 存注入
 -- 主对话 system 提示词的原文，默认空；旧库经 getDb 迁移回填）；v13 任务状态
 -- 精简（用户迭代 2026-09-11）：11 态 → 7 态——draft/ready/wait 并入 ready，
--- wait_decision/failed 并入 wait_user（旧库经 getDb 迁移回填状态值）；
+-- wait_decision/failed 并入 wait_user（旧库经 getDb 迁移回填状态值）；随后
+-- 又恢复独立 wait=待领队分诊（8 态，语义与旧 wait 不同：失败自动重试超限落
+-- wait，领队分诊后 loop 回 ready 或升级 wait_user——TEXT 枚举无结构变更）；
 -- task.blocked_from 列弃用不再读写（列保留不 DROP），status 列默认值改 ready
 -- 主键 = 每张表自己的编号列，统一 INTEGER 自增（schema_meta 例外：key 即主键）
 -- 时间列一律 *_time 结尾（Unix 毫秒）；每张表末尾 created_time / update_time
@@ -963,9 +984,9 @@ CREATE TABLE IF NOT EXISTS task (
   member_chain_list TEXT NOT NULL DEFAULT '[]',  -- 执行链站点列表（JSON 数组：[{member, stageBrief}]；v7 站点 member 写工号数字，迁移解析不到班底行的旧站点保留名字字符串并在渲染时标注 legacy）
   chain_cursor      INTEGER NOT NULL DEFAULT -1, -- -1=没开始；k=第 k 站完成；末站完成→completed
   status            TEXT NOT NULL DEFAULT 'ready',
-                    -- creating / ready / start / paused / wait_user /
-                    -- completed / cancelled（用户迭代 2026-09-11 精简为 7 态；
-                    -- 大任务 completed 可回 ready）
+                    -- creating / ready / start / wait / paused / wait_user /
+                    -- completed / cancelled（用户迭代 2026-09-11：精简为 7 态后
+                    -- 又恢复独立 wait=待领队分诊 = 8 态；大任务 completed 可回 ready）
   current_member    TEXT,                -- 当前执行成员名（松引用：成员移除也不影响这列）
   current_member_id INTEGER,             -- 当前执行成员 ID（v2 的 member.member_id 口径随 v3 合并废弃；写入代码恒置 NULL，物理残留列）
   main_session_id   TEXT,                -- 主会话 ID 快照（v5 落列 v6 改名：建任务时登记的主会话 ID，落库后不变；直查/展示用）

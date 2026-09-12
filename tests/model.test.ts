@@ -34,7 +34,7 @@ function makeTask(overrides: Partial<TaskRecord> = {}): TaskRecord {
   };
 }
 
-describe('task state machine edges (7 态, 用户迭代 2026-09-11)', () => {
+describe('task state machine edges (8 态，用户迭代 2026-09-11)', () => {
   it('creating 收口与放弃：creating -> ready / cancelled 合法，不经转移进入', () => {
     // 面板手动建任务容器：完善收口（finalizeCommissionTask）转 ready、
     // 用户放弃转 cancelled——creating 只在创建时直接落状态，无入边。
@@ -68,13 +68,33 @@ describe('task state machine edges (7 态, 用户迭代 2026-09-11)', () => {
     expect(task.status).toBe('ready');
   });
 
-  it('失败重试与改派归位：start -> ready；重试超限 start -> wait_user', () => {
+  it('失败重试与改派归位：start -> ready；超限 start -> wait', () => {
     const retry = makeTask({ status: 'start' });
     applyTransition(retry, 'ready', T0 + 1);
     expect(retry.status).toBe('ready');
     const exhausted = makeTask({ status: 'start' });
-    applyTransition(exhausted, 'wait_user', T0 + 2);
-    expect(exhausted.status).toBe('wait_user');
+    applyTransition(exhausted, 'wait', T0 + 2);
+    expect(exhausted.status).toBe('wait');
+  });
+
+  it('待领队分诊（wait）：loop 回 ready / 升级 wait_user / 挂起 / 取消合法', () => {
+    const loop = makeTask({ status: 'wait' });
+    applyTransition(loop, 'ready', T0 + 1);
+    expect(loop.status).toBe('ready');
+    const escalate = makeTask({ status: 'wait' });
+    applyTransition(escalate, 'wait_user', T0 + 1);
+    expect(escalate.status).toBe('wait_user');
+    const suspend = makeTask({ status: 'wait' });
+    applyTransition(suspend, 'paused', T0 + 1);
+    expect(suspend.status).toBe('paused');
+    const cancel = makeTask({ status: 'wait' });
+    applyTransition(cancel, 'cancelled', T0 + 1);
+    expect(cancel.status).toBe('cancelled');
+  });
+
+  it('wait 不直跳 completed（分诊后必须回 ready/start 再跑）', () => {
+    const task = makeTask({ status: 'wait' });
+    expect(() => applyTransition(task, 'completed', T0 + 1)).toThrow(TransitionError);
   });
 
   it('挂起/恢复：ready -> paused -> ready', () => {

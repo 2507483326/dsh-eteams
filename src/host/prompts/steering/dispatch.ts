@@ -76,3 +76,30 @@ export function captainCommissionPrompt(
     captainCommissionMessage(taskId, subject, description),
   ].join('\n');
 }
+
+/**
+ * 面板「开始/继续」的开跑批准正文（用户 2026-09-12「任务重新开始有领队的
+ * 情况下怎么没有走领队了，开始之前需要先唤醒一下主对话」）：宿主静默解析/
+ * 复活主会话锚点后，把开跑批准派给本大任务的领队子代理（turn='start'），
+ * 由领队按既有执行链指派——不再由宿直接把成员派出去而绕过领队。本回合转交
+ * 内容经回合 sidecar 由 eteams_captain_guide 的 snapshot.latestMessage 送达。
+ * `taskId` = 被点开跑的任务号（主任务或小任务），`rootTaskId` = 其所属主任务号。
+ */
+export function captainStartMessage(
+  taskId: number,
+  subject: string,
+  rootTaskId: number,
+  resumed: boolean,
+): string {
+  const action = resumed ? '开始（继续）' : '开始';
+  const scope = taskId === rootTaskId ? '' : `（属于主任务 #${rootTaskId}）`;
+  return [
+    '【用户批准开跑】',
+    `用户已在面板点击「${action}」，批准${resumed ? '恢复' : '开跑'}任务 #${taskId}（${subject}）${scope}。`,
+    '',
+    '请按既有计划执行指派（不要重新拆解、不要重复建任务）：',
+    `1. 用 eteams_task_board 核对主任务 #${rootTaskId} 的执行链与当前就绪站；`,
+    '2. 按链就绪即派：用 eteams_assign_task 指派当前站成员（依赖未满足/成员未就绪的卡按既有纪律处理；成员未就绪先 eteams_add_member）；',
+    '3. 完成后用 report 发一句进展（谁在做什么、下一步）。',
+  ].join('\n');
+}

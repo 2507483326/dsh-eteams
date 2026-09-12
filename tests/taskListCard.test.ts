@@ -47,9 +47,9 @@ const byId = (tasks: TaskView[], id: number): TaskView => {
 };
 
 describe('deletableOf（镜像 host deleteTask 守卫口径）', () => {
-  it('① 本身未领取才可删：creating/ready ✓（creating 仅容器分支放宽），已入执行/终态 ✗（7 态逐格）', () => {
+  it('① 本身未领取才可删：creating/ready ✓（creating 仅容器分支放宽），已入执行/待领队/终态 ✗（8 态逐格）', () => {
     const deletableStates = ['creating', 'ready'];
-    const undeletableStates = ['start', 'paused', 'wait_user', 'completed', 'cancelled'];
+    const undeletableStates = ['start', 'wait', 'paused', 'wait_user', 'completed', 'cancelled'];
     for (const status of [...deletableStates, ...undeletableStates]) {
       const tasks = [taskOf({ taskId: 1, status })];
       expect(deletableOf(byId(tasks, 1), tasks), status).toBe(

@@ -29,6 +29,7 @@ import {
   assignTask,
   advanceTask,
   reassignTask,
+  escalateTask,
   suspendTask,
   resumeTask,
   cancelTask,
@@ -1064,10 +1065,10 @@ export function createCaptainTools(
   const reassignTaskTool = defineTool({
     name: 'eteams_reassign_task',
     description:
-      '改派进行中/待用户（wait_user）任务：吊销当前 attempt（旧 token 立即失效），任务转新成员。链任务偏离需 deviationNote。也用于处置待用户任务。',
+      '改派进行中/待领队(wait)/待用户(wait_user)任务：吊销当前 attempt（旧 token 立即失效），任务转新成员/原成员重新执行。wait 任务（失败自动重试超限后）用本工具重新派人 loop——member 缺省=最近执行者。链任务偏离需 deviationNote。',
     parameters: {
       taskId: intR('任务号'),
-      member: str('新成员工号（缺省=原成员重派；同名成员必须用工号）'),
+      member: str('新成员工号（缺省=原成员/最近执行者重派；同名成员必须用工号）'),
       deviationNote: str('偏离原因（偏离链时必填）'),
     },
     output: {
@@ -1093,6 +1094,33 @@ export function createCaptainTools(
         { ...args },
       );
       return { ok: true as const, taskId: task.id, member: attempt.member, attemptId: attempt.id };
+    },
+  });
+
+  const escalateTaskTool = defineTool({
+    name: 'eteams_escalate_task',
+    description:
+      '升级待领队(wait)任务为待用户(wait_user)：流程/环境类问题（非小 bug）交用户决策时用——开一条决策记录并把问题交给用户；小 bug 请改用 eteams_reassign_task 重新指派 loop。',
+    parameters: { taskId: intR('任务号'), note: str('升级原因/要用户决策的问题') },
+    output: {
+      schema: {
+        type: 'object' as const,
+        properties: { ok: bool('是否成功'), taskId: int('任务号') },
+        additionalProperties: false as const,
+      },
+      render: (_a, v) => text(`任务 #${v.taskId} 已升级为待用户`),
+    },
+    execute: async (args, exec) => {
+      const env = envForAgent(config, runtime, exec.agent, exec.signal);
+      const caller = await resolveCaller(env, exec.agent!);
+      if (caller.kind !== 'captain') throw new ETeamsError('只有领队可以升级任务');
+      const task = await escalateTask(
+        env,
+        { teamId: caller.team.id, actor: caller.actor },
+        args.taskId,
+        args.note,
+      );
+      return { ok: true as const, taskId: task.id };
     },
   });
 
@@ -1253,7 +1281,7 @@ export function createCaptainTools(
   const captainGuideTool = defineTool({
     name: 'eteams_captain_guide',
     description:
-      '领取领队规程与本回合任务（领队子代理每回合第一步先调本工具）：返回 guide=工作流程全文（含回合决策表 + 角色手册）、turn=本回合种类（dispatch=主对话转交 / commission=面板任务完善 / none=无待处理转交）、snapshot=快照 JSON（taskId 锚定主任务 / teamStatus 团队现状 / latestMessage 本回合转交内容 / parentSessionId 发起会话 id）。只读幂等，可重复领取。',
+      '领取领队规程与本回合任务（领队子代理每回合第一步先调本工具）：返回 guide=工作流程全文（含回合决策表 + 角色手册）、turn=本回合种类（dispatch=主对话转交 / commission=面板任务完善 / start=面板开始批准 / none=无待处理转交）、snapshot=快照 JSON（taskId 锚定主任务 / teamStatus 团队现状 / latestMessage 本回合转交内容 / parentSessionId 发起会话 id）。只读幂等，可重复领取。',
     parameters: {},
     output: {
       schema: {
@@ -1261,7 +1289,9 @@ export function createCaptainTools(
         properties: {
           ok: bool('是否成功'),
           guide: str('领队工作流程全文（含回合决策表与角色手册）'),
-          turn: str('本回合种类：dispatch=主对话转交 / commission=面板任务完善 / none=无待处理转交'),
+          turn: str(
+            '本回合种类：dispatch=主对话转交 / commission=面板任务完善 / start=面板开始批准 / none=无待处理转交',
+          ),
           snapshot: str(
             '会话快照 JSON（taskId 锚定主任务 / teamStatus 团队现状 / latestMessage 本回合转交内容 / parentSessionId 发起会话 id）',
           ),
@@ -1518,6 +1548,7 @@ export function createCaptainTools(
     assignTaskTool,
     advanceTaskTool,
     reassignTaskTool,
+    escalateTaskTool,
     suspendTaskTool,
     resumeTaskTool,
     cancelTaskTool,
