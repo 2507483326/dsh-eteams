@@ -133,9 +133,11 @@ export function RosterAddPage({
     setAiPrefill(outcome);
     // 填充落地即收掉整页团队页弹窗（用户迭代 2026-09-09「填充后隐藏弹窗」）：
     // not-started 场景本页开在整页团队页（dialog 层）里，命令进了对话输入框
-    // 却被弹窗盖住——set/copied（非 aborted）即广播关页信号，用户直接看到
-    // 输入框回车发送。对话内 tab 场景弹窗未开，信号无接收方、零副作用。
-    if (outcome !== 'aborted') requestCloseTeamsPage();
+    // 却被弹窗盖住——命令确实落地（set）才广播关页信号，用户直接看到输入框
+    // 回车发送。copied（写不进 composer、只进了剪贴板）不收页：关页只会让
+    // 「已复制」提示一起消失，用户看到空输入框 = 静默无效果（2026-09-12 用户
+    // 报告「填充没效果」）。对话内 tab 场景弹窗未开，信号无接收方、零副作用。
+    if (outcome === 'set') requestCloseTeamsPage();
   };
   // 复制成功态（用户迭代 2026-09-09）：写入剪贴板成功 → 复制钮就地亮成功
   // 态（边框+勾转 --success 绿），2 秒后自动回弹——反馈收在按钮自身，任何

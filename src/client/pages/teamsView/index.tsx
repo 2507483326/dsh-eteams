@@ -79,9 +79,11 @@ import {
 import {
   consumePendingGotoAdd,
   consumePendingGotoRoster,
+  consumePendingGotoTask,
   consumePendingSelectTeam,
   GOTO_ADD_EVENT,
   GOTO_ROSTER_EVENT,
+  GOTO_TASK_EVENT,
   SELECT_TEAM_EVENT,
 } from '../../lib/bridge';
 import { navIdOfPath } from '../../lib/status';
@@ -250,6 +252,20 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
       consumePendingGotoRoster();
       navigate('/roster');
     };
+    // 「任务」信号（卡片「打开任务」直达，用户迭代 2026-09-12「任务创建好后，
+    // 主会话应该有一个卡片让用户跳转到任务页面」）：带 taskId 落任务详情
+    // （/tasks/:taskId），不带落任务列表。detail 可能是数字或数字串。
+    const hTask = (id: number | string | null): void => {
+      const numeric =
+        typeof id === 'number' ? id : typeof id === 'string' && id !== '' ? Number(id) : null;
+      navigate(numeric !== null && Number.isFinite(numeric) ? `/tasks/${numeric}` : '/tasks');
+    };
+    const onTask = (event: Event): void => {
+      // 已挂载路径由窗口事件处理；顺带消费 pending 标记，防标记滞留到下一次
+      // 挂载时把用户误拽回任务页（与 h 同口径，docs/19.16）。
+      consumePendingGotoTask();
+      hTask((event as CustomEvent<number | string>).detail);
+    };
     // 选中某个团队（弹层团队行点击）：board 视图随选择联动。M1 无团队详情
     // 路由（/team/:teamId 随 M4）——选择仍是纯 store 语义，不导航。
     const hSelect = (event?: Event): void => {
@@ -260,6 +276,7 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
     };
     window.addEventListener(GOTO_ADD_EVENT, h);
     window.addEventListener(GOTO_ROSTER_EVENT, hRoster);
+    window.addEventListener(GOTO_TASK_EVENT, onTask);
     window.addEventListener(SELECT_TEAM_EVENT, hSelect);
     // 补消费挂载前的跳转信号：跳转方先点宿主 tab 再触发本面板
     // 挂载，窗口事件会错过——pending 标记在这里兜底（docs/19.16）。
@@ -267,10 +284,13 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
     // 短暂呈现持久页签后跳转，零观感差异）。
     if (consumePendingGotoAdd()) h();
     if (consumePendingGotoRoster()) hRoster();
+    const pendingTask = consumePendingGotoTask();
+    if (pendingTask !== null) hTask(pendingTask);
     hSelect();
     return () => {
       window.removeEventListener(GOTO_ADD_EVENT, h);
       window.removeEventListener(GOTO_ROSTER_EVENT, hRoster);
+      window.removeEventListener(GOTO_TASK_EVENT, onTask);
       window.removeEventListener(SELECT_TEAM_EVENT, hSelect);
     };
   }, [dispatch, navigate]);

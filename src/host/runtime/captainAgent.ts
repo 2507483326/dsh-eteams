@@ -73,7 +73,10 @@ export function parseCaptainLabel(label: string | undefined): { leaderName: stri
  * persistent, not turn-scoped. root/taskId 供领队手册插槽按子会话直查本任务
  * 的领队副本行（免注册表扫描）。
  */
-const captainChildren = new Map<string, { teamId: string; root: string; taskId: string }>();
+const captainChildren = new Map<
+  string,
+  { teamId: string; root: string; taskId: string; parentSessionId: string }
+>();
 
 /** Register a freshly spawned captain child (identity.ts 领队解析依据). */
 export function registerCaptainChild(
@@ -81,14 +84,23 @@ export function registerCaptainChild(
   teamId: string,
   root = '',
   taskId = '',
+  parentSessionId = '',
 ): void {
   if (childId === '' || teamId === '') return;
-  captainChildren.set(childId, { teamId, root, taskId });
+  captainChildren.set(childId, { teamId, root, taskId, parentSessionId });
 }
 
 /** The team a captain child serves (undefined for non-captain sessions). */
 export function captainChildTeamOf(childId: string): string | undefined {
   return captainChildren.get(childId)?.teamId;
+}
+
+/** The main conversation a captain child was dispatched from（子代理树的直接
+ * 父）。captainFor 用它把「快照误记成领队子会话」的任务行换回真正的主会话，
+ * 免得成员子代理挂到领队子代理下（用户迭代 2026-09-12）。 */
+export function captainChildParentOf(childId: string): string | undefined {
+  const parent = captainChildren.get(childId)?.parentSessionId;
+  return parent === '' ? undefined : parent;
 }
 
 /** The workspace state root a captain child's team lives in (手册插槽用). */
@@ -422,8 +434,9 @@ export async function dispatchCaptainCore(
   // 再续聊——续聊触发的首轮装配就在子代理上下文里读手册插槽，登记滞后会
   // 漏一次（装配竞态）；失败清锚重建（老锚清掉，子会话换新）。
   const previous = replica.sessionId;
+  const parentSessionId = String(parent.id);
   if (previous !== '') {
-    registerCaptainChild(previous, teamId, root, taskKey);
+    registerCaptainChild(previous, teamId, root, taskKey, parentSessionId);
     try {
       await deliverToChild(subagents, parent, previous as unknown as SessionId, textTurn(prompt), sig);
       return { ok: true, relayed: dispatchAck(previous) };
@@ -436,7 +449,7 @@ export async function dispatchCaptainCore(
   // childId 由调用方预留并**先登记后 spawn**——子代理首次装配早于
   // startContinuable 兑现，插槽必须有登记可查。
   const spawnChildId = previous === '' ? childId : SessionId(randomUUID());
-  registerCaptainChild(String(spawnChildId), teamId, root, taskKey);
+  registerCaptainChild(String(spawnChildId), teamId, root, taskKey, parentSessionId);
   let start: { childId: string; messageId: unknown };
   try {
     start = await subagents.startContinuable({
@@ -458,7 +471,7 @@ export async function dispatchCaptainCore(
     throw error;
   }
   // 子代理的 eteams_* 调用按该团队领队解析（identity.ts / 跨工作区重指）。
-  registerCaptainChild(String(start.childId), teamId, root, taskKey);
+  registerCaptainChild(String(start.childId), teamId, root, taskKey, parentSessionId);
   if (String(start.childId) !== previous) {
     await persistReplicaSession(env, team.id, replica.id, String(start.childId));
   }

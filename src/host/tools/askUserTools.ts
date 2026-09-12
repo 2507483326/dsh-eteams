@@ -1,11 +1,12 @@
 /**
  * 子代理用户问答工具面（eteams_ask_user，2026-09-10 统一）：eteam 的所有子
  * 代理（领队/成员/构建师）需要向用户弹问答时统一走 eteams_ask_user——弹
- * DeepSeek 原生问答弹窗并阻塞等答案、答完同回合继续；弹窗目标优先提问子
- * 代理所属的**主对话**（任务锚/构建父会话记录的主会话，用户正在对话的窗
- * 口），主对话不在线由 runtime 退回提问会话自身。旧转交路径（eteams_ask_
- * answer 回收、steer 主会话代弹）已随统一退役。注册在根作用域、不进任何
- * deny 列表——成员经根注册表可见（MEMBER_DENIED_TOOLS 只 deny 管理面工具）。
+ * DeepSeek 原生问答弹窗并阻塞等答案、答完同回合继续；弹窗目标按「用户当前
+ * 所在会话」判定（2026-09-12）：用户正看着提问子代理自己的对话 → 就地弹，
+ * 否则弹提问子代理所属的**主对话**（任务锚/构建父会话记录的主会话），主对话
+ * 不在线由 runtime 退回提问会话自身。旧转交路径（eteams_ask_answer 回收、
+ * steer 主会话代弹）已随统一退役。注册在根作用域、不进任何 deny 列表——
+ * 成员经根注册表可见（MEMBER_DENIED_TOOLS 只 deny 管理面工具）。
  *
  * @module dsh-eteams/tools/askUserTools
  */
@@ -89,7 +90,7 @@ export function createAskUserTools(
   const askUserTool = defineTool({
     name: 'eteams_ask_user',
     description:
-      '需要用户本人决策时向用户弹问答：DeepSeek 原生问答弹窗直接弹在**主对话**（用户正在对话的窗口）并阻塞等你拿到答案；主对话不在线时自动退回弹在你自己的对话（侧边栏会有未决标记）。答完答案同步返回，你在同回合继续。一次问全 ≤5 问（每问 {id, question, header?, options: [{label, description?}], multiSelect?}），推荐项放首位并在 label 尾标注「（推荐）」。返回 mode=degraded 时按 degradeHint 降级：把问题写进汇报/消息文本直接问用户，不要再重试弹窗。',
+      '需要用户本人决策时向用户弹问答：DeepSeek 原生问答弹窗直接弹在**用户当前所在会话**（用户正看着你的对话就弹这里，否则弹主对话）并阻塞等你拿到答案；主对话不在线时自动退回弹在你自己的对话（侧边栏会有未决标记）。答完答案同步返回，你在同回合继续。一次问全 ≤5 问（每问 {id, question, header?, options: [{label, description?}], multiSelect?}），推荐项放首位并在 label 尾标注「（推荐）」。返回 mode=degraded 时按 degradeHint 降级：把问题写进汇报/消息文本直接问用户，不要再重试弹窗。',
     parameters: {
       questions: {
         type: 'array' as const,

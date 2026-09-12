@@ -10,8 +10,11 @@ import {
   activateETeamsTab,
   consumePendingGotoAdd,
   consumePendingGotoRoster,
+  consumePendingGotoTask,
   consumePendingSelectTeam,
   ETEAMS_TAB_LABEL,
+  GOTO_TASK_EVENT,
+  openTask,
   requestCloseTeamsPage,
   stageTeamSignals,
   teamsTabVisible,
@@ -217,14 +220,16 @@ describe('teamsTabVisible (DOM stub)', () => {
 
 describe('pending jump signals', () => {
   it('stage + consume is one-shot for every signal kind', () => {
-    stageTeamSignals({ memberBuilder: true, roster: true, teamId: 't1' });
+    stageTeamSignals({ memberBuilder: true, roster: true, teamId: 't1', taskId: 7 });
     expect(consumePendingGotoAdd()).toBe(true);
     expect(consumePendingGotoRoster()).toBe(true);
     expect(consumePendingSelectTeam()).toBe('t1');
+    expect(consumePendingGotoTask()).toBe(7);
     // consumed flags must not leak into a later mount
     expect(consumePendingGotoAdd()).toBe(false);
     expect(consumePendingGotoRoster()).toBe(false);
     expect(consumePendingSelectTeam()).toBe(null);
+    expect(consumePendingGotoTask()).toBe(null);
   });
 
   it('leaves flags untouched when the kind is not requested', () => {
@@ -232,6 +237,47 @@ describe('pending jump signals', () => {
     expect(consumePendingGotoAdd()).toBe(true);
     expect(consumePendingGotoRoster()).toBe(false);
     expect(consumePendingSelectTeam()).toBe(null);
+    expect(consumePendingGotoTask()).toBe(null);
+  });
+});
+
+describe('openTask (window stub)', () => {
+  const globalWin = globalThis as { window?: unknown };
+
+  afterEach(() => {
+    globalWin.window = undefined;
+    consumePendingGotoTask();
+  });
+
+  it('stages the task jump and activates the teams tab', () => {
+    const dispatched: { type: string; detail?: unknown }[] = [];
+    globalWin.window = {
+      CustomEvent: class FakeCustomEvent {
+        type: string;
+        detail?: unknown;
+        constructor(type: string, opts?: { detail?: unknown }) {
+          this.type = type;
+          this.detail = opts?.detail;
+        }
+      },
+      dispatchEvent: (event: { type: string }): true => {
+        dispatched.push(event as { type: string; detail?: unknown });
+        return true;
+      },
+    };
+    const tab = el('button', { attrs: { role: 'tab' } });
+    tab.ownText = ETEAMS_TAB_LABEL;
+    const { restore } = stubDocument(tab);
+    try {
+      expect(openTask(7)).toBe(true);
+      expect(tab.clicks).toBe(1);
+      expect(dispatched[0]?.type).toBe(GOTO_TASK_EVENT);
+      expect(dispatched[0]?.detail).toBe(7);
+      // pending 标记供尚未挂载的面板消费。
+      expect(consumePendingGotoTask()).toBe(7);
+    } finally {
+      restore();
+    }
   });
 });
 

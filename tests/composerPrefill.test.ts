@@ -8,6 +8,12 @@
  * node 环境无真 DOM，用最小 document/window 桩钉决策树；键入兜底路径
  * （原生 setter + input 事件）依赖浏览器全局，桩下静默降级不影响结果位。
  *
+ * 现宿主 contenteditable 写路（2026-09-12 用户报告「探索未至之境 页面团队
+ * 弹窗中的AI角色创建填充没效果」，诊断 `source=none outcome=copied
+ * census=none`）：dsh 0.1.2 起 composer 由 textarea 换 Lexical
+ * contenteditable（`[data-composer-input]`），旧 textarea 兜底恒空——本条
+ * 同步锁两代 DOM 写路（textarea 原生 setter / contenteditable 合成 paste）。
+ *
  * @module dsh-eteams/tests/composerPrefill
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -18,22 +24,84 @@ import {
   prefillComposer,
 } from '../src/client/lib/addPeople';
 
-/** 最小可写 textarea 桩（withComposerTextarea 的筛选面足够）。 */
-const fakeTextarea = (overrides: { disabled?: boolean; readOnly?: boolean } = {}) =>
-  ({
-    offsetParent: {},
-    disabled: false,
-    readOnly: false,
-    value: '',
-    focus: () => undefined,
-    setSelectionRange: () => undefined,
-    dispatchEvent: () => true,
-    ...overrides,
-  }) as unknown as HTMLTextAreaElement;
+/** 共享 textarea 原型：原生 value 访问器（addPeople 经 descriptor 取 setter）。 */
+const textareaProto = {
+  _v: '',
+  get value(): string {
+    return this._v;
+  },
+  set value(next: string) {
+    this._v = next;
+  },
+};
 
-/** 安装 document/window 最小桩，返回注册的 textarea 列表（可注入）。 */
-function stubDom(textareas: HTMLTextAreaElement[]): void {
-  vi.stubGlobal('document', { querySelectorAll: () => textareas });
+/** 最小可写 textarea 桩（composerField 的筛选面足够）。 */
+const fakeTextarea = (overrides: { disabled?: boolean; readOnly?: boolean } = {}) => {
+  const el = Object.create(textareaProto) as Record<string, unknown>;
+  el.offsetParent = {};
+  el.disabled = false;
+  el.readOnly = false;
+  el.focus = () => undefined;
+  el.dispatchEvent = () => true;
+  Object.assign(el, overrides);
+  return el as unknown as HTMLTextAreaElement;
+};
+
+/** 最小 DataTransfer 桩（setData/getData）。 */
+class FakeDataTransfer {
+  private readonly data = new Map<string, string>();
+  setData(type: string, value: string): void {
+    this.data.set(type, value);
+  }
+  getData(type: string): string {
+    return this.data.get(type) ?? '';
+  }
+}
+
+/** 最小 ClipboardEvent 桩（只带 clipboardData）。 */
+class FakeClipboardEvent {
+  readonly clipboardData: FakeDataTransfer;
+  constructor(_type: string, init: { clipboardData: FakeDataTransfer }) {
+    this.clipboardData = init.clipboardData;
+  }
+}
+
+/**
+ * 现宿主 composer contenteditable 桩：`data-composer-input` 标记 + 可编辑；
+ * dispatchEvent 模拟宿主 PASTE_COMMAND（读 clipboardData 写入 textContent）——
+ * pasteLands=false 表示合成事件被吞（composer 锁定）。
+ */
+const fakeEditable = (opts: { editable?: boolean; pasteLands?: boolean } = {}) => {
+  const el = {
+    textContent: '',
+    offsetParent: {},
+    getAttribute: (name: string) => (name === 'contenteditable' ? (opts.editable === false ? 'false' : 'true') : null),
+    focus: () => undefined,
+    dispatchEvent: (event: Event) => {
+      if (opts.pasteLands === false) return true;
+      const pasted = (event as unknown as { clipboardData?: FakeDataTransfer }).clipboardData?.getData(
+        'text/plain',
+      );
+      if (pasted !== undefined && pasted !== '') el.textContent = pasted;
+      return true;
+    },
+  };
+  return el as unknown as HTMLElement;
+};
+
+/** 安装 document/window/构造器桩（textareas 与 contenteditable 可分别注入）。 */
+function stubDom(
+  textareas: HTMLTextAreaElement[] = [],
+  options: { editable?: HTMLElement | null; execCommand?: (cmd: string, ui: boolean, value: string) => boolean } = {},
+): void {
+  vi.stubGlobal('HTMLTextAreaElement', { prototype: textareaProto });
+  vi.stubGlobal('DataTransfer', FakeDataTransfer);
+  vi.stubGlobal('ClipboardEvent', FakeClipboardEvent);
+  vi.stubGlobal('document', {
+    querySelectorAll: () => textareas,
+    querySelector: () => options.editable ?? null,
+    execCommand: options.execCommand,
+  });
   vi.stubGlobal('window', { confirm: () => true, setTimeout: () => 0 });
 }
 
@@ -43,7 +111,7 @@ afterEach(() => {
 
 describe('prefillComposer 分流（无 inputActions：整页团队页场景）', () => {
   it('无可写 textarea（无 DOM）→ 退化剪贴板 copied', () => {
-    // node 默认无 document：composerLive() 静默 false。
+    // node 默认无 document：composerField() 静默 null。
     expect(prefillComposer(undefined)).toBe('copied');
   });
 
@@ -52,9 +120,38 @@ describe('prefillComposer 分流（无 inputActions：整页团队页场景）',
     expect(prefillComposer(undefined)).toBe('copied');
   });
 
-  it('有可写 textarea（弹窗盖着的真 composer）→ set，不再退化剪贴板', () => {
-    stubDom([fakeTextarea()]);
+  it('有可写 textarea（旧宿主弹窗盖着的真 composer）→ set，写进原生 value', () => {
+    const field = fakeTextarea();
+    stubDom([field]);
     expect(prefillComposer(undefined)).toBe('set');
+    expect(field.value).toBe(ADD_PEOPLE_TEMPLATE);
+  });
+});
+
+describe('prefillComposer DOM 写路 · 现宿主 contenteditable（dsh 0.1.2+）', () => {
+  it('合成 paste 被宿主接住 → set，模板落进 composer', () => {
+    const field = fakeEditable();
+    stubDom([], { editable: field });
+    expect(prefillComposer(undefined)).toBe('set');
+    expect(field.textContent).toBe(ADD_PEOPLE_TEMPLATE);
+  });
+
+  it('paste 被吞（composer 锁定）时 execCommand 兜底 → set', () => {
+    const field = fakeEditable({ pasteLands: false });
+    stubDom([], {
+      editable: field,
+      execCommand: (_cmd, _ui, value) => {
+        field.textContent = value;
+        return true;
+      },
+    });
+    expect(prefillComposer(undefined)).toBe('set');
+    expect(field.textContent).toBe(ADD_PEOPLE_TEMPLATE);
+  });
+
+  it('无会话工作区触发器（contenteditable=false）→ copied，不谎报 set', () => {
+    stubDom([], { editable: fakeEditable({ editable: false }) });
+    expect(prefillComposer(undefined)).toBe('copied');
   });
 });
 

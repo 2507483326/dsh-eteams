@@ -538,6 +538,18 @@ describe('eteams_captain_guide (用户迭代 2026-09-10 领取完成流程)', ()
     expect(card.title).toBe('已领取领队规程');
   });
 
+  it('领队子代理人格纪律：问询弹窗优先/开跑前问/卡槽免问，report 不承载问题', () => {
+    // 用户 2026-09-12 两条口令：① 需要答复的问题必须弹 eteams_ask_user 弹窗、且在
+    // 执行前问；② 用户调整任务成员卡槽是正常情况、无需询问。
+    expect(CAPTAIN_CHILD_PERSONA).toContain('report 是**单向通知**');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('不得写进 report');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('问询时机');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('skipQuestionnaire=true');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('卡槽免问');
+    // 旧口径（把「需要用户决策」列为 report 场景）已移除。
+    expect(CAPTAIN_CHILD_PERSONA).not.toContain('需要用户决策/答复、任务升级');
+  });
+
   it('returns turn=none with an empty latestMessage when nothing was dispatched', async () => {
     seedTeam({ leaderChild: 'sess-child-1' });
     const guide = findGuideTool();

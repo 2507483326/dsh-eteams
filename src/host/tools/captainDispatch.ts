@@ -15,9 +15,10 @@
  * 登记（无 owner）、是运行时根，弹窗可以直接弹。问询调用失败时子代理把
  * 问题写进 report 降级（persona 有对应降级条款）。
  *
- * 汇报通道：dispatch 立即返回受理确认；子代理每轮结束经 `report` 工具把
- * 汇报发回主对话（harness 的 subagent-report 通道，消息形如
- * 「Background subagent <id> reported: …」），主会话原样展示给用户。
+ * 汇报通道：dispatch 立即返回受理确认；子代理仅特殊情况（需用户决策/升级
+ * 待用户/收口总结）经 `report` 工具把汇报发回主对话（harness 的
+ * subagent-report 通道，消息形如「Background subagent <id> reported: …」），
+ * 例行执行不汇报，主会话原样展示到达的汇报。
  *
  * @module dsh-eteams/tools/captainDispatch
  */
@@ -58,7 +59,7 @@ export function createCaptainDispatchTool(
   return defineTool({
     name: 'eteams_dispatch_captain',
     description:
-      '把用户交给团队的任务（或对任务的答复/追问、团队邮件通知）转交领队子代理主持——子会话按大任务锚定（随任务生灭），同一任务的后续转交在同一会话续聊。子代理直接向用户弹问询（ask_user_question），每轮汇报经子代理汇报消息送达本对话；本会话原样展示到达的汇报即可（简短确认，不要复述全文），不要直接调用 eteams_* 工具，也不要自己动手执行任务。',
+      '把用户交给团队的任务（或对任务的答复/追问、团队邮件通知）转交领队子代理主持——子会话按大任务锚定（随任务生灭），同一任务的后续转交在同一会话续聊。子代理直接向用户弹问询（ask_user_question）；例行执行不向本对话汇报，仅特殊情况（需用户决策、升级待用户、收口总结）经子代理汇报消息送达——到达后原样展示即可（简短确认，不要复述全文），不要直接调用 eteams_* 工具，也不要自己动手执行任务。',
     parameters: {
       taskId: int('锚定的大任务号（主任务/任务单；band 流程要求先建任务再转交时透传。不传 = 自动取该团队最近的一个主任务）'),
       message: strR('转交内容：用户任务/答复原话，或团队通知的要点'),

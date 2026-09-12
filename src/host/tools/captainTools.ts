@@ -381,7 +381,7 @@ export function createCaptainTools(
       interview: {
         type: 'object' as const,
         description:
-          '意图访谈（2026-09-10 统一问答）：把问题写入会话（发布前先播报步骤「意图访谈」），然后**立即调 eteams_ask_user 把同一组问题弹给用户**——原生弹窗直接弹在发起构建的主对话（不在线自动退回你的对话），答案由宿主自动写回构建会话（无须再 eteams_build_report(answers)），你在同回合继续起草。弹窗被拒/报错：不重试弹窗——按 degradeHint 把问题写进汇报文本直接问用户。',
+          '意图访谈（2026-09-10 统一问答）：把问题写入会话（发布前先播报步骤「意图访谈」），然后**立即调 eteams_ask_user 把同一组问题弹给用户**——原生弹窗弹在用户当前所在会话（用户正看着你的对话就弹这里，否则发起构建的主对话；不在线自动退回你的对话），答案由宿主自动写回构建会话（无须再 eteams_build_report(answers)），你在同回合继续起草。弹窗被拒/报错：不重试弹窗——按 degradeHint 把问题写进汇报文本直接问用户。',
         properties: {
           questions: {
             type: 'array' as const,
@@ -499,8 +499,8 @@ export function createCaptainTools(
         ...(args.newBuild === true ? { newBuild: true } : {}),
       });
       // 发布即返回（2026-09-10 统一问答）：interview 只写进构建会话，弹窗由
-      // 子代理随后自己调 eteams_ask_user 发起（原生弹窗直接弹在主对话，答案宿
-      // 主自动写回）。宿主不做任何会话路由/中转/唤醒。
+      // 子代理随后自己调 eteams_ask_user 发起（原生弹窗弹在用户当前所在会话，
+      // 否则主对话；答案宿主自动写回）。宿主不做任何会话路由/中转/唤醒。
       return {
         ok: true as const,
         status: session.status,
@@ -816,10 +816,12 @@ export function createCaptainTools(
   const createTaskTool = defineTool({
     name: 'eteams_create_task',
     description:
-      '创建任务：一句主题 + 合同（description/contractMd/idempotencyNote，合同统一写在一篇 Markdown 里：验收标准/允许改动/禁止改动/交付物分节）+ 显式 dependencies + 可选执行链 chain。对话任务拆解（docs/26）：传 parentTaskId 把本任务挂为对应主任务（任务单）下的小任务——chain 站点即成员槽，成员按序接力；小任务文件夹落在主任务文件夹 sub/ 下。',
+      '创建任务：一句主题 + 合同（description/contractMd/idempotencyNote，合同统一写在一篇 Markdown 里：验收标准/允许改动/禁止改动/交付物分节）+ 显式 dependencies + 可选执行链 chain。对话任务拆解（docs/26）：传 parentTaskId 把本任务挂为对应主任务（任务单）下的小任务——chain 站点即成员槽，成员按序接力；小任务文件夹落在主任务文件夹 sub/ 下。**拆解小任务必须带 parentTaskId**：本对话已有主任务时漏传会被宿主拒绝、不入库（否则会静默建成顶层任务，主任务页的小任务列表里看不到）；首次创建主任务请用 eteams_submit_task（本工具建的是任务，不是任务单容器）。',
     parameters: {
       subject: strR('任务主题（一句话，作为文件夹 slug）'),
-      parentTaskId: int('父主任务号（对话任务拆解：挂到对应任务单下）'),
+      parentTaskId: int(
+        '父主任务号（拆解小任务必填：挂到对应任务单下；本对话已有主任务时漏传会被拒绝）',
+      ),
       description: str('任务说明'),
       contractMd: str(
         '任务合同全文（Markdown）：## 验收标准（编号列表）/ ## 允许改动 / ## 禁止改动 / ## 交付物 分节统一写在这篇 MD 里',
@@ -858,14 +860,15 @@ export function createCaptainTools(
   const submitTaskTool = defineTool({
     name: 'eteams_submit_task',
     description:
-      '对话任务入口（docs/26）：用户在对话中把一个任务交给团队时先调它——立即生成任务 ID（主任务/任务单容器）与专属任务文件夹，面板「任务」页立刻以「创建中」显示（旋转动画 + 状态「创建中」+ 不可点进）。提交后按工作流推进：先向用户问询明确目标（结论用 eteams_update_task 写回本主任务 description），再用 eteams_create_task（带 parentTaskId）把任务拆解成多个小任务（每个小任务 chain 站点即成员槽）；拆解全部完成后**必须**再调本工具带 taskId 收口：回写主题/说明并把「创建中」转「待开始」（面板随即可开跑）。面板手动创建的任务（docs/panelTaskCommission）同样传 taskId 收口。',
+      '对话任务入口（docs/26）：用户在对话中把一个任务交给团队时先调它——立即生成任务 ID（主任务/任务单容器）与专属任务文件夹，面板「任务」页立刻以「创建中」显示（旋转动画 + 状态「创建中」+ 不可点进）。提交后按工作流推进：先向用户问询明确目标（结论用 eteams_update_task 写回本主任务 description），再用 eteams_create_task（带 parentTaskId）把任务拆解成多个小任务（每个小任务 chain 站点即成员槽）；拆解全部完成后**必须**再调本工具带 taskId 收口：回写主题/说明并把「创建中」转「待开始」（面板随即可开跑）——收口须带 questionnaire（问过用户的问题清单）或 skipQuestionnaire=true（用户已给全/要求直接开始），两者皆无会被宿主拒绝（问询必须在执行前完成）。面板手动创建的任务（docs/panelTaskCommission）同样传 taskId 收口。',
     parameters: {
       taskId: int(
         '收口目标主任务号（不带 = 新建主任务容器，先落「创建中」待拆解收口；带 = 拆解完成后收口，把「创建中」转「待开始」）',
       ),
       subject: strR('任务主题（一句话）'),
       description: str('当前对任务的理解/背景（问询后更新）'),
-      questionnaire: strArr('计划向用户问询的问题（留档；答案更新进 description）'),
+      questionnaire: strArr('收口时必带：问过用户的问题清单（留档；答案更新进 description）'),
+      skipQuestionnaire: bool('无需问询：用户已给全或要求直接开始时置 true（跳过收口问询自检）'),
     },
     output: {
       schema: {
@@ -895,12 +898,14 @@ export function createCaptainTools(
           ...(args.questionnaire !== undefined && args.questionnaire.length > 0
             ? { questionnaire: args.questionnaire }
             : {}),
+          ...(args.skipQuestionnaire === true ? { skipQuestionnaire: true } : {}),
         });
       } else {
-        // 锁定 + 增补守卫（用户迭代 2026-09-10）：本对话已有进行中的主任务
-        // 就不再开新容器——band 是软约束，这里是硬兜底（模型忘了带 taskId
-        // 或无视 band 时给出可执行出路）。终态容器不拦：项目收口后的新大
-        // 请求自然开新主任务。
+        // 锁定 + 增补守卫（用户迭代 2026-09-10；2026-09-12 加严「每个会话
+        // 只有一个主任务」）：本对话已有主任务（**含 completed**——完成只是
+        // 可回退标识）就不再开新容器——band 是软约束，这里是硬兜底（模型忘
+        // 了带 taskId 或无视 band 时给出可执行出路）。锚点只有容器删除或
+        // cancelled 才释放，故正常流程里本对话不会再建第二个主任务。
         const freshBefore = await readTeam(stateRootOf(env), caller.team.id);
         // env.sessionId 缺省（无会话上下文的调用）按无锚定处理：'' 在判据里
         // 恒返回 undefined，不误拦面板等无会话路径。
@@ -908,7 +913,7 @@ export function createCaptainTools(
           freshBefore !== undefined ? anchoredMainTaskOf(freshBefore, env.sessionId ?? '') : undefined;
         if (anchored !== undefined) {
           throw new ETeamsError(
-            `本对话已有进行中的主任务 #${anchored.id}「${anchored.subject}」——不要再另建主任务`,
+            `本对话已有主任务 #${anchored.id}「${anchored.subject}」——一个对话只有一个主任务（完成也不新开），不要再另建主任务`,
             caller.team.hasLeader
               ? `新请求用 eteams_dispatch_captain（taskId=${anchored.id}，message=用户原话）转交领队，由领队在主任务下增补小任务`
               : `新请求先问询，然后 eteams_create_task（parentTaskId=${anchored.id}）在主任务下增补小任务`,

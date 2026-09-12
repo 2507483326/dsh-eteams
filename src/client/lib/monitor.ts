@@ -163,7 +163,7 @@ export interface TeamSnapshot {
     retryCount: number;
     createdAt: number;
   }[];
-  /** 子代理待问答（转交主会话弹出、等提问方回收的问答单）。 */
+  /** 子代理待问答（弹窗落点按用户当前所在会话，等提问方回收的问答单）。 */
   pendingAsks: {
     askId: string;
     askingName: string;

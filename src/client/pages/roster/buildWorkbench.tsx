@@ -268,9 +268,10 @@ export function BuildWorkbench({ build, addMode, onConfirmed }: BuildWorkbenchPr
     refreshBuild();
   };
 
-  // 意图访谈作答走主对话弹窗（2026-09-10 统一问答）：构建子代理经
-  // eteams_ask_user 弹在发起构建的主对话（不在线退回它的子对话），答案由
-  // 宿主自动写回——工作台不再渲染平行问卷，只提示去处。
+  // 意图访谈作答走原生弹窗（2026-09-10 统一问答；2026-09-12 落点按「用户当
+  // 前所在会话」判定）：构建子代理经 eteams_ask_user 弹在用户当前所在会话
+  // （用户在看构建子对话就弹那里，否则发起构建的主对话；不在线退回它的子对
+  // 话），答案由宿主自动写回——工作台不再渲染平行问卷，只提示去处。
   // 重启代理等操作失败要可见（父会话不在线 / 网络问题），不再静默吞掉。
   const [interviewError, setInterviewError] = useState<string | null>(null);
   // 手动重启构建代理（用户迭代）：不答题也能派新代理重新核查/重新出题。
@@ -355,16 +356,17 @@ export function BuildWorkbench({ build, addMode, onConfirmed }: BuildWorkbenchPr
           </div>
           {build.interview !== undefined && build.interview.answers === undefined && (
             // 意图访谈去工作台化（用户反馈 2026-09-05「访谈怎么放到创建
-            // 页面去了」）：作答走问答弹窗——2026-09-10 统一问答后弹窗经
-            // eteams_ask_user 直接弹在发起构建的主对话，工作台只提示去处，
-            // 不再渲染平行问卷。
+            // 页面去了」）：作答走问答弹窗——2026-09-10 统一问答、2026-09-12
+            // 落点按「用户当前所在会话」判定后弹窗经 eteams_ask_user 弹在用户
+            // 当前所在会话（否则发起构建的主对话），工作台只提示去处，不再渲染
+            // 平行问卷。
             <div className="mb-1 mt-2.5 rounded-[10px] border border-solid border-primary px-3 py-2.5">
               <div className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
                 <PenLine className="h-4 w-4 text-primary" />
-                意图访谈——问答弹窗在发起构建的对话里
+                意图访谈——问答弹窗在用户当前所在会话
               </div>
               <div className={MUTED_CLASS}>
-                问答弹窗直接弹在发起构建的主对话（该对话不在线时退回构建子代理的对话）——逐题作答后构建自动继续。没看到弹窗？点「重启代理」重新出题。
+                问答弹窗弹在用户当前所在会话（用户在看构建子对话就弹那里，否则发起构建的主对话；该对话不在线时退回构建子代理的对话）——逐题作答后构建自动继续。没看到弹窗？点「重启代理」重新出题。
               </div>
               {interviewError !== null && (
                 <div className="mt-2 text-xs leading-5 text-destructive">⚠️ {interviewError}</div>

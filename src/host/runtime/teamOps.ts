@@ -17,6 +17,7 @@ import type {
   Actor,
   MemberRecord,
   ModelRouteSnapshot,
+  TaskMemberRecord,
   TaskRecord,
   TeamState,
 } from '../model/types.js';
@@ -303,10 +304,8 @@ export async function addMember(
         ...(member.persona.personaMd !== undefined && member.persona.personaMd !== ''
           ? { personaMd: member.persona.personaMd }
           : {}),
-        ...(route.model !== '' ? { model: route.model } : {}),
-        ...(route.reasoningEffort !== undefined && route.reasoningEffort !== ''
-          ? { reasoningEffort: route.reasoningEffort }
-          : {}),
+        // 路线三列整组抄（v9 provider 与 createTask 副本口径一致）。
+        ...routeToTaskMemberFields(route),
         avatar: member.avatar,
         createdAt: now,
       });
@@ -349,6 +348,47 @@ function routeFromParams(
     ...(trimmedModel !== '' && trimmedProvider !== '' ? { provider: trimmedProvider } : {}),
     ...(trimmedModel !== '' && trimmedEffort !== '' ? { reasoningEffort: trimmedEffort } : {}),
   };
+}
+
+/**
+ * 路线 → 任务副本行三列（v7 决策 5：建任务/加成员时从班底整行复制；v9 补
+ * provider）。model 空串 = 会话默认，三列一并省略/清空。建任务（assignment
+ * 的 createTask）与加成员两处副本行拷贝共用本件。
+ */
+export function routeToTaskMemberFields(
+  route: ModelRouteSnapshot,
+): Pick<TaskMemberRecord, 'model' | 'provider' | 'reasoningEffort'> {
+  const override = route.model !== '';
+  return {
+    model: override ? route.model : undefined,
+    provider: override && route.provider !== undefined && route.provider !== '' ? route.provider : undefined,
+    reasoningEffort:
+      override && route.reasoningEffort !== undefined && route.reasoningEffort !== ''
+        ? route.reasoningEffort
+        : undefined,
+  };
+}
+
+/**
+ * 成员路线同步进任务副本行（用户迭代 2026-09-12「修改团队成员的模型的时候能
+ * 把新的模型同步到成员表」）：副本行的 model/provider/reasoning_effort 原本
+ * 只在建任务/加成员时定版（v7 决策 14），手改班底路线后各任务副本行会停在旧
+ * 值。这里把班底当前路线整组镜像到该工号名下的所有副本行——已起会话的行也刷
+ * （spawn 读班底模板，副本列只作成员表真相；本次会话不变，下次起会话按新路线）。
+ * 同名成员按工号各归各；无号 legacy 行退按名。
+ */
+function syncMemberRouteToTaskMembers(team: TeamState, member: MemberRecord): void {
+  const fields = routeToTaskMemberFields(member.modelRoute);
+  for (const row of team.taskMembers) {
+    const mine =
+      member.employeeId !== undefined
+        ? row.employeeId === member.employeeId
+        : row.name === member.name;
+    if (!mine) continue;
+    row.model = fields.model;
+    row.provider = fields.provider;
+    row.reasoningEffort = fields.reasoningEffort;
+  }
 }
 
 /** 班底行定位（v7）：工号优先（同名成员各是一行），无号退按名（旧数据）。 */
@@ -423,8 +463,10 @@ export async function updateMember(
  * select on the member card). Empty model resets to 会话默认（用户迭代
  * 2026-09-04：settings agent-default-model，spawn 侧 sessionDefaultRouteOf）；
  * 有值即 override——provider 整组入档（v9 回归：同 id 模型跨提供方需消歧，
- * spawn 按它传 agentOptions.provider）。写班底行；副本行在建任务/派发时
- * 定版，不再随写同步（v7 #14）；已起会话的成员在下次起会话生效。
+ * spawn 按它传 agentOptions.provider）。写班底行；并同步进该成员的任务副本行
+ * （用户迭代 2026-09-12「修改团队成员的模型的时候能把新的模型同步到成员表」
+ * ——v7 #14 的「副本行不再随写同步」就地回补）；已起会话的成员在下次起会话
+ * 生效（spawn 读班底模板，副本列只作成员表真相）。
  */
 export async function setMemberModel(
   env: RuntimeEnv,
@@ -447,6 +489,8 @@ export async function setMemberModel(
   const fresh = await withTeam(env, team.id, (teamNow, _root, tx) => {
     const member = requireMemberTemplate(teamNow, params.name, params.employeeId);
     member.modelRoute = routeFromParams(params.provider, params.model, params.reasoningEffort);
+    // 用户迭代 2026-09-12：新路线同步进该成员的任务副本行（成员表）。
+    syncMemberRouteToTaskMembers(teamNow, member);
     insertEventInTx(tx, teamNow.id, {
       seq: 0,
       at: tx.now,
@@ -489,6 +533,9 @@ export async function setLeaderModel(
     // 班底领队行缺失（领队从未就位）静默不写——维持原口径。
     if (rosterLeader === undefined) return teamNow;
     rosterLeader.modelRoute = route;
+    // 领队也是普通成员（v7）：新路线同步进其各任务副本行（成员表）——用户
+    // 迭代 2026-09-12 与成员同口径。
+    syncMemberRouteToTaskMembers(teamNow, rosterLeader);
     insertEventInTx(tx, teamNow.id, {
       seq: 0,
       at: tx.now,

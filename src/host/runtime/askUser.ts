@@ -2,19 +2,21 @@
  * 子代理用户问答（eteams_ask_user 运行时编排，2026-09-10 统一）：eteam 的
  * 子代理（领队/成员/构建师）需要向用户弹问答时一律——
  * ① 审计行落 ask_questions（status=pending）：面板「待问答」徽标的数据源；
- * ② ctx.userQuestions.ask() 弹**DeepSeek 原生问答弹窗**并阻塞——目标优先
- *    提问子代理所属的**主对话**（用户正在对话的窗口，任务锚/构建父会话记
- *    录的主会话；主对话代理是活运行时根，原生弹窗直接接管它的输入区，侧
- *    边栏琥珀点常驻未决标记）；主对话不在线（CALLER_NOT_LIVE）或弹窗被拒
- *    时退回提问子代理自己的对话再试一次（子代理也是 continuable 运行时
- *    根，用户打开该会话即可作答）；答完同回合继续，答案同步返回；
+ * ② ctx.userQuestions.ask() 弹**DeepSeek 原生问答弹窗**并阻塞——目标按
+ *    「用户当前所在会话」判定（presence 心跳，见 runAskUser）：用户正看着
+ *    提问子代理自己的对话 → 就地弹；否则弹提问子代理所属的**主对话**（任务
+ *    锚/构建父会话记录的主会话；主对话代理是活运行时根，原生弹窗直接接管
+ *    它的输入区，侧边栏琥珀点常驻未决标记）；主对话不在线（CALLER_NOT_LIVE）
+ *    或弹窗被拒时退回提问子代理自己的对话再试一次（子代理也是 continuable
+ *    运行时根，用户打开该会话即可作答）；答完同回合继续，答案同步返回；
  * ③ 构建师调用时宿主自动把答案写回构建会话（answerBuildInterview，覆写幂
  *    等）——构建子代理无须再 eteams_build_report(answers)；
  * ④ 两次弹窗都被拒/服务缺失 → 行转 cancelled，返回 degradeHint（把问题写
  *    进汇报文本直接问用户的既有兜底）。
  *
- * 宿主不做更多会话路由：弹窗是原生组件，弹在哪由传入的 agent 决定；除主
- * 对话优先、自身兜底外不引入第三目标，也不唤醒任何对话的 LLM。
+ * 宿主不做更多会话路由：弹窗是原生组件，弹在哪由传入的 agent 决定；除
+ * presence 命中就地在提问会话弹、否则主对话优先、自身兜底外不引入第三目标，
+ * 也不唤醒任何对话的 LLM。
  * （旧转交路径——presence 判定、steer 主会话代弹、eteams_ask_answer 回收、
  * wakeAskingChild 唤醒——随统一整体退役，2026-09-10。）
  *
@@ -30,7 +32,7 @@ import {
   type AskQuestion,
 } from '../state/asks.js';
 import { stateRootOf, type RuntimeEnv } from './base.js';
-import { answerBuildInterview, readBuildSession } from './roleBuilder.js';
+import { answerBuildInterview, readBuildPresence, readBuildSession } from './roleBuilder.js';
 
 /** 调用者视图（工具层从 resolveCaller 结果投影；runtime 不反向依赖 tools）。 */
 export interface AskCallerView {
@@ -108,10 +110,18 @@ export async function runAskUser(
     return { mode: 'degraded', reason: '弹窗服务不可用（宿主未提供 userQuestions）' };
   }
 
-  // 弹窗目标：主对话优先（用户所在窗口）；不在线或未记录 → 提问会话自身。
+  // 弹窗目标按「用户当前所在会话」判定（用户 2026-09-12「判断用户当前在哪个
+  // 会话，如果在当前会话就弹当前会话，不在就弹主会话」）：presence 心跳命中
+  // 提问会话自身（用户正看着这个子对话）→ 就地弹；否则弹主对话（用户通常在
+  // 主对话里），主对话不在线退回提问会话自身。
+  const presence = readBuildPresence(root);
+  const userInAskingSession = presence !== null && presence.sessionId === caller.askingSessionId;
   const mainAgent = liveAgentOf(env.ctx, caller.mainSessionId);
-  const primary =
-    mainAgent !== undefined && mainAgent !== options.agent ? mainAgent : options.agent;
+  const primary = userInAskingSession
+    ? options.agent
+    : mainAgent !== undefined && mainAgent !== options.agent
+      ? mainAgent
+      : options.agent;
 
   const askId = newAskId();
   const now = Date.now();

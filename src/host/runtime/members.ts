@@ -22,16 +22,21 @@ import { memberBriefing, memberWelcome } from '../prompts/spawn/member.js';
 import { neutralizeInterpolation } from './sessionPersona.js';
 import { registerMemberSession } from './usage.js';
 import { taskDirAbs } from './docs.js';
+import { taskMemberBadge } from './roster.js';
 
 /** Label prefix identifying eteams member children. */
 export const MEMBER_LABEL_PREFIX = 'eteams-member:';
 
 /**
- * `eteams-member:<teamId>:<mainTaskId>:<employeeId>`（v7：标签带任务作用域
- * ——同一成员每个大任务各一套副本行/子会话）。
+ * `eteams-member:<名字>（T<mainTaskId>-ET<工号>）`：子代理 label 是宿主会话头部
+ * 面包屑的显示名（dsh-client-runtime projectList：`displayTitle = child.label
+ * ?? childId`），故必须以人名开头——v7 的纯数字尾串
+ * `<teamId>:<mainTaskId>:<employeeId>` 在头部读起来像时间（用户迭代
+ * 2026-09-12「子代理上面的名字没有了都是时间显示了」）。工牌后缀沿用 v7 的
+ * (任务, 工号) 作用域：同名成员、同一成员跨任务各是一行，显示上仍可区分。
  */
-export function buildMemberLabel(teamId: string, mainTaskId: number, employeeId: number): string {
-  return `${MEMBER_LABEL_PREFIX}${teamId}:${mainTaskId}:${employeeId}`;
+export function buildMemberLabel(mainTaskId: number, employeeId: number, name: string): string {
+  return `${MEMBER_LABEL_PREFIX}${name}（${taskMemberBadge(mainTaskId, employeeId)}）`;
 }
 
 /**
@@ -164,8 +169,9 @@ export async function spawnMember(
       : sessionDefaultRouteOf(env.ctx);
   const start = await env.ctx.subagents.startContinuable({
     provider: env.config.memberProvider,
-    // v7 标签带任务作用域：副本行 = (工号, 大任务)，各是各的子会话。
-    label: buildMemberLabel(String(team.id), row.mainTaskId ?? 0, row.employeeId ?? 0),
+    // 标签 = 显示名（宿主会话头部读 label）：名字在前，工牌后缀带 (任务, 工号)
+    // 作用域——副本行 = (工号, 大任务)，同名成员各是各的子会话。
+    label: buildMemberLabel(row.mainTaskId ?? 0, row.employeeId ?? 0, row.name),
     request: {
       prompt: [{ type: 'text', text: memberWelcome(team, row.name, template, taskBriefing(env, team, task)) }],
       parent: captain,

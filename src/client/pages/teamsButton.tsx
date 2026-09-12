@@ -72,6 +72,12 @@
  * 影响：选择/锁定/弹层交互照旧；persona/团队恢复对账在子代理会话一律跳过
  * （那是主会话语义）。
  *
+ * 团队徽章 hover（用户迭代 2026-09-12「团队徽章 hover 显示当前正在执行的任务
+ * 和人员」）：锁定徽章挂 shadcn Tooltip（原 vendor 预留件首次启用，Content 改
+ * bg-popover 弹层卡签名），面板列执行中任务逐行「头像 + 执行人 + 任务主题」；
+ * 无执行中任务时显示阶段文案（创建中 / 正在调度成员 / 等待中…，**领队不列入**）。
+ * 摘要口径在 lib/teamBadgeSummary 纯函数（单测锁定），本文件只做渲染接线。
+ *
  * @module dsh-eteams/client/teamsButton
  */
 import {
@@ -104,7 +110,8 @@ import {
   type RosterMember,
   type SessionIdentity,
 } from '../lib/api';
-import { useActivityMonitor } from '../lib/monitor';
+import { useActivityMonitor, type TeamSnapshot } from '../lib/monitor';
+import { teamBadgeSummary } from '../lib/teamBadgeSummary';
 import { getApp } from '../store/app';
 import { Avatar } from '../features/avatar/avatar';
 import { cn } from '../lib/cn';
@@ -117,6 +124,7 @@ import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
 import { Input } from '../components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../components/ui/tooltip';
 
 /** ================================== 类型 ================================== */
 
@@ -211,6 +219,13 @@ const CLEAR_BUTTON_CLASS =
    会话上没有可选可清的东西，脸面是纯只读标识。 */
 const IDENTITY_FACE_CLASS =
   'inline-flex h-7 shrink-0 cursor-default items-center gap-1.5 rounded-full border-none bg-business-tint px-2.5 text-[13px] leading-[18px] font-medium text-primary';
+
+/* 团队徽章 hover 面板（用户迭代 2026-09-12）：锁定徽章悬浮显示执行中任务+人员。
+   覆盖 TooltipContent 默认深色小气泡（bg-primary/text-primary-foreground/text-xs/
+   px-3 py-1.5）为弹层卡签名（bg-popover + --border 细线 + shadow-md，与
+   PopoverContent 同档）——cn 的 tailwind-merge 按组去重，后写覆盖。 */
+const BADGE_HOVER_CLASS =
+  'w-max max-w-[260px] rounded-lg border border-solid border-[color:var(--border)] bg-popover px-2.5 py-2 text-popover-foreground shadow-md';
 
 /** ================================== 常量与映射表 ================================== */
 
@@ -349,6 +364,43 @@ function SubagentIdentityFace({ identity }: { identity: SessionIdentity }): Reac
 }
 
 /**
+ * 团队徽章 hover 面板（用户迭代 2026-09-12「团队徽章 hover 显示当前正在执行的
+ * 任务和人员」）：执行中任务逐行「头像 + 执行人 + 任务主题」；无执行中任务时
+ * 显示当前阶段文案（创建中 / 正在调度成员 / 等待中…）。摘要口径见
+ * lib/teamBadgeSummary（纯函数、单测锁定；领队不列入）。
+ */
+function TeamBadgeHover({
+  team,
+  captainName,
+}: {
+  team: TeamSnapshot;
+  captainName: string;
+}): ReactNode {
+  const summary = teamBadgeSummary(team, captainName);
+  if (summary.executing.length === 0) {
+    return <span className="text-xs text-muted-foreground">{summary.statusLine}</span>;
+  }
+  // 执行人头像取成员行（assignee 是成员名；查不到则 Avatar 走首字兜底）。
+  const avatarByName = new Map(team.members.map((m) => [m.name, m.avatar]));
+  return (
+    <div className="flex flex-col gap-1.5">
+      {summary.executing.map((row) => {
+        const avatar = avatarByName.get(row.member);
+        return (
+          <div key={row.taskId} className="flex items-center gap-2">
+            <Avatar name={row.member} seed={avatar?.seed} salt={avatar?.salt} size={18} />
+            <span className="shrink-0 text-xs font-medium text-foreground">{row.member}</span>
+            <span className="max-w-[150px] truncate text-xs text-muted-foreground">
+              · {row.subject}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
  * 触发钮面（团队对话锁定，用户迭代 2026-09-10）：渲染在 Provider 子树内
  * （useActivityMonitor 需 store context），按选中面三分支——
  * - 角色面：头像 + 名字 + hover 清除钮（行为不变）；
@@ -359,6 +411,8 @@ function SubagentIdentityFace({ identity }: { identity: SessionIdentity }): Reac
  *   重选。
  * 失联判定门槛 `fetchedAt !== 0`：轮询首帧未落地前不判（快照空列表≠无团队），
  * 避免挂载瞬间解锁闪烁。
+ * 用户迭代 2026-09-12：锁定且队伍在快照里时挂 Tooltip 显示执行中任务+人员
+ * （TeamBadgeHover）；原生 title 让位给富面板（失联/未落地分支仍用 title 兜底）。
  */
 function TeamsTriggerButton(props: {
   selectedMember: RosterMember | null;
@@ -373,12 +427,16 @@ function TeamsTriggerButton(props: {
     state.fetchedAt !== 0 &&
     !state.teams.some((t) => t.teamId === props.selectedTeam!.teamId);
   const locked = props.selectedTeam !== null && !teamGone;
+  const team =
+    props.selectedTeam !== null
+      ? state.teams.find((t) => t.teamId === props.selectedTeam!.teamId)
+      : undefined;
   const onTriggerClick = (): void => {
     // 锁定徽章不可点击（不能打开 团队/角色 切换弹层）。
     if (locked) return;
     props.onButtonClick();
   };
-  return (
+  const button = (
     <Button
       variant="ghost"
       size="sm"
@@ -393,7 +451,9 @@ function TeamsTriggerButton(props: {
           : props.selectedTeam !== null
             ? teamGone
               ? '绑定的团队已删除——点击重新选择'
-              : `本对话已固定为团队「${props.selectedTeam.name}」对话`
+              : team === undefined
+                ? `本对话已固定为团队「${props.selectedTeam.name}」对话`
+                : undefined
             : undefined
       }
       aria-label="团队"
@@ -426,6 +486,18 @@ function TeamsTriggerButton(props: {
       )}
     </Button>
   );
+  // 锁定且队伍在快照里才挂 hover 面板——摘要直接来自这份快照。
+  if (locked && team !== undefined) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>{button}</TooltipTrigger>
+        <TooltipContent side="top" className={BADGE_HOVER_CLASS}>
+          <TeamBadgeHover team={team} captainName={team.captain.name} />
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+  return button;
 }
 
 /**

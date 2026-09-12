@@ -36,6 +36,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import { installCard } from './pages/eteamsCard';
+import { installTaskCard } from './pages/taskCard';
 import { EteamBuildCard } from './pages/buildCard';
 import { ETEAMS_TAB_LABEL, ETEAMS_VIEW_ID } from './lib/bridge';
 import { installClientDiagnostics, recordClientDiag } from './lib/diagnostics';
@@ -137,6 +138,11 @@ export function apply(ctx: Context): void {
   );
 
   guard('conversation.card', () => installCard(ctx));
+
+  // 任务卡片（用户迭代 2026-09-12「任务创建好后，主会话应该有一个卡片让用户
+  // 跳转到任务页面」）：主会话 eteams_submit_task 建主任务后在会话里折出一张
+  // 带「打开任务」按钮的卡片——与团队卡片同一 Conversation Node 机制。
+  guard('conversation.task-card', () => installTaskCard(ctx));
 
   // 会话未开始的新会话屏（hero）没有可供插件入驻的 additive 槽位——
   // hero 行两个席位都是 single 且已被宿主占用——因此走 DOM 注入：

@@ -82,6 +82,8 @@ export interface TeamsPanelOptions {
   readonly roster?: boolean;
   /** Select this team after landing (teamId). */
   readonly teamId?: string;
+  /** Land on the Tasks page for this task（/tasks/:taskId）. */
+  readonly taskId?: number;
 }
 
 /** A viewport-anchored rectangle in plain numbers (fixed positioning input). */

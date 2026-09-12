@@ -1,8 +1,10 @@
 /**
- * 子代理用户问答（eteams_ask_user，2026-09-10 统一路径）tests：弹窗目标优先
- * 提问方所属的**主对话**（任务锚 mainSessionId / 构建父会话，agents.get 取
- * 活运行时根），主对话不在线或拒收退回提问会话自身再试一次（ctx.userQuestions
- * .ask 阻塞等答案、同回合继续）——弹也先落审计行（面板徽标数据源），答案落
+ * 子代理用户问答（eteams_ask_user，2026-09-10 统一路径）tests：弹窗目标按
+ * 「用户当前所在会话」判定（2026-09-12 presence 心跳命中提问会话就就地弹），
+ * 否则优先提问方所属的**主对话**（任务锚 mainSessionId / 构建父会话，
+ * agents.get 取活运行时根），主对话不在线或拒收退回提问会话自身再试一次
+ * （ctx.userQuestions.ask 阻塞等答案、同回合继续）——弹也先落审计行（面板
+ * 徽标数据源），答案落
  * 行回传；构建师调用走 fallback 身份（构建会话 builderChildId 判定），答案由
  * 宿主自动写回构建会话；服务缺失 → 不落单直接降级；两连弹都被拒 → 行转
  * cancelled 后降级；非团队非构建调用者原样抛错。直接驱动工具 execute，走
@@ -24,6 +26,7 @@ import {
   readBuildSession,
   reportBuildProgress,
   setBuildParentSession,
+  writeBuildPresence,
 } from '../src/host/runtime/roleBuilder';
 import {
   normalizeAskAnswer,
@@ -323,6 +326,88 @@ describe('eteams_ask_user 弹窗目标主对话', () => {
     expect((ask.mock.calls[0]![0] as { agent?: unknown }).agent).toMatchObject({ id: 'cap-1' });
     expect((ask.mock.calls[1]![0] as { agent?: unknown }).agent).toMatchObject({ id: 'member-1' });
     expect(readAskSync(root, String(result.askId))?.status).toBe('answered');
+  });
+});
+
+// ---------- 弹窗目标=用户当前所在会话（presence 心跳判定，2026-09-12） ----------
+
+describe('eteams_ask_user 弹窗目标按用户当前所在会话判定', () => {
+  /** 桩 ctx 的 agents.get 改为按 id 命中（主对话在线的模拟）。 */
+  function withLiveAgent(ctx: Context, liveId: string): Context {
+    (ctx as unknown as { agents: { get: (id: string) => unknown } }).agents.get = (id) =>
+      id === liveId ? agentOf(id) : undefined;
+    return ctx;
+  }
+
+  it('presence 命中提问会话自身 → 就地弹（主对话在线也优先用户所在会话）', async () => {
+    seedTeam();
+    // 用户正看着成员甲的对话——presence 心跳上报的就是 member-1。
+    await writeBuildPresence(root, 'member-1');
+    const ask = fakeAsk('A');
+    const result = await callAsk(
+      askArgs(),
+      agentOf('member-1'),
+      withLiveAgent(fakeCtx({ userQuestions: { ask } }), 'cap-1'),
+    );
+    expect(result).toMatchObject({ ok: true, mode: 'self' });
+    expect(ask).toHaveBeenCalledTimes(1);
+    // 就地弹：目标是提问会话自身，不切到在线的 cap-1。
+    expect((ask.mock.calls[0]![0] as { agent?: unknown }).agent).toMatchObject({ id: 'member-1' });
+  });
+
+  it('presence 命中主对话（用户在看主对话）→ 弹主对话', async () => {
+    seedTeam();
+    await writeBuildPresence(root, 'cap-1');
+    const ask = fakeAsk('A');
+    await callAsk(
+      askArgs(),
+      agentOf('member-1'),
+      withLiveAgent(fakeCtx({ userQuestions: { ask } }), 'cap-1'),
+    );
+    expect((ask.mock.calls[0]![0] as { agent?: unknown }).agent).toMatchObject({ id: 'cap-1' });
+  });
+
+  it('presence 命中别的会话（既非提问会话也非主对话）→ 弹主对话', async () => {
+    seedTeam();
+    await writeBuildPresence(root, 'other-session');
+    const ask = fakeAsk('A');
+    await callAsk(
+      askArgs(),
+      agentOf('member-1'),
+      withLiveAgent(fakeCtx({ userQuestions: { ask } }), 'cap-1'),
+    );
+    expect((ask.mock.calls[0]![0] as { agent?: unknown }).agent).toMatchObject({ id: 'cap-1' });
+  });
+
+  it('presence 缺失/过期（未上报）→ 弹主对话', async () => {
+    seedTeam();
+    const ask = fakeAsk('A');
+    await callAsk(
+      askArgs(),
+      agentOf('member-1'),
+      withLiveAgent(fakeCtx({ userQuestions: { ask } }), 'cap-1'),
+    );
+    expect((ask.mock.calls[0]![0] as { agent?: unknown }).agent).toMatchObject({ id: 'cap-1' });
+  });
+
+  it('构建师场景同样按 presence：命中构建子对话 → 就地弹，不切父会话', async () => {
+    await reportBuildProgress(root, { request: 'r' });
+    await markBuilderChild(root, 'builder-1');
+    await reportBuildProgress(root, {
+      step: '意图访谈',
+      interview: {
+        questions: [{ id: 'q1', question: '你主要用它做什么？', options: [{ label: 'A' }] }],
+      },
+    });
+    await setBuildParentSession(root, 'cap-9');
+    await writeBuildPresence(root, 'builder-1');
+    const ask = fakeAsk('A');
+    const ctx = fakeCtx({ userQuestions: { ask } });
+    (ctx as unknown as { agents: { get: (id: string) => unknown } }).agents.get = (id) =>
+      id === 'cap-9' ? agentOf(id) : undefined;
+    await callAsk(askArgs(), agentOf('builder-1'), ctx);
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect((ask.mock.calls[0]![0] as { agent?: unknown }).agent).toMatchObject({ id: 'builder-1' });
   });
 });
 

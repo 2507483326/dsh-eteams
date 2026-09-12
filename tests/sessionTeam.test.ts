@@ -121,7 +121,7 @@ describe('sessionTeamSection branches', () => {
   it('runs the two-step workflow when no main task is anchored (先建任务再转交)', () => {
     // 用户迭代 2026-09-07 两步走：主会话第一步自己建主任务（标题由模型把
     // 原话简化），第二步转交持续领队子代理分解分配。锁定语义下该形态保留
-    // ——只在无进行中锚定主任务时走。
+    // ——只在无锚定主任务时走。
     setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
     const band = sessionTeamSection('s-other', () => team());
     expect(band).toContain('第一步·建任务');
@@ -145,6 +145,8 @@ describe('sessionTeamSection branches', () => {
     expect(band).toContain('eteams_dispatch_captain（taskId=3，message=用户原话）');
     expect(band).toContain('增补小任务');
     expect(band).toContain('parentTaskId=3');
+    // 领队子代理的问询工具是 eteams_ask_user（主会话路径才用 ask_user_question）。
+    expect(band).toContain('eteams_ask_user');
     expect(band).toContain('不要再 eteams_submit_task');
     // 两步走的建任务第一步不再出现。
     expect(band).not.toContain('第一步·建任务');
@@ -174,16 +176,29 @@ describe('sessionTeamSection branches', () => {
     expect(band).toContain('不要复述全文');
   });
 
-  it('falls back to two-step when all anchored main tasks are terminal (终态回退)', () => {
-    // 锚定判据只认非终态主任务：completed 容器不再锚定——band 回到两步走，
-    // 允许开新项目（新建主任务）。
+  it('falls through to two-step only when the session has no main task（无锚定回退）', () => {
+    // 锚定判据不以状态释放：completed 容器仍锚定（见下条用例），只有容器
+    // 删除或 cancelled（安全阀）才回退两步走。
     setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
     const band = sessionTeamSection('s-other', () =>
-      team({ tasks: [mainTask(3, 's-other', 'completed')] }),
+      team({ tasks: [mainTask(3, 's-other', 'cancelled')] }),
     );
     expect(band).toContain('第一步·建任务');
     expect(band).toContain('eteams_submit_task');
     expect(band).not.toContain('增补小任务');
+  });
+
+  it('stays anchored after the container completes（完成也不开新项目）', () => {
+    // 用户迭代 2026-09-12「每个会话只有一个主任务，完成只是暂时的」：容器
+    // completed 仍锚定——band 继续走增补子任务，不回两步走、不新开主任务。
+    setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
+    const band = sessionTeamSection('s-other', () =>
+      team({ tasks: [mainTask(3, 's-other', 'completed')] }),
+    );
+    expect(band).toContain('主任务 #3');
+    expect(band).toContain('增补小任务');
+    expect(band).toContain('容器完成也不新开');
+    expect(band).not.toContain('第一步·建任务');
   });
 
   it('branches on hasLeader in the two-step shape（docs/panelTaskCommission）', () => {
@@ -261,8 +276,8 @@ describe('绑定常驻（用户迭代 2026-09-10 锁定语义）', () => {
   });
 });
 
-describe('anchoredMainTaskOf（锚定判据：本会话最新非终态主任务）', () => {
-  it('picks the latest non-terminal main task of the session', () => {
+describe('anchoredMainTaskOf（锚定判据：本会话的主任务容器，删除/取消才释放）', () => {
+  it('picks the latest main task of the session regardless of status', () => {
     const t = team({
       tasks: [
         mainTask(1, 's-other', 'ready'),
@@ -272,13 +287,23 @@ describe('anchoredMainTaskOf（锚定判据：本会话最新非终态主任务�
     expect(anchoredMainTaskOf(t, 's-other')?.id).toBe(4);
   });
 
-  it('ignores terminal main tasks, other sessions, and subtasks', () => {
+  it('keeps anchoring a completed container（完成只是可回退标识，不开新项目）', () => {
+    // 用户迭代 2026-09-12「每个会话只有一个主任务，完成只是暂时的」：容器
+    // completed 仍锚定——新工作追加小任务即自动回 ready，不再开新主任务。
+    const t = team({ tasks: [mainTask(1, 's-other', 'completed')] });
+    expect(anchoredMainTaskOf(t, 's-other')?.id).toBe(1);
+  });
+
+  it('releases the anchor on cancelled（删除 = 行消失，天然释放）', () => {
+    const t = team({ tasks: [mainTask(5, 's-other', 'cancelled')] });
+    expect(anchoredMainTaskOf(t, 's-other')).toBeUndefined();
+  });
+
+  it('ignores other sessions and subtasks', () => {
     const t = team({
       tasks: [
-        mainTask(1, 's-other', 'completed'),
         mainTask(2, 's-else', 'ready'),
         { ...mainTask(3, 's-other', 'start'), parentId: 2 },
-        mainTask(5, 's-other', 'cancelled'),
       ],
     });
     expect(anchoredMainTaskOf(t, 's-other')).toBeUndefined();
@@ -293,10 +318,10 @@ describe('anchoredMainTaskOf（锚定判据：本会话最新非终态主任务�
     expect(anchoredMainTaskOf(t, 's-other')).toBeUndefined();
   });
 
-  it('treats wait_user as a non-terminal anchor and skips terminal ones', () => {
-    // 等待用户中的主任务仍在进行——继续锚定增补；已成终态（cancelled）
-    // 的不锚（用户迭代 2026-09-11：failed 已并入 wait_user，终态只剩
-    // completed/cancelled）。
+  it('anchors wait_user but releases cancelled', () => {
+    // 等待用户中的主任务仍锚定增补；cancelled 释放锚点（用户迭代 2026-09-11：
+    // failed 已并入 wait_user；2026-09-12：completed 不再释放，释放只剩
+    // cancelled 与删除）。
     const t = team({
       tasks: [mainTask(2, 's-other', 'wait_user'), mainTask(6, 's-other', 'cancelled')],
     });

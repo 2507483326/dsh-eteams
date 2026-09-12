@@ -71,6 +71,8 @@ import {
 } from './notifier.js';
 import { renderTeamDocs, taskDirAbs, teamWorkDirRel } from './docs.js';
 import { drainMembers, interruptMember, sendAssignmentInTx, spawnMember } from './members.js';
+import { captainChildParentOf } from './captainAgent.js';
+import { anchoredMainTaskOfCaller } from './sessionTeam.js';
 import { readBuildPresence } from './roleBuilder.js';
 import {
   cancelledNotice,
@@ -79,7 +81,7 @@ import {
   reportFailedMail,
   suspendedNotice,
 } from '../prompts/handoff/mails.js';
-import { ensureTaskWorkDir, rmTree, withTeam } from './teamOps.js';
+import { ensureTaskWorkDir, rmTree, routeToTaskMemberFields, withTeam } from './teamOps.js';
 
 /** 空唤醒动作（收件人不存在/未起会话时的占位）。 */
 const noWake: Wake = () => Promise.resolve(false);
@@ -139,7 +141,14 @@ export async function captainFor(
   team: TeamState,
   task: TaskRecord,
 ): Promise<Agent | undefined> {
-  const mainSession = (task.mainSessionId ?? '') || teamMainSessionOf(team);
+  // 快照若记的是领队子代理（拆解小任务是领队子代理调的 eteams_create_task，
+  // 小任务行会快照成领队子会话 id），换成它的主会话父——否则按它当父锚，成员
+  // 子代理会挂到领队子代理下，harness 顶部子代理列表要先展开领队才看得到其它
+  // 子代理（用户迭代 2026-09-12）。主会话快照本身（主对话）原样保留。
+  const snapshot = task.mainSessionId ?? '';
+  const mainSession =
+    (snapshot !== '' ? (captainChildParentOf(snapshot) ?? snapshot) : '') ||
+    teamMainSessionOf(team);
   if (mainSession !== '') {
     const live = env.ctx.agents.get(mainSession);
     if (live !== undefined) return live;
@@ -224,6 +233,26 @@ export async function createTask(
         '拆解小任务时用 parentTaskId 挂到主任务下',
       );
     }
+    // 入库守卫（用户迭代 2026-09-12「拆解漏传 parentTaskId，小任务散成顶层」）：
+    // 本对话已有锚定主任务（领队子代理按副本行/注册表换回它主持的大任务）时，
+    // 不带 parentTaskId 的创建一律拒绝、不入库——否则会静默建成顶层任务，
+    // 主任务详情页的小任务列表（按 parentId 过滤）里看不到。判据与 band/
+    // submit_task 守卫同源（anchoredMainTaskOf 家族，completed 仍锚定）。首次
+    // （本对话尚无主任务）放行：顶层任务创建路径不受影响。
+    const sessionId = params.mainSessionId ?? env.sessionId ?? '';
+    if (params.parentTaskId === undefined && sessionId !== '') {
+      const anchored = anchoredMainTaskOfCaller(team, sessionId);
+      if (anchored !== undefined) {
+        throw new ETeamsError(
+          kind === 'group'
+            ? `本对话已有主任务 #${anchored.id}「${anchored.subject}」——一个对话只有一个主任务（完成也不新开）`
+            : `本对话已有主任务 #${anchored.id}「${anchored.subject}」——创建任务必须挂在其下（parentTaskId=${anchored.id}）`,
+          kind === 'group'
+            ? '新项目请在新对话中发起；继续旧项目在其主任务下增补小任务'
+            : '不带 parentTaskId 会建成顶层任务（主任务下看不到）；首次创建主任务请用 eteams_submit_task',
+        );
+      }
+    }
     let parent: TaskRecord | undefined;
     if (params.parentTaskId !== undefined) {
       parent = team.tasks.find((t) => t.id === params.parentTaskId);
@@ -296,13 +325,8 @@ export async function createTask(
           ...(m.persona.personaMd !== undefined && m.persona.personaMd !== ''
             ? { personaMd: m.persona.personaMd }
             : {}),
-          ...(m.modelRoute.model !== '' ? { model: m.modelRoute.model } : {}),
-          ...(m.modelRoute.model !== '' && m.modelRoute.provider !== undefined && m.modelRoute.provider !== ''
-            ? { provider: m.modelRoute.provider }
-            : {}),
-          ...(m.modelRoute.reasoningEffort !== undefined && m.modelRoute.reasoningEffort !== ''
-            ? { reasoningEffort: m.modelRoute.reasoningEffort }
-            : {}),
+          // 路线三列整组抄（与加成员副本口径同源，v9 provider 消歧）。
+          ...routeToTaskMemberFields(m.modelRoute),
           avatar: m.avatar,
           createdAt: tx.now,
         });
@@ -417,6 +441,8 @@ export async function finalizeCommissionTask(
     contractMd?: string;
     /** 问询留档（与 eteams_submit_task 的 questionnaire 同词表）。 */
     questionnaire?: string[];
+    /** 显式跳过问询自检（用户已给全/要求直接开始）。 */
+    skipQuestionnaire?: boolean;
   },
 ): Promise<TaskRecord> {
   const out = await withTeam(env, who.teamId, (team, _root, tx) => {
@@ -428,6 +454,16 @@ export async function finalizeCommissionTask(
       throw new ETeamsError(
         `主任务 ${task.id} 处于 ${task.status}，无需重复提交`,
         '拆解小任务请用 eteams_create_task（带 parentTaskId）',
+      );
+    }
+    // 收口问询自检闸（用户 2026-09-12「应该要问就要在任务执行之前问」）：收口
+    // 是开跑闸（creating→ready），未问询不得放行——必须带 questionnaire（问过
+    // 用户的问题）或显式声明跳过（用户已给全/要求直接开始）。
+    const asked = params.questionnaire !== undefined && params.questionnaire.length > 0;
+    if (!asked && params.skipQuestionnaire !== true) {
+      throw new ETeamsError(
+        `主任务 ${task.id} 收口前必须先完成问询（FR-37）：用 eteams_ask_user（领队子代理）/ ask_user_question（主会话）向用户问清目标，再带 questionnaire 收口；用户已给全或要求直接开始时传 skipQuestionnaire=true。`,
+        '问询发生在执行之前：收口（creating→ready）是开跑闸，未问询不得进「待开始」。',
       );
     }
     const oldDir = task.workDir;

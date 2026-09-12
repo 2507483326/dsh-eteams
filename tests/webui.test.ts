@@ -22,7 +22,7 @@ import {
 } from '../src/host/runtime/roleBuilder';
 import { joinPath } from '../src/host/runtime/base';
 import { readCaptainTurn, unregisterCaptainChild } from '../src/host/runtime/captainAgent';
-import { clearSessionTeam } from '../src/host/runtime/sessionTeam';
+import { clearSessionTeam, setSessionTeam } from '../src/host/runtime/sessionTeam';
 import { getDb } from '../src/host/state/db';
 import { recordUsage, type UsageRecord } from '../src/host/state/usageStore';
 import { readTeamSync } from '../src/host/state/store';
@@ -132,19 +132,34 @@ interface SurfaceHarness {
   post: (path: string, body?: unknown) => Promise<{ code: number; body: string }>;
   /** live 会话注册表（ctx.agents.get 的底层 Map）——二十五轮 DA38 无领队
    * 锚点用例要「原主会话下线」（delete 键）驱动心跳退化路径。 */
-  captains: Map<string, { id: string; session: { header: { cwd: string } } }>;
+  captains: Map<string, FakeAgent>;
   /** ctx.agents 引用（三十七轮 DA50 冷恢复用例往上面挂 fake resume）。 */
   agents?: { get: (id: string) => unknown };
-  call?: (name: string, args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  /** 工具调用（默认主会话 cap-conv）；传 agent 可换会话——「一个团队多个
+   * 主任务」只能来自多个对话，用例借此模拟第二个对话（各自锚定自己的主任务）。 */
+  call?: (
+    name: string,
+    args: Record<string, unknown>,
+    agent?: FakeAgent,
+  ) => Promise<Record<string, unknown>>;
   /** 原始工具调用（不补收口）——观察「创建中」窗口的用例用它。 */
-  callRaw?: (name: string, args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  callRaw?: (
+    name: string,
+    args: Record<string, unknown>,
+    agent?: FakeAgent,
+  ) => Promise<Record<string, unknown>>;
   mem?: (
     agent: { id: string },
     name: string,
     args: Record<string, unknown>,
   ) => Promise<Record<string, unknown>>;
-  memberAgent?: (childId: string) => { id: string; session: { header: { cwd: string } } };
+  memberAgent?: (childId: string) => FakeAgent;
+  /** 造一个假会话（不同于主会话）——配合 setSessionTeam 绑定到同一团队。 */
+  agentFor?: (id: string) => FakeAgent;
 }
+
+/** 假 agent（工具执行只读 id + cwd）：主会话/第二个对话/成员子会话同形。 */
+type FakeAgent = { id: string; session: { header: { cwd: string } } };
 
 /** Shared route-registration plumbing (webServer + workspaceRegistry fakes).
  * workspaces 可覆写注册表列表（默认单工作区）——测试全局单库根去重用。 */
@@ -233,13 +248,14 @@ async function installFull(overrides: Partial<ETeamsResolvedConfig> = {}): Promi
   const callRaw = async (
     name: string,
     args: Record<string, unknown>,
+    agent: FakeAgent = captainAgent,
   ): Promise<Record<string, unknown>> => {
     const tool = captainTools.find((t) => t.name === name);
     if (!tool) throw new Error(`missing captain tool ${name}`);
     return (await tool.execute(
       args as never,
       {
-        agent: captainAgent,
+        agent,
         signal: undefined,
       } as never,
     )) as Record<string, unknown>;
@@ -251,14 +267,22 @@ async function installFull(overrides: Partial<ETeamsResolvedConfig> = {}): Promi
   const call = async (
     name: string,
     args: Record<string, unknown>,
+    agent: FakeAgent = captainAgent,
   ): Promise<Record<string, unknown>> => {
-    const result = await callRaw(name, args);
+    const result = await callRaw(name, args, agent);
     if (name === 'eteams_submit_task' && args.taskId === undefined) {
-      await callRaw('eteams_submit_task', {
-        taskId: result.taskId,
-        subject: args.subject,
-        ...(args.description !== undefined ? { description: args.description } : {}),
-      });
+      await callRaw(
+        'eteams_submit_task',
+        {
+          taskId: result.taskId,
+          subject: args.subject,
+          ...(args.description !== undefined ? { description: args.description } : {}),
+          // 收口问询自检闸（2026-09-12）：多数用例只借收口拿 ready 容器，
+          // 显式声明跳过问询；问询闸本身由 lifecycle 的收口用例覆盖。
+          skipQuestionnaire: true,
+        },
+        agent,
+      );
     }
     return result;
   };
@@ -276,6 +300,7 @@ async function installFull(overrides: Partial<ETeamsResolvedConfig> = {}): Promi
   };
   installWebSurface(ctx, cfg);
   const handler = registered[0]!;
+  const agentFor = (id: string): FakeAgent => ({ id, session: { header: { cwd: workspace } } });
   return {
     handler,
     get: async (url) => fire(handler, 'GET', url),
@@ -286,6 +311,7 @@ async function installFull(overrides: Partial<ETeamsResolvedConfig> = {}): Promi
     callRaw,
     mem,
     memberAgent,
+    agentFor,
   };
 }
 
@@ -1300,6 +1326,7 @@ describe('conversation task workflow (docs/26)', () => {
       taskId: group.id,
       subject: '官网迁移',
       description: '把官网迁到新域名',
+      skipQuestionnaire: true,
     });
     expect(finalized.status).toBe('ready');
 
@@ -1617,6 +1644,30 @@ describe('conversation task workflow (docs/26)', () => {
     expect(statusOf(group)).toBe('start');
   });
 
+  it('keeps one main task per conversation: second submit rejected even after the container completed（用户迭代 2026-09-12）', async () => {
+    const h = await installFull();
+    const created = await h.post('/eteams-api/team', {
+      name: '单一主任务团队',
+      sessionId: 'cap-conv',
+    });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    const group = (
+      (await h.call!('eteams_submit_task', { subject: '主任务' })) as { taskId: number }
+    ).taskId;
+    // 容器完成只是「当前小任务都完成」的可回退标识——仍是本对话的主任务
+    // （completed 不再释放锚点，用户原话「主任务的完成只是暂时的」）。
+    getDb(stateRoot())
+      .prepare('UPDATE task SET status = ? WHERE task_id = ?')
+      .run('completed', group);
+
+    // 同一对话再提交主任务 → 硬兜底拒绝，指引在主任务下增补小任务。
+    await expect(h.call!('eteams_submit_task', { subject: '第二个主任务' })).rejects.toThrow(
+      /一个对话只有一个主任务/,
+    );
+    // 完成也不新开：仍只有这一个主任务容器。
+    expect(readTeam(teamId).tasks.filter((t) => t.parentId === null)).toHaveLength(1);
+  });
+
   it('starts a group task: dispatches ready chained subs, skips the rest（二十五轮 DA38）', async () => {
     const h = await installFull();
     const created = await h.post('/eteams-api/team', {
@@ -1671,13 +1722,19 @@ describe('conversation task workflow (docs/26)', () => {
     expect(childIdOf(teamId, 'Alice')).not.toBe('');
 
     // 全 ready 卡都无链：整体开始只回跳过清单（started=0，原因逐卡透出）。
-    // 锁定语义下先把第一个任务单落终态再开第二个（一个对话同时只有一个
-    // 进行中的主任务，docs/teamSessionLock）。
-    getDb(stateRoot())
-      .prepare('UPDATE task SET status = ? WHERE task_id = ?')
-      .run('completed', group);
+    // 一个团队可以有多个主任务，但只能来自多个对话（每个对话各自锚定一个，
+    // 用户迭代 2026-09-12）——绑定第二个对话 cap-conv-2 到同队再建第二个任务单。
+    setSessionTeam('cap-conv-2', {
+      teamId: String(teamId),
+      name: '整体开始团队',
+      boundAt: Date.now(),
+    });
     const group2 = (
-      (await h.call!('eteams_submit_task', { subject: '主任务二' })) as { taskId: number }
+      (await h.call!(
+        'eteams_submit_task',
+        { subject: '主任务二' },
+        h.agentFor!('cap-conv-2'),
+      )) as { taskId: number }
     ).taskId;
     await h.post(`/eteams-api/team/${teamId}/task`, {
       subject: '也没选成员',
@@ -1762,14 +1819,20 @@ describe('conversation task workflow (docs/26)', () => {
     expect(teamAfterSingle.tasks.find((t) => t.id === singleId)!.attempts[0]!.member).toBe('Bob');
 
     // 依赖未完成的小任务：跳过原因诚实透出（依赖卡未 completed →
-    // 「依赖未完成」，不再被状态闸静默吞掉）。锁定语义下本会话（cap-conv）
-    // 已有进行中的主任务容器 #1——先把第一个任务单落终态再开第二个
-    // （一个对话同时只有一个进行中的主任务，docs/teamSessionLock）。
-    getDb(stateRoot())
-      .prepare('UPDATE task SET status = ? WHERE task_id = ?')
-      .run('completed', group);
+    // 「依赖未完成」，不再被状态闸静默吞掉）。第二个任务单来自第二个对话
+    // （cap-conv-3，各自锚定一个主任务；同队多任务必须多对话，用户迭代
+    // 2026-09-12）。
+    setSessionTeam('cap-conv-3', {
+      teamId: String(teamId),
+      name: '接力跳过团队',
+      boundAt: Date.now(),
+    });
     const group3 = (
-      (await h.call!('eteams_submit_task', { subject: '主任务三' })) as { taskId: number }
+      (await h.call!(
+        'eteams_submit_task',
+        { subject: '主任务三' },
+        h.agentFor!('cap-conv-3'),
+      )) as { taskId: number }
     ).taskId;
     const blocked = await h.post(`/eteams-api/team/${teamId}/task`, {
       subject: '卡在依赖的小任务',
@@ -2295,11 +2358,11 @@ describe('GET /board 跨团队聚合 (docs/35 §6 Q1/Q3/Q4/Q5/Q9)', () => {
     await h.post(`/eteams-api/team/${teamA}/member`, { name: 'Bob', role: 'engineer' });
     await h.post(`/eteams-api/team/${teamB}/member`, { name: 'Cara', role: 'writer' });
 
-    // 甲队：三支任务单逐支推进——锁定语义下一个对话同时只有一个进行中的
-    // 主任务（docs/teamSessionLock），上一支落终态后才提交下一支；各支的
-    // 小任务在容器进终态前挂好（终态容器不再收小任务）。小任务全部完成会
-    // 自动收口容器，subB/subC 完成时容器已提前终态则自动收口早退——看板
-    // groups 列表读小任务进度，两种时序断言同值。
+    // 甲队：三支任务单——一个团队可挂多个主任务，但每个只能由不同的对话建
+    // （每个对话各自锚定一个主任务，用户迭代 2026-09-12）：group1 走主对话
+    // cap-conv，group2/group3 分别由 cap-conv-2 / cap-conv-3 提交。完成是可
+    // 回退标识、容器仍收小任务（createTask 命中即回 ready），无时序约束；
+    // 小任务全部完成会自动收口容器，看板 groups 读小任务进度。
     const group1 = (
       (await h.call!('eteams_submit_task', { subject: '主任务一' })) as {
         taskId: number;
@@ -2322,8 +2385,10 @@ describe('GET /board 跨团队聚合 (docs/35 §6 Q1/Q3/Q4/Q5/Q9)', () => {
     getDb(stateRoot())
       .prepare('UPDATE task SET status = ? WHERE task_id = ?')
       .run('completed', group1);
+    // 第二个任务单来自第二个对话（cap-conv-2，各自锚定一个主任务）。
+    setSessionTeam('cap-conv-2', { teamId: String(teamA), name: '聚合甲', boundAt: Date.now() });
     const group2 = (
-      (await h.call!('eteams_submit_task', { subject: '主任务二' })) as {
+      (await h.call!('eteams_submit_task', { subject: '主任务二' }, h.agentFor!('cap-conv-2'))) as {
         taskId: number;
       }
     ).taskId;
@@ -2331,8 +2396,10 @@ describe('GET /board 跨团队聚合 (docs/35 §6 Q1/Q3/Q4/Q5/Q9)', () => {
     getDb(stateRoot())
       .prepare('UPDATE task SET status = ? WHERE task_id = ?')
       .run('completed', group2);
+    // 第三个任务单来自第三个对话（cap-conv-3）。
+    setSessionTeam('cap-conv-3', { teamId: String(teamA), name: '聚合甲', boundAt: Date.now() });
     const group3 = (
-      (await h.call!('eteams_submit_task', { subject: '主任务三' })) as {
+      (await h.call!('eteams_submit_task', { subject: '主任务三' }, h.agentFor!('cap-conv-3'))) as {
         taskId: number;
       }
     ).taskId;

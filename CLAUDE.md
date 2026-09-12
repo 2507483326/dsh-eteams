@@ -84,7 +84,7 @@ dsh plugin --profile desktop add C:\eTeam   # 安装到 DSH profile（live link�
 - `roles`：**全局角色库**（人设手册 persona_md、头像、一句话简介）；预置角色首次启动写入，构建师/面板新增也落这里。`employee_id` 列已弃用（工牌挪进班底——列保留、全链路不再读写）。同一角色可复制成多份成员。
 - `team_members`：**班底 = 工牌发放处**（团队 × 角色 + 派发模型路线），领队也是一行（建队即入领号）。**工号 = 行自增主键**（`team_member_id`，表自增、全局只增不复用、不按队内凑整）；允许同名同角色多行；`role_name / persona_md / profile` 是随写同步的副本列（直查/展示用，真相在 roles）。
 - `task_members`：**任务成员副本**——建大任务时把班底**全员（含领队）**复制进来（`employee_id` 抄班底、`main_task_id` = 所属大任务、status=staged）；派发起会话后 session 锚与 attempt 归属（`attempts.task_member_id`）都落自己的副本行；行生命周期跟随大任务（删任务级联删副本）。领队的「团队级主持行」（`name='项目牧羊人'` 且 `main_task_id IS NULL`）保留——它不是工牌，是领队子会话锚 + has_leader 载体，领队行查找统一按此判据；`removed` 枚举仅剩主持行使用。
-- 对外标识：班底成员 `ET-0007`，任务成员 `T3-ET0007`（主任务 3 的 7 号）；member spawn label `eteams-member:<teamId>:<主任务id>:<工号>`，setup hook 按 (mainTaskId, employeeId) 精确取副本行；邮箱按 (team_id, employee_id) 分箱，执行链站点记工号。
+- 对外标识：班底成员 `ET-0007`，任务成员 `T3-ET0007`（主任务 3 的 7 号）；member spawn label `eteams-member:<名字>（T<主任务id>-ET<工号>）`——label 是宿主会话头部面包屑的显示名（`displayTitle = label ?? childId`），故名字在前、工牌后缀保 (任务, 工号) 作用域；邮箱按 (team_id, employee_id) 分箱，执行链站点记工号。
 
 ### Web 回环面（`src/host/runtime/webui.ts`）
 

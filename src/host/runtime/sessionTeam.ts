@@ -13,9 +13,9 @@
  *
  * band 文本组装在 prompts/system/sessionTeam.ts（纯函数，判别联合入参）——
  * 本文件只留 bindings store 与薄壳：领队子代理注册表守卫、绑定查表、活团
- * 队快照解析、**锚定主任务判据**（anchoredMainTaskOf：本会话最新一个非终
- * 态主任务）后，把判别联合传给纯函数。绑定即意图、转交分工等口径说明随
- * band 文本在 prompts 平面。
+ * 队快照解析、**锚定主任务判据**（anchoredMainTaskOf：本会话的主任务容器，
+ * 删除/取消才释放）后，把判别联合传给纯函数。绑定即意图、转交分工等口径
+ * 说明随 band 文本在 prompts 平面。
  *
  * The band is built per assembly against the LIVE team snapshot (readTeamSync
  * via the webui locateTeam helper) so 批准/阶段变化即时反映，无需重绑。
@@ -23,7 +23,7 @@
  * @module dsh-eteams/host/runtime/sessionTeam
  */
 import type { TaskRecord, TeamState } from '../model/types.js';
-import { captainChildTeamOf } from './captainAgent.js';
+import { captainChildParentOf, captainChildTeamOf } from './captainAgent.js';
 import { sessionTeamBand } from '../prompts/system/sessionTeam.js';
 
 export { sessionIdOfScope } from './sessionPersona.js';
@@ -68,22 +68,25 @@ export function getSessionTeamId(sessionId: string): string | undefined {
   return bindings.get(sessionId)?.teamId;
 }
 
-/** 主任务锚定终态集合（用户迭代 2026-09-11：`failed` 已并入 `wait_user`）。
- * 锚定判据跳过终态容器——全部终态时回退两步走（下一个大请求自然开新项目）。
- * 注：`completed` 容器在状态机上可回退 ready（追加小任务即续），但锚定语义
- * 仍按「已完成即释放锚点」——同一对话的**新**大请求开新项目，继续旧项目走
- * 显式 parentTaskId。 */
-const TERMINAL_TASK_STATUSES: ReadonlySet<TaskRecord['status']> = new Set([
-  'completed',
-  'cancelled',
-]);
+/**
+ * 锚点释放状态集合（用户迭代 2026-09-12「每个会话只有一个主任务，完成只是
+ * 暂时的，后面有新任务还是挂下面继续执行」）：只认 `cancelled`——`completed`
+ * 是「当前小任务都完成」的可回退标识（追加小任务即自动回 ready），继续锚定、
+ * 不再开新主任务；容器被删除时任务行消失、锚点自然释放。cancelled 是唯一
+ * 例外：createTask 拒收已取消容器挂小任务，继续锚定只会把会话卡死，故释放
+ * （容器本身不设 cancelled，此为存量/旁路数据的兜底）。
+ */
+const ANCHOR_RELEASING_TASK_STATUSES: ReadonlySet<TaskRecord['status']> = new Set(['cancelled']);
 
 /**
- * 锚定主任务判据（用户迭代 2026-09-10「已创建任务走增补子任务」）：本会话
- * 建过且仍非终态的最新**主任务容器**（parentId 空 + chain 空——createTask
- * 校验容器不带执行链，面板单杆任务有链不会误锚；mainSessionId 是建任务时
- * 登记的调用方会话快照——对话工具与面板 commission 同源）。返回 undefined
- * = 本对话尚无进行中的主任务（band 走两步走、submit_task 放行）。
+ * 锚定主任务判据（用户迭代 2026-09-10「已创建任务走增补子任务」；2026-09-12
+ * 「每个会话只有一个主任务」）：本会话建过的最新**主任务容器**（parentId 空
+ * + chain 空——createTask 校验容器不带执行链，面板单杆任务有链不会误锚；
+ * mainSessionId 是建任务时登记的调用方会话快照——对话工具与面板 commission
+ * 同源）。**不按状态过滤**：容器完成（completed）只是可回退标识，仍锚定
+ * ——新工作一律增补小任务进入它（追加即自动回 ready）；仅容器删除（行消失）
+ * 或 cancelled（安全阀）释放锚点。返回 undefined = 本对话尚无主任务
+ * （band 走两步走、submit_task 放行）。
  */
 export function anchoredMainTaskOf(team: TeamState, sessionId: string): TaskRecord | undefined {
   if (sessionId === '') return undefined;
@@ -92,10 +95,39 @@ export function anchoredMainTaskOf(team: TeamState, sessionId: string): TaskReco
     if (task.parentId !== null) continue;
     if (task.chain.length > 0) continue;
     if (task.mainSessionId !== sessionId) continue;
-    if (TERMINAL_TASK_STATUSES.has(task.status)) continue;
+    if (ANCHOR_RELEASING_TASK_STATUSES.has(task.status)) continue;
     if (latest === undefined || task.id > latest.id) latest = task;
   }
   return latest;
+}
+
+/**
+ * 调用会话视角的「本对话锚定主任务」：与 {@link anchoredMainTaskOf} 同判据，
+ * 但先把**领队子代理会话**换回它发起的主会话。领队子代理建的小任务行
+ * `main_session_id` 快照记的是领队子会话 id（既有口径，见 createTask），与
+ * 主任务容器登记的发起会话不同——直接按调用会话比对永远找不到主任务。
+ *
+ * 两条线索：领队副本行（持久，`isLeader && session_id = 本子会话`，其
+ * mainTaskId 即主持的大任务）优先，注册表（进程内，重启后丢失）兜底。
+ * 主会话/无领队会话没有这两条线索，按自身会话判定（原判据不变）。
+ */
+export function anchoredMainTaskOfCaller(
+  team: TeamState,
+  sessionId: string,
+): TaskRecord | undefined {
+  if (sessionId === '') return undefined;
+  const replica = team.taskMembers.find((r) => r.isLeader === true && r.sessionId === sessionId);
+  if (replica !== undefined) {
+    const anchored = team.tasks.find(
+      (t) =>
+        t.id === replica.mainTaskId &&
+        t.parentId === null &&
+        t.chain.length === 0 &&
+        !ANCHOR_RELEASING_TASK_STATUSES.has(t.status),
+    );
+    if (anchored !== undefined) return anchored;
+  }
+  return anchoredMainTaskOf(team, captainChildParentOf(sessionId) ?? sessionId);
 }
 
 /**
@@ -124,8 +156,8 @@ export function sessionTeamSection(
           // 分工口径随 hasLeader 分支：无领队团队由主会话直接主持（面板
           // 手动建任务的完善路径同语义，docs/panelTaskCommission）。
           hasLeader: team.hasLeader,
-          // 锚定主任务：非空 = 本对话已有进行中的主任务，band 切增补子任务
-          // 分工（不再两步走建任务）。
+          // 锚定主任务：非空 = 本对话已有主任务（completed 也算），band 切
+          // 增补子任务分工（不再两步走建任务）。
           mainTaskId: anchoredMainTaskOf(team, sessionId)?.id,
         },
   );

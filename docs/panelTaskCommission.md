@@ -130,12 +130,13 @@ team.hasLeader?
   工具 execute 保留 caller 判定 + 团队读取，改调核心函数——**工具自身行为零变更**，现有 tests/captainDispatch.test.ts 假服务用例直接验证。
 - `prompts/steering/dispatch.ts`：新增 `captainCommissionPrompt(teamViewJson, taskId, subject, description)`——**按 `captainDispatchPrompt` 同款组装（团队现状快照 + 完善指令）**，否则新建子代理不知道班底构成、`eteams_create_task` 的 chain 工号无从下手。完善指令内容：
   - 告知任务 #N 已以「创建中」占位（主题=描述首行截断、说明=全文），**不要**再 `eteams_submit_task` 新建主任务；
-  - 流程与对话一致：如有必要先问询（可跳过；问询弹窗会直接弹给用户）→ `eteams_update_task` 回写主题/说明 → `eteams_create_task(parentTaskId=N)` 拆解小任务（依赖/执行链/成员槽，站点写工号）→ `eteams_submit_task(taskId=N, subject, description)` 收口（更新容器信息并把创建中转就绪）→ 汇报「任务 #N 已完善（N 个小任务）」；
+  - 流程与对话一致：如有必要先问询（可跳过；问询弹窗会直接弹给用户）→ `eteams_update_task` 回写主题/说明 → `eteams_create_task(parentTaskId=N)` 拆解小任务（依赖/执行链/成员槽，站点写工号）→ `eteams_submit_task(taskId=N, subject, description, questionnaire)` 收口（更新容器信息并把创建中转就绪；无 `questionnaire` 且未传 `skipQuestionnaire=true` 会被收口问询自检闸拒绝，见 3.6）→ 汇报「任务 #N 已完善（N 个小任务）」；
   - 红线照旧：**不自批开跑**（完善收口后等用户批准/指派；本设计另在宿主闸上兜底，见 3.9）。
 
 ### 3.6 `eteams_submit_task` 扩展收口模式 + 收口函数落点（P9 修订）
 
-- `assignment.ts` 新增导出函数 `finalizeCommissionTask(env, who, taskId, { subject, description?, contractMd? })`：单 `withTeam` 事务内——updateTask 核心校验（复用其字段校验）+ `applyTransition(creating→ready)` + `renameTaskFolder`（主题变了同步 sub/ 文件夹前缀）+ `plan.questionnaire` 事件照发 + 返回任务记录。**收口必须落在这个纯 runtime 函数**——工具层（captainTools）按分层纪律不能手写事务/转移，而 `updateTask` 自己开事务无法与其拼装。
+- `assignment.ts` 新增导出函数 `finalizeCommissionTask(env, who, taskId, { subject, description?, contractMd?, questionnaire?, skipQuestionnaire? })`：单 `withTeam` 事务内——updateTask 核心校验（复用其字段校验）+ **收口问询自检闸** + `applyTransition(creating→ready)` + `renameTaskFolder`（主题变了同步 sub/ 文件夹前缀）+ `plan.questionnaire` 事件照发 + 返回任务记录。**收口必须落在这个纯 runtime 函数**——工具层（captainTools）按分层纪律不能手写事务/转移，而 `updateTask` 自己开事务无法与其拼装。
+  - **收口问询自检闸（用户 2026-09-12「应该要问就要在任务执行之前问」）**：收口是开跑闸，未问询不得放行——`questionnaire` 非空，或显式 `skipQuestionnaire===true`（用户已给全/要求直接开始的合法跳过）二选一，否则抛可执行错误（指引用 `eteams_ask_user` / `ask_user_question` 先问，或传 skip），主任务停在「创建中」不可开跑。
 - `captainTools.ts` `eteams_submit_task` 参数加可选 `taskId: number`：
   - 不带（现状）：照旧新建主任务容器。
   - 带且目标存在、`parentId===null`、`status==='creating'`：调 `finalizeCommissionTask`；输出照现状补 `folder`（readTeam + taskDirRel）。

@@ -68,10 +68,18 @@ export function peekCapturedInputActions(): InputActionsFace | undefined {
  *    events (glued text sent as plain message 2026-09-10, and a cleared
  *    draft when the claim pipeline consumed the token), while the canonical
  *    draft is exactly the end state the repaired flow always converged to.
- * 2. Simulated typing（kit 皆空的罕见兜底）: native value setter + bubbling
- *    `input` event with the canonical template; a 150ms repair pass rewrites
- *    it if the synthetic event was swallowed.
- * 3. Clipboard — no live composer textarea at all.
+ * 2. DOM write（kit 皆空的罕见兜底）: legacy hosts get the native textarea
+ *    value setter + bubbling `input` event; the current host composer is a
+ *    Lexical contenteditable (`[data-composer-input]`, NO textarea since
+ *    dsh 0.1.2) and gets a synthetic `paste` event carrying the template —
+ *    the host's own PASTE_COMMAND feeds it into the editor model. A 150ms
+ *    repair pass rewrites it if the write was swallowed.
+ * 3. Clipboard — no live composer field at all.
+ *
+ * 2026-09-12 用户报告「探索未至之境 页面团队弹窗中的AI角色创建填充没效果」：
+ * 诊断 `source=none outcome=copied draft= census=none`——现宿主 composer 换
+ * Lexical contenteditable 后旧 textarea 兜底恒空，kit/捕获桥缺席时填充只能
+ * 静默退化剪贴板。本条补上 contenteditable 写路（见 composerField）。
  */
 export function prefillComposer(
   inputActions: InputActionsFace | undefined,
@@ -96,28 +104,135 @@ export function prefillComposer(
     // 写进的就是发送文本——带空格的完整命令回车即被宿主命令路由识别，
     // 不经过斜杠 claim 决策表（历史粘连态方案的全部故障都源自那条链）。
     actions.setDraft(ADD_PEOPLE_TEMPLATE);
-    withComposerTextarea((el) => el.focus());
+    focusComposer();
     return 'set';
   }
-  // 无 kit 兜底：native setter 直接落规范模板 + 冒泡 input 事件，修复窗兜底。
-  withComposerTextarea((el) => el.focus());
-  writeTemplateViaDom(ADD_PEOPLE_TEMPLATE);
+  // 无 kit 兜底：DOM 写路（旧宿主 textarea 原生 setter / 现宿主 contenteditable
+  // 合成 paste）。写不进去（composer 锁定/内核不支持）不谎报 set——退剪贴板，
+  // 让调用位显示「已复制」而不是静默无反应。修复窗兜底迟到的 DOM 就绪。
+  focusComposer();
+  const wrote = writeTemplateViaDom(ADD_PEOPLE_TEMPLATE);
   scheduleDomRepair();
+  if (!wrote) {
+    void writeClipboardSafe(ADD_PEOPLE_TEMPLATE);
+    return 'copied';
+  }
   return 'set';
 }
 
-/** 经原生 value setter（绕过 React value tracker）把文本写进 composer DOM。 */
-function writeTemplateViaDom(text: string): void {
-  withComposerTextarea((el) => {
-    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
-    if (setter === undefined) return;
-    setter.call(el, text);
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-  });
+/** ================================== composer 写路 ================================== */
+
+/**
+ * The live composer field. Current hosts (dsh 0.1.2+) render the composer as a
+ * Lexical `contenteditable`（`[data-composer-input]`）with NO textarea——旧版
+ * 「最后一个可写 textarea」的 DOM 兜底在新宿主上恒空（2026-09-12 用户报告
+ * 「探索未至之境 页面团队弹窗中的AI角色创建填充没效果」，诊断
+ * `source=none outcome=copied census=none`）。先按旧宿主 textarea 取，取不到
+ * 再认现宿主的 contenteditable。
+ */
+type ComposerField =
+  | { kind: 'textarea'; el: HTMLTextAreaElement }
+  | { kind: 'editable'; el: HTMLElement };
+
+function composerField(): ComposerField | null {
+  try {
+    if (typeof document === 'undefined') return null;
+    // 旧宿主：最后一个可见可写的 textarea 即 composer。禁用/只读的 textarea
+    //（无会话 hero 的工作区触发器、被 block 的 composer）不作为目标——往里
+    // 派事件既不触发 onChange 也不可编辑。
+    const visible = Array.from(document.querySelectorAll<HTMLTextAreaElement>('textarea')).filter(
+      (el) => el.offsetParent !== null && !el.disabled && !el.readOnly,
+    );
+    const textarea = visible.at(-1);
+    if (textarea !== undefined) return { kind: 'textarea', el: textarea };
+    // 现宿主：Lexical contenteditable（宿主以 [data-composer-input] 标记；
+    // 无会话的工作区触发器同标记但 contenteditable=false，不作写目标）。
+    if (typeof document.querySelector !== 'function') return null;
+    const editable = document.querySelector<HTMLElement>('[data-composer-input]');
+    if (
+      editable !== null &&
+      editable !== undefined &&
+      editable.getAttribute('contenteditable') === 'true' &&
+      editable.offsetParent !== null
+    ) {
+      return { kind: 'editable', el: editable };
+    }
+    return null;
+  } catch {
+    // 无 DOM/沙箱环境静默降级（docs/19.7.1）
+    return null;
+  }
+}
+
+/** Focus the live composer field (best effort; no DOM is a silent no-op). */
+function focusComposer(): void {
+  try {
+    composerField()?.el.focus();
+  } catch {
+    // 静默
+  }
 }
 
 /**
- * 修复窗：无 kit 兜底写路里合成 input 事件被吞时 150ms 后重写规范模板。
+ * 经原生 value setter（绕过 React value tracker）把文本写进 composer DOM，
+ * 或对现宿主 contenteditable 走合成 paste。返回是否确实落地。
+ */
+function writeTemplateViaDom(text: string): boolean {
+  const field = composerField();
+  if (field === null) return false;
+  if (field.kind === 'textarea') {
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+    if (setter === undefined) return false;
+    setter.call(field.el, text);
+    field.el.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  }
+  return pasteIntoEditable(field.el, text);
+}
+
+/**
+ * contenteditable composer 写入（现宿主 Lexical 编辑器）：先全选现有草稿
+ *（替换语义与旧 textarea 的原生 setter 对齐，防「重新填充」叠加出两份），
+ * 再合成 paste 事件带 text/plain——宿主为 composer 注册的 PASTE_COMMAND 读
+ * clipboardData 后走官方 keyboard.paste 进编辑器模型（直接改 textContent /
+ * 裸 execCommand 会被 Lexical 的 DOM 对账丢弃）。合成事件被吞（composer
+ * 锁定/内核不支持）时退回 execCommand；仍不落地由调用位退剪贴板。
+ *
+ * @returns whether the template actually landed in the composer DOM.
+ */
+function pasteIntoEditable(el: HTMLElement, text: string): boolean {
+  try {
+    const selection = window.getSelection();
+    if (selection !== null && typeof document.createRange === 'function') {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+  } catch {
+    // 选择不可设：paste 按光标位置插入
+  }
+  try {
+    const data = new DataTransfer();
+    data.setData('text/plain', text);
+    el.dispatchEvent(
+      new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }),
+    );
+  } catch {
+    // ClipboardEvent/DataTransfer 不可用（老内核）→ execCommand 兜底
+  }
+  // Lexical 的离散 update 同步对账 DOM，此处直读即知落没落地。
+  if ((el.textContent ?? '').includes(text)) return true;
+  try {
+    document.execCommand('insertText', false, text);
+  } catch {
+    // 无 execCommand（沙箱）静默降级
+  }
+  return (el.textContent ?? '').includes(text);
+}
+
+/**
+ * 修复窗：无 kit 兜底写路里合成事件被吞时 150ms 后重写规范模板。
  * 无 window 环境（纯 node 单测）无从排程，静默跳过。
  */
 function scheduleDomRepair(): void {
@@ -129,51 +244,30 @@ function scheduleDomRepair(): void {
   }, 150);
 }
 
-/**
- * Best-effort composer access: the last visible writable textarea is the
- * composer. 禁用/只读的 textarea（无会话 hero 的工作区触发器、被 block 的
- * composer）不作为目标——往里派事件既不触发 onChange 也不可编辑。
- */
-function withComposerTextarea(fn: (el: HTMLTextAreaElement) => void): void {
-  try {
-    const visible = Array.from(document.querySelectorAll<HTMLTextAreaElement>('textarea')).filter(
-      (el) => el.offsetParent !== null && !el.disabled && !el.readOnly,
-    );
-    const target = visible.at(-1);
-    if (target !== null && target !== undefined) fn(target);
-  } catch {
-    // 无 DOM/沙箱环境静默降级（docs/19.7.1）
-  }
-}
-
-/** Whether a writable composer textarea exists（无 inputActions 时的分流判据）. */
+/** Whether a writable composer field exists（无 inputActions 时的分流判据）. */
 function composerLive(): boolean {
-  let live = false;
-  withComposerTextarea(() => {
-    live = true;
-  });
-  return live;
+  return composerField() !== null;
 }
 
 /** Best-effort read of the composer draft (override-confirm guard). */
 function composerDraft(): string {
-  let value = '';
-  withComposerTextarea((el) => {
-    value = el.value;
-  });
-  return value;
+  const field = composerField();
+  if (field === null) return '';
+  return field.kind === 'textarea' ? field.el.value : (field.el.textContent ?? '');
 }
 
 /**
  * 诊断探针：composer 机器草稿投影的前 40 字符（足够辨认命令是否落地）。
- * InputBar 的 textarea 带 `data-phase` 属性（唯一标记，禁用/只读的工作区
- * 触发器同样携带且受控渲染机器草稿）——按标记直读，不受「最后可写
- * textarea」选择偏差影响；无标记（老版本宿主/无 DOM）回落可写读。
+ * 旧宿主 InputBar 的 textarea 带 `data-phase`；现宿主换 Lexical
+ * contenteditable，标记是 `data-composer-input`——两代标记都直读，不受
+ * 「最后可写字段」选择偏差影响；无标记（老版本宿主/无 DOM）回落可写读。
  */
 export function composerDraftProbe(): string {
   try {
     const el = document.querySelector<HTMLTextAreaElement>('textarea[data-phase]');
     if (el !== null) return el.value.slice(0, 40);
+    const editable = document.querySelector<HTMLElement>('[data-composer-input]');
+    if (editable !== null && editable !== undefined) return (editable.textContent ?? '').slice(0, 40);
   } catch {
     // 无 DOM 环境静默降级
   }
@@ -182,19 +276,29 @@ export function composerDraftProbe(): string {
 
 /**
  * 诊断普查：页面全部 textarea 的状态旗标（D=disabled，R=readOnly，V=有值）
- * 与 data-phase 档位——填充不落地时一次看清机器投影挂在哪个元素上。
+ * 与 data-phase 档位，外加现宿主 composer contenteditable 的
+ * contenteditable 值 + 是否有值——填充不落地时一次看清机器投影挂在哪个
+ * 元素上（census=none 曾是「现宿主无 textarea」的误读来源）。
  */
 export function composerCensus(): string {
   try {
     const all = Array.from(document.querySelectorAll<HTMLTextAreaElement>('textarea'));
-    if (all.length === 0) return 'none';
-    return all
+    const editable =
+      typeof document.querySelector === 'function'
+        ? document.querySelector<HTMLElement>('[data-composer-input]')
+        : null;
+    const editableFlag =
+      editable === null || editable === undefined
+        ? 'none'
+        : `${editable.getAttribute('contenteditable') ?? '-'}${(editable.textContent ?? '') !== '' ? 'V' : '-'}`;
+    if (all.length === 0) return `editable:${editableFlag}`;
+    return `${all
       .map((el) => {
         const flags = `${el.disabled ? 'D' : '-'}${el.readOnly ? 'R' : '-'}${el.value !== '' ? 'V' : '-'}`;
         const phase = (el.getAttribute('data-phase') ?? '-').slice(0, 8);
         return `${flags}(${phase})`;
       })
-      .join(',');
+      .join(',')};editable:${editableFlag}`;
   } catch {
     return '?';
   }

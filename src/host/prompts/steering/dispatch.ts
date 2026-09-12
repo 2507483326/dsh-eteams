@@ -28,8 +28,8 @@ export function dispatchAck(childId: string): string {
   const short = childId.slice(0, 8);
   return [
     `已转交持续领队子代理（会话 ${short}…）主持团队工作流。`,
-    '它将直接主持后续流程：问询弹窗直接弹在主对话（原生问答界面，用户作答后领队同回合继续）；',
-    '每轮汇报经子代理汇报消息送达本对话——到达后原样展示给用户，不要复述全文，也不要重复转交相同内容。',
+    '它将直接主持后续流程：问询弹窗弹在用户当前所在会话（用户在看领队子对话就弹那里，否则弹在本对话；原生问答界面，用户作答后领队同回合继续）；',
+    '领队的特殊情况汇报经子代理汇报消息送达本对话（例行执行不汇报，面板可见）——到达后原样展示给用户，不要复述全文，也不要重复转交相同内容。',
   ].join('\n');
 }
 
@@ -50,10 +50,10 @@ export function captainCommissionMessage(
     `- 任务描述（用户原话）：${description}`,
     '',
     '请完善这个任务（不要再用 eteams_submit_task 新建主任务，容器已存在）：',
-    '1. 如有必要先向用户问询明确目标（ask_user_question 弹窗；问题较少时也可跳过问询直接完善）——面板发起的任务完善过程可能出现问询弹窗，属正常流程；',
+    '1. 先在执行之前向用户问询明确目标（领队子代理用 eteams_ask_user、主会话用 ask_user_question 弹窗；问题较少时也可跳过问询直接完善）——面板发起的任务完善过程可能出现问询弹窗，属正常流程；',
     `2. 用 eteams_update_task 把结论写回主任务 #${taskId}（subject/description，可带 contractMd）；`,
     `3. 用 eteams_create_task（parentTaskId=${taskId}）把任务拆解成小任务（chain 站点即成员槽，成员写工号）；`,
-    `4. 全部小任务拆好后用 eteams_submit_task（taskId=${taskId}, subject, description）收口：把创建中的主任务转就绪。`,
+    `4. 全部小任务拆好后用 eteams_submit_task（taskId=${taskId}, subject, description, questionnaire）收口：把创建中的主任务转就绪——收口必须带上问过的问题（questionnaire），用户已给全/要求直接开始则传 skipQuestionnaire=true；未问询且未声明跳过会被宿主拒绝。`,
     '',
     '红线照旧：只完善计划，不自批开跑——收口后等用户批准/指派，不要自己 eteams_assign_task。',
   ].join('\n');
@@ -100,6 +100,6 @@ export function captainStartMessage(
     '请按既有计划执行指派（不要重新拆解、不要重复建任务）：',
     `1. 用 eteams_task_board 核对主任务 #${rootTaskId} 的执行链与当前就绪站；`,
     '2. 按链就绪即派：用 eteams_assign_task 指派当前站成员（依赖未满足/成员未就绪的卡按既有纪律处理；成员未就绪先 eteams_add_member）；',
-    '3. 完成后用 report 发一句进展（谁在做什么、下一步）。',
+    '3. 指派后按汇报纪律：例行执行不向主对话汇报（面板与任务页实时可见），report 只做单向通知（升级「待用户」的告知、失败结论、收口总结）；需要用户答复的问题一律用 eteams_ask_user 弹窗问，不得写进 report。',
   ].join('\n');
 }

@@ -77,7 +77,13 @@ export function createMemberTools(
         },
         additionalProperties: false as const,
       },
-      render: (_a, v) => text(`已接取 ${v.taskId}（${v.attemptId}）\n\n${v.contract}`),
+      render: (_a, v) =>
+        text(
+          `已接取任务 ${v.taskId}（attempt_id ${v.attemptId}，token ${v.token}）\n` +
+            '后续 eteams_append_progress / eteams_complete_task / eteams_fail_task ' +
+            '必须原样携带上面的 attempt_id 与 token。\n\n' +
+            `${v.contract}`,
+        ),
     },
     execute: async (args, exec) => {
       const { env, caller } = await memberOf(exec);

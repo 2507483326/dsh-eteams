@@ -28,6 +28,9 @@ export const SELECT_TEAM_EVENT = 'eteams:select-team';
 /** Custom window event: a surface asks the panel to open the 成员 tab (roster page). */
 export const GOTO_ROSTER_EVENT = 'eteams:goto-roster';
 
+/** Custom window event: a surface asks the panel to open the Tasks page (CustomEvent detail: taskId). */
+export const GOTO_TASK_EVENT = 'eteams:goto-task';
+
 /** Custom window event: a surface asks the full-page 团队页 overlay to close. */
 export const CLOSE_TEAMS_PAGE_EVENT = 'eteams:close-page';
 
@@ -43,6 +46,9 @@ let pendingGotoRoster = false;
 
 /** Pending team selection (teamId) — consumed once on panel mount. */
 let pendingSelectTeam: string | null = null;
+
+/** Pending tasks-page jump (taskId) — same mount-time consumption. */
+let pendingGotoTask: number | null = null;
 
 /** Whether a jump request is waiting; consumes it (one-shot). */
 export function consumePendingGotoAdd(): boolean {
@@ -65,8 +71,15 @@ export function consumePendingSelectTeam(): string | null {
   return value;
 }
 
+/** The pending task-page target, if any; consumes it (one-shot). */
+export function consumePendingGotoTask(): number | null {
+  const value = pendingGotoTask;
+  pendingGotoTask = null;
+  return value;
+}
+
 /** Dispatch a window CustomEvent when a DOM/window exists (best effort). */
-function dispatchSignal(name: string, detail?: string): void {
+function dispatchSignal(name: string, detail?: string | number): void {
   if (typeof window !== 'undefined' && typeof window.CustomEvent === 'function') {
     window.dispatchEvent(new CustomEvent(name, detail === undefined ? undefined : { detail }));
   }
@@ -83,6 +96,8 @@ export function stageTeamSignals(
     memberBuilder?: boolean;
     roster?: boolean;
     teamId?: string;
+    /** Open the Tasks page（/tasks/:taskId）on landing. */
+    taskId?: number;
   } = {},
 ): void {
   if (opts.memberBuilder === true) {
@@ -96,6 +111,10 @@ export function stageTeamSignals(
   if (opts.teamId !== undefined) {
     pendingSelectTeam = opts.teamId;
     dispatchSignal(SELECT_TEAM_EVENT, opts.teamId);
+  }
+  if (opts.taskId !== undefined) {
+    pendingGotoTask = opts.taskId;
+    dispatchSignal(GOTO_TASK_EVENT, opts.taskId);
   }
 }
 
@@ -125,6 +144,22 @@ export function openMemberBuilder(): boolean {
   if (typeof window !== 'undefined' && typeof window.CustomEvent === 'function') {
     window.dispatchEvent(new CustomEvent(GOTO_ADD_EVENT));
   }
+  return activateETeamsTab();
+}
+
+/**
+ * Activate the 团队 tab AND open the Tasks page for one task（/tasks/:taskId）—
+ * the {@link openMemberBuilder} pattern for the 任务 surface. The
+ * "task created" conversation card uses this for its click-through (用户迭代
+ * 2026-09-12「任务创建好后，主会话应该有一个卡片让用户跳转到任务页面」）。
+ * Both paths covered: the window event for the already-mounted panel, the
+ * pending flag for the about-to-mount panel (tab click → remount).
+ *
+ * @returns whether the tab element was found and clicked.
+ */
+export function openTask(taskId: number): boolean {
+  pendingGotoTask = taskId;
+  dispatchSignal(GOTO_TASK_EVENT, taskId);
   return activateETeamsTab();
 }
 
