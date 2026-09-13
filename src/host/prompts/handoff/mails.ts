@@ -39,7 +39,6 @@ export function stationLabel(ref: string | number): string {
 export function assignmentMail(
   task: TaskRecord,
   opts: {
-    teamName: string;
     stageBrief?: string;
     handoff?: string;
     attemptId: number;
@@ -102,6 +101,9 @@ export function reportCompletedMail(
       }。请用 eteams_advance_task 推进（完成即续派）。`,
     );
   }
+  lines.push(
+    '未决项自检：产出若仍含「待用户确认 / 推荐默认 / 待复核」类项，先用 eteams_ask_user 问清用户再推进，不得用默认值代替确认。',
+  );
   lines.push(`（attempt ${opts.attemptId}）`);
   return lines.filter((l) => l !== undefined).join('\n');
 }

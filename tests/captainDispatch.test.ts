@@ -550,6 +550,23 @@ describe('eteams_captain_guide (用户迭代 2026-09-10 领取完成流程)', ()
     expect(CAPTAIN_CHILD_PERSONA).not.toContain('需要用户决策/答复、任务升级');
   });
 
+  it('领队子代理未决项纪律：需要用户确认的迭代问清到无未决项（用户 2026-09-13）', () => {
+    // 用户 2026-09-13：有需要用户确认的问题必须问用户并迭代澄清；与此无关的
+    // 例行进度/流转仍不汇报。
+    expect(CAPTAIN_CHILD_PERSONA).toContain('未决项');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('推荐默认');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('问询是**迭代**的');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('例行进展与状态流转不汇报');
+  });
+
+  it('领队子代理任务/非任务判别：闲聊不建任务、启动走开跑（用户 2026-09-13）', () => {
+    // 用户 2026-09-13「简单对话和启动项目这种不加入新任务」：领队不得把闲聊
+    // 或「启动/开始/继续」当成新需求去增补小任务。
+    expect(CAPTAIN_CHILD_PERSONA).toContain('开跑与建任务判别');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('简单对话/闲聊/纯问答直接回应');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('不要把开跑当成新需求去增补小任务');
+  });
+
   it('returns turn=none with an empty latestMessage when nothing was dispatched', async () => {
     seedTeam({ leaderChild: 'sess-child-1' });
     const guide = findGuideTool();

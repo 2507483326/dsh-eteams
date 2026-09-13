@@ -18,7 +18,6 @@ import type {
   Actor,
   AttemptKind,
   AttemptRecord,
-  ChainStation,
   DecisionRecord,
   MailMessage,
   TaskMemberRecord,
@@ -28,14 +27,15 @@ import type {
 } from '../model/types.js';
 import {
   applyTransition,
+  chainFrontier,
+  chainIndexOfStation,
   hasUpcomingStation,
   nextChainStation,
-  stationKeyOf,
-  stationPointsTo,
   taskSlug,
   unsatisfiedDependencies,
   wouldCycle,
 } from '../model/taskMachine.js';
+import { hasAcceptanceCriteria } from '../model/contract.js';
 import { insertEventInTx } from '../state/events.js';
 import { nextAutoincrementId } from '../state/db.js';
 import {
@@ -456,6 +456,30 @@ export async function finalizeCommissionTask(
         '拆解小任务请用 eteams_create_task（带 parentTaskId）',
       );
     }
+    // 收口拆解质量闸（docs/taskOrchestrationRefinement 议题一）：主任务必须
+    // 拆出至少一个未取消小任务，且每个小任务的合同都要含非空「## 验收标准」
+    // 段——把「该不该拆 / 单元合不合格」从软约束变成可拒绝路径。
+    const subs = team.tasks.filter((t) => t.parentId === task.id && t.status !== 'cancelled');
+    if (subs.length === 0) {
+      throw new ETeamsError(
+        `主任务 ${task.id} 还没有任何小任务：先 eteams_create_task（parentTaskId=${task.id}）拆解，再收口`,
+        '主任务必须拆出至少一个小任务（单站点也行）',
+      );
+    }
+    for (const sub of subs) {
+      if (sub.contractMd === undefined || sub.contractMd.trim() === '') {
+        throw new ETeamsError(
+          `小任务 ${sub.id}「${sub.subject}」缺少任务合同：先用 eteams_update_task 补上含「## 验收标准」的合同`,
+          '收口前每个小任务都要有可验收的合同',
+        );
+      }
+      if (!hasAcceptanceCriteria(sub.contractMd)) {
+        throw new ETeamsError(
+          `小任务 ${sub.id}「${sub.subject}」的合同缺少「## 验收标准」段`,
+          '格式：二级标题「## 验收标准」+ 非空编号列表',
+        );
+      }
+    }
     // 收口问询自检闸（用户 2026-09-12「应该要问就要在任务执行之前问」）：收口
     // 是开跑闸（creating→ready），未问询不得放行——必须带 questionnaire（问过
     // 用户的问题）或显式声明跳过（用户已给全/要求直接开始）。
@@ -631,9 +655,11 @@ interface AssignmentPlan {
   row: TaskMemberRecord;
   /** 任务有执行链（站点派发）。 */
   isStation: boolean;
-  /** 链的下一站（isStation 时）。 */
-  planned?: ChainStation;
-  /** 链偏离留痕（D11）——有值即本次派发偏离了执行链。 */
+  /** 本次派发的链站下标（弱顺序链，用户 2026-09-13）：成员在链上的既有站位；
+   * 不在链上则已追加到链尾、取新站下标。无链任务 = 0。 */
+  stationIndex: number;
+  /** 链偏离留痕（D11）——有值即本次派发偏离了执行链；改可选审计（用户
+   * 2026-09-13 弱顺序链后不再强制）。 */
   deviation?: string;
   kind: AttemptKind;
 }
@@ -807,6 +833,8 @@ export async function startGroupTask(
       });
       continue;
     }
+    // 下一站 = 链上最靠前的未跑站（弱顺序链，用户 2026-09-13：completeTask 把
+    // chainCursor 记为 frontier-1，故 cursor+1 恒为 frontier）。
     const next = sub.chain[sub.chainCursor + 1];
     if (next === undefined) {
       result.skipped.push({
@@ -856,6 +884,61 @@ export async function startGroupTask(
     syncGroupStatusInTx(tx, freshTeam, requireTask(freshTeam, taskId), who.actor);
   });
   return result;
+}
+
+/**
+ * 面板「开始」立即置执行中（用户 2026-09-13「任务开始按钮点击之后应该是立刻
+ * 改变状态，而不是等待领队来修改状态」）：有领队团队点开始只把批准转交领队
+ * （webui 的 hasLeader 分支），容器要等领队指派才随 syncGroupOfSubtaskInTx
+ * 翻 start——面板上点击像没反应。本函数在批准转交成功后由宿主同步把被点的
+ * 主任务置 start（ready/paused → start），让面板立刻显示「执行中」；真正派发/
+ * 接取的状态机（成员领取才 ready→start）不变。
+ *
+ * 只对主任务容器生效：小任务派发前必须是 ready（prepareAssignment 口径），
+ * 提前置 start 会把领队随后的 eteams_assign_task 拒死——非容器调用 no-op。
+ */
+export async function markGroupStarted(
+  env: RuntimeEnv,
+  who: OpActor,
+  taskId: number,
+): Promise<TaskRecord> {
+  const out = await withTeam(env, who.teamId, (team, _root, tx) => {
+    const task = requireTask(team, taskId);
+    if (task.parentId === null && (task.status === 'ready' || task.status === 'paused')) {
+      applyTransition(task, 'start', tx.now);
+      emit(tx, team.id, who.actor, 'task.started', {
+        taskId: task.id,
+        payload: { via: 'panel.start' },
+      });
+    }
+    return { team, task };
+  });
+  renderTeamDocs(env.workspace, out.team, (msg) => env.ctx.logger.warn(msg));
+  return out.task;
+}
+
+/**
+ * {@link markGroupStarted} 的逆操作（面板开始的回滚面）：领队派发失败时把刚
+ * 被点起的主任务退回 `ready`，不让面板留下「执行中但无人认领」的假态。仅
+ * 容器、仅 `start` 生效；非容器/其余状态 no-op。
+ */
+export async function resetGroupStarted(
+  env: RuntimeEnv,
+  who: OpActor,
+  taskId: number,
+): Promise<void> {
+  const out = await withTeam(env, who.teamId, (team, _root, tx) => {
+    const task = requireTask(team, taskId);
+    if (task.parentId === null && task.status === 'start') {
+      applyTransition(task, 'ready', tx.now);
+      emit(tx, team.id, who.actor, 'task.reopened', {
+        taskId: task.id,
+        payload: { via: 'panel.start.failed' },
+      });
+    }
+    return { team };
+  });
+  renderTeamDocs(env.workspace, out.team, (msg) => env.ctx.logger.warn(msg));
 }
 
 /**
@@ -919,29 +1002,36 @@ async function prepareAssignment(
   const row = resolveAssigneeRow(team, task, params.member);
   // 占用判定（v7 副本行语义）：改派回原执行者时本任务自己的占用不算忙。
   assertNotBusy(row, params.forReassign === true ? task.id : undefined);
-  const planned = nextChainStation(task);
-  if (
-    isStation &&
-    planned !== undefined &&
-    !stationPointsTo(planned, row) &&
-    (params.deviationNote ?? '').trim() === ''
-  ) {
-    throw new ETeamsError(
-      `任务 ${task.id} 执行链下一站是「${stationKeyOf(planned)}」，指派给「${row.name}」（ET-${String(row.employeeId ?? 0).padStart(4, '0')}）需要 deviation_note`,
-      '偏离执行链必须留痕（D11）：说明改派原因，或改派链上成员',
-    );
-  }
+  // 弱顺序链（用户 2026-09-13）：成员不在链上即追加到链尾——指派任意在册成员
+  // 都成立，不再要求 deviation_note（链只作「大致从前往后」的弱约束，成员可
+  // 任意顺序执行）。已在链上则复用其既有站位，不重复追加。
+  const stationIndex = ensureChainStation(task, row);
   await ensureSpawned(env, team, row, task, captain);
   return {
     task,
     row,
     isStation,
+    stationIndex,
     kind: params.kind ?? (isStation ? 'stage' : 'initial'),
-    ...(planned !== undefined ? { planned } : {}),
     ...((params.deviationNote ?? '').trim() !== ''
       ? { deviation: params.deviationNote!.trim() }
       : {}),
   };
+}
+
+/**
+ * 确保成员在任务执行链上有站位（弱顺序链，用户 2026-09-13）：`isStation` 的
+ * 任务里，成员不在链上就**追加到链尾**（站点引用 = 工号，无号退按名；空
+ * stageBrief），返回其站下标；已在链上返回既有下标。无链任务返回 0（不建链，
+ * 保持单站点自由指派语义）。判定用 {@link chainIndexOfStation}（「是否已在
+ * 链上」），**不是**「是否下一站」——否则同一成员会被反复追加。
+ */
+function ensureChainStation(task: TaskRecord, row: TaskMemberRecord): number {
+  if (task.chain.length === 0) return 0;
+  const existing = chainIndexOfStation(task.chain, row);
+  if (existing !== undefined) return existing;
+  task.chain.push({ member: row.employeeId ?? row.name, stageBrief: '' });
+  return task.chain.length - 1;
 }
 
 /**
@@ -1076,7 +1166,7 @@ function applyAssignment(
   opts: { handoff?: string },
   wakes: Wake[],
 ): { task: TaskRecord; attempt: AttemptRecord } {
-  const { task, row, isStation } = plan;
+  const { task, row } = plan;
   // 内存新建行（id = 0，resolveAssigneeRow 兜底补建的行）：发号尝试前先按
   // task_members 自增号预占——attempt.task_member_id 是 claim/占用判定的
   // 安全边界（设计三#9），不能等快照写库回填（那时 attempt 已经落库）。
@@ -1085,7 +1175,9 @@ function applyAssignment(
     kind: plan.kind,
     member: row.name,
     taskMemberId: row.id,
-    stationIndex: isStation ? task.chainCursor + 1 : 0,
+    // 站号 = 成员在本任务链上的实际站位（弱顺序链，用户 2026-09-13）：乱序/
+    // 追加派发也贴在正确站点上，完成推进（frontier）才判得准。
+    stationIndex: plan.stationIndex,
   });
   task.assignee = row.name;
   row.nowTaskId = task.id;
@@ -1100,10 +1192,13 @@ function applyAssignment(
       ...(plan.deviation !== undefined ? { deviation: plan.deviation } : {}),
     },
   });
+  // 本站简报取成员自己的站位（不是「下一站」——弱顺序链可能乱序派发）。
+  const stationBrief = task.chain[plan.stationIndex]?.stageBrief;
   wakes.push(
     sendAssignmentInTx(env, tx, team, row, task, attempt.id, {
-      ...(plan.planned !== undefined ? { stageBrief: plan.planned.stageBrief } : {}),
+      ...(stationBrief !== undefined ? { stageBrief: stationBrief } : {}),
       ...(opts.handoff !== undefined ? { handoff: opts.handoff } : {}),
+      stationIndex: plan.stationIndex,
     }),
   );
   // 容器同步（首派/链推进/改派共用本落笔）：新尝试在办 → 容器 start。
@@ -1448,6 +1543,17 @@ export async function resumeTask(
       resumeRef = task.assignee ?? last?.member ?? thrower('挂起任务缺少执行成员记录');
     }
     const row = resolveAssigneeRow(team, task, resumeRef);
+    // 恢复站号（弱顺序链，用户 2026-09-13）：优先最近一次尝试的站位（限本副本
+    // 行、且下标仍有效），退「成员在链上的既有站位 / 补站」（ensureChainStation），
+    // 保证恢复的尝试不会落在链外。
+    const stationIndex =
+      last !== undefined &&
+      last.taskMemberId === row.id &&
+      last.stationIndex >= 0 &&
+      last.stationIndex < task.chain.length
+        ? last.stationIndex
+        : ensureChainStation(task, row);
+    const stationBrief = task.chain[stationIndex]?.stageBrief;
     await ensureSpawned(env, team, row, task, await captainFor(env, team, task));
     const wakes: Wake[] = [];
     const attempt = withTeamTx(root, team.id, (tx) => {
@@ -1455,7 +1561,7 @@ export async function resumeTask(
         kind: 'reassign',
         member: row.name,
         ...(row.id > 0 ? { taskMemberId: row.id } : {}),
-        stationIndex: task.chain.length > 0 ? task.chainCursor + 1 : 0,
+        stationIndex,
       });
       applyTransition(task, 'ready', tx.now);
       task.statusNote = undefined;
@@ -1468,9 +1574,8 @@ export async function resumeTask(
       });
       wakes.push(
         sendAssignmentInTx(env, tx, team, row, task, fresh.id, {
-          ...(nextChainStation(task) !== undefined
-            ? { stageBrief: nextChainStation(task)!.stageBrief }
-            : {}),
+          ...(stationBrief !== undefined ? { stageBrief: stationBrief } : {}),
+          ...(task.chain.length > 0 ? { stationIndex } : {}),
         }),
       );
       // 容器同步：恢复即重新派发（新在办尝试）→ 容器回 start。
@@ -1518,10 +1623,13 @@ export async function redeliverAssignment(
     if (row === undefined || row.sessionId === '') {
       return { team, task, redelivered: false as const, wakes: [] as Wake[] };
     }
-    const next = nextChainStation(task);
+    // 重发沿用 live 尝试自己的站位（弱顺序链，用户 2026-09-13）：不能用
+    // 「下一站」，否则乱序/追加派发的重发信会描述错站。
+    const liveStation = task.chain[live.stationIndex];
     const wakes: Wake[] = [
       sendAssignmentInTx(env, tx, team, row, task, live.id, {
-        ...(next !== undefined ? { stageBrief: next.stageBrief } : {}),
+        ...(liveStation !== undefined ? { stageBrief: liveStation.stageBrief } : {}),
+        ...(task.chain.length > 0 ? { stationIndex: live.stationIndex } : {}),
         handoff: '上一次指派未送达/未完成，请重新接取开工。',
       }),
     ];
@@ -1762,15 +1870,19 @@ export async function completeTask(
     freeMember(fresh, task);
     const isStation = task.chain.length > 0;
     const wakes: Wake[] = [];
-    // Intermediate station iff the completed station (cursor+1) is not the last.
-    if (isStation && task.chainCursor + 2 < task.chain.length) {
-      task.chainCursor += 1; // station at old cursor+1 is now complete
-      const next = nextChainStation(task)!;
+    // 弱顺序链推进（用户 2026-09-13）：frontier = 链上最靠前、尚无成功尝试的
+    // 站点。还有未跑站点 → 中间站（任务回 ready，等领队从 frontier 续派）；
+    // 全部站点都有成功尝试 → 收口。顺序接力场景与旧的「下一站」口径逐位一致；
+    // 乱序/追加派发时不会误收口，而是**继续把剩余站点跑完**。
+    const frontier = chainFrontier(task.chain.length, task.attempts);
+    if (isStation && frontier < task.chain.length) {
+      task.chainCursor = frontier - 1; // 使 nextChainStation = 最靠前的未跑站
+      const next = task.chain[frontier]!;
       applyTransition(task, 'ready', tx.now);
       emit(tx, fresh.id, memberActor(member), 'task.stage_completed', {
         taskId: task.id,
         attemptId: attempt.id,
-        payload: { station: task.chainCursor, next: next.member },
+        payload: { station: attempt.stationIndex, next: next.member },
       });
       wakes.push(
         notifyCaptainInTx(
@@ -1795,8 +1907,8 @@ export async function completeTask(
       return { team: fresh, task, done: false, wakes, actor: memberActor(member) };
     }
     // Final station or chainless: task completed (docs/35 §5#10：产出不落列，
-    // 反查 attempts 最新成功行)。
-    const final = isStation && !hasUpcomingStation(task);
+    // 反查 attempts 最新成功行)。走到这里 = 无链，或链上所有站点都有成功尝试。
+    const final = isStation;
     // 终站完成：cursor 记末站下标（进度口径 cursor+1 = 全长；docs/26 链语义）。
     if (isStation) task.chainCursor = task.chain.length - 1;
     applyTransition(task, 'completed', tx.now);
@@ -1872,11 +1984,14 @@ export async function failTask(
     if (task.retryCount <= maxRetries) {
       // 立即同成员重试（docs/35 §5#8）：归位 ready（原 wait 已撤销——用户
       // 迭代 2026-09-11「重试排队」并入 ready）。
+      // 重试贴在**同一站**（弱顺序链，用户 2026-09-13）：乱序重试不会被重算成
+      // chainCursor+1 而贴错站。
+      const retryStation = task.chain[attempt.stationIndex];
       const retry = makeAttempt(tx, task, {
         kind: 'retry',
         member: member.name,
         ...(member.id > 0 ? { taskMemberId: member.id } : {}),
-        stationIndex: task.chain.length > 0 ? task.chainCursor + 1 : 0,
+        stationIndex: attempt.stationIndex,
       });
       applyTransition(task, 'ready', tx.now);
       task.assignee = member.name;
@@ -1888,9 +2003,8 @@ export async function failTask(
       });
       wakes.push(
         sendAssignmentInTx(env, tx, fresh, member, task, retry.id, {
-          ...(nextChainStation(task) !== undefined
-            ? { stageBrief: nextChainStation(task)!.stageBrief }
-            : {}),
+          ...(retryStation !== undefined ? { stageBrief: retryStation.stageBrief } : {}),
+          ...(task.chain.length > 0 ? { stationIndex: attempt.stationIndex } : {}),
           handoff: `重试 ${task.retryCount}/${maxRetries}。上次失败：${attempt.error}`,
         }),
       );

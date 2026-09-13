@@ -9,8 +9,9 @@
  * drawerTaskId，零新增接线）。依赖 features/tasks、lib/monitor、shared。
  *
  * 用户迭代 2026-09-11「创建中不允许点进去，加上创建中 loading 效果」：
- * creating 容器整卡禁点（与任务列表卡同口径——完善收口前进详情无意义）、
- * 进度行换 CreatingLoadingRow（shared/components，两卡共用）。
+ * 进度行换 CreatingLoadingRow（shared/components，两卡共用）。用户 2026-09-13
+ * 「我希望任务在创建中也能点进去看到子任务一个一个生成出来」：整卡「创建中
+ * 禁点」撤回——创建中容器照常进详情（只读档在详情页落地），进度行保持转圈。
  *
  * @module dsh-eteams/client/pages/board/taskActivity
  */
@@ -88,15 +89,12 @@ function BoardTaskTile({
     task.kind === 'group' && task.status === 'ready' && subs.length > 0
       ? groupDisplayOf(subs)
       : null;
-  // 创建中容器禁点（用户迭代 2026-09-11，与任务列表卡同口径）：完善收口前
-  // 进详情无意义。不可点卡身压掉常量里的 cursor-pointer（cn/tailwind-merge
-  // 以后者覆盖）。
+  // 整卡恒可点进详情（用户 2026-09-13「我希望任务在创建中也能点进去看到
+  // 子任务一个一个生成出来」：撤回 2026-09-11 创建中禁点——只读档在详情页
+  // 落地）。creating 仍用于进度行分支。
   const creating = task.status === 'creating';
   return (
-    <div
-      className={cn('eteams-task-card', BOARD_TASK_CARD_CLASS, creating && 'cursor-default')}
-      onClick={creating ? undefined : onOpen}
-    >
+    <div className={cn('eteams-task-card', BOARD_TASK_CARD_CLASS)} onClick={onOpen}>
       {/* 头行：主题截断（title 兜底全文）。 */}
       <div className="truncate text-sm font-semibold text-foreground" title={task.subject}>
         {task.subject}

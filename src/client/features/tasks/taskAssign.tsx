@@ -171,15 +171,18 @@ function stationMetricsOf(box: HTMLElement): { mids: number[]; lefts: number[]; 
   return { mids, lefts, endLeft };
 }
 
-/** 成员 chip 的拖拽源 hook：deps 携带成员引用（空 deps 会冻结 spec——见文件头）。 */
-function useMemberDrag(memberRef: string) {
+/** 成员 chip 的拖拽源 hook：deps 携带成员引用与可拖开关（空 deps 会冻结
+ * spec——见文件头）；enabled=false（2026-09-13 创建中详情只读档）时 canDrag
+ * 关，chip 退化为静态展示（光标/提示由调用位切换）。 */
+function useMemberDrag(memberRef: string, enabled: boolean) {
   return useDrag<MemberDragItem, unknown, { isDragging: boolean }>(
     () => ({
       type: MEMBER_DRAG_TYPE,
       item: { member: memberRef },
+      canDrag: () => enabled,
       collect: (monitor) => ({ isDragging: monitor.isDragging() }),
     }),
-    [memberRef],
+    [memberRef, enabled],
   );
 }
 
@@ -248,10 +251,16 @@ const CHIP_RING_CLASS = 'ring-1 ring-inset ring-primary';
 const BOX_DANGLING_CLASS = 'text-[10px] font-normal text-muted-foreground';
 /* 任务区头像描边：二十三轮 DA36 起 5 处显式传入；三十二轮 DA45 描边进
  * Avatar 容器默认（用户拍板「头像加上边框」全表面统一），调用位显式类撤除。 */
+/** 罗列条 chip 基座（A.5.3 品牌淡底；DA14 26→30、DA16 30→32、DA18 圆角 4px）
+ * ——可拖（cursor-grab）/ 只读（cursor-default，2026-09-13 创建中详情只读档）
+ * 两变体共用一份字面值，避免分叉（tailwind content 扫描仍能检出基类字面量）。 */
+const STRIP_CHIP_BASE_CLASS =
+  'inline-flex h-[32px] shrink-0 items-center gap-1.5 rounded-[4px] bg-business-tint px-2 text-xs font-medium text-[color:var(--eteams-brand-ink)]';
 /** 罗列条 chip（可拖签名 = ROLE_CHIP_CLASS 品牌淡底变体，A.5.3；hover 提示
- * 走 title，光标 grab/grabbing；DA14 26→30、DA16 30→32、DA18 圆角 4px）。 */
-const STRIP_CHIP_CLASS =
-  'inline-flex h-[32px] shrink-0 cursor-grab items-center gap-1.5 rounded-[4px] bg-business-tint px-2 text-xs font-medium text-[color:var(--eteams-brand-ink)] active:cursor-grabbing';
+ * 走 title，光标 grab/grabbing）。 */
+const STRIP_CHIP_CLASS = `${STRIP_CHIP_BASE_CLASS} cursor-grab active:cursor-grabbing`;
+/** 罗列条 chip 只读签名（2026-09-13 创建中详情：成员照显但禁拖）。 */
+const STRIP_CHIP_STATIC_CLASS = `${STRIP_CHIP_BASE_CLASS} cursor-default`;
 /** 领队 chip：中性底 + 虚线边（不可拖签名，A.5.2 草图 ╌╌ 口径；DA14 26→30、
  * DA16 30→32、DA18 圆角 4px）。 */
 const CAPTAIN_CHIP_CLASS = `inline-flex h-[32px] shrink-0 cursor-default items-center gap-1.5 rounded-[4px] border border-dashed bg-[color:var(--eteams-pill-bg)] px-2 text-xs font-medium text-[color:var(--eteams-pill-ink)] ${BORDER_TOKEN_CLASS}`;
@@ -261,19 +270,26 @@ const CHIP_TAG_CLASS = 'text-[10px] font-normal text-muted-foreground';
  * 徽章面——中性 pill 底 + token 边 + 10px medium，区别于 chip 主题色。 */
 const STRIP_BADGE_CLASS = `inline-flex items-center rounded-[3px] border border-solid bg-[color:var(--eteams-pill-bg)] ${BORDER_TOKEN_CLASS} px-1 text-[10px] font-medium leading-none text-muted-foreground`;
 
-/** 成员罗列条的可拖 chip（A.3.2：可拖，源 chip 拖拽中半透明；头像渲染复用
+/** 成员罗列条 chip（A.3.2：可拖，源 chip 拖拽中半透明；头像渲染复用
  * Avatar；五轮 DA18：原「未启动」小字改工号数字徽章 STRIP_BADGE_CLASS；
  * 用户迭代 2026-09-10「成员没有状态」：原状态点随 memberTone 下线——成员
- * 只是工牌持有者，不挂状态）。 */
-function MemberDragChip({ member }: { member: MemberView }): ReactNode {
-  const [{ isDragging }, dragRef] = useMemberDrag(memberRefOf(member));
+ * 只是工牌持有者，不挂状态）。2026-09-13 只读档：draggable=false（创建中
+ * 详情）时禁拖、静态光标、提示退化为成员名。 */
+function MemberDragChip({
+  member,
+  draggable = true,
+}: {
+  member: MemberView;
+  draggable?: boolean;
+}): ReactNode {
+  const [{ isDragging }, dragRef] = useMemberDrag(memberRefOf(member), draggable);
   const badge = employeeBadgeOf(member.employeeId);
   return (
     <div
       ref={dragRef}
-      className={STRIP_CHIP_CLASS}
+      className={draggable ? STRIP_CHIP_CLASS : STRIP_CHIP_STATIC_CLASS}
       style={isDragging ? { opacity: 0.5 } : undefined}
-      title="拖拽成员到下方的成员卡槽完成指派"
+      title={draggable ? '拖拽成员到下方的成员卡槽完成指派' : member.name}
     >
       <Avatar name={member.name} seed={member.avatar?.seed} salt={member.avatar?.salt} size={26} />
       <span>{member.name}</span>
@@ -305,15 +321,25 @@ function CaptainChip({ captain }: { captain: CaptainView }): ReactNode {
  * 二十四轮 DA37 订正（用户拍板「团队成员还是在卡片内，只是拖拽成员到下方
  * 的成员卡槽完成指派不在」）——罗列条回卡内原位（border-t 分区），**只留
  * chips 行**；指派提示拆出为 {@link StripAssignHint}（仍置卡下方左竖线块）。
+ *
+ * 2026-09-13 只读档（readOnly，创建中详情）：成员照显（用户要看团队成员）
+ * 但 chip 禁拖——无卡槽可放，拖拽只会是空操作。
  */
-export function TeamMemberStrip({ team }: { team: TeamSnapshot }): ReactNode {
+export function TeamMemberStrip({
+  team,
+  readOnly = false,
+}: {
+  team: TeamSnapshot;
+  /** 只读档（2026-09-13 创建中详情）：chip 禁拖。 */
+  readOnly?: boolean;
+}): ReactNode {
   return (
     <div className="mt-2 border-t border-solid pt-2 leading-none">
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="text-xs font-semibold text-muted-foreground">团队成员</span>
         {!team.leaderRemoved && <CaptainChip captain={team.captain} />}
         {team.members.map((m) => (
-          <MemberDragChip key={memberRefOf(m)} member={m} />
+          <MemberDragChip key={memberRefOf(m)} member={m} draggable={!readOnly} />
         ))}
       </div>
     </div>

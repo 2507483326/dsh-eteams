@@ -239,11 +239,10 @@ export function sendAssignmentInTx(
   row: TaskMemberRecord,
   task: TaskRecord,
   attemptId: number,
-  opts: { stageBrief?: string; handoff?: string } = {},
+  opts: { stageBrief?: string; handoff?: string; stationIndex?: number } = {},
 ): Wake {
   const isStation = task.chain.length > 0;
   const content = assignmentMail(task, {
-    teamName: team.name,
     attemptId,
     isStation,
     briefing: taskBriefing(env, team, task),

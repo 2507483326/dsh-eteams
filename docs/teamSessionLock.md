@@ -1,6 +1,6 @@
 # 团队对话锁定 + 已建任务走增补子任务（用户迭代 2026-09-10；2026-09-12 加严「每个会话只有一个主任务」）
 
-一个对话选定团队后，**永久固定为该团队的团队对话**：1 个主对话只能有 1 个团队；输入栏团队徽章常驻显示该团队且不可点击切换；后续消息若该对话已有主任务，则新工作请求走「增补子任务」流程而不是另建主任务。本文档自含记录本迭代的语义、判据与全部改动点。
+一个对话选定团队后，**固定为该团队的团队对话**（用户迭代 2026-09-13「开始对话后才不能修改」：对话未开始即空白屏时可改选，首条消息发出后才锁）：1 个主对话只能有 1 个团队；输入栏团队徽章常驻显示该团队且对话开始后不可点击切换；后续消息若该对话已有主任务，则新工作请求走「增补子任务」流程而不是另建主任务。本文档自含记录本迭代的语义、判据与全部改动点。
 
 ## 替代关系
 
@@ -10,7 +10,7 @@
 
 **宿主**（`src/host/runtime/sessionTeam.ts`）：`bindings` Map（sessionId → {teamId, name, boundAt}）中的条目**常驻**，不随发送、回合或时间消耗。写路径只有两处：
 
-- `setSessionTeam`（POST `/eteams-api/session-team`）：已有绑定且指向**另一支**团队、且旧团队在 `locateTeam` 下仍健在 → 409 `本对话已固定为团队「X」——一个对话只能绑定一个团队`。同队重绑放行（刷新队名/时间）；旧队已死放行（逃生口）。
+- `setSessionTeam`（POST `/eteams-api/session-team`）：已有绑定且指向**另一支**团队、且旧团队在 `locateTeam` 下仍健在、**且对话已开始**（`conversationStarted`：会话事件里出现过 `turn/start`；无活 agent = 未开始，eteam.ts 空白判定同口径）→ 409 `本对话已固定为团队「X」——一个对话只能绑定一个团队`。对话未开始（空白屏）时换队放行——覆盖写新绑定（用户迭代 2026-09-13「开始对话后才不能修改」）。同队重绑放行（刷新队名/时间）；旧队已死放行（逃生口）。
 - `clearSessionTeamForTeam(teamId)`：删团队时遍历清掉指向该队的全部绑定（`teamOps.deleteTeam` 提交后调用）——**唯一的解锁逃生口**。
 
 工具层硬兜底（band 是软约束，守卫防模型绕过）：
@@ -19,7 +19,7 @@
 - `eteams_submit_task` 新建主任务分支：调用会话在绑定团队里已有锚定主任务（**含 `completed`**，见下节判据）→ 抛错并按 hasLeader 给出增补指引（有领队提示 `eteams_dispatch_captain（taskId=#N）`，无领队提示 `eteams_create_task（parentTaskId=#N）`）。
 - `eteams_create_task` 入库守卫（用户迭代 2026-09-12「拆解漏传 parentTaskId，小任务散成顶层」）：`createTask`（`assignment.ts`）在写库前按 `main_session_id` 解析本对话的锚定主任务（领队子代理的小任务行快照记的是领队子会话，经副本行/注册表换回它主持的大任务，`anchoredMainTaskOfCaller`）——已有主任务却不带 `parentTaskId` → 抛错**不入库**（否则会静默建成顶层任务，主任务详情页的小任务列表按 `parentId` 过滤就只剩带父号的那条）；本对话尚无主任务（首次）放行，顶层任务创建路径（主会话/面板/单杆任务）不受影响。提示词同步（`eteams_create_task` 描述 + 领队子代理纪律「parentTaskId 必带」）。
 
-**客户端**（`src/client/pages/teamsButton.tsx`）：选中团队后徽章为**只读锁定面**——chip + 队名、无清除钮、点击不打开 团队/角色 弹层（`TeamsTriggerButton` 子组件在 Provider 子树内经 `useActivityMonitor` 判定锁定态）。解锁逃生口：轮询快照已落地（`fetchedAt !== 0`）但绑定团队不在列表 = 已删除 → 徽章置灰恢复可点、弹层团队 tab 顶部提示「绑定的团队已删除——请重新选择团队」（弹层自算同判据），选中新队走既有 `selectTeam`（宿主守卫因旧队已死放行）。
+**客户端**（`src/client/pages/teamsButton.tsx`）：选中团队后徽章为**只读锁定面**——chip + 队名、无清除钮、点击不打开 团队/角色 弹层（`TeamsTriggerButton` 子组件在 Provider 子树内经 `useActivityMonitor` 判定锁定态）。锁定判据含**对话已开始**（会话快照 `blank` 位为 false；`useSession` kit 缺席时按已开始兜底，退回原语义）——未开始时徽章仍可点、弹层可换队（用户迭代 2026-09-13「开始对话后才不能修改」）。解锁逃生口：轮询快照已落地（`fetchedAt !== 0`）但绑定团队不在列表 = 已删除 → 徽章置灰恢复可点、弹层团队 tab 顶部提示「绑定的团队已删除——请重新选择团队」（弹层自算同判据），选中新队走既有 `selectTeam`（宿主守卫因旧队已死放行）。
 
 **挂载对账**：恢复团队选择时宿主 GET `/session-team?sessionId=…` 为真相源——有绑定直接采信（刷 face + 本地镜像，不 POST）；宿主无绑定则按本地镜像 POST 重申（重启/失联自愈）；请求失败只进诊断通道（`recordClientDiag`），不再误设 `personaError`（那是角色面的错误位；锁定徽章应常驻显示）。角色面行为不变。
 
@@ -42,11 +42,11 @@
 
 | 位置 | 改动 |
 | --- | --- |
-| `host/runtime/sessionTeam.ts` | 绑定常驻；删 consumed/consumeSessionTeamBinding/getConsumedSessionTeamId/isHumanUserTurn；新增 getSessionTeamBinding、clearSessionTeamForTeam、anchoredMainTaskOf；section live 分支传 mainTaskId |
+| `host/runtime/sessionTeam.ts` | 绑定常驻；删 consumed/consumeSessionTeamBinding/getConsumedSessionTeamId/isHumanUserTurn；新增 getSessionTeamBinding、clearSessionTeamForTeam、anchoredMainTaskOf；section live 分支传 mainTaskId；新增 `conversationStarted`（2026-09-13 换队守卫的「已开始」判据） |
 | `host/prompts/system/sessionTeam.ts` | band live 分支加 mainTaskId 与锚定增补文案；固定锁定声明；dead 分支改「团队已删除，可在团队按钮重选」 |
 | `host/index.ts` | 删一次性消费监听器（session/event） |
 | `host/tools/identity.ts`、`host/runtime/usage.ts` | 消费凭证回退收敛为 `getSessionTeamId(...)` |
-| `host/runtime/webui.ts` | POST /session-team 锁守卫（409）+ 新增 GET /session-team |
+| `host/runtime/webui.ts` | POST /session-team 锁守卫（409，2026-09-13 收窄为「对话已开始」才 409）+ 新增 GET /session-team |
 | `host/tools/captainTools.ts` | create_team / submit_task 新建分支两条守卫 |
 | `host/runtime/teamOps.ts` | createTeam 不再清绑定；deleteTeam 清指向该队的绑定 |
 | `host/prompts/spawn/captainChild.ts` | 领队子代理增补条款；拆解纪律补「parentTaskId 必带」（漏传被入库守卫拒绝） |
@@ -58,6 +58,6 @@
 
 ## 测试
 
-- `tests/sessionTeam.test.ts`：绑定常驻、anchoredMainTaskOf 选取、band 锚定/回退分支、resolveCaller 绑定优先（一次性消费用例删除）。
-- `tests/webui.test.ts`：session-team 同队重绑 200 / 异队重绑 409 / 旧队删除后重绑 200 / GET 回读。
+- `tests/sessionTeam.test.ts`：绑定常驻、anchoredMainTaskOf 选取、band 锚定/回退分支、resolveCaller 绑定优先（一次性消费用例删除）、`conversationStarted` 逐分支（无 agent/无事件/命令事件/畸形 → 未开始；有 turn/start → 已开始）。
+- `tests/webui.test.ts`：session-team 同队重绑 200 / **未开始换队 200** / **已开始换队 409** / 旧队删除后重绑 200 / GET 回读。
 - `tests/lifecycle.test.ts`：`入库守卫：一个会话一个主任务` 三例——领队子代理漏传 `parentTaskId` 被拒且**不落库**（#43–#45 事故回归）、首次（无主任务）放行、主会话同判据；原「同会话建多个顶层任务」的用例改走第二个对话（多主任务只能来自多对话）。

@@ -23,7 +23,10 @@
  * 团队对话，1 个主对话只能有 1 个团队」）：团队面改为**常驻锁定**——替代
  * 2026-09-07 的一次性选择（发送后清空）语义：选中团队后按钮恒显该团队
  * 徽章（发送不清空），且不能再点击打开 团队/角色 弹层（只读徽章）；宿主
- * 绑定常驻，换队 POST 被 409 拒。唯一逃生口 = 绑定的团队被删除：轮询快
+ * 绑定常驻，换队 POST 被 409 拒。用户迭代 2026-09-13「开始对话后才不能
+ * 修改」：锁定判据从「选中即锁」放宽为「**对话已开始**才锁」——会话快照
+ * blank 位为 true（首条消息发出前）时徽章仍可点击换队，宿主换队守卫同判据
+ * 放行。唯一逃生口 = 绑定的团队被删除：轮询快
  * 照里队伍消失（fetchedAt 已落地）即自动解锁——徽章置灰可点、弹层顶部
  * 提示重选；挂载对账以宿主 GET /session-team 为真相源（本地镜像兜底重
  * 申）。角色面不随发送清空。 Clicking the button ALWAYS toggles this popup
@@ -142,7 +145,9 @@ interface TeamsButtonProps {
   readonly sessionId?: string;
   readonly inputActions?: { setDraft: (text: string) => void };
   readonly useSession?: <S>(
-    selector: (snapshot: { subagent?: SubagentFace | null } | undefined) => S,
+    selector: (
+      snapshot: { subagent?: SubagentFace | null; blank?: boolean } | undefined,
+    ) => S,
   ) => S;
 }
 
@@ -417,6 +422,9 @@ function TeamBadgeHover({
 function TeamsTriggerButton(props: {
   selectedMember: RosterMember | null;
   selectedTeam: { teamId: string; name: string } | null;
+  /** 对话是否已开始（快照 blank 取反）——未开始时锁定不成立（用户迭代
+   * 2026-09-13「开始对话后才不能修改」：选中团队后到首条消息前仍可点击换队）。 */
+  conversationStarted: boolean;
   open: boolean;
   onButtonClick: () => void;
   onClear: () => void;
@@ -426,7 +434,7 @@ function TeamsTriggerButton(props: {
     props.selectedTeam !== null &&
     state.fetchedAt !== 0 &&
     !state.teams.some((t) => t.teamId === props.selectedTeam!.teamId);
-  const locked = props.selectedTeam !== null && !teamGone;
+  const locked = props.selectedTeam !== null && props.conversationStarted && !teamGone;
   const team =
     props.selectedTeam !== null
       ? state.teams.find((t) => t.teamId === props.selectedTeam!.teamId)
@@ -451,9 +459,11 @@ function TeamsTriggerButton(props: {
           : props.selectedTeam !== null
             ? teamGone
               ? '绑定的团队已删除——点击重新选择'
-              : team === undefined
-                ? `本对话已固定为团队「${props.selectedTeam.name}」对话`
-                : undefined
+              : !props.conversationStarted
+                ? `已选择团队「${props.selectedTeam.name}」——对话开始前可点击更换`
+                : team === undefined
+                  ? `本对话已固定为团队「${props.selectedTeam.name}」对话`
+                  : undefined
             : undefined
       }
       aria-label="团队"
@@ -824,6 +834,12 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
   // 探测兜底（非响应式——kit 缺席是旧装配退化，翻转窗口可忽略）。
   const sessionHook = typeof props.useSession === 'function' ? props.useSession : undefined;
   const kitSubagent = sessionHook?.((snapshot) => snapshot?.subagent ?? null);
+  // 对话是否已开始（用户迭代 2026-09-13「开始对话后才不能修改」）：读会话
+  // 快照的 blank 位（宿主 blank 同口径——首条 ACCEPTED 消息前为 true）。kit
+  // hook 缺席（旧装配）无从判定，按已开始兜底（锁定，退回原语义），绝不放宽
+  // 成可换队。
+  const kitBlank = sessionHook?.((snapshot) => snapshot?.blank === true);
+  const conversationStarted = sessionHook === undefined ? true : kitBlank !== true;
   const isSubagent =
     sessionHook === undefined
       ? sessionId !== undefined && sessionId !== '' && isAddressedSubagentSession(sessionId)
@@ -1062,6 +1078,7 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
               <TeamsTriggerButton
                 selectedMember={selectedMember}
                 selectedTeam={selectedTeam}
+                conversationStarted={conversationStarted}
                 open={open}
                 onButtonClick={onButtonClick}
                 onClear={clearSelection}

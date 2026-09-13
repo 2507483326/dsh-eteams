@@ -13,10 +13,11 @@
  * 标示（一区一线，不再逐卡挂徽章）。
  *
  * 用户迭代 2026-09-11「创建中不允许点进去，加上创建中 loading 效果」：
- * creating 容器（面板手动创建、待完善收口）整卡禁点——完善中进详情无意义
- * （子任务尚未落库，收口瞬间结构可能塌缩成普通任务面，成员条/小任务列表
- * 一起消失）；进度计数行换 CreatingLoadingRow（loader + 「正在完善任务…」）。
- * 删除钮照旧保留：创建中是手动建任务占位的逃生门（docs/panelTaskCommission）。
+ * 进度计数行换 CreatingLoadingRow（loader + 「正在完善任务…」）。删除钮照旧
+ * 保留：创建中是手动建任务占位的逃生门（docs/panelTaskCommission）。
+ * 用户 2026-09-13「我希望任务在创建中也能点进去看到子任务一个一个生成
+ * 出来」：整卡「创建中禁点」撤回——创建中容器改**可点进详情**（只读观望档，
+ * 判据见 taskDetailPage 的 isDetailReadOnly），进度行保持转圈不变。
  *
  * @module dsh-eteams/client/pages/tasks/taskListCard
  */
@@ -133,14 +134,15 @@ export function TaskListCard({
     </>
   );
   const deletable = deletableOf(task, allTasks);
-  // 创建中容器禁点（用户迭代 2026-09-11「创建中不允许点进去」）：完善收口前
-  // 进详情无意义（见头注）；删除钮照旧（逃生门）。判据在卡内现算，调用位只
-  // 需照旧传 onOpen（不新增 props，禁止进详情的规则收口在本卡）。
+  // 整卡可点判据 = 当前会话卡（用户 2026-09-13「我希望任务在创建中也能点
+  // 进去看到子任务一个一个生成出来」：撤回 2026-09-11「创建中禁点」——创建
+  // 中容器照常进详情，只读档在详情页落地）。判据在卡内现算，调用位只需照旧
+  // 传 onOpen（不新增 props）。
   const creating = task.status === 'creating';
-  const openable = currentSession && !creating;
+  const openable = currentSession;
   return (
     // 整卡点击只对可进的当前会话卡生效（其它任务不进详情——2026-09-10 口径；
-    // 创建中禁点——2026-09-11 口径）；不可点卡身不加 cursor-pointer
+    // 创建中卡 2026-09-13 起同可进）；不可点卡身不加 cursor-pointer
     // （悬停语义与行为一致）。
     <div
       className={cn('eteams-task-card', TASK_CARD_CLASS, openable ? 'cursor-pointer' : 'cursor-default')}
@@ -233,10 +235,10 @@ export function TaskListCard({
             容器（手动建任务占位）计划未定不渲染开始钮（与宿主 startGroup
             Task 同闸镜像），终态照旧收。2026-09-10：「详情」钮仅当前
             会话卡渲染；其它会话卡同位渲染「跳转会话」钮（canJump 门控
-            ——目标会话已不在会话列表的卡无此钮，纯展示）。2026-09-11：
-            详情钮同禁创建中（显式闸——creating 恒为 group 分支本就无此
-            钮，闸在此防 kind 判据将来变动时漏出进详情的旁路）。 */}
-          {currentSession && task.kind !== 'group' && !creating && (
+            ——目标会话已不在会话列表的卡无此钮，纯展示）。2026-09-13：
+            创建中禁点闸随「可点进详情」一并撤除（creating 恒为 group 分支
+            本就无此钮，判据只留 kind）。 */}
+          {currentSession && task.kind !== 'group' && (
             <Button type="button" variant="outline" size="sm" onClick={onOpen}>
               详情
             </Button>

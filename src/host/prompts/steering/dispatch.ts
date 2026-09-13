@@ -50,7 +50,7 @@ export function captainCommissionMessage(
     `- 任务描述（用户原话）：${description}`,
     '',
     '请完善这个任务（不要再用 eteams_submit_task 新建主任务，容器已存在）：',
-    '1. 先在执行之前向用户问询明确目标（领队子代理用 eteams_ask_user、主会话用 ask_user_question 弹窗；问题较少时也可跳过问询直接完善）——面板发起的任务完善过程可能出现问询弹窗，属正常流程；',
+    '1. 先在执行之前向用户问询明确目标（领队子代理用 eteams_ask_user、主会话用 ask_user_question 弹窗；问题较少时也可跳过问询直接完善）——面板发起的任务完善过程可能出现问询弹窗，属正常流程；凡只有用户能定的未决项必须迭代问清（直到无未决项），不得用「推荐默认」带过；',
     `2. 用 eteams_update_task 把结论写回主任务 #${taskId}（subject/description，可带 contractMd）；`,
     `3. 用 eteams_create_task（parentTaskId=${taskId}）把任务拆解成小任务（chain 站点即成员槽，成员写工号）；`,
     `4. 全部小任务拆好后用 eteams_submit_task（taskId=${taskId}, subject, description, questionnaire）收口：把创建中的主任务转就绪——收口必须带上问过的问题（questionnaire），用户已给全/要求直接开始则传 skipQuestionnaire=true；未问询且未声明跳过会被宿主拒绝。`,
@@ -100,6 +100,6 @@ export function captainStartMessage(
     '请按既有计划执行指派（不要重新拆解、不要重复建任务）：',
     `1. 用 eteams_task_board 核对主任务 #${rootTaskId} 的执行链与当前就绪站；`,
     '2. 按链就绪即派：用 eteams_assign_task 指派当前站成员（依赖未满足/成员未就绪的卡按既有纪律处理；成员未就绪先 eteams_add_member）；',
-    '3. 指派后按汇报纪律：例行执行不向主对话汇报（面板与任务页实时可见），report 只做单向通知（升级「待用户」的告知、失败结论、收口总结）；需要用户答复的问题一律用 eteams_ask_user 弹窗问，不得写进 report。',
+    '3. 指派后按汇报纪律：例行执行不向主对话汇报（面板与任务页实时可见），report 只做单向通知（升级「待用户」的告知、失败结论、收口总结）；需要用户答复的问题一律用 eteams_ask_user 弹窗问，不得写进 report；需要用户确认的未决项必须迭代问清（直到无未决项），不得用默认值代替。',
   ].join('\n');
 }

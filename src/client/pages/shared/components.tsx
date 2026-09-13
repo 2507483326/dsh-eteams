@@ -69,12 +69,13 @@ export function FormErrorNote({
   );
 }
 
-/** 任务「创建中」加载行（用户迭代 2026-09-11「创建中不允许点进去，加上创建中
- * loading 效果」）：面板手动创建的容器在完善收口前（status=creating）由列表卡
- * 与看板任务卡替代进度计数行渲染——旋转 loader + 「正在完善任务…」。文案不带
- * 「创建中」：状态语义已由底栏状态 pill 承担，本行只补「正在完善」的增量信息
- * （派生元素不重复已可视状态）。动画走 Tailwind animate-spin（skeleton.tsx 的
- * animate-pulse 同族）；两卡共用一处，避免字面值双轨。 */
+/** 任务「创建中」加载行（用户迭代 2026-09-11「加上创建中 loading 效果」）：
+ * 面板手动创建的容器在完善收口前（status=creating）由列表卡与看板任务卡替代
+ * 进度计数行渲染——旋转 loader + 「正在完善任务…」。文案不带「创建中」：状态
+ * 语义已由状态 pill 承担，本行只补「正在完善」的增量信息（派生元素不重复已
+ * 可视状态）。动画走 Tailwind animate-spin（skeleton.tsx 的 animate-pulse
+ * 同族）；两卡共用一处，避免字面值双轨。2026-09-13 起详情页只读档也在小任务
+ * 列表下方复用本行（交代子任务正随拆解逐个生成）。 */
 export function CreatingLoadingRow(): ReactNode {
   return (
     <div className={cn(LIST_COUNT_CLASS, 'flex items-center gap-1.5')}>

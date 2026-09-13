@@ -17,6 +17,7 @@ import {
   anchoredMainTaskOf,
   clearSessionTeam,
   clearSessionTeamForTeam,
+  conversationStarted,
   getSessionTeamBinding,
   getSessionTeamId,
   sessionTeamSection,
@@ -176,6 +177,24 @@ describe('sessionTeamSection branches', () => {
     expect(band).toContain('不要复述全文');
   });
 
+  it('chat 直答 / 启动走开跑：两类消息都不增补新任务（用户 2026-09-13）', () => {
+    // 用户 2026-09-13「简单对话和启动项目这种不加入新任务」：闲聊直接回应、
+    // 「启动/开始/继续」按开跑处理——两分支（有/无领队）都要写明，不得增补。
+    setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
+    const withLeader = sessionTeamSection('s-other', () =>
+      team({ tasks: [mainTask(3, 's-other', 'ready')] }),
+    );
+    expect(withLeader).toContain('简单对话/闲聊/纯问答直接回应');
+    expect(withLeader).toContain('开跑指令');
+    expect(withLeader).toContain('不要增补新任务');
+    const leaderless = sessionTeamSection('s-other', () =>
+      team({ hasLeader: false, tasks: [mainTask(5, 's-other', 'ready')] }),
+    );
+    expect(leaderless).toContain('简单对话/闲聊/纯问答直接回应');
+    expect(leaderless).toContain('开跑指令');
+    expect(leaderless).toContain('不要增补新任务');
+  });
+
   it('falls through to two-step only when the session has no main task（无锚定回退）', () => {
     // 锚定判据不以状态释放：completed 容器仍锚定（见下条用例），只有容器
     // 删除或 cancelled（安全阀）才回退两步走。
@@ -273,6 +292,25 @@ describe('绑定常驻（用户迭代 2026-09-10 锁定语义）', () => {
     // 幂等：再清一次不报错、其余条目不动。
     clearSessionTeamForTeam('t1');
     expect(getSessionTeamBinding('s-b')).toEqual({ teamId: 't2', name: '乙队', boundAt: 2 });
+  });
+});
+
+describe('conversationStarted（对话已开始判据：turn/start 才算，用户迭代 2026-09-13）', () => {
+  it('无活 agent / 无事件 / 只有命令事件 / 畸形结构 → 未开始', () => {
+    expect(conversationStarted(undefined)).toBe(false);
+    expect(conversationStarted({})).toBe(false);
+    expect(conversationStarted({ session: {} })).toBe(false);
+    expect(conversationStarted({ session: { events: [] } })).toBe(false);
+    expect(conversationStarted({ session: { events: [{ type: 'command/run' }] } })).toBe(false);
+    expect(conversationStarted({ session: { events: 'bad' } })).toBe(false);
+  });
+
+  it('出现 turn/start → 已开始（未开始的对话才允许换队）', () => {
+    expect(
+      conversationStarted({
+        session: { events: [{ type: 'user/message' }, { type: 'turn/start' }] },
+      }),
+    ).toBe(true);
   });
 });
 

@@ -12,9 +12,11 @@ export const MEMBER_RULES = [
   '接取：收到指派 → eteams_claim_task（返回 attempt_id + token；token 是后续进度的凭证）。',
   '婉拒：接不了（能力/负载/前置缺失）→ eteams_decline_task，写明原因；领队改派。',
   '进度：开工即 eteams_append_progress；阶段节点（方案定了/主路径通了/发现风险）再记；文本 ≤200 字。',
-  '完成：交付完成 → eteams_complete_task（output 写清做了什么/改了哪些文件/如何验证）；产出同步写入任务 notes.md。',
+  '自审：完工前对照合同「验收标准」逐条核对并给出证据（能跑通/有复现方式，不是「文件存在」；试边界与错误路径），结论写进 complete 的 output。',
+  '完成：交付完成 → eteams_complete_task（output 写清做了什么/改了哪些文件/如何验证——即上条自审结论）；产出同步写入任务 notes.md。**不得在以下情况标完成**：测试在失败、实现只做一半、有未解错误、找不到必要依赖；做不下去用 eteams_fail_task 说明障碍，不要硬撑完成。',
   '失败：做不下去 → eteams_fail_task（error 写具体障碍与已尝试方案）；自动重试超限后落待领队，由领队分诊（重新指派 loop 或升级用户）。',
-  '求助：需要决策/跨任务信息 → eteams_send_message 问领队；不要自行扩大范围。',
+  '求助：需要决策/跨任务信息 → eteams_send_message 问领队；不要自行扩大范围。只有用户本人能定的问题（范围取舍、验收偏好、与既有决策冲突等）→ 视为**未决项**，用 eteams_ask_user 直接弹窗问用户，问清再继续。',
+  '未决项：只有用户能定的问题不得自己填「推荐默认 / 待复核 / 推翻即改」硬推——那是把确认责任转嫁给后续；问询是迭代的，直到无未决项才完工。',
   '纪律：一个 attempt 一个 token；token 失效（被改派/取消）立即停止，重新等指派；空闲后等待领队调度。',
 ];
 
@@ -27,6 +29,7 @@ export const MEMBER_TOOL_SHEET = [
   '- eteams_fail_task { task_id, attempt_id, token, error }',
   '- eteams_task_board {} → 我的任务与状态',
   '- eteams_send_message { to, content } → 领队/成员',
+  '- eteams_ask_user { questions } → 弹窗直接问用户（只有用户能定的未决项，问清再继续）',
   '- eteams_team_status {} → 团队概览',
 ].join('\n');
 
@@ -53,7 +56,7 @@ export function memberBriefing(opts: {
     '',
     '## 实时汇报（必须发给领队）',
     '1. 开工即报：接取后 eteams_append_progress 记计划，并 eteams_send_message to="captain" 报「已开工 + 计划」。',
-    '2. 遇问题即报：障碍 / 需决策 / 发现风险，立即 eteams_send_message to="captain"，不要静默硬扛。',
+    '2. 遇问题即报：障碍 / 需决策 / 发现风险，立即 eteams_send_message to="captain"，不要静默硬扛；其中只有用户本人能定的问题用 eteams_ask_user 直接问用户——别自己填默认值、也别当成「待后续复核」带过。',
     '3. 完成 / 失败必报：eteams_complete_task（产出/改动/验证）、eteams_fail_task（障碍），自动送达领队。',
   ].join('\n');
 }

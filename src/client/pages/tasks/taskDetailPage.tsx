@@ -6,12 +6,15 @@
  * 用户拍板「将任务做成任务详情页面和任务列表页面，点击到详情再编排整个
  * 任务」；store 持久层回写由 routes.tsx 的 location sync 承担——ui model
  * 语义不变）；选中任务被删（快照里已无此 id）自动回落列表页（原 tasksTab
- * 分支注记口径，navigate('/tasks') 落地）；创建中容器同样不进详情
- * （用户迭代 2026-09-11「创建中不允许点进去」——点击门在列表卡/看板卡，
- * 本页兜持久层恢复旁路，见 enterable 注）。
+ * 分支注记口径，navigate('/tasks') 落地）。用户 2026-09-13「我希望任务在
+ * 创建中也能点进去看到子任务一个一个生成出来」：创建中容器放开进详情
+ * （推翻 2026-09-11「创建中不允许点进去」口径），但走**只读观望档**
+ * （isDetailReadOnly——团队成员 + 小任务随快照陆续长出，不给新增/删除/
+ * 卡槽/开始；收口转 ready 后自动恢复既有编排面）。
  * 主任务（group）详情 = **整个任务的编排面**：新增小任务 + 小任务卡片全套
  * （taskSubtaskItem：执行序号/卡槽/把手拖拽调序——十轮 DA23 把手化/改删/
- * 展开/就地编辑）+ 成员罗列条；任务/小任务：详情正文（taskDrawer 的
+ * 展开/就地编辑；把手拖拽 2026-09-13 经 SUBTASK_REORDER_ENABLED 暂时停用）
+ * + 成员罗列条；任务/小任务：详情正文（taskDrawer 的
  * TaskDetailContent）+ 卡槽 + 站点行 + 依赖 chips + 成员罗列条。编辑/删除
  * 弹窗（taskDialogs，组件内瞬态 useState）就地挂载；展示态徽标居 shared/
  * components（docs/47 DB10 自 taskPills 纯移动，跨域复用归 shared/）、
@@ -46,10 +49,14 @@ import {
   depPatchesForReorder,
   executionOrderOf,
 } from '../../features/tasks/taskAssignCore';
-import { groupDisplayOf, isGroupStartable } from '../../features/tasks/taskDisplayStatus';
+import {
+  groupDisplayOf,
+  isDetailReadOnly,
+  isGroupStartable,
+} from '../../features/tasks/taskDisplayStatus';
 import { Button } from '../../components/ui/button';
 import { TaskDetailContent, TaskStations } from './taskDrawer';
-import { FormErrorNote, GroupSummaryChip } from '../shared/components';
+import { CreatingLoadingRow, FormErrorNote, GroupSummaryChip } from '../shared/components';
 import { CHIP_CLASS, LIST_TITLE_CLASS, MUTED_CLASS } from '../shared/styles';
 import { TaskHeaderCard } from './taskHeaderCard';
 import { SubtaskItem } from './taskSubtaskItem';
@@ -72,8 +79,9 @@ export interface TaskDetailPageProps {
 /**
  * 任务详情页（原 tasksTab 详情两分支收编，编辑态/编排瞬态随页）：
  * - 主任务（group）详情 = **整个任务的编排面**：头部卡 + 新增小
- *   任务 + 小任务卡片全套（执行序号/卡槽 TaskAssignDropBox/拖拽调执行顺序/
- *   修改删除）+ 成员罗列条（单条）；
+ *   任务 + 小任务卡片全套（执行序号/卡槽 TaskAssignDropBox/拖拽调执行顺序
+ *   ——2026-09-13 经 SUBTASK_REORDER_ENABLED 暂时停用/修改删除）+ 成员
+ *   罗列条（单条）；
  * - 任务/小任务详情 = 头部卡（含小任务的修改/删除）+ 挂靠行 + 详情正文
  *   （TaskDetailContent：合同四数组/状态说明/阻塞/产出/尝试时间线）+ 卡槽
  *   （小任务可拖拽指派）+ 站点行 + 依赖 chips + 成员罗列条。
@@ -93,10 +101,11 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
   // 自动回落列表页（原 tasksTab 分支注记口径）：拆页前该窗口原地回落列表
   // 渲染，拆页后 navigate('/tasks')——渲染一帧空即跳列表（拆页显式接受的
   // 差异，见 46 清单 M3 验收注记）。
-  // 用户迭代 2026-09-11「创建中不允许点进去」：创建中容器同判——列表卡/看板
-  // 卡的点击门已挡（含「详情」钮），这里兜住持久层旁路（ETeamsRouter 按
-  // drawerTaskId 恢复上次详情时可能落在创建中任务上），口径与 not-found 同款。
-  const enterable = selected !== null && selected.status !== 'creating';
+  // 用户 2026-09-13「我希望任务在创建中也能点进去看到子任务一个一个生成
+  // 出来」：创建中容器放开进详情（推翻 2026-09-11「创建中不允许点进去」
+  // 口径），只读档由下方 isDetailReadOnly 承担——本判据只剩 not-found
+  // （快照里查无此 id，含 :taskId 非法段 Number NaN 查无）回落列表页。
+  const enterable = selected !== null;
   useEffect(() => {
     if (!enterable) navigate('/tasks');
   }, [enterable, navigate]);
@@ -200,6 +209,9 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
   // （兄弟集按同 parentId 从传入数组取），线性链改写只含 deps 实际变化且
   // ready 的卡，按序逐发 updateTeamTask({dependencies})——非乐观更新；
   // 部分失败也回拉快照对齐。
+  // 2026-09-13「任务列表卡片暂时去掉拖拽」：把手拖拽经 taskSubtaskItem 的
+  // SUBTASK_REORDER_ENABLED 暂时停用，本提交核与 reorderError 槽保留为恢复
+  // 挂载位（关闭后不可达，不改变行为）。
   const submitReorder = async (fromTaskId: number, toTaskId: number): Promise<void> => {
     const patches = depPatchesForReorder(team.tasks, fromTaskId, toTaskId);
     if (patches === null) return;
@@ -262,11 +274,11 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
     }
   };
 
-  if (selected === null || selected.status === 'creating') {
-    // 防御位：:taskId 在快照里查无此任务（被删/非法段）或任务还在创建中
-    // （2026-09-11 口径，见上方 enterable 注）——回列表导航已在上方 effect
-    // 落地，本帧渲染空（roster/rosterDetailPage 同款先例，名册回拉/导航
-    // 到位即恢复）。
+  if (selected === null) {
+    // 防御位：:taskId 在快照里查无此任务（被删/非法段）——回列表导航已在上方
+    // effect 落地，本帧渲染空（roster/rosterDetailPage 同款先例，名册回拉/
+    // 导航到位即恢复）。创建中任务不再走本分支（2026-09-13 放开进详情，
+    // 只读档见下方 isDetailReadOnly）。
     return null;
   }
 
@@ -277,7 +289,10 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
   // 详情页成员罗列条（八轮 DA21：编排收进详情，罗列条随编排走——仅
   // 存在可放置任务（ready）时渲染，作为卡槽的拖拽源）。二十四轮
   // DA37：指派提示拆出 StripAssignHint（与罗列条同判据另行渲染）。
-  const detailStrip = (show: boolean): ReactNode => (show ? <TeamMemberStrip team={team} /> : null);
+  // 2026-09-13 只读档：创建中详情仍显示罗列条（成员全程可见）但 chip 禁拖
+  // （readOnly 透传 TeamMemberStrip）。
+  const detailStrip = (show: boolean, readOnly: boolean): ReactNode =>
+    show ? <TeamMemberStrip team={team} readOnly={readOnly} /> : null;
 
   // 共用弹窗（详情页实例；列表页另有各挂各的）：编辑/新增 + 删除确认。
   // 瞬态 useState 不入 ui model；host 校验合同冻结（领取后），错误就地显示。
@@ -313,19 +328,25 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
     // 七轮 DA20：小任务按执行序展示（兄弟依赖拓扑序，创建序平局）。
     const subs = executionOrderOf(team.tasks.filter((t) => t.parentId === selected.taskId));
     const done = subs.filter((t) => t.status === 'completed').length;
-    // docs/panelTaskCommission：就地编辑入口判据加 creating（与宿主
-    // updateTask 白名单对齐——创建中的容器可边完善边改主题/说明）。
-    // 用户迭代 2026-09-11：draft 并入 ready。
-    const mutable = selected.status === 'creating' || selected.status === 'ready';
+    // 用户 2026-09-13「任务在创建中也能点进去看到子任务一个一个生成出来」：
+    // 创建中容器 = 只读观望档——团队成员/小任务照常可见（随快照陆续长出），
+    // 但不给就地编辑入口（新增小任务/卡槽拖拽/删除/开始全收；宿主同闸拒
+    // creating 的派发与开跑）。收口转 ready 后 readOnly 变 false，自动恢复
+    // 既有编排面。
+    const readOnly = isDetailReadOnly(selected.status, null);
+    // docs/panelTaskCommission：就地编辑入口判据（与宿主 updateTask 白名单
+    // 对齐）。用户迭代 2026-09-11：draft 并入 ready；2026-09-13：创建中只读，
+    // 编辑窗口收窄为 ready。
+    const mutable = !readOnly && selected.status === 'ready';
     // docs/29 B.2 组卡汇总：ready 且有小任务时叠加汇总 chip。
     const summary = selected.status === 'ready' && subs.length > 0 ? groupDisplayOf(subs) : null;
     // 罗列条/指派提示块渲染判据（八轮 DA21 口径；用户迭代 2026-09-11：
     // draft 并入 ready）：存在可放置任务（ready）才渲染，仍是卡槽拖拽源。
     // docs/panelTaskCommission：creating 占位也显示罗列条（成员随完善全程
-    // 可见，仅展示无卡槽可放）；指派提示块仍要求存在可放置任务——无小任务
-    // 时不提示拖拽。
-    const stripShow = selected.status === 'creating' || subs.some((t) => t.status === 'ready');
-    const assignHintShow = subs.some((t) => t.status === 'ready');
+    // 可见，仅展示无卡槽可放）；2026-09-13：只读档罗列条照显但 chip 禁拖，
+    // 指派提示块不渲染。
+    const stripShow = readOnly || subs.some((t) => t.status === 'ready');
+    const assignHintShow = !readOnly && subs.some((t) => t.status === 'ready');
     return (
       <TaskDndProvider>
         <div>
@@ -352,7 +373,7 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
                     <GroupSummaryChip summary={summary} />
                   </div>
                 )}
-                {detailStrip(stripShow)}
+                {detailStrip(stripShow, readOnly)}
               </>
             }
             // 二十八轮 DA41：头部卡右端动作槽（自「任务列表」行上移）。
@@ -417,7 +438,7 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
               2026-09-11：撤下拉与修改——展开态/就地编辑整链下线，小任务列表
               直接平铺（原 shadcn Accordion 多开受控随展开区一并撤除）。 */}
           {subs.map((t, subIndex) => {
-            const subMutable = t.status === 'ready';
+            const subMutable = !readOnly && t.status === 'ready';
             return (
               <SubtaskItem
                 key={t.taskId}
@@ -425,6 +446,7 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
                 subIndex={subIndex}
                 members={team.members}
                 subMutable={subMutable}
+                readOnly={readOnly}
                 assignBusy={assignBusy}
                 assignError={assignError}
                 reorderError={reorderError}
@@ -440,8 +462,18 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
             );
           })}
           {/* docs/panelTaskCommission：0 条也显示（用户拍板「0条也要显示
-            出来」）——创建完善期子任务未落库时空态行兜底，任务列表区不空窗。 */}
-          {subs.length === 0 && <div className={cn(MUTED_CLASS, 'mt-2')}>暂无小任务</div>}
+            出来」）——非创建期子任务未落库时空态行兜底，任务列表区不空窗。 */}
+          {subs.length === 0 && !readOnly && (
+            <div className={cn(MUTED_CLASS, 'mt-2')}>暂无小任务</div>
+          )}
+          {/* 用户 2026-09-13「任务在创建中也能点进去看到子任务一个一个生成
+              出来」：只读档在列表下方常驻「正在完善任务…」——小任务正随拆解
+              逐个落库（快照 1s 轮询刷新），本行交代生成仍在进行。 */}
+          {readOnly && (
+            <div className="mt-2">
+              <CreatingLoadingRow />
+            </div>
+          )}
           {dialogs}
         </div>
       </TaskDndProvider>
@@ -456,10 +488,11 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
     selected.parentId !== null
       ? (team.tasks.find((t) => t.taskId === selected.parentId) ?? null)
       : null;
-  // docs/panelTaskCommission：就地编辑入口判据加 creating（与 group 分支
-  // mutable 及宿主 updateTask 白名单对齐——创建中的任务边完善边改）；
-  // 用户迭代 2026-09-11：draft 并入 ready。
-  const subMutable = selected.status === 'creating' || selected.status === 'ready';
+  // docs/panelTaskCommission：就地编辑入口判据（与 group 分支 mutable 及
+  // 宿主 updateTask 白名单对齐）；用户迭代 2026-09-11：draft 并入 ready；
+  // 2026-09-13：父仍为创建中时同走只读档（拆解期不给就地编排/删除/卡槽）。
+  const readOnly = isDetailReadOnly(selected.status, parent?.status ?? null);
+  const subMutable = !readOnly && selected.status === 'ready';
   return (
     <TaskDndProvider>
       <div>
@@ -519,7 +552,7 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
         {startError !== null && startError.taskId === selected.taskId && (
           <FormErrorNote>{startError.message}</FormErrorNote>
         )}
-        {detailStrip(parent !== null && subMutable)}
+        {detailStrip(parent !== null && subMutable, readOnly)}
         {parent !== null && subMutable && <StripAssignHint />}
         {dialogs}
       </div>

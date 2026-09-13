@@ -10,6 +10,9 @@
  * /session-team 守卫 409，旧队已死才放行重选）；输入栏徽章常显该团队且
  * 不能再打开 团队/角色 切换弹层（客户端锁定面）。替代 2026-09-07 的一次性
  * 消费语义（consumeSessionTeamBinding/本回合凭证已随锁定语义整体移除）。
+ * 用户迭代 2026-09-13「开始对话后才不能修改」：锁定从「选中即锁」放宽为
+ * 「对话已开始才锁」——对话未开回合（无 turn/start）前可改选团队（换队守卫
+ * 见 {@link conversationStarted}，客户端徽章同判据）。
  *
  * band 文本组装在 prompts/system/sessionTeam.ts（纯函数，判别联合入参）——
  * 本文件只留 bindings store 与薄壳：领队子代理注册表守卫、绑定查表、活团
@@ -66,6 +69,25 @@ export function getSessionTeamBinding(sessionId: string): SessionTeamBinding | u
 /** The session's bound teamId, if any (identity.ts 绑定优先 resolveCaller). */
 export function getSessionTeamId(sessionId: string): string | undefined {
   return bindings.get(sessionId)?.teamId;
+}
+
+/**
+ * 对话是否已开始（宿主 blank 同口径）：会话事件里出现过 `turn/start` 即已
+ * 开始；无活 agent（空白桌面会话在首条 prompt 之前没有活 agent——eteam.ts
+ * 实测同口径）或没有该事件 = 未开始。
+ *
+ * 换队守卫据此收窄（用户迭代 2026-09-13「开始对话后才不能修改」）：未开始
+ * 的对话可改选团队（覆盖写），已开始才 409 锁定；严格「1 对话 1 团队」的硬
+ * 不变量仍由工具层守卫（create_team / submit_task / create_task 锚定）兜住，
+ * HTTP 这层只管输入栏交互。结构化探测：未知结构一律按未开始（宽松放行，
+ * 与「首次选择」同路径）。
+ */
+export function conversationStarted(liveAgent: unknown): boolean {
+  const events = (liveAgent as { session?: { events?: unknown } } | undefined)?.session?.events;
+  return (
+    Array.isArray(events) &&
+    (events as ReadonlyArray<{ type?: unknown }>).some((event) => event.type === 'turn/start')
+  );
 }
 
 /**

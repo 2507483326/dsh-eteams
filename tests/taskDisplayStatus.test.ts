@@ -4,8 +4,9 @@
  * wait_user）：8 态→展示态映射全表（含 cancelled 同桶异色特例）、retryCount
  * 并入 detail、未知态中性回退、isStartable/isTerminal 开始钮状态窗口（M3 收拢
  * 三处开始钮判据）与 isGroupStartable（创建中容器不渲染开始钮——与宿主
- * startGroupTask 同闸镜像；completed 需先追加小任务回 ready）、group 汇总
- * 优先级（error > doing > waiting > done 全完成 null）与全部 done → null。
+ * startGroupTask 同闸镜像；completed 需先追加小任务回 ready）、isDetailReadOnly
+ * （创建中详情只读观望档——用户 2026-09-13）、group 汇总优先级（error > doing >
+ * waiting > done 全完成 null）与全部 done → null。
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -14,6 +15,7 @@ import {
   STATUS_LABELS,
   displayStatusOf,
   groupDisplayOf,
+  isDetailReadOnly,
   isGroupStartable,
   isStartable,
   isTerminal,
@@ -155,6 +157,25 @@ describe('isGroupStartable（组开始钮判据扩位，docs/panelTaskCommission
     expect(isGroupStartable('cancelled')).toBe(false);
     // 未知态非终态非创建中非已完成——照渲染（原 !isTerminal 同口径）。
     expect(isGroupStartable('unknown_state')).toBe(true);
+  });
+});
+
+describe('isDetailReadOnly（创建中详情只读档，用户 2026-09-13）', () => {
+  it('创建中的容器 / 父仍为创建中的小任务 → 只读', () => {
+    // 容器详情（parentStatus=null）在 creating → 只读观望。
+    expect(isDetailReadOnly('creating', null)).toBe(true);
+    // 小任务（ready）在创建中的父任务下 → 同只读（拆解期不给就地编排）。
+    expect(isDetailReadOnly('ready', 'creating')).toBe(true);
+  });
+
+  it('非创建中（含 ready/start/completed）→ 可编辑', () => {
+    expect(isDetailReadOnly('ready', null)).toBe(false);
+    expect(isDetailReadOnly('start', null)).toBe(false);
+    expect(isDetailReadOnly('paused', null)).toBe(false);
+    expect(isDetailReadOnly('completed', null)).toBe(false);
+    // 小任务在非创建中父任务下照常可编辑（原口径不变）。
+    expect(isDetailReadOnly('ready', 'ready')).toBe(false);
+    expect(isDetailReadOnly('ready', 'start')).toBe(false);
   });
 });
 

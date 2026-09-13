@@ -23,6 +23,7 @@ import type {
   TaskStatus,
   TeamState,
 } from '../model/types.js';
+import { chainDoneStations } from '../model/taskMachine.js';
 import { memberBoxKey, readEventsSync, readMailboxSync, recordEvent } from '../state/events.js';
 import { readPendingAsksSync } from '../state/asks.js';
 import { boardOverview } from '../state/queries.js';
@@ -57,7 +58,9 @@ import {
   captainFor,
   createTask,
   deleteTask,
+  markGroupStarted,
   redeliverAssignment,
+  resetGroupStarted,
   resumeTask,
   startGroupTask,
   suspendGroupTask,
@@ -84,6 +87,7 @@ import { stopBuilderChild, wakeBuilderChild } from './builderPhases.js';
 import { clearSessionPersona, setSessionPersona } from './sessionPersona.js';
 import {
   clearSessionTeam,
+  conversationStarted,
   getSessionTeamBinding,
   getSessionTeamId,
   setSessionTeam,
@@ -155,15 +159,18 @@ function withCommissionLock<T>(teamKey: string, run: () => Promise<T>): Promise<
   return next;
 }
 
-/** Station status for chain index `i` given the task state. */
+/** Station status for chain index `i` given the task state. `doneStations` =
+ * 该站已有成功尝试（弱顺序链，用户 2026-09-13）——乱序/追加派发时后段站点也
+ * 能正确显示「已完成」，不只认游标。 */
 function stationStatusOf(
   status: TaskStatus,
   chainLength: number,
   cursor: number,
+  doneStations: readonly boolean[],
   i: number,
 ): StationView['stationStatus'] {
   void chainLength;
-  if (i <= cursor) return 'done';
+  if (i <= cursor || doneStations[i] === true) return 'done';
   if (i === cursor + 1 && (ACTIVE_STATUSES.includes(status) || status === 'ready'))
     return 'current';
   return 'pending';
@@ -259,8 +266,15 @@ function memberView(team: TeamState, m: MemberRecord) {
  * paused（面板不再出现「执行中但没有任何小任务在跑」，也不漏「小任务已挂起」
  * ——用户迭代「小任务挂起之后，主任务也同步挂起」），不落盘。显式 paused 容器
  * 保持 paused（用户显式挂起的语义不被读取侧冲掉）。
+ *
+ * 用户 2026-09-13「任务开始应该先改状态」：面板点「开始」时宿主已在派发前把
+ * 容器置 `start`（`markGroupStarted`，落 `task.started` 事件 payload
+ * `via='panel.start'`）。这是**用户显式开跑**、领队尚在指派途中的过渡态——此时
+ * 无在办小任务是正常的，不能按陈旧 start 回落 `ready`（否则点击像没反应，
+ * 面板仍显「待开始」）。故 `panelStarted` 为真时，无在办/挂起小任务也保持
+ * `start`；真正的陈旧 start（无该事件）依旧回落，两侧口径不冲突。
  */
-function containerStatusOf(t: TaskRecord, team: TeamState): TaskStatus {
+function containerStatusOf(t: TaskRecord, team: TeamState, panelStarted: boolean): TaskStatus {
   if (t.parentId !== null) return t.status;
   if (t.status !== 'start' && t.status !== 'paused') return t.status;
   const subs = team.tasks.filter((s) => s.parentId === t.id);
@@ -271,7 +285,9 @@ function containerStatusOf(t: TaskRecord, team: TeamState): TaskStatus {
   );
   if (active) return 'start';
   if (t.status === 'paused') return 'paused';
-  return subs.some((s) => s.status === 'paused') ? 'paused' : 'ready';
+  if (subs.some((s) => s.status === 'paused')) return 'paused';
+  if (panelStarted) return 'start';
+  return 'ready';
 }
 
 /** Per-task view row with chain station marks and a compact attempt summary.
@@ -279,11 +295,20 @@ function containerStatusOf(t: TaskRecord, team: TeamState): TaskStatus {
  * 产出由 completeGroupIfDoneInTx 聚合进 task.completed 事件
  * （payload.via='subtasks.completed'）——面板按事件反查，小任务仍走
  * attempts 反查（docs/35 §5#10 产出不落列）。 */
-function taskView(t: TaskRecord, team: TeamState, groupOutcomes?: Map<number, string>) {
+function taskView(
+  t: TaskRecord,
+  team: TeamState,
+  groupOutcomes?: Map<number, string>,
+  panelStarted = false,
+) {
   // 末站完成即 completed（chainCursor 不再推进，docs/35 §5#10）——完成态
-  // 按满进度口径显示站点。
+  // 按满进度口径显示站点。doneStations 由 attempts 派生（弱顺序链，用户
+  // 2026-09-13）：乱序/追加派发下后段已完成站点不再错显为 pending。
+  const doneStations = chainDoneStations(t.chain.length, t.attempts);
   const stationStatus = (i: number): StationView['stationStatus'] =>
-    t.status === 'completed' ? 'done' : stationStatusOf(t.status, t.chain.length, t.chainCursor, i);
+    t.status === 'completed'
+      ? 'done'
+      : stationStatusOf(t.status, t.chain.length, t.chainCursor, doneStations, i);
   return {
     taskId: t.id,
     subject: t.subject,
@@ -309,7 +334,7 @@ function taskView(t: TaskRecord, team: TeamState, groupOutcomes?: Map<number, st
     // 主会话 ID 快照（task.main_session_id，v5 落列 v6 改名）：建任务时登记
     // 的主会话（增量字段，客户端可选消费）。
     sessionId: t.mainSessionId ?? null,
-    status: containerStatusOf(t, team),
+    status: containerStatusOf(t, team, panelStarted),
     assignee: t.assignee ?? null,
     dependencies: t.dependencies,
     chain: t.chain.map((s, i): StationView => ({
@@ -365,6 +390,15 @@ export function teamSnapshot(
   // 的聚合文本按 taskId 收敛，同任务多次收口取最新一条（Map 覆盖写）。
   const events = readEventsSync(stateRoot, team.id);
   const groupOutcomes = new Map<number, string>();
+  // 面板显式开跑过的容器（用户 2026-09-13「任务开始应该先改状态」）：markGroupStarted
+  // 落 `task.started` payload via='panel.start'——containerStatusOf 据此把「领队
+  // 指派途中、暂无在办小任务」的过渡态显示为「执行中」，不被陈旧 start 兜底回落。
+  const panelStarted = new Set<number>();
+  for (const e of events) {
+    if (e.type !== 'task.started' || e.taskId === undefined) continue;
+    const payload = (e.payload ?? {}) as Record<string, unknown>;
+    if (payload.via === 'panel.start') panelStarted.add(e.taskId);
+  }
   for (const e of events) {
     if (e.type !== 'task.completed' || e.taskId === undefined) continue;
     const payload = (e.payload ?? {}) as Record<string, unknown>;
@@ -412,7 +446,7 @@ export function teamSnapshot(
     // 成员 = 班底行（v7）。领队也是班底一行，但领队卡单独走 captain 段，
     // 成员列表跳过它避免重复出卡。
     members: team.members.filter((m) => m.isLeader !== true).map((m) => memberView(team, m)),
-    tasks: team.tasks.map((t) => taskView(t, team, groupOutcomes)),
+    tasks: team.tasks.map((t) => taskView(t, team, groupOutcomes, panelStarted.has(t.id))),
     pendingDecisions: team.pendingDecisions
       .filter((d) => d.status === 'open')
       .map((d) => ({
@@ -902,10 +936,12 @@ export function installWebSurface(
             // task workflow and the leadership branch (领队 / 主窗口充当
             // 领队 / 团队建在他会话的可行动提示).
             //
-            // 锁定守卫（用户迭代 2026-09-10「1 个主对话只能有 1 个团队」）：
-            // 会话已绑定其他健在团队 → 409 拒绝；同队重绑放行（刷新名字/
+            // 锁定守卫（用户迭代 2026-09-10「1 个主对话只能有 1 个团队」；
+            // 2026-09-13「开始对话后才不能修改」收窄）：会话已绑定其他健在
+            // 团队**且对话已开始**（有 turn/start）→ 409 拒绝；对话未开始
+            // （空白会话可改选团队）放行覆盖写；同队重绑放行（刷新名字/
             // 时间）；旧队已删除放行（删队清绑定 + 客户端徽章解锁后的重选
-            // 逃生口）。
+            // 逃生口）。硬不变量仍由工具层守卫兜住（sessionTeam.ts 注记）。
             if (req.method === 'POST' && segments[0] === 'session-team' && segments.length === 1) {
               const body = parseJsonObject(await readBody(req));
               const sessionId = str(body.sessionId, '');
@@ -922,7 +958,8 @@ export function installWebSurface(
               const existing = getSessionTeamBinding(sessionId);
               if (existing !== undefined && existing.teamId !== teamId) {
                 const current = locateTeam(ctx, config, existing.teamId);
-                if (current !== undefined) {
+                const liveAgent = (ctx as unknown as RuntimeContext).agents?.get(sessionId);
+                if (current !== undefined && conversationStarted(liveAgent)) {
                   sendError(
                     res,
                     409,
@@ -1684,6 +1721,17 @@ export function installWebSurface(
                   sendError(res, 400, '未找到主会话锚点（领队派发父锚），无法把开始交给领队');
                   return;
                 }
+                // 用户 2026-09-13「任务开始应该先改状态」：被点的主任务先置
+                // 「执行中」再唤醒领队——面板刷新即见状态翻转（快照侧另有
+                // panel.start 豁免，见 containerStatusOf），不再等领队指派后
+                // 才由容器同步翻 start。派发失败回滚，免留无人认领的假执行中。
+                // 小任务点开始传自身 id，两个函数内 no-op（派发前必须是 ready）。
+                const before = task.status;
+                await markGroupStarted(
+                  leaderEnv,
+                  { teamId: team.id, actor: { kind: 'user', name: '用户' } },
+                  task.id,
+                );
                 try {
                   await dispatchCaptainCore(leaderEnv, config, anchor, team, rootTaskId, {
                     kind: 'start',
@@ -1695,6 +1743,13 @@ export function installWebSurface(
                     ),
                   });
                 } catch (e) {
+                  if (before !== 'start') {
+                    await resetGroupStarted(
+                      leaderEnv,
+                      { teamId: team.id, actor: { kind: 'user', name: '用户' } },
+                      task.id,
+                    );
+                  }
                   sendError(res, 400, e instanceof Error ? e.message : String(e));
                   return;
                 }

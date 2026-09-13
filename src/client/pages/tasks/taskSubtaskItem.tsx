@@ -6,6 +6,8 @@
  * ——展开箭头、展开区正文、行头「修改」钮与就地编辑器整条链一并撤除（用户
  * 原话「去掉主任务和子任务的下拉和修改按钮」），卡面只剩：状态 pill + 序号 +
  * 主题 + 指派人、开始/需要选择成员、删除、卡槽、执行链站点行。
+ * 用户 2026-09-13「任务列表卡片暂时去掉拖拽」：小任务卡 grip 把手拖拽调序
+ * 经 SUBTASK_REORDER_ENABLED 开关暂时停用（见常量注；成员拖拽指派不受影响）。
  *
  * @module dsh-eteams/client/pages/tasks/taskSubtaskItem
  */
@@ -42,11 +44,18 @@ interface TaskErrorSlot {
  * 卡身滚动容器 overflow-x-hidden 的外缘裁剪）。 */
 const SUBTASK_CARD_CLASS = `mt-1.5 ${TASK_CARD_CLASS}`;
 
+/** 小任务卡 grip 拖拽调序开关（用户 2026-09-13「任务列表卡片暂时去掉拖拽」）：
+ * 置 false = 左上把手不渲染、拖拽源（canDrag）与放置目标（canDrop）双关，
+ * 小任务卡只读不可调序；恢复 = 置回 true（原拖拽链路原样，无需改其它代码）。
+ * 显式标注 boolean——避免字面量 false 收窄成常量条件。 */
+const SUBTASK_REORDER_ENABLED: boolean = false;
+
 /** 小任务卡片（七轮 DA20 调序 + 十轮 DA23 把手化）：**只有左上 grip 把手
  * 可拖**（'eteams-subtask'，ready 才可拖），卡身不可拖。二十五轮 DA38：
  * 整卡点击 = 进小任务详情页的口径撤除；卡身只作为放置目标（同父兄弟卡才亮；
  * drop 时 onReorder 以最新快照现算依赖改写补丁，非乐观更新）。拖拽中
- * 半透明、悬停 ring 高亮。 */
+ * 半透明、悬停 ring 高亮。2026-09-13：经 SUBTASK_REORDER_ENABLED 暂时停用
+ * ——把手不渲染、drag/drop 双关（见常量注）。 */
 function SubtaskCard({
   task,
   onReorder,
@@ -61,7 +70,7 @@ function SubtaskCard({
     () => ({
       type: SUBTASK_DRAG_TYPE,
       item: { taskId: task.taskId, parentId: task.parentId, editable },
-      canDrag: () => editable,
+      canDrag: () => SUBTASK_REORDER_ENABLED && editable,
       collect: (monitor) => ({ isDragging: monitor.isDragging() }),
     }),
     [task.taskId, task.parentId, editable],
@@ -70,7 +79,11 @@ function SubtaskCard({
     () => ({
       accept: SUBTASK_DRAG_TYPE,
       canDrop: (item) =>
-        item.editable && item.taskId !== task.taskId && item.parentId === task.parentId && editable,
+        SUBTASK_REORDER_ENABLED &&
+        item.editable &&
+        item.taskId !== task.taskId &&
+        item.parentId === task.parentId &&
+        editable,
       drop: (item) => onReorder(item.taskId, task.taskId),
       collect: (monitor) => ({ isOver: monitor.isOver() && monitor.canDrop() }),
     }),
@@ -86,16 +99,18 @@ function SubtaskCard({
       )}
     >
       <div className="flex items-start gap-1.5">
-        <span
-          ref={dragRef}
-          title="拖动调整执行顺序"
-          className={cn(
-            'mt-0.5 shrink-0',
-            editable ? 'cursor-grab text-muted-foreground' : 'cursor-default opacity-40',
-          )}
-        >
-          <GripVertical className="h-4 w-4" />
-        </span>
+        {SUBTASK_REORDER_ENABLED && (
+          <span
+            ref={dragRef}
+            title="拖动调整执行顺序"
+            className={cn(
+              'mt-0.5 shrink-0',
+              editable ? 'cursor-grab text-muted-foreground' : 'cursor-default opacity-40',
+            )}
+          >
+            <GripVertical className="h-4 w-4" />
+          </span>
+        )}
         <div className="min-w-0 flex-1">{children}</div>
       </div>
     </div>
@@ -104,12 +119,14 @@ function SubtaskCard({
 
 /** 组详情页小任务卡条目：状态（assignBusy/error 瞬态）与提交回调
  * 由消费页持有（tasks/taskDetailPage），经 props 传入；suppressStations
- * （boxCoversChain）随块在组件内现算。 */
+ * （boxCoversChain）随块在组件内现算。2026-09-13：readOnly 档（创建中详情）
+ * 不渲染成员卡槽——整页只读。 */
 export function SubtaskItem({
   task,
   subIndex,
   members,
   subMutable,
+  readOnly = false,
   assignBusy,
   assignError,
   reorderError,
@@ -124,6 +141,9 @@ export function SubtaskItem({
   subIndex: number;
   members: readonly MemberView[];
   subMutable: boolean;
+  /** 只读档（2026-09-13 创建中详情）：不渲染成员卡槽（整页只读，无拖拽
+   * 指派入口；执行链仍由 TaskStations 呈现）。 */
+  readOnly?: boolean;
   assignBusy: number | null;
   assignError: TaskErrorSlot | null;
   reorderError: TaskErrorSlot | null;
@@ -172,17 +192,20 @@ export function SubtaskItem({
         </div>
         {/* docs/29 A.8（四轮 DA17）：成员卡槽在任务卡下方独立一行
         （拖拽指派 drop target）。DA42：卡槽常显；onOpenEdit 在本卡
-        编辑态哑化由消费页传入。 */}
-        <div className="mt-1.5">
-          <TaskAssignDropBox
-            task={task}
-            members={members}
-            busy={assignBusy === task.taskId}
-            onAssign={onAssign}
-            onRemoveStation={onRemoveStation}
-            onOpenEdit={onOpenEditDialog}
-          />
-        </div>
+        编辑态哑化由消费页传入。2026-09-13 只读档：创建中详情不渲染卡槽
+        （整页只读，无拖拽指派入口；执行链仍由 TaskStations 呈现）。 */}
+        {!readOnly && (
+          <div className="mt-1.5">
+            <TaskAssignDropBox
+              task={task}
+              members={members}
+              busy={assignBusy === task.taskId}
+              onAssign={onAssign}
+              onRemoveStation={onRemoveStation}
+              onOpenEdit={onOpenEditDialog}
+            />
+          </div>
+        )}
         {!suppressStations && <TaskStations task={task} members={members} />}
       </SubtaskCard>
       {assignError !== null && assignError.taskId === task.taskId && (

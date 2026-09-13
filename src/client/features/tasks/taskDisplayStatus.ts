@@ -141,6 +141,17 @@ export function isGroupStartable(status: string): boolean {
   return !isTerminal(status) && status !== 'creating' && status !== 'completed';
 }
 
+/**
+ * 详情页只读判据（用户 2026-09-13「我希望任务在创建中也能点进去看到子任务
+ * 一个一个生成出来」）：创建中的容器、以及父仍为创建中的小任务——详情页
+ * **放开进入但整页只读**（看团队成员 + 小任务随快照陆续出现，不给新增/
+ * 删除/卡槽拖拽/开始；宿主本就拒 creating 容器的派发与开跑，两侧同口径）。
+ * parentStatus 传父任务状态（容器详情传 null）。
+ */
+export function isDetailReadOnly(status: string, parentStatus: string | null): boolean {
+  return status === 'creating' || parentStatus === 'creating';
+}
+
 /** 组卡汇总 chip（B.2 group 汇总规则）：一条可渲染的汇总（tone/icon/detail）。 */
 export interface GroupSummary {
   label: string;

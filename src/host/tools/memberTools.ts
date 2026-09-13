@@ -151,7 +151,7 @@ export function createMemberTools(
   const completeTool = defineTool({
     name: 'eteams_complete_task',
     description:
-      '交付完成：output 写清做了什么/改了哪些文件/如何验证；changedPaths 列改动文件。链任务完成中间站后领队会推进下一站。',
+      '交付完成：output 写清做了什么/改了哪些文件/如何验证，并带上自审结论（对照合同「验收标准」逐条 pass/fail + 证据/复现方式，不是「文件存在」）；changedPaths 列改动文件。链任务完成中间站后领队会推进下一站。',
     parameters: {
       taskId: intR('任务号'),
       attemptId: intR('attempt id'),

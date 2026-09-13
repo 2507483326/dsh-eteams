@@ -51,7 +51,7 @@
 
 ---
 
-## 二、验证：成员自审（降级于独立验证）
+## 二、验证：成员自审（相对独立验证的降级方案）
 
 ### 定稿口径
 
@@ -119,6 +119,30 @@
 | `src/host/prompts/handoff/mails.ts` | 删除 `assignmentMail` 死参数 `teamName` |
 
 ---
+
+## 实现注意与回归影响
+
+### 收口闸会打破的现有用例（必须同步更新）
+
+新闸要求「主任务下有 ≥1 个带非空『验收标准』合同的小任务」。现有测试里以下收口路径**尚未满足**，实现时必须为它们补小任务/合同（或调整断言），否则会红：
+
+- `tests/lifecycle.test.ts:1097`（收口回写）/ `:1132`（问询自检闸）/ `:1196`（主会话锚定）：都只建了**空容器**就收口——新闸会以「空容器」拒绝。
+- `tests/lifecycle.test.ts:1156`：建了一个**无合同小任务**后收口——新闸会以「缺验收标准」拒绝。
+- `tests/lifecycle.test.ts:1278 / 1359 / 1419 / 1513 / 1582 / 1626`、`tests/webui.test.ts:282 / 1329`：以 `taskId + skipQuestionnaire` 收口的路径，**须逐一核对**是否有带验收标准的小任务。
+- 正例参照：`tests/lifecycle.test.ts:309` 的小任务合同 `## 验收标准 …` 就是新格式。
+
+### 4e 死参数删除的连带改动
+
+`assignmentMail` 的 `teamName` 被两处传入，删参数须同步：`src/host/runtime/members.ts:246`（`teamName: team.name`）与 `tests/memberBriefing.test.ts:82`。
+
+### 领队人设文本的测试约束
+
+`tests/captainDispatch.test.ts:544-550` 断言 `CAPTAIN_CHILD_PERSONA` 含/不含若干子串——必须保留 `report 是**单向通知**`、`不得写进 report`、`问询时机`、`skipQuestionnaire=true`、`卡槽免问`，且**不得**出现 `需要用户决策/答复、任务升级`。新增「拆解判据」段时须避开这些约束。
+
+### 容器合同与已知边界
+
+- 收口闸只校验**小任务**合同；主任务容器自身的 `description`/`contractMd` 不参与该闸（现有测试给容器传 `contractMd` 的做法不受影响）。
+- 已知边界：收口后再把唯一小任务删除，容器会停在 `ready` 且 0 小任务——本闸只在收口时校验，不覆盖此路径。若要求「删空即回收口」，需另给 `eteams_delete_task` 加守卫（本期不做，记录在案）。
 
 ## 验收与测试
 

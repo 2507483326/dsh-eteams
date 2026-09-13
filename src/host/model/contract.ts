@@ -43,3 +43,26 @@ export function contractMdFromLegacyArrays(
   if (sections.length === 0) return undefined;
   return sections.join('\n');
 }
+
+/**
+ * 合同是否含非空「验收标准」段（收口闸判据，docs/taskOrchestrationRefinement）：
+ * 精确匹配二级标题行 `## 验收标准`——行首 `##` 后须跟空白，标题文字 trim 后
+ * 精确等于「验收标准」；`###`/加粗/变体一律不认。段内容 = 该标题行到下一个
+ * `# ` / `## ` 标题（或文末）之间的文本，去空白后非空才算有效（`### 子标题`
+ * 及正文仍算段内）。
+ */
+export function hasAcceptanceCriteria(md: string | undefined): boolean {
+  if (md === undefined) return false;
+  let inSection = false;
+  for (const line of md.split(/\r?\n/)) {
+    const heading = /^(#{1,2})\s+(.*)$/.exec(line);
+    if (heading !== null) {
+      // 遇到下一个同级或更高级标题：段已结束——此前若无内容即为空段。
+      if (inSection) return false;
+      if (heading[1] === '##' && heading[2]!.trim() === '验收标准') inSection = true;
+      continue;
+    }
+    if (inSection && line.trim() !== '') return true;
+  }
+  return false;
+}

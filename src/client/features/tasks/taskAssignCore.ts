@@ -188,29 +188,34 @@ function isOrderEditable(task: OrderableTaskLike): boolean {
 }
 
 /**
- * 兄弟小任务的展示执行顺序：对兄弟集（同 parentId，含 null 顶层）内的依赖做
- * 分层拓扑排序（Kahn，逐轮按输入序=创建序平局），兄弟集外的依赖（外部依赖）
- * 不参与兄弟排序；环/悬空引用（防御，host 侧 wouldCycle 本应杜绝）把剩余
- * 按输入序直接追加，绝不丢任务。
+ * 兄弟小任务的展示执行顺序（与宿主 `subExecutionOrder` 同口径，用户
+ * 2026-09-13「已增补并指派的任务怎么没有排在最后」）：对兄弟集（同 parentId，
+ * 含 null 顶层）内的依赖做拓扑排序——逐趟按输入序（=创建序）扫描，扫到依赖
+ * 已满足的就地发出，**同趟内新满足的也立即发出**，故链式依赖会连续排开、
+ * 后增补的无依赖任务自然落到末尾。旧实现按「层」批量发出（一轮把当前所有
+ * 就绪卡一次性发出、再重扫），会让无依赖的新任务挤进首个依赖层、排到链中间，
+ * 与宿主实际发棒顺序（subExecutionOrder）不一致。兄弟集外的依赖（外部依赖）
+ * 不参与兄弟排序；环/悬空引用（防御，host 侧 wouldCycle 本应杜绝）把剩余按
+ * 输入序直接追加，绝不丢任务。
  */
 export function executionOrderOf<T extends OrderableTaskLike>(tasks: readonly T[]): T[] {
   const siblingIds = new Set(tasks.map((t) => t.taskId));
   const ordered: T[] = [];
   const emitted = new Set<number>();
-  let remaining = [...tasks];
-  while (remaining.length > 0) {
-    const ready = remaining.filter((t) =>
-      t.dependencies.every((d) => !siblingIds.has(d) || emitted.has(d)),
-    );
-    if (ready.length === 0) {
-      ordered.push(...remaining);
-      break;
+  let progress = true;
+  while (ordered.length < tasks.length && progress) {
+    progress = false;
+    for (const task of tasks) {
+      if (emitted.has(task.taskId)) continue;
+      if (task.dependencies.every((d) => !siblingIds.has(d) || emitted.has(d))) {
+        emitted.add(task.taskId);
+        ordered.push(task);
+        progress = true;
+      }
     }
-    for (const task of ready) {
-      ordered.push(task);
-      emitted.add(task.taskId);
-    }
-    remaining = remaining.filter((t) => !emitted.has(t.taskId));
+  }
+  for (const task of tasks) {
+    if (!emitted.has(task.taskId)) ordered.push(task);
   }
   return ordered;
 }

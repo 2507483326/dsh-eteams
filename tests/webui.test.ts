@@ -213,7 +213,10 @@ async function installFake(): Promise<SurfaceHarness> {
  * a test can drive the full loop — 对话提交 → 拆解 → 指派 → 接取 → 交付 →
  * 主任务自动收口 — plus GET /board aggregation, end to end.
  */
-async function installFull(overrides: Partial<ETeamsResolvedConfig> = {}): Promise<SurfaceHarness> {
+async function installFull(
+  overrides: Partial<ETeamsResolvedConfig> = {},
+  opts: { failDispatch?: boolean } = {},
+): Promise<SurfaceHarness> {
   const cfg = { ...config, ...overrides };
   const registered: Handler[] = [];
   const captains = new Map<string, { id: string; session: { header: { cwd: string } } }>();
@@ -222,10 +225,12 @@ async function installFull(overrides: Partial<ETeamsResolvedConfig> = {}): Promi
     logger: { info: () => undefined, warn: () => undefined },
     subagents: {
       async startContinuable() {
+        if (opts.failDispatch === true) throw new Error('子代理服务不可用');
         const childId = `sess-child-${++childCounter}`;
         return { childId, messageId: 'm-fake' };
       },
       async followup() {
+        if (opts.failDispatch === true) throw new Error('子代理服务不可用');
         return 'm-fake';
       },
       interrupt() {},
@@ -271,6 +276,18 @@ async function installFull(overrides: Partial<ETeamsResolvedConfig> = {}): Promi
   ): Promise<Record<string, unknown>> => {
     const result = await callRaw(name, args, agent);
     if (name === 'eteams_submit_task' && args.taskId === undefined) {
+      // 收口拆解质量闸（docs/taskOrchestrationRefinement）要求主任务下至少一个
+      // 带非空「## 验收标准」的小任务：本助手只借收口拿 ready 容器，故先建一个
+      // 占位小任务过闸、收口后删掉——让自建小任务的用例保持原语义。
+      const placeholder = await callRaw(
+        'eteams_create_task',
+        {
+          subject: '收口占位小任务',
+          parentTaskId: result.taskId,
+          contractMd: '## 验收标准\n1. 占位',
+        },
+        agent,
+      );
       await callRaw(
         'eteams_submit_task',
         {
@@ -283,6 +300,7 @@ async function installFull(overrides: Partial<ETeamsResolvedConfig> = {}): Promi
         },
         agent,
       );
+      await callRaw('eteams_delete_task', { taskId: placeholder.taskId }, agent);
     }
     return result;
   };
@@ -1260,29 +1278,44 @@ describe('conversation task workflow (docs/26)', () => {
     });
     expect(rebind.code).toBe(200);
 
-    // 锁定守卫：会话已绑定健在的甲队 → 换绑乙队 409（1 对话 1 团队）。
-    const locked = await h.post('/eteams-api/session-team', {
+    // 对话未开始（无活 agent / 无 turn/start）→ 可改选团队（用户迭代
+    // 2026-09-13「开始对话后才不能修改」）：换绑乙队放行。
+    const blankSwitch = await h.post('/eteams-api/session-team', {
       sessionId: 'sess-a',
       teamId: String(teamB),
     });
-    expect(locked.code).toBe(409);
-    expect(locked.body).toContain('绑定团队甲');
-    // GET 仍是甲队。
-    const stillA = await h.get('/eteams-api/session-team?sessionId=sess-a');
-    expect(json<{ teamId?: string }>(stillA.body).teamId).toBe(String(teamA));
+    expect(blankSwitch.code).toBe(200);
+    const readbackB = await h.get('/eteams-api/session-team?sessionId=sess-a');
+    expect(json<{ teamId?: string }>(readbackB.body).teamId).toBe(String(teamB));
 
-    // 逃生口：删除甲队 → 绑定随之清除 → 重绑乙队放行。
-    const del = await h.post(`/eteams-api/team/${teamA}/delete`, {});
+    // 对话已开始（会话事件出现 turn/start）→ 锁定：换绑甲队 409
+    // （1 对话 1 团队）。
+    h.captains.set('sess-a', {
+      id: 'sess-a',
+      session: { header: { cwd: workspace }, events: [{ type: 'turn/start' }] },
+    } as never);
+    const locked = await h.post('/eteams-api/session-team', {
+      sessionId: 'sess-a',
+      teamId: String(teamA),
+    });
+    expect(locked.code).toBe(409);
+    expect(locked.body).toContain('绑定团队乙');
+    // GET 仍是乙队。
+    const stillB = await h.get('/eteams-api/session-team?sessionId=sess-a');
+    expect(json<{ teamId?: string }>(stillB.body).teamId).toBe(String(teamB));
+
+    // 逃生口：删除乙队 → 绑定随之清除 → 重绑甲队放行。
+    const del = await h.post(`/eteams-api/team/${teamB}/delete`, {});
     expect(del.code).toBe(200);
     const freed = await h.post('/eteams-api/session-team', {
       sessionId: 'sess-a',
-      teamId: String(teamB),
+      teamId: String(teamA),
     });
     expect(freed.code).toBe(200);
-    const nowB = await h.get('/eteams-api/session-team?sessionId=sess-a');
-    expect(json<{ teamId?: string; name?: string }>(nowB.body)).toEqual({
-      teamId: String(teamB),
-      name: '绑定团队乙',
+    const nowA = await h.get('/eteams-api/session-team?sessionId=sess-a');
+    expect(json<{ teamId?: string; name?: string }>(nowA.body)).toEqual({
+      teamId: String(teamA),
+      name: '绑定团队甲',
     });
 
     // 过期选择（团队已删）→ 404，不是静默绑上。
@@ -1322,6 +1355,13 @@ describe('conversation task workflow (docs/26)', () => {
     expect(existsSync(join(workspace, group.workDir!, 'notes.md'))).toBe(true);
 
     // 1b. 收口：拆解完成后把「创建中」转「待开始」（收口前 startGroupTask 拒绝）。
+    // 收口闸要求主任务下至少一个带「## 验收标准」的小任务——先建占位过闸，
+    // 收口后删掉（本用例自建小任务，占位只为过闸）。
+    const gateStub = await h.callRaw!('eteams_create_task', {
+      subject: '收口占位小任务',
+      parentTaskId: group.id,
+      contractMd: '## 验收标准\n1. 占位',
+    });
     const finalized = await h.callRaw!('eteams_submit_task', {
       taskId: group.id,
       subject: '官网迁移',
@@ -1329,6 +1369,7 @@ describe('conversation task workflow (docs/26)', () => {
       skipQuestionnaire: true,
     });
     expect(finalized.status).toBe('ready');
+    await h.callRaw!('eteams_delete_task', { taskId: gateStub.taskId });
 
     // 2. 面板拆解：parentTaskId（数字串）挂任务单；chain 站点 = 成员槽。
     const sub = await h.post(`/eteams-api/team/${teamId}/task`, {
@@ -2167,6 +2208,18 @@ describe('conversation task workflow (docs/26)', () => {
     let team = readTeam(teamId);
     expect(team.tasks.find((t) => t.id === subId)!.status).toBe('ready');
     expect(team.tasks.find((t) => t.id === subId)!.attempts).toHaveLength(0);
+    // 用户 2026-09-13「点击开始应该立刻改变状态」：批准转交领队后宿主同步把
+    // 主任务置执行中，不再等领队指派才由容器同步翻 start。
+    expect(team.tasks.find((t) => t.id === group)!.status).toBe('start');
+    // 面板快照同口径（用户 2026-09-13「任务开始应该先改状态」）：无在办小任务
+    // 时也被 panel.start 事件豁免，不再被读取侧兜底回落成「待开始」。
+    const snapGroup = (
+      teamSnapshot(readTeam(teamId), workspace, config).tasks as Array<{
+        taskId: number;
+        status: string;
+      }>
+    ).find((t) => t.taskId === group)!;
+    expect(snapGroup.status).toBe('start');
     const leaderRow = team.taskMembers.find((r) => r.mainTaskId === group && r.isLeader === true);
     expect(leaderRow).toBeDefined();
     expect(leaderRow!.sessionId).not.toBe('');
@@ -2184,6 +2237,35 @@ describe('conversation task workflow (docs/26)', () => {
     turn = readCaptainTurn(stateRoot(), String(group));
     expect(turn?.turn).toBe('start');
     expect(turn?.message).toContain('恢复');
+  });
+
+  it('rolls the container back to 待开始 when the leader dispatch fails（先改状态的回滚，2026-09-13）', async () => {
+    const h = await installFull({}, { failDispatch: true });
+    const created = await h.post('/eteams-api/team', { name: '回滚团队', sessionId: 'cap-conv' });
+    const teamId = json<{ teamId: number }>(created.body).teamId;
+    await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Alice', role: 'researcher' });
+    const group = (
+      (await h.call!('eteams_submit_task', { subject: '主任务' })) as { taskId: number }
+    ).taskId;
+    await h.post(`/eteams-api/team/${teamId}/task`, {
+      subject: '接力小任务',
+      parentTaskId: String(group),
+      chain: [{ member: 'Alice', stageBrief: '先做' }],
+    });
+
+    const started = await h.post(`/eteams-api/team/${teamId}/task/${group}/start`, {});
+    expect(started.code).toBe(400);
+    // 先置「执行中」的过渡态被回滚：raw 与面板快照都退回「待开始」，
+    // 不留无人认领的假执行中。
+    const team = readTeam(teamId);
+    expect(team.tasks.find((t) => t.id === group)!.status).toBe('ready');
+    const snapGroup = (
+      teamSnapshot(readTeam(teamId), workspace, config).tasks as Array<{
+        taskId: number;
+        status: string;
+      }>
+    ).find((t) => t.taskId === group)!;
+    expect(snapGroup.status).toBe('ready');
   });
 });
 

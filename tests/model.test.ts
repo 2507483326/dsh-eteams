@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   applyTransition,
   canTransition,
+  chainDoneStations,
+  chainFrontier,
+  chainIndexOfStation,
   dependenciesSatisfied,
   dependentsOf,
   hasUpcomingStation,
@@ -13,7 +16,8 @@ import {
   unsatisfiedDependencies,
   wouldCycle,
 } from '../src/host/model/taskMachine';
-import type { TaskRecord } from '../src/host/model/types';
+import { hasAcceptanceCriteria } from '../src/host/model/contract';
+import type { AttemptStatus, TaskRecord } from '../src/host/model/types';
 
 const T0 = 1_000;
 
@@ -33,6 +37,30 @@ function makeTask(overrides: Partial<TaskRecord> = {}): TaskRecord {
     ...overrides,
   };
 }
+
+describe('合同验收标准段判定（收口闸判据，docs/taskOrchestrationRefinement）', () => {
+  it('二级标题「## 验收标准」+ 非空内容 → true（可在其他分节之间）', () => {
+    expect(hasAcceptanceCriteria('## 验收标准\n1. 支持 CSV 导出')).toBe(true);
+    expect(hasAcceptanceCriteria('## 允许改动\n- x\n\n## 验收标准\n1. 通过')).toBe(true);
+  });
+
+  it('段后接 ### 子标题或正文仍算段内', () => {
+    expect(hasAcceptanceCriteria('## 验收标准\n### 子项\n- 一条')).toBe(true);
+  });
+
+  it('缺标题 / 空段 / 变体标题 → false', () => {
+    expect(hasAcceptanceCriteria(undefined)).toBe(false);
+    expect(hasAcceptanceCriteria('')).toBe(false);
+    expect(hasAcceptanceCriteria('## 允许改动\n- x')).toBe(false);
+    expect(hasAcceptanceCriteria('## 验收标准\n\n## 交付物\n- x')).toBe(false);
+    expect(hasAcceptanceCriteria('### 验收标准\n1. x')).toBe(false);
+    expect(hasAcceptanceCriteria('## 验收标准 \n  \n')).toBe(false);
+  });
+
+  it('`##验收标准`（标题后无空白）不认——须标准二级标题', () => {
+    expect(hasAcceptanceCriteria('##验收标准\n1. x')).toBe(false);
+  });
+});
 
 describe('task state machine edges (8 态，用户迭代 2026-09-11)', () => {
   it('creating 收口与放弃：creating -> ready / cancelled 合法，不经转移进入', () => {
@@ -187,6 +215,43 @@ describe('execution chain helpers (D11)', () => {
       done: 0,
       total: 1,
     });
+  });
+});
+
+describe('弱顺序链：站点定位与 frontier 推进（用户 2026-09-13）', () => {
+  const attempt = (stationIndex: number, status: AttemptStatus) => ({ stationIndex, status });
+
+  it('chainIndexOfStation 按工号优先、legacy 名字兜底，找不到返回 undefined', () => {
+    const chain = [
+      { member: 7, stageBrief: 'a' },
+      { member: 'Legacy', stageBrief: 'b' },
+    ];
+    expect(chainIndexOfStation(chain, { employeeId: 7, name: 'Alice' })).toBe(0);
+    expect(chainIndexOfStation(chain, { employeeId: null, name: 'Legacy' })).toBe(1);
+    expect(chainIndexOfStation(chain, { employeeId: 9, name: 'Bob' })).toBeUndefined();
+  });
+
+  it('chainFrontier = 最靠前、尚无成功尝试的站点（乱序/追加也算）', () => {
+    expect(chainFrontier(0, [])).toBe(0); // 无链 → 直接可收口
+    expect(chainFrontier(2, [])).toBe(0);
+    expect(chainFrontier(2, [attempt(0, 'succeeded')])).toBe(1); // 顺序推进
+    // 乱序：站 0、站 2 成功，站 1（中间追加前未跑）未跑 → frontier=1，继续往后跑。
+    expect(chainFrontier(3, [attempt(0, 'succeeded'), attempt(2, 'succeeded')])).toBe(1);
+    // 全部站点都有成功尝试 → 可收口。
+    expect(chainFrontier(2, [attempt(0, 'succeeded'), attempt(1, 'succeeded')])).toBe(2);
+    // 失败/吊销/越界站号的尝试不算成功。
+    expect(
+      chainFrontier(2, [attempt(0, 'failed'), attempt(1, 'revoked'), attempt(5, 'succeeded')]),
+    ).toBe(0);
+  });
+
+  it('chainDoneStations 派生逐站完成标记（越界忽略）', () => {
+    expect(chainDoneStations(3, [attempt(0, 'succeeded'), attempt(2, 'succeeded')])).toEqual([
+      true,
+      false,
+      true,
+    ]);
+    expect(chainDoneStations(0, [attempt(0, 'succeeded')])).toEqual([]);
   });
 });
 

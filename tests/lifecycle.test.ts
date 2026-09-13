@@ -202,6 +202,15 @@ function childByEmployee(employeeId: number) {
   return child;
 }
 
+/** 按 (大任务, 工号) 工牌精确定位子代理：同一成员跨任务各一行子会话，单按工号
+ * 会命中该成员在别的任务下的子代理（弱顺序链用例里 Bob 同时进了两个任务）。 */
+function childByBadge(mainTaskId: number, employeeId: number) {
+  const badge = `T${mainTaskId}-ET${String(Math.max(0, Math.floor(employeeId))).padStart(4, '0')}`;
+  const child = runtime.children.find((c) => c.label.includes(badge));
+  if (!child) throw new Error(`未找到任务 ${mainTaskId} 工号 ${employeeId} 的成员子代理`);
+  return child;
+}
+
 async function mem<T>(agent: FakeAgent, name: string, args: Record<string, unknown>): Promise<T> {
   return (await memberTool(name).execute(
     args as never,
@@ -216,6 +225,21 @@ function readTeam(teamId: number): TeamState {
   const team = readTeamSync(root, teamId);
   if (team === undefined) throw new Error(`团队 ${teamId} 不存在`);
   return team;
+}
+
+/** 建一个 ready 主任务容器：收口闸（docs/taskOrchestrationRefinement）要求主任务
+ * 下至少一个带非空「## 验收标准」的小任务——先建占位小任务过闸、收口后删掉，
+ * 让只借收口拿 ready 容器的用例保持原语义（自建小任务的用例不受影响）。 */
+async function submitReady(subject: string): Promise<{ taskId: number }> {
+  const created = await cap<{ taskId: number }>('eteams_submit_task', { subject });
+  const stub = await cap<{ taskId: number }>('eteams_create_task', {
+    subject: '收口占位小任务',
+    parentTaskId: created.taskId,
+    contractMd: '## 验收标准\n1. 占位',
+  });
+  await cap('eteams_submit_task', { taskId: created.taskId, subject, skipQuestionnaire: true });
+  await cap('eteams_delete_task', { taskId: stub.taskId });
+  return created;
 }
 
 beforeEach(() => {
@@ -292,14 +316,6 @@ describe('lifecycle (offline full flow)', () => {
     expect(submitted.status).toBe('creating');
     expect(submitted.folder).toMatch(/^teams\//);
     const groupId = submitted.taskId;
-    const finalized = await cap<{ ok: true; status: string }>('eteams_submit_task', {
-      taskId: groupId,
-      subject: '调研导出方案并实现',
-      description: '先调研 CSV/JSON 方案，再实现导出模块',
-      questionnaire: ['交付格式？', '验收偏好？'],
-    });
-    expect(finalized.status).toBe('ready');
-
     // 4. 拆解：小任务挂到任务单下（chain 站点即成员槽）+ 依赖小任务
     const task = await cap<{ ok: true; taskId: number; status: string }>('eteams_create_task', {
       subject: '调研导出方案并实现',
@@ -316,6 +332,15 @@ describe('lifecycle (offline full flow)', () => {
     });
     expect(task.status).toBe('ready');
     const subId = task.taskId;
+    // 收口：拆解完成后把「创建中」转「待开始」（收口闸要求主任务下至少一个带
+    // 「## 验收标准」的小任务，故拆解完再收口）。
+    const finalized = await cap<{ ok: true; status: string }>('eteams_submit_task', {
+      taskId: groupId,
+      subject: '调研导出方案并实现',
+      description: '先调研 CSV/JSON 方案，再实现导出模块',
+      questionnaire: ['交付格式？', '验收偏好？'],
+    });
+    expect(finalized.status).toBe('ready');
 
     // 一个会话一个主任务（入库守卫，用户迭代 2026-09-12）：第二个顶层任务
     // 必须来自另一个对话——用第二对话建它（同一会话会被入库守卫拒绝）。
@@ -430,20 +455,25 @@ describe('lifecycle (offline full flow)', () => {
     expect(midBox.messages.at(-1)!.content).toContain('下一站');
     expect(midBox.messages.at(-1)!.content).toContain(`ET-${String(bobId).padStart(4, '0')}`);
 
-    // 10. 偏离链：改派 Carol 必须 deviationNote（D11），留痕后放行
-    await expect(cap('eteams_assign_task', { taskId: subId, member: carolId })).rejects.toThrow(
-      /deviation_note|偏离/,
-    );
-    await cap<{ ok: true }>('eteams_assign_task', {
+    // 10. 弱顺序链（用户 2026-09-13）：改派不在链上的 Carol 不再需要 deviationNote
+    // ——系统自动补 task_members 副本行（幂等去重）并把 Carol 追加到链尾。
+    const rowsBefore = readTeam(teamId).taskMembers.filter((r) => r.mainTaskId === groupId).length;
+    await cap<{ ok: true; member: string }>('eteams_assign_task', {
       taskId: subId,
       member: carolId,
-      deviationNote: 'Bob 临时不可用',
     });
     team = readTeam(teamId);
-    expect(team.tasks.find((t) => t.id === subId)!.assignee).toBe('Carol');
+    const carolTask = team.tasks.find((t) => t.id === subId)!;
+    expect(carolTask.assignee).toBe('Carol');
+    expect(carolTask.chain.map((s) => s.member)).toEqual([
+      alice.employeeId,
+      bob.employeeId,
+      carol.employeeId,
+    ]);
+    expect(team.taskMembers.filter((r) => r.mainTaskId === groupId).length).toBe(rowsBefore);
 
-    // Carol claim + 末站完成 → completed；chainCursor 不再推进（docs/35 §5#10
-    // 观察项：显示层按完成态满进度口径承接，runtime 列保持现状）
+    // Carol claim + 完成（追加站 index 2）：因 Bob 站（index 1）还没跑，任务回 ready
+    // 继续往后跑剩余站点，不误收口——弱顺序链 frontier 口径。
     const carolChild = childByEmployee(carol.employeeId);
     const carolAgent = memberAgent(carolChild.childId);
     const carolClaim = await mem<{ token: string; attemptId: number }>(
@@ -457,16 +487,38 @@ describe('lifecycle (offline full flow)', () => {
       token: carolClaim.token,
       text: '实现中',
     });
-    const finalDone = await mem<{ ok: true; done: boolean }>(carolAgent, 'eteams_complete_task', {
+    const carolDone = await mem<{ ok: true; done: boolean }>(carolAgent, 'eteams_complete_task', {
       taskId: subId,
       attemptId: carolClaim.attemptId,
       token: carolClaim.token,
       output: '导出模块实现完成，单测通过',
       changedPaths: ['src/export/index.ts'],
     });
+    expect(carolDone.done).toBe(false);
+    team = readTeam(teamId);
+    let doneSub = team.tasks.find((t) => t.id === subId)!;
+    expect(doneSub.status).toBe('ready');
+    expect(doneSub.chainCursor).toBe(0);
+    const stageBox = await cap<{ ok: true; messages: { content: string }[] }>('eteams_mailbox', {});
+    expect(stageBox.messages.at(-1)!.content).toContain('下一站');
+
+    // 11. 继续把剩余站点跑完：Bob 跑 index 1 → 全站都有成功尝试 → 收口 completed。
+    await cap<{ ok: true }>('eteams_assign_task', { taskId: subId, member: bobId });
+    const bobChild = childByBadge(groupId, bob.employeeId);
+    const bobAgent = memberAgent(bobChild.childId);
+    const bobClaim = await mem<{ token: string; attemptId: number }>(bobAgent, 'eteams_claim_task', {
+      taskId: subId,
+    });
+    const finalDone = await mem<{ ok: true; done: boolean }>(bobAgent, 'eteams_complete_task', {
+      taskId: subId,
+      attemptId: bobClaim.attemptId,
+      token: bobClaim.token,
+      output: '导出模块实现完成，单测通过',
+      changedPaths: ['src/export/index.ts'],
+    });
     expect(finalDone.done).toBe(true);
     team = readTeam(teamId);
-    const doneSub = team.tasks.find((t) => t.id === subId)!;
+    doneSub = team.tasks.find((t) => t.id === subId)!;
     expect(doneSub.status).toBe('completed');
     // 终站完成后 cursor 记末站下标（进度口径 cursor+1 = 全长，docs/26 链语义）。
     expect(doneSub.chainCursor).toBe(doneSub.chain.length - 1);
@@ -476,7 +528,7 @@ describe('lifecycle (offline full flow)', () => {
     // 组收口（docs/26）：唯一小任务完成 → 任务单 ready→completed
     expect(team.tasks.find((t) => t.id === groupId)!.status).toBe('completed');
 
-    // 11. 已完成任务不能再 advance；依赖任务在上游完成后可指派
+    // 12. 已完成任务不能再 advance；依赖任务在上游完成后可指派
     await expect(cap('eteams_advance_task', { taskId: subId })).rejects.toThrow(
       /只能指派 ready|处于 completed|无后续站点/,
     );
@@ -490,7 +542,7 @@ describe('lifecycle (offline full flow)', () => {
     // 分诊，用户迭代 2026-09-11）——不再进 wait_user/DecisionRecord，改由
     // 领队 reassign loop 或 escalate 升级（重试指派为 pending_accept，成员
     // 需重新 claim 才能再次上报）。
-    const docAgent = memberAgent(childByEmployee(bob.employeeId).childId);
+    const docAgent = memberAgent(childByBadge(doc.taskId, bob.employeeId).childId);
     const failOnce = async (expectRetried: boolean) => {
       const claim = await mem<{ token: string; attemptId: number }>(docAgent, 'eteams_claim_task', {
         taskId: doc.taskId,
@@ -584,10 +636,13 @@ describe('lifecycle (offline full flow)', () => {
       expect(types).toContain(expected);
     }
     expect(types).not.toContain('chain.deviated');
-    const deviated = events.find(
-      (e) => e.type === 'task.assigned' && e.payload?.deviation !== undefined,
+    // 弱顺序链自动入链的留痕：Carol 的派发事件 station=2（追加到链尾的站），
+    // 本次没有 deviationNote（不需要偏离审计）。
+    const carolAssign = events.find(
+      (e) => e.type === 'task.assigned' && e.payload?.member === 'Carol',
     );
-    expect(deviated?.payload?.deviation).toBe('Bob 临时不可用');
+    expect(carolAssign?.payload?.station).toBe(2);
+    expect(carolAssign?.payload?.deviation).toBeUndefined();
 
     // 14. 非法转换被拒绝：completed 任务不能再 assign
     await expect(cap('eteams_assign_task', { taskId: subId, member: aliceId })).rejects.toThrow(
@@ -597,6 +652,91 @@ describe('lifecycle (offline full flow)', () => {
     // 15. 邮箱可见
     const mailbox = await cap<{ ok: true; messages: unknown[] }>('eteams_mailbox', {});
     expect(mailbox.messages.length).toBeGreaterThan(0);
+  });
+
+  it('弱顺序链：不在链上的成员自动入链（幂等）且完成后继续跑剩余站点（用户 2026-09-13）', async () => {
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '弱链团队' });
+    const teamId = created.teamId;
+    const alice = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: 'Alice',
+      role: 'engineer',
+      teamId,
+    });
+    const bob = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: 'Bob',
+      role: 'engineer',
+      teamId,
+    });
+    const task = await cap<{ ok: true; taskId: number }>('eteams_create_task', {
+      subject: '弱链任务',
+      chain: [{ member: String(alice.employeeId), stageBrief: 'A 站' }],
+    });
+
+    // 指派不在链上的 Bob：不需要 deviationNote，自动补副本行 + 追加到链尾。
+    const rowsBefore = readTeam(teamId).taskMembers.filter(
+      (r) => r.mainTaskId === task.taskId,
+    ).length;
+    await cap<{ ok: true }>('eteams_assign_task', {
+      taskId: task.taskId,
+      member: String(bob.employeeId),
+    });
+    let team = readTeam(teamId);
+    let t = team.tasks.find((x) => x.id === task.taskId)!;
+    expect(t.chain.map((s) => s.member)).toEqual([alice.employeeId, bob.employeeId]);
+    expect(team.taskMembers.filter((r) => r.mainTaskId === task.taskId).length).toBe(rowsBefore);
+
+    // Bob 先跑（追加站 index 1）：Alice 站（index 0）未跑 → 任务回 ready 继续往后，
+    // 不误收口（弱顺序链 frontier = 最靠前未成功站）。
+    const bobAgent = memberAgent(childByBadge(task.taskId, bob.employeeId).childId);
+    const bobClaim = await mem<{ token: string; attemptId: number }>(
+      bobAgent,
+      'eteams_claim_task',
+      { taskId: task.taskId },
+    );
+    const bobDone = await mem<{ ok: true; done: boolean }>(bobAgent, 'eteams_complete_task', {
+      taskId: task.taskId,
+      attemptId: bobClaim.attemptId,
+      token: bobClaim.token,
+      output: 'Bob 先做',
+    });
+    expect(bobDone.done).toBe(false);
+    team = readTeam(teamId);
+    t = team.tasks.find((x) => x.id === task.taskId)!;
+    expect(t.status).toBe('ready');
+    expect(t.chainCursor).toBe(-1); // frontier=0（Alice 站未跑）
+    expect(t.attempts.at(-1)!.stationIndex).toBe(1);
+
+    // 再次指派已在链上的 Bob（幂等）：链不重复追加。
+    await cap<{ ok: true }>('eteams_assign_task', {
+      taskId: task.taskId,
+      member: String(bob.employeeId),
+    });
+    t = readTeam(teamId).tasks.find((x) => x.id === task.taskId)!;
+    expect(t.chain).toHaveLength(2);
+
+    // 改派回链上的 Alice 跑剩余站（index 0）→ 全站都有成功尝试 → 收口 completed。
+    await cap<{ ok: true }>('eteams_reassign_task', {
+      taskId: task.taskId,
+      member: String(alice.employeeId),
+    });
+    t = readTeam(teamId).tasks.find((x) => x.id === task.taskId)!;
+    expect(t.chain).toHaveLength(2);
+    const aliceAgent = memberAgent(childByBadge(task.taskId, alice.employeeId).childId);
+    const aliceClaim = await mem<{ token: string; attemptId: number }>(
+      aliceAgent,
+      'eteams_claim_task',
+      { taskId: task.taskId },
+    );
+    const aliceDone = await mem<{ ok: true; done: boolean }>(aliceAgent, 'eteams_complete_task', {
+      taskId: task.taskId,
+      attemptId: aliceClaim.attemptId,
+      token: aliceClaim.token,
+      output: 'Alice 收尾',
+    });
+    expect(aliceDone.done).toBe(true);
+    t = readTeam(teamId).tasks.find((x) => x.id === task.taskId)!;
+    expect(t.status).toBe('completed');
+    expect(t.chainCursor).toBe(1);
   });
 
   it('rejects claim by a member the task is not assigned to', async () => {
@@ -1105,6 +1245,12 @@ describe('面板手动建任务（docs/panelTaskCommission）', () => {
       status: 'creating',
     });
     const oldDir = group.workDir!;
+    // 收口闸要求主任务下至少一个带「## 验收标准」的小任务。
+    await createTask(env, who(teamId), {
+      subject: '迁移目录结构',
+      parentTaskId: group.id,
+      contractMd: '## 验收标准\n1. 目录归位',
+    });
     const done = await finalizeCommissionTask(env, who(teamId), group.id, {
       subject: '迁移文档结构',
       description: '完善后的任务说明',
@@ -1140,10 +1286,17 @@ describe('面板手动建任务（docs/panelTaskCommission）', () => {
       kind: 'group',
       status: 'creating',
     });
+    // 收口闸先过拆解质量（建一个带验收标准的小任务）；本用例只验问询闸。
+    await createTask(env, who(teamId), {
+      subject: '占位小任务',
+      parentTaskId: group.id,
+      contractMd: '## 验收标准\n1. 占位',
+    });
     await expect(
       finalizeCommissionTask(env, who(teamId), group.id, { subject: '直接收口' }),
     ).rejects.toThrow(/收口前必须先完成问询/);
-    // 被拒后主任务仍停在「创建中」——不可点进、开不了跑。
+    // 被拒后主任务仍停在「创建中」——开不了跑（2026-09-13 起创建中可点进
+    // 详情只读观望，此处只锁「不可开跑」语义）。
     expect(readTeam(teamId).tasks.find((t) => t.id === group.id)!.status).toBe('creating');
     // 显式跳过（用户已给全/要求直接开始）→ 放行转 ready。
     const skipped = await finalizeCommissionTask(env, who(teamId), group.id, {
@@ -1165,6 +1318,7 @@ describe('面板手动建任务（docs/panelTaskCommission）', () => {
     const sub = await createTask(env, who(teamId), {
       subject: '完善期拆出的小任务',
       parentTaskId: group.id,
+      contractMd: '## 验收标准\n1. 拆解完成',
     });
     // 小任务（parent_id 非空）不能作为收口目标——拆解用 create_task。
     await expect(
@@ -1181,6 +1335,72 @@ describe('面板手动建任务（docs/panelTaskCommission）', () => {
   });
 });
 
+describe('收口拆解质量闸（docs/taskOrchestrationRefinement 议题一）', () => {
+  const who = (teamId: number): OpActor => ({ teamId, actor: { kind: 'user', name: '用户' } });
+
+  async function freshGroup(): Promise<{ teamId: number; env: RuntimeEnv; groupId: number }> {
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '收口闸团队' });
+    const env = runtimeEnvFor();
+    const group = await createTask(env, who(created.teamId), {
+      subject: '主任务',
+      kind: 'group',
+      status: 'creating',
+    });
+    return { teamId: created.teamId, env, groupId: group.id };
+  }
+
+  it('空容器收口被拒：主任务必须拆出至少一个小任务，容器停在「创建中」', async () => {
+    const { teamId, env, groupId } = await freshGroup();
+    await expect(
+      finalizeCommissionTask(env, who(teamId), groupId, {
+        subject: '空容器',
+        skipQuestionnaire: true,
+      }),
+    ).rejects.toThrow(/还没有任何小任务/);
+    expect(readTeam(teamId).tasks.find((t) => t.id === groupId)!.status).toBe('creating');
+  });
+
+  it('小任务缺合同 → 拒绝收口', async () => {
+    const { teamId, env, groupId } = await freshGroup();
+    await createTask(env, who(teamId), { subject: '无合同小任务', parentTaskId: groupId });
+    await expect(
+      finalizeCommissionTask(env, who(teamId), groupId, {
+        subject: '主任务',
+        skipQuestionnaire: true,
+      }),
+    ).rejects.toThrow(/缺少任务合同/);
+  });
+
+  it('小任务合同缺「## 验收标准」段 → 拒绝收口', async () => {
+    const { teamId, env, groupId } = await freshGroup();
+    await createTask(env, who(teamId), {
+      subject: '无验收标准小任务',
+      parentTaskId: groupId,
+      contractMd: '## 允许改动\n- x',
+    });
+    await expect(
+      finalizeCommissionTask(env, who(teamId), groupId, {
+        subject: '主任务',
+        skipQuestionnaire: true,
+      }),
+    ).rejects.toThrow(/缺少「## 验收标准」段/);
+  });
+
+  it('全部小任务带非空验收标准 → 放行 creating→ready', async () => {
+    const { teamId, env, groupId } = await freshGroup();
+    await createTask(env, who(teamId), {
+      subject: '合格小任务',
+      parentTaskId: groupId,
+      contractMd: '## 验收标准\n1. 通过',
+    });
+    const done = await finalizeCommissionTask(env, who(teamId), groupId, {
+      subject: '主任务',
+      skipQuestionnaire: true,
+    });
+    expect(done.status).toBe('ready');
+  });
+});
+
 describe('主会话锚定（用户迭代 2026-09-12：子代理不挂在领队下面）', () => {
   const who = (teamId: number): OpActor => ({ teamId, actor: { kind: 'user', name: '用户' } });
 
@@ -1193,12 +1413,7 @@ describe('主会话锚定（用户迭代 2026-09-12：子代理不挂在领队�
       teamId,
     });
     // 主对话建容器（main_session_id 快照 = cap-1）并收口转 ready。
-    const group = await cap<{ taskId: number }>('eteams_submit_task', { subject: '导出主任务' });
-    await cap('eteams_submit_task', {
-      taskId: group.taskId,
-      subject: '导出主任务',
-      skipQuestionnaire: true,
-    });
+    const group = await submitReady('导出主任务');
     // 领队子代理（独立会话）拆解小任务：小任务行快照记的是领队子会话
     // （既有口径，不改），但派发成员时锚点要换回它的主会话父（cap-1）——否则
     // 成员子代理挂到领队子代理下，harness 顶部列表要先展开领队才看得到其它
@@ -1231,14 +1446,7 @@ describe('入库守卫：一个会话一个主任务（用户迭代 2026-09-12�
     const created = await cap<{ teamId: number }>('eteams_create_team', { name: '守卫团队' });
     const teamId = created.teamId;
     // 主对话建容器（main_session_id 快照 = cap-1）并收口。
-    const group = await cap<{ taskId: number }>('eteams_submit_task', {
-      subject: '新建一个 Vue 项目',
-    });
-    await cap('eteams_submit_task', {
-      taskId: group.taskId,
-      subject: '新建一个 Vue 项目',
-      skipQuestionnaire: true,
-    });
+    const group = await submitReady('新建一个 Vue 项目');
     // 领队子代理（独立会话）带 parentTaskId 拆第一个小任务：照常入库。
     const leaderEnv: RuntimeEnv = { ...runtimeEnvFor(), sessionId: 'leader-child-1' };
     const sub = await createTask(leaderEnv, who(teamId), {
@@ -1274,8 +1482,7 @@ describe('入库守卫：一个会话一个主任务（用户迭代 2026-09-12�
   it('主会话已有主任务：不带 parentTaskId 的顶层任务同样拒绝（同一判据）', async () => {
     const created = await cap<{ teamId: number }>('eteams_create_team', { name: '主会话守卫' });
     const teamId = created.teamId;
-    const group = await cap<{ taskId: number }>('eteams_submit_task', { subject: '主任务' });
-    await cap('eteams_submit_task', { taskId: group.taskId, subject: '主任务', skipQuestionnaire: true });
+    const group = await submitReady('主任务');
     await expect(cap('eteams_create_task', { subject: '散开的顶层任务' })).rejects.toThrow(
       new RegExp(`已有主任务 #${group.taskId}`),
     );
@@ -1351,13 +1558,7 @@ describe('大任务状态语义 + 依赖派发闸（用户迭代 2026-09-11 精�
       role: 'engineer',
       teamId,
     });
-    const group = await cap<{ taskId: number }>('eteams_submit_task', { subject: '中断主任务' });
-    // 收口转 ready（2026-09-12：对话建的主任务先落「创建中」）。
-    await cap('eteams_submit_task', {
-      taskId: group.taskId,
-      subject: '中断主任务',
-      skipQuestionnaire: true,
-    });
+    const group = await submitReady('中断主任务');
     const sub = await cap<{ taskId: number }>('eteams_create_task', {
       subject: '两站任务',
       parentTaskId: group.taskId,
@@ -1411,13 +1612,7 @@ describe('大任务状态语义 + 依赖派发闸（用户迭代 2026-09-11 精�
       role: 'engineer',
       teamId,
     });
-    const group = await cap<{ taskId: number }>('eteams_submit_task', { subject: '重发主任务' });
-    // 收口转 ready（2026-09-12：对话建的主任务先落「创建中」）。
-    await cap('eteams_submit_task', {
-      taskId: group.taskId,
-      subject: '重发主任务',
-      skipQuestionnaire: true,
-    });
+    const group = await submitReady('重发主任务');
     const sub = await cap<{ taskId: number }>('eteams_create_task', {
       subject: '单站任务',
       parentTaskId: group.taskId,
@@ -1505,13 +1700,7 @@ describe('大任务状态语义 + 依赖派发闸（用户迭代 2026-09-11 精�
       role: 'engineer',
       teamId,
     });
-    const group = await cap<{ taskId: number }>('eteams_submit_task', { subject: '暂停主任务' });
-    // 收口转 ready（2026-09-12：对话建的主任务先落「创建中」）。
-    await cap('eteams_submit_task', {
-      taskId: group.taskId,
-      subject: '暂停主任务',
-      skipQuestionnaire: true,
-    });
+    const group = await submitReady('暂停主任务');
     const first = await cap<{ taskId: number }>('eteams_create_task', {
       subject: '第一棒',
       parentTaskId: group.taskId,
@@ -1574,13 +1763,7 @@ describe('大任务状态语义 + 依赖派发闸（用户迭代 2026-09-11 精�
       role: 'engineer',
       teamId,
     });
-    const group = await cap<{ taskId: number }>('eteams_submit_task', { subject: '同步挂起主任务' });
-    // 收口转 ready（2026-09-12：对话建的主任务先落「创建中」）。
-    await cap('eteams_submit_task', {
-      taskId: group.taskId,
-      subject: '同步挂起主任务',
-      skipQuestionnaire: true,
-    });
+    const group = await submitReady('同步挂起主任务');
     const sub = await cap<{ taskId: number }>('eteams_create_task', {
       subject: '在跑小任务',
       parentTaskId: group.taskId,
@@ -1621,9 +1804,7 @@ describe('大任务状态语义 + 依赖派发闸（用户迭代 2026-09-11 精�
       role: 'engineer',
       teamId,
     });
-    const group = await cap<{ taskId: number }>('eteams_submit_task', { subject: '主任务' });
-    // 收口转 ready（2026-09-12：对话建的主任务先落「创建中」）。
-    await cap('eteams_submit_task', { taskId: group.taskId, subject: '主任务', skipQuestionnaire: true });
+    const group = await submitReady('主任务');
     const sub = await cap<{ taskId: number }>('eteams_create_task', {
       subject: '单站任务',
       parentTaskId: group.taskId,

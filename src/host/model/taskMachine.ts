@@ -12,7 +12,13 @@
  *
  * @module dsh-eteams/model/taskMachine
  */
-import type { ChainStation, TaskMemberRecord, TaskRecord, TaskStatus } from './types.js';
+import type {
+  AttemptRecord,
+  ChainStation,
+  TaskMemberRecord,
+  TaskRecord,
+  TaskStatus,
+} from './types.js';
 
 /** Thrown for any illegal status move; carries an actionable hint. */
 export class TransitionError extends Error {
@@ -133,6 +139,51 @@ export function hasUpcomingStation(task: TaskRecord): boolean {
 export function stationProgress(task: TaskRecord): { done: number; total: number } | undefined {
   if (task.chain.length === 0) return undefined;
   return { done: task.chainCursor + 1, total: task.chain.length };
+}
+
+/**
+ * 成员在某任务执行链上的站点下标（弱顺序链，用户 2026-09-13）：按
+ * {@link stationPointsTo} 找**第一个**匹配站点；未在链上返回 undefined。
+ * 指派成员前用它判断「是否已在链上」——已在链上就复用其站点，不重复追加。
+ */
+export function chainIndexOfStation(
+  chain: readonly ChainStation[],
+  row: Pick<TaskMemberRecord, 'employeeId' | 'name'>,
+): number | undefined {
+  const i = chain.findIndex((s) => stationPointsTo(s, row));
+  return i === -1 ? undefined : i;
+}
+
+/**
+ * 链上各站点是否已有成功尝试（弱顺序链进度，用户 2026-09-13）：「站点 i 已
+ * 成功」= 存在 stationIndex === i 且 status === 'succeeded' 的尝试。越界
+ * stationIndex（<0 或 >= chainLength）忽略——追加/删站后旧尝试的下标可能失效。
+ */
+export function chainDoneStations(
+  chainLength: number,
+  attempts: readonly Pick<AttemptRecord, 'stationIndex' | 'status'>[],
+): boolean[] {
+  const done = new Array<boolean>(chainLength).fill(false);
+  for (const a of attempts) {
+    if (a.status === 'succeeded' && a.stationIndex >= 0 && a.stationIndex < chainLength) {
+      done[a.stationIndex] = true;
+    }
+  }
+  return done;
+}
+
+/**
+ * 弱顺序链的推进位（frontier，用户 2026-09-13）：最靠前、尚无成功尝试的站点
+ * 下标；全部站点都有成功尝试（或无链）→ `chainLength` = 可收口。执行顺序为弱
+ * 约束——成员可任意顺序跑，某站完成后任务**继续从 frontier 往后跑剩余站点**
+ * （而不是只认链游标 +1）。
+ */
+export function chainFrontier(
+  chainLength: number,
+  attempts: readonly Pick<AttemptRecord, 'stationIndex' | 'status'>[],
+): number {
+  const i = chainDoneStations(chainLength, attempts).indexOf(false);
+  return i === -1 ? chainLength : i;
 }
 
 /** Team id / member key sanitizer (docs/05.1: sanitizeKey). */

@@ -368,6 +368,13 @@ describe('executionOrderOf（兄弟依赖拓扑展示序，七轮 DA20）', () =
   it('外部依赖（兄弟集外）不参与兄弟排序', () => {
     expect(executionOrderOf([ord(2, [99]), ord(1, [])]).map((t) => t.taskId)).toEqual([2, 1]);
   });
+  it('增补的无依赖任务追加到末尾，不插队进首个依赖层（用户 2026-09-13）', () => {
+    // 1←2←3 线性链 + 后增补的无依赖 4：应连续排开为 1,2,3,4（旧分层实现会给出
+    // 1,4,2,3——新任务挤到第二，面板顺序与宿主发棒顺序 subExecutionOrder 不一致）。
+    expect(
+      executionOrderOf([ord(1, []), ord(2, [1]), ord(3, [2]), ord(4, [])]).map((t) => t.taskId),
+    ).toEqual([1, 2, 3, 4]);
+  });
   it('环（防御）：剩余按输入序追加，不丢任务', () => {
     expect(executionOrderOf([ord(1, [2]), ord(2, [1]), ord(3, [])]).map((t) => t.taskId)).toEqual([
       3, 1, 2,
