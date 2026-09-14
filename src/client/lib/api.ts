@@ -452,7 +452,7 @@ export async function openTaskFolder(teamId: string, taskId: number): Promise<vo
   );
 }
 
-/** 主任务开始响应的跳过卡（二十五轮 DA38）：无链/依赖未满/占用等逐卡原因，
+/** 主任务开始响应的跳过卡（二十五轮 DA38）：无链/占用等逐卡原因，
  * 面板行内就地提示。 */
 export interface GroupStartSkipped {
   taskId: number;

@@ -28,6 +28,7 @@ import {
   newAskId,
   normalizeAskAnswer,
   insertAskSync,
+  recordAskDeliverySync,
   type AskAnswer,
   type AskQuestion,
 } from '../state/asks.js';
@@ -117,14 +118,20 @@ export async function runAskUser(
   const presence = readBuildPresence(root);
   const userInAskingSession = presence !== null && presence.sessionId === caller.askingSessionId;
   const mainAgent = liveAgentOf(env.ctx, caller.mainSessionId);
-  const primary = userInAskingSession
-    ? options.agent
-    : mainAgent !== undefined && mainAgent !== options.agent
-      ? mainAgent
-      : options.agent;
+  // 弹窗主对话优先（用户 2026-09-12）：用户不在提问子会话、且主对话有活代理
+  // 时弹主对话，否则弹提问子会话自身。primaryIsMain 决定落点会话的记录（v14）。
+  const primaryIsMain =
+    !userInAskingSession && mainAgent !== undefined && mainAgent !== options.agent;
+  const primary = primaryIsMain ? mainAgent : options.agent;
 
   const askId = newAskId();
   const now = Date.now();
+  // 落点意图**先落库**（v14）：弹窗是阻塞的，面板需在待答期间就能拿到落点去
+  // 跳转，不能等答完才写；主对话不在线退回提问子会话时再由 recordAskDeliverySync
+  // 更正为提问会话。
+  const deliverySessionId = primaryIsMain
+    ? (caller.mainSessionId ?? caller.askingSessionId)
+    : caller.askingSessionId;
   // 就地弹也落审计行（面板徽标的数据源）：pending → answered。
   insertAskSync(root, {
     askId,
@@ -136,8 +143,10 @@ export async function runAskUser(
     questions,
     status: 'pending',
     // relaySessionId 审计留档：恒等于提问会话自身（旧转交时代的字段，保留
-    // 兼容历史行读端；弹窗实际落点随 target 运行态决定，不另落列）。
+    // 兼容历史行读端）；v14 弹窗实际落点另落 delivery_session_id/is_main。
     relaySessionId: caller.askingSessionId,
+    deliverySessionId,
+    deliveryIsMain: primaryIsMain,
     createdAt: now,
     updatedAt: now,
   });
@@ -156,6 +165,8 @@ export async function runAskUser(
       // 对话再试一次（侧边栏未决标记仍引导用户）；同目标或无兜底则原样上抛。
       if (primary === options.agent || options.agent === undefined) throw primaryError;
       reply = await askOnce(options.agent);
+      // 退回提问子会话成功：更正落点记录（面板据此跳到子会话作答）。
+      recordAskDeliverySync(root, askId, caller.askingSessionId, false);
     }
     const answers = reply.answers
       .map(normalizeAskAnswer)

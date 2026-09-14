@@ -131,8 +131,11 @@ export const CARD_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(240px,1f
 
 /** 任务列表小卡栅格（十二轮 DA25：用户拍板「卡片再大一点」——任务卡比团队
  * 卡再宽一档，最小 260px 自适应列，窄列少宽列多；任务列表专用，不并轨
- * CARD_GRID_CLASS 以免牵动团队/角色列表）。 */
-export const TASK_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3';
+ * CARD_GRID_CLASS 以免牵动团队/角色列表。用户 2026-09-14「任务卡片变长
+ * 一点，目前跳转会话/删除/开始按钮溢出了」：最小 260px → 300px 再宽一档
+ * ——底栏三钮（跳转会话/删除/开始）在 260px 档挤爆卡宽，加宽后单行容纳；
+ * 看板任务小卡共用同栅格，一并受益）。 */
+export const TASK_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3';
 
 /** 团队列表小卡栅格（用户迭代 2026-09-07：团队卡加宽一档——最小 240px 自
  * 适应列，窄列少宽列多；角色列表维持 210px 原档、任务卡 260px 仍宽一档）。

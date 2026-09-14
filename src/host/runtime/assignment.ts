@@ -32,7 +32,6 @@ import {
   hasUpcomingStation,
   nextChainStation,
   taskSlug,
-  unsatisfiedDependencies,
   wouldCycle,
 } from '../model/taskMachine.js';
 import { hasAcceptanceCriteria } from '../model/contract.js';
@@ -51,6 +50,7 @@ import {
   generateToken,
   memberActor,
   PLUGIN_ACTOR,
+  resumeOptionsOf,
   stateRootOf,
   type RuntimeEnv,
 } from './base.js';
@@ -71,7 +71,7 @@ import {
 } from './notifier.js';
 import { renderTeamDocs, taskDirAbs, teamWorkDirRel } from './docs.js';
 import { drainMembers, interruptMember, sendAssignmentInTx, spawnMember } from './members.js';
-import { captainChildParentOf } from './captainAgent.js';
+import { captainChildParentOf } from './captainChildRegistry.js';
 import { anchoredMainTaskOfCaller } from './sessionTeam.js';
 import { readBuildPresence } from './roleBuilder.js';
 import {
@@ -164,10 +164,9 @@ export async function captainFor(
   // 失）与恢复失败（会话记录被回收）都落 undefined 走原报错。
   if (mainSession !== '') {
     try {
-      const handle = await env.ctx.agents.resume?.({
-        resumeSessionId: mainSession as unknown as SessionId,
-        signal: env.signal,
-      });
+      const handle = await env.ctx.agents.resume?.(
+        await resumeOptionsOf(env.ctx, mainSession as unknown as SessionId, env.signal),
+      );
       if (handle !== undefined) {
         env.ctx.logger.warn(`eteams: 主会话锚点离线，已按任务行快照冷恢复主会话（${mainSession}）`);
         return handle.agent;
@@ -738,8 +737,9 @@ export async function assignTask(
 }
 
 /** 主任务整体开始的结果（二十五轮 DA38）：started = 成功派发的小任务数；
- * skipped = 未能派发的小任务（无链/依赖未满/占用/起会话失败等，原因随卡
- * 透出，面板行内就地提示）。 */
+ * skipped = 未能派发的小任务（无链/已到末站/占用/起会话失败等，原因随卡
+ * 透出，面板行内就地提示）。依赖不再进跳过清单——它已不拦派发（用户
+ * 2026-09-14）。 */
 export interface GroupStartResult {
   started: number;
   skipped: { taskId: number; subject: string; reason: string }[];
@@ -942,7 +942,7 @@ export async function resetGroupStarted(
 }
 
 /**
- * 派发前置（docs/35 §5#3 首派按链起人）：校验任务状态/依赖/占用/链纪律，
+ * 派发前置（docs/35 §5#3 首派按链起人）：校验任务状态/占用/链纪律，
  * 未起会话（session_id 空）实例行先起子会话；成功后锚定到大任务、
  * 回填 session_id，随本次写事务落库。只改内存快照，失败即
  * 整帧作废。改派路径（forReassign）目标任务可以在 wait/start/paused 等
@@ -972,12 +972,10 @@ async function prepareAssignment(
         '检查任务状态，或用 eteams_reassign_task 改派',
       );
     }
-    // 依赖未满足的任务保持 ready 不物化（原 wait+blockedFrom 退役）：派发口
-    // 显式校验，不达标即拒——用户迭代 2026-09-11「阻塞就 ready 等待就行」。
-    const unsat = unsatisfiedDependencies(team.tasks, task);
-    if (unsat.length > 0) {
-      throw new ETeamsError(`任务 ${task.id} 的依赖未完成：${unsat.join('、')}`, '先推进依赖任务');
-    }
+    // 依赖不再拦截派发（用户 2026-09-14「闸门拦住去掉吧，不然任意调度时会出问题」）：
+    // 依赖只作**排布提示**（面板执行序 subExecutionOrder 仍按兄弟依赖拓扑排），
+    // 派发口不再按依赖拒绝——领队可任意顺序调度（有链任务按链当前站推进），
+    // 是否等前置由领队判断，宿主不挡。
     // 父容器还在「创建中」（面板手动创建占位，docs/panelTaskCommission）：
     // 计划未定不派发——单任务路径与 eteams_assign_task 两条派发路径共此闸。
     if (task.parentId !== null) {
@@ -1507,6 +1505,56 @@ export async function pauseTaskOnInterrupt(
   });
   if (out.changed) renderTeamDocs(env.workspace, out.team, (msg) => env.ctx.logger.warn(msg));
   return out.changed ? out.taskId : undefined;
+}
+
+/**
+ * 领队子代理回合被中断 → **按中断类型分流**（用户迭代 2026-09-14）：与成员中断
+ * 的 {@link pauseTaskOnInterrupt} 对称，补齐 captainChildren 这条此前无人消费
+ * 的路径。宿主以 `turn/end{reason.kind}` 收尾被中断的回合：`aborted` = 有人主动
+ * 取消（用户在子代理窗口停止领队），`interrupted` = 进程崩溃补记。
+ *
+ * - `aborted` → **直接挂起主任务**：复用 {@link suspendGroupTask}（= 面板暂停主
+ *   任务同语义，挂起在跑小任务 + 容器本身），面板显示「已挂起」、不点「开始」
+ *   就不会重新派发领队，状态不再对不上。
+ * - 其它（异常）→ **不挂起**：工作流不冻结，只在锚定主任务落一条异常备注 + 事件
+ *   （status_note 区分于用户停止），交主会话判读——检查是什么异常、是否需要用户
+ *   处理，不需要则由主会话重新派发继续。
+ *
+ * 不是用户可见操作，actor 用插件身份；仅 ready/start 容器生效，终态/查不到一律
+ * no-op（删除团队、同队重建领队等自愈路径已先动状态，这里不会误伤）。
+ * @returns `'paused'` 已挂起 / `'noted'` 异常仅留备注 / `undefined` 未处置
+ */
+export async function handleCaptainInterrupt(
+  env: RuntimeEnv,
+  teamId: number,
+  taskId: number,
+  reason: string,
+): Promise<'paused' | 'noted' | undefined> {
+  const team = readTeamSync(stateRootOf(env), teamId);
+  if (team === undefined) return undefined;
+  const task = team.tasks.find((t) => t.id === taskId);
+  if (task === undefined) return undefined;
+  if (task.status !== 'ready' && task.status !== 'start') return undefined;
+  if (reason === 'aborted') {
+    await suspendGroupTask(
+      env,
+      { teamId, actor: PLUGIN_ACTOR },
+      taskId,
+      '领队回合被中断，主任务已挂起（点「开始」继续）',
+    );
+    return 'paused';
+  }
+  // 异常中断：不冻结工作流，只落备注 + 事件（主会话据此判读后决定是否重派）。
+  await withTeam(env, teamId, (fresh, _root, tx) => {
+    const target = requireTask(fresh, taskId);
+    target.statusNote = `领队会话异常中断（${reason}），工作流未挂起——请检查异常后再决定是否重新派发`;
+    target.updatedAt = tx.now;
+    emit(tx, fresh.id, PLUGIN_ACTOR, 'task.updated', {
+      taskId,
+      payload: { fields: ['status_note'], via: 'captain.interrupted', reason },
+    });
+  });
+  return 'noted';
 }
 
 /**

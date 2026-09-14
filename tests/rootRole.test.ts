@@ -14,7 +14,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ETeamsConfig, type ETeamsResolvedConfig } from '../src/host/config';
 import { stateRootFor } from '../src/host/runtime/base';
-import { registerCaptainChild, unregisterCaptainChild } from '../src/host/runtime/captainAgent';
+import { registerCaptainChild, unregisterCaptainChild } from '../src/host/runtime/captainChildRegistry';
 import { markBuilderChild, reportBuildProgress } from '../src/host/runtime/roleBuilder';
 import { rootPromptSection } from '../src/host/runtime/rootPrompt';
 import {

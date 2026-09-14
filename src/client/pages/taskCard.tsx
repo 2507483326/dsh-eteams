@@ -32,6 +32,7 @@ import {
 import { taskCardDefinition } from '../lib/taskCardDefinition';
 import { STATUS_LABELS } from '../features/tasks/taskDisplayStatus';
 import { getApp } from '../store/app';
+import { TaskIdBadge } from './shared/components';
 import { enterTeamsPanel } from './teamsPanel';
 
 /** 快照里按 taskId 定位任务与其所属团队（跨队聚合口径）。 */
@@ -94,8 +95,11 @@ function TaskCardBody({ node }: { node: { data: unknown } }): ReactNode {
     <div className="eteams-ui">
       <Card className="eteams-ui my-2 border-solid px-4 py-3">
         <div className="flex flex-wrap items-center gap-2">
+          {/* 编号徽章（用户 2026-09-14「任务卡片 title 前面加上编号徽章」）：
+              任务号已由徽章承担，主题空档的兜底文案去掉重复的 #id。 */}
+          <TaskIdBadge taskId={data.taskId} />
           <strong className="text-sm font-semibold tracking-tight text-foreground">
-            {data.subject !== '' ? data.subject : `任务 #${data.taskId}`}
+            {data.subject !== '' ? data.subject : '任务'}
           </strong>
           <Badge
             variant="outline"

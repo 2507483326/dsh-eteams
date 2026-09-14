@@ -104,6 +104,17 @@ export interface TaskView {
   statusNote: string | null;
   /** 主会话 ID 快照（task.main_session_id，v5 落列 v6 改名）：建任务时登记的主会话；null/缺省 = 未登记。 */
   sessionId?: string | null;
+  /**
+   * 本大任务里**已有子会话**的成员（用户 2026-09-14「会话成员」按任务口径取）：
+   * 副本行按大任务粒度建，sessionId 非空 = 该成员的子会话已起；未建会话的成员
+   * 不在此表（点不进去）。旧快照缺省 = 无（回退空表）。
+   */
+  memberSessions?: {
+    name: string;
+    employeeId: number | null;
+    sessionId: string;
+    avatar: { seed: number; salt: number } | null;
+  }[];
   status: string;
   assignee: string | null;
   dependencies: number[];
@@ -126,6 +137,10 @@ export interface EventView {
   type: string;
   taskId: number | null;
   text: string;
+  /** 任务标签主题（v14 看板动态「和任务绑定」）；null/缺省 = 无任务或任务已删。 */
+  taskSubject?: string | null;
+  /** 语义色调（v14 行首彩点）：info/ok/warn/err/muted；旧运行时缺省。 */
+  tone?: string;
 }
 
 /** The team leader (项目牧羊人) as projected by the host — not a roster member. */
@@ -170,6 +185,48 @@ export interface TeamSnapshot {
     askingKind: string;
     questionCount: number;
     createdAt: number;
+    /** 提问子代理会话 id（宿主一直下发；旧客户端类型未透传，v14 补上作跳转兜底）。 */
+    askingSessionId?: string | null;
+    /** 相关大任务 id（v14；问答绑定任务的标签用）。旧快照缺省。 */
+    mainTaskId?: number | null;
+    /** 弹窗实际落点会话 id（v14；「决策面板」跳转目标）。旧快照缺省。 */
+    deliverySessionId?: string | null;
+    /** 落点是否主对话（v14；旧快照缺省 = 未知按否）。 */
+    deliveryIsMain?: boolean;
+  }[];
+  /**
+   * 『已决策』历史：已处置的升级决策（decisions resolved 行，处置时刻降序）。
+   * v15（用户 2026-09-14「做过决策后决策面板还是 0，历史也要显示」）；旧快照
+   * 缺省 = 无历史。
+   */
+  resolvedDecisions?: {
+    id: number;
+    taskId: number;
+    error: string;
+    retryCount: number;
+    createdAt: number;
+    resolvedAt: number | null;
+    /** 处置结论：reassign/suspend/notify_user；缺省 null。 */
+    choice: string | null;
+    /** 处置备注；缺省 null。 */
+    note: string | null;
+  }[];
+  /** 『已决策』历史：已结束问答单（answered/cancelled/expired，结束时刻降序）。 */
+  recentAsks?: {
+    askId: string;
+    askingName: string;
+    askingKind: string;
+    mainTaskId?: number | null;
+    askingSessionId?: string | null;
+    deliverySessionId?: string | null;
+    deliveryIsMain?: boolean;
+    questionCount: number;
+    createdAt: number;
+    answeredAt: number | null;
+    /** answered / cancelled / expired。 */
+    status: string;
+    /** 答案摘要（多题/多选「；」连接）；无答案为 ''。 */
+    answerSummary: string;
   }[];
   latestEvents: EventView[];
 }

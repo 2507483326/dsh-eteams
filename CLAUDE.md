@@ -71,7 +71,7 @@ dsh plugin --profile desktop add C:\eTeam   # 安装到 DSH profile（live link�
 
 8 态：`creating / ready / start / wait / paused / wait_user / completed / cancelled`。非法转移抛 `TransitionError`（带可执行中文 hint，工具层转成 actionable 错误文案）。关键设计：
 
-- **阻塞不是独立状态**：依赖未满足的任务保持 `ready`，派发口用 `dependenciesSatisfied` 校验（原 `wait + blockedFrom` 物化已退役）。
+- **依赖不再当闸门**（用户 2026-09-14「闸门拦住去掉吧，不然任意调度时会出问题」）：`dependencies` 只作排布提示（面板执行序按兄弟依赖拓扑排），派发口不按依赖拒绝——是否等前置由领队判断；原 `wait + blockedFrom` 物化已退役。
 - **`wait` = 待领队分诊**（用户迭代 2026-09-11）：成员失败按 `maxRetries` 自动重试，超限落 `wait`；领队分诊——小 bug `eteams_reassign_task` 重新指派 loop（wait→ready），流程/环境问题 `eteams_escalate_task` 升级 `wait_user`（wait→wait_user），挂起 `paused`、取消 `cancelled`。
 - `ready` 派发不改状态，成员领取才 `ready→start`；`start` 可回 `ready`（失败重试/改派/中间站交接）。
 - `creating` = 面板手动创建的主任务容器占位（完善收口转 ready）。

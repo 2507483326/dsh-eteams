@@ -9,7 +9,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { TaskMemberRecord, TeamState } from '../model/types.js';
 import { listTeams, findTeamByCaptain } from '../state/store.js';
 import { getSessionTeamId } from '../runtime/sessionTeam.js';
-import { captainChildTeamOf } from '../runtime/captainAgent.js';
+import { captainChildTeamOf } from '../runtime/captainChildRegistry.js';
 import { locateAgentTeam } from '../runtime/workspaces.js';
 import { leaderRowOf } from '../runtime/notifier.js';
 import {

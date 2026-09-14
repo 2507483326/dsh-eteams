@@ -26,7 +26,7 @@
  * @module dsh-eteams/host/runtime/sessionTeam
  */
 import type { TaskRecord, TeamState } from '../model/types.js';
-import { captainChildParentOf, captainChildTeamOf } from './captainAgent.js';
+import { captainChildParentOf, captainChildTeamOf } from './captainChildRegistry.js';
 import { sessionTeamBand } from '../prompts/system/sessionTeam.js';
 
 export { sessionIdOfScope } from './sessionPersona.js';

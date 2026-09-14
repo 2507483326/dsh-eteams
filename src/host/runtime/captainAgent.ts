@@ -40,6 +40,13 @@ import { atomicWriteText, insertTaskMemberRow, readTeamSync, withTeamTx } from '
 import { getDb } from '../state/db.js';
 import { locks, teamLockKey } from '../state/lock.js';
 import { leaderRouteOf } from './notifier.js';
+import {
+  captainChildRootOf,
+  captainChildTaskOf,
+  captainChildTeamOf,
+  registerCaptainChild,
+  unregisterCaptainChild,
+} from './captainChildRegistry.js';
 import { LEADER_NAME } from './roster.js';
 import { composeCaptainPersona } from '../prompts/personas/captain.js';
 import {
@@ -63,61 +70,6 @@ export function parseCaptainLabel(label: string | undefined): { leaderName: stri
   if (!label || !label.startsWith(CAPTAIN_LABEL_PREFIX)) return undefined;
   const leaderName = label.slice(CAPTAIN_LABEL_PREFIX.length);
   return leaderName === '' ? undefined : { leaderName };
-}
-
-/**
- * Live dispatch registry: child session id → { teamId, workspace root,
- * taskId }, written at spawn and on every followup re-registration (persisted
- * child id survives host restarts, so the map must be re-populated). Dropped
- * only when the same team rebuilds its child (stale lineage) — the child is
- * persistent, not turn-scoped. root/taskId 供领队手册插槽按子会话直查本任务
- * 的领队副本行（免注册表扫描）。
- */
-const captainChildren = new Map<
-  string,
-  { teamId: string; root: string; taskId: string; parentSessionId: string }
->();
-
-/** Register a freshly spawned captain child (identity.ts 领队解析依据). */
-export function registerCaptainChild(
-  childId: string,
-  teamId: string,
-  root = '',
-  taskId = '',
-  parentSessionId = '',
-): void {
-  if (childId === '' || teamId === '') return;
-  captainChildren.set(childId, { teamId, root, taskId, parentSessionId });
-}
-
-/** The team a captain child serves (undefined for non-captain sessions). */
-export function captainChildTeamOf(childId: string): string | undefined {
-  return captainChildren.get(childId)?.teamId;
-}
-
-/** The main conversation a captain child was dispatched from（子代理树的直接
- * 父）。captainFor 用它把「快照误记成领队子会话」的任务行换回真正的主会话，
- * 免得成员子代理挂到领队子代理下（用户迭代 2026-09-12）。 */
-export function captainChildParentOf(childId: string): string | undefined {
-  const parent = captainChildren.get(childId)?.parentSessionId;
-  return parent === '' ? undefined : parent;
-}
-
-/** The workspace state root a captain child's team lives in (手册插槽用). */
-export function captainChildRootOf(childId: string): string | undefined {
-  const root = captainChildren.get(childId)?.root;
-  return root === '' ? undefined : root;
-}
-
-/** The big task a captain child's session anchors (手册插槽按任务读副本行). */
-export function captainChildTaskOf(childId: string): string | undefined {
-  const taskId = captainChildren.get(childId)?.taskId;
-  return taskId === '' ? undefined : taskId;
-}
-
-/** Drop the registry entry after the run settles (or on spawn failure). */
-export function unregisterCaptainChild(childId: string): void {
-  captainChildren.delete(childId);
 }
 
 /**

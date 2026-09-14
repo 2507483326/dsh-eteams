@@ -19,9 +19,17 @@ import type {
   TaskRecord,
   TeamState,
 } from '../model/types.js';
-import { deliverToChild, ETeamsError, PLUGIN_ACTOR, stateRootOf, type RuntimeEnv } from './base.js';
+import {
+  deliverToChild,
+  ETeamsError,
+  PLUGIN_ACTOR,
+  resumeOptionsOf,
+  stateRootOf,
+  type RuntimeEnv,
+} from './base.js';
 import { lookupMemberSession, registerMemberSession } from './usage.js';
 import { readBuildPresence } from './roleBuilder.js';
+import { captainChildParentOf } from './captainChildRegistry.js';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 
 /** 提交后的最佳努力唤醒动作（事务内登记、COMMIT 后执行）。 */
@@ -241,10 +249,9 @@ async function resolveAnchorAgent(
   const first = candidates[0];
   if (first === undefined) return undefined;
   try {
-    const handle = await env.ctx.agents.resume?.({
-      resumeSessionId: first as unknown as SessionId,
-      signal: env.signal,
-    });
+    const handle = await env.ctx.agents.resume?.(
+      await resumeOptionsOf(env.ctx, first as unknown as SessionId, env.signal),
+    );
     if (handle !== undefined) {
       env.ctx.logger.warn(`eteams: 唤醒锚点离线，已冷恢复会话（${first}）`);
       return handle.agent;
@@ -335,9 +342,27 @@ async function wakeCaptain(
   content: string,
   taskId?: number,
 ): Promise<boolean> {
-  // 锚点优先用本任务自己的主会话快照（teamMainSessionOf 取的是全队最早任务
-  // 的快照，历史对话常已关闭——2026-09-11 同 wakeMember 的根因修复）。
+  // 该 root 任务的领队子代理副本行（is_leader=1 且已起会话）先解析出来——
+  // 唤醒它要求它的**真实直接父**在场（见下面的锚点优先级）。
+  const task = taskId !== undefined ? team.tasks.find((t) => t.id === taskId) : undefined;
+  const root = task !== undefined ? (task.parentId ?? task.id) : taskId;
+  const leaderRow =
+    team.hasLeader && taskId !== undefined
+      ? team.taskMembers.find(
+          (r) => r.isLeader === true && r.mainTaskId === root && r.sessionId !== '',
+        )
+      : undefined;
+  // 锚点优先级（用户 2026-09-13「主会话没唤醒子代理跑不了」）：
+  // ① 领队子代理的**直接父**（spawn/派发时登记进 captainChildren 注册表）——
+  //    宿主 followup/sendMessage 只认「写进子代理持久 header 的那个确切父级」
+  //    （dsh-subagent：Follow-up authority 来自确切活着的直接父）；父锚不对会
+  //    被拒成 belongs to another parent session。所以任务行快照即使记着别的
+  //    会话，也先把真正的父冷恢复起来再投。
+  // ② 本任务自己的主会话快照（teamMainSessionOf 取的是全队最早任务，历史
+  //    对话常已关闭——2026-09-11 同 wakeMember 的根因修复）
+  // ③ 全队主会话快照 → ④ 面板心跳；全离线走冷恢复。
   const captain = await resolveAnchorAgent(env, [
+    leaderRow !== undefined ? captainChildParentOf(leaderRow.sessionId) : undefined,
     taskMainSessionOf(team, taskId ?? null),
     teamMainSessionOf(team),
     readBuildPresence(stateRootOf(env))?.sessionId,
@@ -347,27 +372,20 @@ async function wakeCaptain(
     return false;
   }
   const blocks = [{ type: 'text' as const, text: content }];
-  if (team.hasLeader && taskId !== undefined) {
-    const task = team.tasks.find((t) => t.id === taskId);
-    const root = task !== undefined ? (task.parentId ?? task.id) : taskId;
-    const leaderRow = team.taskMembers.find(
-      (r) => r.isLeader === true && r.mainTaskId === root && r.sessionId !== '',
-    );
-    if (leaderRow !== undefined) {
-      try {
-        await deliverToChild(
-          env.ctx.subagents,
-          captain,
-          leaderRow.sessionId as unknown as SessionId,
-          blocks,
-          env.signal,
-        );
-        return true;
-      } catch (error) {
-        env.ctx.logger.warn(
-          `eteams: wake to leader child failed, fallback to main session: ${String(error)}`,
-        );
-      }
+  if (leaderRow !== undefined) {
+    try {
+      await deliverToChild(
+        env.ctx.subagents,
+        captain,
+        leaderRow.sessionId as unknown as SessionId,
+        blocks,
+        env.signal,
+      );
+      return true;
+    } catch (error) {
+      env.ctx.logger.warn(
+        `eteams: wake to leader child failed, fallback to main session: ${String(error)}`,
+      );
     }
   }
   try {

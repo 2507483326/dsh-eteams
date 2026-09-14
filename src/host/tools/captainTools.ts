@@ -12,7 +12,7 @@ import type { ETeamsResolvedConfig } from '../config.js';
 import { ETeamsError, stateRootOf, type RuntimeContext } from '../runtime/base.js';
 import { recordEvent } from '../state/events.js';
 import { readTeam } from '../state/store.js';
-import { taskDirRel } from '../runtime/docs.js';
+import { boardFileAbs, taskDirRel } from '../runtime/docs.js';
 import {
   createTeam,
   addMember,
@@ -39,7 +39,12 @@ import { listTeams, envForAgent, resolveCaller } from './identity.js';
 import { getSessionTeamId, anchoredMainTaskOf } from '../runtime/sessionTeam.js';
 import { locateTeamAcrossWorkspaces } from '../runtime/workspaces.js';
 import { readBox } from '../runtime/notifier.js';
-import { readRoster, taskMemberBadge, upsertRosterMember } from '../runtime/roster.js';
+import {
+  formatEmployeeId,
+  readRoster,
+  taskMemberBadge,
+  upsertRosterMember,
+} from '../runtime/roster.js';
 import {
   answerBuildInterview,
   hasBuildSessionFile,
@@ -51,10 +56,10 @@ import {
 } from '../runtime/roleBuilder.js';
 import { startBuilderChild } from '../runtime/builderPhases.js';
 import {
-  captainChildTaskOf,
   leaderHandbookForChild,
   readCaptainTurn,
 } from '../runtime/captainAgent.js';
+import { captainChildTaskOf } from '../runtime/captainChildRegistry.js';
 import { captainChildPersona } from '../prompts/spawn/captainChild.js';
 import { stationPointsTo, stationProgress } from '../model/taskMachine.js';
 import { renderContract } from '../prompts/handoff/mails.js';
@@ -225,7 +230,13 @@ export function createCaptainTools(
         },
         additionalProperties: false as const,
       },
-      render: (_a, v) => text(`成员 ${v.member} 已加入团队 #${v.teamId}`),
+      // 工号必须进 render：model-facing content = render 输出，而后续
+      // eteams_assign_task / eteams_reassign_task 的 member 要的就是工号——
+      // 只回名字会让同名成员无法指称（2026-09-14 同类缺陷排查）。
+      render: (_a, v) =>
+        text(
+          `成员 ${v.member} 已加入团队 #${v.teamId}（工号 ${formatEmployeeId(v.employeeId ?? 0)}，指派时 member 传数字 ${v.employeeId ?? 0}）`,
+        ),
     },
     execute: async (args, exec) => {
       const env = envForAgent(config, runtime, exec.agent, exec.signal);
@@ -385,23 +396,26 @@ export function createCaptainTools(
         properties: {
           questions: {
             type: 'array' as const,
-            description: '问题列表（一次问全 ≤5 问）',
+            description: '问题列表（一次问全 ≤5 问；问题会原样经 eteams_ask_user 弹出，按提问口径写）',
             items: {
               type: 'object' as const,
               properties: {
                 id: str('问题唯一 id'),
-                question: str('问题文本'),
+                question: str(
+                  '问题文本（提问口径：自包含——点名哪个任务/哪一步、为什么问；说人话——不用代号、缩写与行话，术语一句解释）',
+                ),
                 header: str(
                   '问题题头（可省）：模型常沿用 ask_user_question 的 header 习惯，渲染为问题上方的小标题',
                 ),
                 options: {
                   type: 'array' as const,
-                  description: '2-4 个选项，推荐项放首位并在 label 尾加「（推荐）」',
+                  description:
+                    '2-4 个选项：每个都写清「选它会怎样」，推荐项放首位并在 label 尾加「（推荐）」；禁止 A/B 代号式无信息量选项',
                   items: {
                     type: 'object' as const,
                     properties: {
-                      label: str('选项文案'),
-                      description: str('选项说明（可省）'),
+                      label: str('选项文案（直接写具体做法与后果；推荐项尾标「（推荐）」）'),
+                      description: str('选项说明（可省）：一句具体影响或例子'),
                     },
                     additionalProperties: false,
                   },
@@ -1014,7 +1028,7 @@ export function createCaptainTools(
   const assignTaskTool = defineTool({
     name: 'eteams_assign_task',
     description:
-      '把 ready 任务指派给成员并投递指派信。执行链是**弱顺序**（用户 2026-09-13）：可指派任意在册成员——成员不在本任务链上时，系统自动为其补 task_members 副本行（幂等去重）并把该成员追加到链尾；链上成员也可任意顺序执行，不再要求 deviationNote（有则记为审计留痕）。handoff 是给受派成员的交接说明。',
+      '把 ready 任务指派给成员并投递指派信。**按链来**（用户 2026-09-14「没有特殊情况，按链来」）：有执行链的任务用 eteams_advance_task 按当前站推进（自动按链取人、不跳站）；本工具用于**无执行链**的任务。传不在本任务链上的成员时，系统会自动补 task_members 副本行（幂等去重）并把该成员追加到链尾——这会**绕过链**，有链的任务不要这样做（要换人/调序先改链再按链派）。handoff 是给受派成员的交接说明。',
     parameters: {
       taskId: intR('任务号'),
       member: strR('受派成员（成员工号数字，如 7 = ET-0007；同名成员必须用工号）'),
@@ -1050,7 +1064,7 @@ export function createCaptainTools(
   const advanceTaskTool = defineTool({
     name: 'eteams_advance_task',
     description:
-      '推进链任务到下一站（完成即续派的第一动作）。无链任务会报错并提示用 eteams_assign_task。',
+      '推进链任务到**当前站**（最靠前的未跑站，自动按链取人）——开跑/续派的第一动作，不跳站、不越过当前站、不自己挑人。无链任务会报错并提示用 eteams_assign_task。',
     parameters: { taskId: intR('任务号'), handoff: str('交接说明（可选）') },
     output: {
       schema: {
@@ -1298,7 +1312,7 @@ export function createCaptainTools(
   const captainGuideTool = defineTool({
     name: 'eteams_captain_guide',
     description:
-      '领取领队规程与本回合任务（领队子代理每回合第一步先调本工具）：返回 guide=工作流程全文（含回合决策表 + 角色手册）、turn=本回合种类（dispatch=主对话转交 / commission=面板任务完善 / start=面板开始批准 / none=无待处理转交）、snapshot=快照 JSON（taskId 锚定主任务 / teamStatus 团队现状 / latestMessage 本回合转交内容 / parentSessionId 发起会话 id）。只读幂等，可重复领取。',
+      '领取领队规程与本回合任务（领队子代理每回合第一步先调本工具）：返回 guide=工作流程全文（含回合决策表 + 角色手册）、turn=本回合种类（dispatch=主对话转交 / commission=面板任务完善 / start=面板开始批准 / none=无待处理转交）、snapshot=快照 JSON（taskId 锚定主任务 / boardFile 队伍留言板绝对路径 / teamStatus 团队现状 / latestMessage 本回合转交内容 / parentSessionId 发起会话 id）。只读幂等，可重复领取。',
     parameters: {},
     output: {
       schema: {
@@ -1310,7 +1324,7 @@ export function createCaptainTools(
             '本回合种类：dispatch=主对话转交 / commission=面板任务完善 / start=面板开始批准 / none=无待处理转交',
           ),
           snapshot: str(
-            '会话快照 JSON（taskId 锚定主任务 / teamStatus 团队现状 / latestMessage 本回合转交内容 / parentSessionId 发起会话 id）',
+            '会话快照 JSON（taskId 锚定主任务 / boardFile 队伍留言板绝对路径 / teamStatus 团队现状 / latestMessage 本回合转交内容 / parentSessionId 发起会话 id）',
           ),
         },
         additionalProperties: false as const,
@@ -1351,6 +1365,14 @@ export function createCaptainTools(
         replicaTaskId ?? (registryTaskId !== undefined ? Number(registryTaskId) : null);
       const turnRec =
         anchoredTaskId !== null ? readCaptainTurn(root, String(anchoredTaskId)) : null;
+      // 队伍留言板绝对路径（用户 2026-09-14）：锚定主任务文件夹根下的
+      // 留言板.md——派发/推进前先读、每完成一个编排动作追加一行。
+      const anchoredTask =
+        anchoredTaskId !== null
+          ? caller.team.tasks.find((t) => t.id === anchoredTaskId)
+          : undefined;
+      const boardFile =
+        anchoredTask !== undefined ? boardFileAbs(env.workspace, caller.team, anchoredTask) : null;
       // 团队现状快照与 eteams_team_status 同一视图（含构建会话行）。
       const view = teamView(env, caller.team);
       const build = readBuildSession(root);
@@ -1364,6 +1386,7 @@ export function createCaptainTools(
         turn: turnRec === null ? 'none' : turnRec.turn,
         snapshot: JSON.stringify({
           ...(anchoredTaskId !== null ? { taskId: anchoredTaskId } : {}),
+          ...(boardFile !== null ? { boardFile } : {}),
           teamStatus: view,
           latestMessage: turnRec?.message ?? '',
           parentSessionId: turnRec?.parentSessionId ?? null,

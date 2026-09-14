@@ -16,7 +16,7 @@ import type { Session, SessionEvent } from '@deepseek-ai/dsh-session';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { resolveConfig, type ETeamsResolvedConfig } from '../src/host/config';
 import type { TeamState } from '../src/host/model/types';
-import { registerCaptainChild } from '../src/host/runtime/captainAgent';
+import { registerCaptainChild } from '../src/host/runtime/captainChildRegistry';
 import { setSessionTeam } from '../src/host/runtime/sessionTeam';
 import {
   dayKeyOf,

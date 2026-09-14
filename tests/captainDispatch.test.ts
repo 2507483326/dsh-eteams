@@ -22,15 +22,18 @@ import {
   captainChildPersona,
   captainTurnBrief,
 } from '../src/host/prompts/spawn/captainChild';
-import { composeCaptainPersona } from '../src/host/prompts/personas/captain';
+import { composeCaptainPersona, defaultCaptainPersona } from '../src/host/prompts/personas/captain';
+import { captainStartMessage } from '../src/host/prompts/steering/dispatch';
 import {
   CAPTAIN_CHILD_DENIED_TOOLS,
-  captainChildTeamOf,
   leaderHandbookForChild,
   readCaptainTurn,
+} from '../src/host/runtime/captainAgent';
+import {
+  captainChildTeamOf,
   registerCaptainChild,
   unregisterCaptainChild,
-} from '../src/host/runtime/captainAgent';
+} from '../src/host/runtime/captainChildRegistry';
 import { MEMBER_DENIED_TOOLS } from '../src/host/runtime/members';
 import { createCaptainTools } from '../src/host/tools/captainTools';
 import { resolveCaller } from '../src/host/tools/identity';
@@ -38,7 +41,7 @@ import { insertTeamRow, readTeamSync, withTeamTx, writeTeamInTx } from '../src/h
 import { appendMail } from '../src/host/state/events';
 import { teamView } from '../src/host/runtime/teamOps';
 import { LEADER_NAME, upsertRosterMember } from '../src/host/runtime/roster';
-import { joinPath, type RuntimeEnv } from '../src/host/runtime/base';
+import { joinPath, resumeOptionsOf, type RuntimeEnv } from '../src/host/runtime/base';
 import type { MailMessage, TaskMemberRecord, TeamState } from '../src/host/model/types';
 import { cleanupTempWorkspace } from './support/tmpWorkspace';
 
@@ -483,6 +486,106 @@ describe('eteams_dispatch_captain', () => {
   });
 });
 
+describe('resumeOptionsOf (续派冷恢复修复)', () => {
+  it('carries the host session-default route so {{model}} resolves on cold resume', async () => {
+    const ctx = {
+      agentDefaultModel: {
+        currentSelection: () => ({
+          provider: 'ollama',
+          model: 'glm-5.3-flash:cloud',
+          reasoningEffort: 'high',
+        }),
+      },
+    };
+    const options = await resumeOptionsOf(ctx, 'sess-1' as never, undefined);
+    expect(options.resumeSessionId).toBe('sess-1');
+    // 宿主把 AgentOptions.model 直接当作 {{model}} 的取值：冷恢复不带路线时
+    // 部署级 deployment:persona 段渲染即抛 no value，续派唤醒整条断掉。
+    expect(options.agentOptions).toEqual({
+      provider: 'ollama',
+      model: 'glm-5.3-flash:cloud',
+      reasoningEffort: 'high',
+    });
+  });
+
+  it('adds a setup that re-mounts the recorded preset (读印章 → mount)', async () => {
+    const disposeSymbol = (Symbol as unknown as { dispose?: symbol }).dispose;
+    const mounted: { id: string | undefined; agentCtx: unknown }[] = [];
+    let disposed = 0;
+    const observation: Record<string | symbol, unknown> = {
+      projections: { values: { agentPreset: 'standard' } },
+    };
+    if (disposeSymbol !== undefined) {
+      observation[disposeSymbol] = () => {
+        disposed += 1;
+      };
+    }
+    const ctx = {
+      agentPresets: {
+        mount: (agentCtx: unknown, id?: string) => {
+          mounted.push({ agentCtx, id });
+          return Promise.resolve();
+        },
+      },
+      sessionQuery: { observeSession: async () => observation },
+    };
+    const options = await resumeOptionsOf(ctx, 'sess-9' as never, undefined);
+    expect(typeof options.setup).toBe('function');
+    // 观测是租约：读完即还。
+    expect(disposed).toBe(disposeSymbol !== undefined ? 1 : 0);
+    const agentCtx = { scope: 'agent-scope' };
+    await options.setup!(agentCtx);
+    expect(mounted).toEqual([{ agentCtx, id: 'standard' }]);
+  });
+
+  it('omits setup when the recorded preset is unreadable (不猜默认)', async () => {
+    const ctx = {
+      agentPresets: { mount: () => Promise.resolve() },
+      sessionQuery: { observeSession: async () => ({ projections: { values: {} } }) },
+    };
+    const options = await resumeOptionsOf(ctx, 'sess-10' as never, undefined);
+    expect(options.setup).toBeUndefined();
+  });
+
+  it('omits setup when the preset roster is absent (TUI/旧宿主降级)', async () => {
+    const options = await resumeOptionsOf({}, 'sess-11' as never, undefined);
+    expect(options.setup).toBeUndefined();
+  });
+
+  it('a failing remount degrades to no tools instead of breaking the resume', async () => {
+    const ctx = {
+      agentPresets: { mount: () => Promise.reject(new Error('broken preset')) },
+      sessionQuery: {
+        observeSession: async () => ({ projections: { values: { agentPreset: 'standard' } } }),
+      },
+    };
+    const options = await resumeOptionsOf(ctx, 'sess-12' as never, undefined);
+    await expect(options.setup!({})).resolves.toBeUndefined();
+  });
+
+  it('omits agentOptions when the default-model service is absent (旧行为兜底)', async () => {
+    const options = await resumeOptionsOf({}, 'sess-2' as never, undefined);
+    expect(options).toEqual({ resumeSessionId: 'sess-2' });
+  });
+
+  it('degrades a throwing cordis ctx to no agentOptions (without inject 兜底)', async () => {
+    const throwing = new Proxy(
+      {},
+      {
+        get(_target, prop) {
+          if (prop === 'agentDefaultModel') {
+            throw new Error('cannot get property "agentDefaultModel" without inject');
+          }
+          return undefined;
+        },
+      },
+    );
+    expect(await resumeOptionsOf(throwing, 'sess-3' as never, undefined)).toEqual({
+      resumeSessionId: 'sess-3',
+    });
+  });
+});
+
 describe('eteams_captain_guide (用户迭代 2026-09-10 领取完成流程)', () => {
   function findGuideTool() {
     const guide = createCaptainTools(config, runtime.ctx).find(
@@ -513,11 +616,14 @@ describe('eteams_captain_guide (用户迭代 2026-09-10 领取完成流程)', ()
     expect(out.guide).toContain(marker);
     const snap = JSON.parse(out.snapshot) as {
       taskId: number;
+      boardFile?: string;
       teamStatus: Record<string, unknown>;
       latestMessage: string;
       parentSessionId: string | null;
     };
     expect(snap.taskId).toBe(1);
+    // 队伍留言板绝对路径随快照下发（用户 2026-09-14）：领队派发/推进前先读它。
+    expect(snap.boardFile).toContain('留言板.md');
     expect(snap.latestMessage).toBe('改成导出 Excel');
     expect(snap.parentSessionId).toBe('cap-1');
     expect(Array.isArray((snap.teamStatus as { members: unknown[] }).members)).toBe(true);
@@ -565,6 +671,39 @@ describe('eteams_captain_guide (用户迭代 2026-09-10 领取完成流程)', ()
     expect(CAPTAIN_CHILD_PERSONA).toContain('开跑与建任务判别');
     expect(CAPTAIN_CHILD_PERSONA).toContain('简单对话/闲聊/纯问答直接回应');
     expect(CAPTAIN_CHILD_PERSONA).toContain('不要把开跑当成新需求去增补小任务');
+  });
+
+  it('领队按链派发纪律：没有特殊情况、按链来（用户 2026-09-14）', () => {
+    // 用户 2026-09-14 原话「改成没有特殊情况，按链来」：开跑/续派必须按执行链
+    // 当前站推进，不得跳站、不得凭建任务时的计划挑人（实况：用户给 #72 改了链，
+    // 领队仍按旧计划把当前站派给了原成员，跳过了新加的首站）。
+    expect(CAPTAIN_CHILD_PERSONA).toContain('没有特殊情况，按链来');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('一律按链派发');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('不跳站');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('按链取人');
+    // 指派纪律改为「按执行链当前站派人」；旧的「可指派任意在册成员」许可撤除。
+    expect(CAPTAIN_CHILD_PERSONA).toContain('按执行链当前站派人');
+    expect(CAPTAIN_CHILD_PERSONA).not.toContain('可指派任意在册成员');
+    // 同一口径落到领队人设与开跑批准正文（转交内容由 guide snapshot 送达）。
+    expect(defaultCaptainPersona().rules.join('\n')).toContain('没有特殊情况，按链来');
+    expect(defaultCaptainPersona().rules.join('\n')).toContain('按执行链当前站');
+    const start = captainStartMessage(72, '脚手架', 71, false);
+    expect(start).toContain('没有特殊情况，按链来');
+    expect(start).toContain('当前站');
+    expect(start).toContain('不跳站');
+    expect(start).toContain('eteams_advance_task');
+  });
+
+  it('领队留言板纪律：派发前先读、做完编排动作追加一行（用户 2026-09-14）', () => {
+    // 用户 2026-09-14：领队与每个子 agent 共用一块留言板，记录各自做了什么；
+    // 分配与进行任务前都先读一遍。
+    expect(CAPTAIN_CHILD_PERSONA).toContain('留言板');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('留言板.md');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('boardFile');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('派发/推进前先读');
+    const start = captainStartMessage(73, '场景实现', 71, false);
+    expect(start).toContain('留言板');
+    expect(start).toContain('追加一行');
   });
 
   it('returns turn=none with an empty latestMessage when nothing was dispatched', async () => {

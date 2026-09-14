@@ -21,6 +21,7 @@ import {
   cancelTask,
   createTask,
   finalizeCommissionTask,
+  handleCaptainInterrupt,
   pauseTaskOnInterrupt,
   redeliverAssignment,
   startGroupTask,
@@ -35,7 +36,7 @@ import { wakeMember } from '../src/host/runtime/notifier';
 import {
   registerCaptainChild,
   unregisterCaptainChild,
-} from '../src/host/runtime/captainAgent';
+} from '../src/host/runtime/captainChildRegistry';
 import { clearSessionTeam, setSessionTeam } from '../src/host/runtime/sessionTeam';
 import type { TeamState } from '../src/host/model/types';
 import { cleanupTempWorkspace } from './support/tmpWorkspace';
@@ -362,6 +363,8 @@ describe('lifecycle (offline full flow)', () => {
     expect(existsSync(join(workspace, 'teams', '导出功能团队', 'README.md'))).toBe(true);
     expect(existsSync(join(workspace, sub.workDir!, 'contract.md'))).toBe(true);
     expect(existsSync(join(workspace, sub.workDir!, 'notes.md'))).toBe(true);
+    // 队伍留言板挂在**主任务**文件夹根下（小任务成员共享同一块，用户 2026-09-14）。
+    expect(existsSync(join(workspace, group.workDir!, '留言板.md'))).toBe(true);
 
     // v7 决策 5：建大任务即按班底全员铺副本（含领队）；领队班底行 ET-0001
     //（表自增：建队即入班底领首号）。
@@ -380,12 +383,8 @@ describe('lifecycle (offline full flow)', () => {
     expect(captainTools.some((t) => t.name === 'eteams_claim_task')).toBe(false);
     expect(memberTools.some((t) => t.name === 'eteams_assign_task')).toBe(false);
 
-    // 6. 依赖未完成 → 拒绝指派依赖任务（校验在起会话之前，无副作用）
-    await expect(cap('eteams_assign_task', { taskId: doc.taskId, member: bobId })).rejects.toThrow(
-      /依赖未完成/,
-    );
-
-    // 7. 指派链任务首站 → Alice
+    // 6. 指派链任务首站 → Alice（依赖不再拦截派发，用户 2026-09-14
+    // 「闸门拦住去掉吧」——该口径由「依赖未完成不再拦截派发」用例单独覆盖）
     const assigned = await cap<{ ok: true; taskId: number; member: string; attemptId: number }>(
       'eteams_assign_task',
       { taskId: subId, member: aliceId },
@@ -401,7 +400,7 @@ describe('lifecycle (offline full flow)', () => {
 
     const aliceAgent = memberAgent(aliceChild.childId);
 
-    // 8. claim → token；错误 token 拒绝
+    // 7. claim → token；错误 token 拒绝
     const claimed = await mem<{ ok: true; attemptId: number; token: string; contract: string }>(
       aliceAgent,
       'eteams_claim_task',
@@ -436,7 +435,7 @@ describe('lifecycle (offline full flow)', () => {
       text: '方案调研完成',
     });
 
-    // 9. 中间站完成 → 任务回 ready + 领队收到续派通知（完成即续派）
+    // 8. 中间站完成 → 任务回 ready + 领队收到续派通知（完成即续派）
     const stationDone = await mem<{ ok: true; done: boolean }>(aliceAgent, 'eteams_complete_task', {
       taskId: subId,
       attemptId: claimed.attemptId,
@@ -455,7 +454,7 @@ describe('lifecycle (offline full flow)', () => {
     expect(midBox.messages.at(-1)!.content).toContain('下一站');
     expect(midBox.messages.at(-1)!.content).toContain(`ET-${String(bobId).padStart(4, '0')}`);
 
-    // 10. 弱顺序链（用户 2026-09-13）：改派不在链上的 Carol 不再需要 deviationNote
+    // 9. 弱顺序链（用户 2026-09-13）：改派不在链上的 Carol 不再需要 deviationNote
     // ——系统自动补 task_members 副本行（幂等去重）并把 Carol 追加到链尾。
     const rowsBefore = readTeam(teamId).taskMembers.filter((r) => r.mainTaskId === groupId).length;
     await cap<{ ok: true; member: string }>('eteams_assign_task', {
@@ -1524,25 +1523,40 @@ describe('大任务状态语义 + 依赖派发闸（用户迭代 2026-09-11 精�
     expect(team.tasks.find((t) => t.id === sub.id)!.status).toBe('cancelled');
   });
 
-  it('依赖未完成的任务派发被拒（依赖不再物化，派发口显式校验）', async () => {
+  it('依赖未完成不再拦截派发（用户 2026-09-14「闸门拦住去掉吧」）', async () => {
     const created = await cap<{ teamId: number }>('eteams_create_team', { name: '依赖团队' });
     const teamId = created.teamId;
-    await cap('eteams_add_member', { name: 'Dave', role: 'engineer', teamId });
-    const env = runtimeEnvFor();
-    const first = await createTask(env, who(teamId), {
+    const dave = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: 'Dave',
+      role: 'engineer',
+      teamId,
+    });
+    const group = await submitReady('依赖主任务');
+    const first = await cap<{ taskId: number }>('eteams_create_task', {
       subject: '前置任务',
-      chain: [{ member: 2, stageBrief: '先做' }],
+      parentTaskId: group.taskId,
+      chain: [{ member: String(dave.employeeId), stageBrief: '先做' }],
     });
-    const second = await createTask(env, who(teamId), {
+    const second = await cap<{ taskId: number }>('eteams_create_task', {
       subject: '后置任务',
-      chain: [{ member: 2, stageBrief: '后做' }],
-      dependencies: [first.id],
+      parentTaskId: group.taskId,
+      dependencies: [first.taskId],
+      chain: [{ member: String(dave.employeeId), stageBrief: '后做' }],
     });
-    await expect(assignTask(env, who(teamId), { taskId: second.id, member: 2 })).rejects.toThrow(
-      /依赖未完成/,
-    );
-    // 依赖被拒不改写状态：任务仍是 ready 等着（无物化 wait）。
-    expect(readTeam(teamId).tasks.find((t) => t.id === second.id)!.status).toBe('ready');
+    // 依赖只作排布提示（面板执行序按兄弟依赖拓扑排），不再拦截派发——前置未完成
+    // 也照派，是否等前置由领队判断（用户 2026-09-14「不然任意调度时会出问题」）。
+    const assigned = await cap<{ ok: true; member: string }>('eteams_assign_task', {
+      taskId: second.taskId,
+      member: String(dave.employeeId),
+    });
+    expect(assigned.member).toBe('Dave');
+    const t = readTeam(teamId).tasks.find((x) => x.id === second.taskId)!;
+    expect(t.status).toBe('ready'); // 派发不改状态（成员领取才 start）
+    expect(t.attempts).toHaveLength(1);
+    expect(t.attempts[0]!.status).toBe('pending_accept');
+    expect(t.attempts[0]!.stationIndex).toBe(0);
+    // 依赖字段仍在（排布提示用），只是不再当闸门。
+    expect(t.dependencies).toEqual([first.taskId]);
   });
 
   it('成员回合中断 → 小任务挂起（attempt 吊销、站号不丢），整体开始自动恢复续跑', async () => {
@@ -1599,6 +1613,102 @@ describe('大任务状态语义 + 依赖派发闸（用户迭代 2026-09-11 精�
     expect(back.attempts.at(-1)!.stationIndex).toBe(0);
     // 续派即在办 → 容器回 start。
     expect(readTeam(teamId).tasks.find((t) => t.id === group.taskId)!.status).toBe('start');
+  });
+
+  it('领队被用户主动停止（aborted）→ 锚定的大任务挂起（不再卡「执行中」，可点开始续跑）', async () => {
+    // 现场：在子代理窗口停止领队，主任务却留在 start（执行中），再派发会重新
+    // 唤醒领队导致状态对不上（用户迭代 2026-09-14）。观察者按 captainChildRegistry
+    // （teamId/taskId）派发到 handleCaptainInterrupt；此处直连验证效果。
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '领队中断团队' });
+    const teamId = created.teamId;
+    const alice = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: 'Alice',
+      role: 'engineer',
+      teamId,
+    });
+    const group = await submitReady('领队中断主任务');
+    const sub = await cap<{ taskId: number }>('eteams_create_task', {
+      subject: '单站任务',
+      parentTaskId: group.taskId,
+      chain: [{ member: String(alice.employeeId), stageBrief: '实现' }],
+    });
+    const started = await startGroupTask(runtimeEnvFor(), who(teamId), group.taskId);
+    expect(started.started).toBe(1);
+    // 派发即在办 → 容器 start（正是用户看到「执行中」的那一态）。
+    expect(readTeam(teamId).tasks.find((t) => t.id === group.taskId)!.status).toBe('start');
+
+    const handled = await handleCaptainInterrupt(
+      runtimeEnvFor(),
+      teamId,
+      group.taskId,
+      'aborted',
+    );
+    expect(handled).toBe('paused');
+    const container = readTeam(teamId).tasks.find((t) => t.id === group.taskId)!;
+    expect(container.status).toBe('paused');
+    expect(container.statusNote).toContain('领队回合被中断');
+    // 面板暂停主任务同语义：在跑小任务一并挂起。
+    expect(readTeam(teamId).tasks.find((t) => t.id === sub.taskId)!.status).toBe('paused');
+
+    // 点「开始」→ 从挂起态续派，状态回一致。
+    const resumed = await startGroupTask(runtimeEnvFor(), who(teamId), group.taskId);
+    expect(resumed.started).toBe(1);
+    expect(readTeam(teamId).tasks.find((t) => t.id === sub.taskId)!.status).toBe('ready');
+    expect(readTeam(teamId).tasks.find((t) => t.id === group.taskId)!.status).toBe('start');
+  });
+
+  it('领队中断：容器已终态 → no-op（删除团队等自愈路径不误伤）', async () => {
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '领队中断终态' });
+    const teamId = created.teamId;
+    const group = await submitReady('终态主任务');
+    // 模拟已收口（终态容器）：不应被领队中断改写。
+    getDb(root)
+      .prepare('UPDATE task SET status = ? WHERE task_id = ?')
+      .run('completed', group.taskId);
+    const out = await handleCaptainInterrupt(runtimeEnvFor(), teamId, group.taskId, 'aborted');
+    expect(out).toBeUndefined();
+    expect(readTeam(teamId).tasks.find((t) => t.id === group.taskId)!.status).toBe('completed');
+  });
+
+  it('领队会话异常中断（interrupted）→ 不挂起工作流，只落异常备注 + 事件交主会话判读', async () => {
+    // 用户迭代 2026-09-14：区分中断类型——用户主动停止才挂起；宿主崩溃补记等
+    // 异常不冻结工作流，只留可判读的痕迹（status_note 与 member 挂起文案相区别）。
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '领队异常中断' });
+    const teamId = created.teamId;
+    const alice = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: 'Alice',
+      role: 'engineer',
+      teamId,
+    });
+    const group = await submitReady('异常中断主任务');
+    const sub = await cap<{ taskId: number }>('eteams_create_task', {
+      subject: '单站任务',
+      parentTaskId: group.taskId,
+      chain: [{ member: String(alice.employeeId), stageBrief: '实现' }],
+    });
+    const started = await startGroupTask(runtimeEnvFor(), who(teamId), group.taskId);
+    expect(started.started).toBe(1);
+
+    const handled = await handleCaptainInterrupt(
+      runtimeEnvFor(),
+      teamId,
+      group.taskId,
+      'interrupted',
+    );
+    expect(handled).toBe('noted');
+    const container = readTeam(teamId).tasks.find((t) => t.id === group.taskId)!;
+    // 不挂起：容器与在跑小任务都保持原状（工作流不冻结）。
+    expect(container.status).toBe('start');
+    expect(container.statusNote).toContain('领队会话异常中断');
+    expect(readTeam(teamId).tasks.find((t) => t.id === sub.taskId)!.status).toBe('ready');
+
+    // 事件留痕：主会话可据此区分「用户主动停止」与「异常」。
+    const events = readEventsSync(root, teamId);
+    expect(
+      events.some(
+        (e) => e.type === 'task.updated' && (e.payload as { via?: string })?.via === 'captain.interrupted',
+      ),
+    ).toBe(true);
   });
 
   it('僵尸指派（ready + 待接取）：开始被闸拒死 → 幂等重发复活（2026-09-11 回归）', async () => {
@@ -1823,5 +1933,30 @@ describe('大任务状态语义 + 依赖派发闸（用户迭代 2026-09-11 精�
       subject: '单站任务',
       reason: '执行中，等本回合收尾',
     });
+  });
+
+  it('render 回传工号与邮箱摘要（model-facing content = render 输出，2026-09-14 同类排查）', () => {
+    // add_member：工号不进 render，后续 assign/reassign（member 传工号）无从指称。
+    const addBlocks = captainTool('eteams_add_member').output.render(
+      {},
+      { ok: true, member: 'Alice', teamId: 1, employeeId: 7 } as never,
+    ) as Array<{ type: string; text?: string }>;
+    const added = addBlocks.map((b) => b.text ?? '').join('');
+    expect(added).toContain('ET-0007');
+
+    // claim_task：邮箱摘要是成员侧唯一的自有箱快照，必须进 render。
+    const claimBlocks = memberTool('eteams_claim_task').output.render(
+      {},
+      {
+        ok: true,
+        taskId: 3,
+        attemptId: 9,
+        token: 'abc123',
+        contract: '合同正文',
+        inboxPreview: ['[notice] 领队：先做选型'],
+      } as never,
+    ) as Array<{ type: string; text?: string }>;
+    const claimed = claimBlocks.map((b) => b.text ?? '').join('');
+    expect(claimed).toContain('先做选型');
   });
 });

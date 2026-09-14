@@ -20,7 +20,7 @@ import {
   captainChildTeamOf,
   registerCaptainChild,
   unregisterCaptainChild,
-} from '../src/host/runtime/captainAgent';
+} from '../src/host/runtime/captainChildRegistry';
 import { cleanupTempWorkspace } from './support/tmpWorkspace';
 import type { ETeamsResolvedConfig } from '../src/host/config';
 import type { TaskMemberRecord, TaskRecord, TeamState } from '../src/host/model/types';

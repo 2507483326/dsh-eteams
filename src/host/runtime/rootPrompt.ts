@@ -15,7 +15,7 @@ import { rootPromptBand } from '../prompts/system/rootPrompt.js';
 import { getDb } from '../state/db.js';
 import { hasTaskMemberSession, rootRoleRow } from '../state/store.js';
 import { stateRootFor } from './base.js';
-import { captainChildTeamOf } from './captainAgent.js';
+import { captainChildTeamOf } from './captainChildRegistry.js';
 import { readBuildSession } from './roleBuilder.js';
 import { sessionIdOfScope } from './sessionPersona.js';
 

@@ -73,7 +73,7 @@
 
 ### 3.3 面板展示
 
-`webui.ts` 的 `stationStatusOf`（:163）除游标外，还按 `chainDoneStations`（`taskView` :287/:291）把「已有成功尝试」的站点标 `done`——乱序完成时后段站点不再错显为 `pending`。
+`webui.ts` 的 `stationStatusOf`（:163）除游标外，还按 `chainDoneStations`（`taskView` :319）把「已有成功尝试」的站点标 `done`——乱序完成时后段站点不再错显为 `pending`；「正在执行」的站点改由 `chainActiveStations`（有 `pending_accept`/`running` 在办尝试的站）反查（用户 2026-09-14），乱序/跳站派发时不再按 `chainCursor + 1`（那只是 frontier）把未跑的站错标为「执行中」；无任何在办尝试时才退回 frontier 口径。
 
 ---
 
@@ -87,7 +87,24 @@
 - 一般继续把链上剩余站点跑完，领队判断是否收口；允许任务内循环（如修复→测试→再修），但避免链内无限回环；
 - 流程/环境问题仍走 `eteams_escalate_task` 升级「待用户」。
 
-落点：`src/host/prompts/spawn/captainChild.ts`（`执行` / `指派纪律` / `失败分诊` 三条）、`src/host/prompts/personas/captain.ts`（`指派纪律` / `升级处置`）、工具描述 `src/host/tools/captainTools.ts:1015`（assign）与 `:1083`（reassign）。
+### 4.1 派发口径：按链来（用户 2026-09-14）
+
+派发（开跑/续派）**一律按执行链当前站**——先 `eteams_task_board` 读出每张卡的 `chain.next`（最靠前的未跑站），再用 `eteams_advance_task` 按链推进（自动按链取人）。**没有特殊情况**：不跳站、不越过当前站、不凭建任务时的计划或自己的判断另指他人；要换人/调序先改执行链（卡槽）再按链派；只有**无执行链**的任务才用 `eteams_assign_task` 自由指派。这里的「弱顺序」只是宿主对乱序/续跑的**容错**（用户改链、续跑恢复），不是派发时挑人的许可。
+
+触发实况：用户给 #72 的执行链前面加了「需求明确大师」，领队开跑时仍按建任务时的旧计划把 `eteams_assign_task(member=前端开发者)` 派了出去——该成员在链上已有站位（站 1），于是首站被跳过、站 1 先跑。根因是领队没重读当前链（未调 `eteams_task_board`；guide 快照只带链**长度**不带站点成员）。
+
+落点：`src/host/prompts/spawn/captainChild.ts`（`执行·按链来` / `指派纪律` / 回合决策表 `start` 分支 / `开跑与建任务判别`）、`src/host/prompts/personas/captain.ts`（`指派纪律` / `完成即续派` / `任务/非任务判别`）、`src/host/prompts/steering/dispatch.ts`（`captainStartMessage`）、`src/host/prompts/system/captain.ts`（执行期）、`src/host/prompts/system/sessionTeam.ts`（无领队主会话主持分支）、工具描述 `captainTools.ts`（assign / advance）。
+
+补：**依赖不再是派发闸门**（用户 2026-09-14「闸门拦住去掉吧，不然任意调度时会出问题」）——`dependencies` 只作排布提示（面板执行序 `subExecutionOrder` / `executionOrderOf` 仍按兄弟依赖拓扑排），派发核 `prepareAssignment` 不再按依赖拒绝（`unsatisfiedDependencies` / `dependenciesSatisfied` 随之删除）；是否等前置由领队按链判断。
+
+### 4.2 队伍留言板（用户 2026-09-14）
+
+主任务文件夹根下一块 `留言板.md`（`teams/<团队>/tasks/<主任务号>-<slug>/留言板.md`），由宿主在文档树物化时 **create-only** 落盘（`renderTeamDocs`）；同一大任务的**领队与全部成员共用一块板**（小任务成员经 `boardFileAbs` 上溯到主任务根）。
+
+- **读**：领队**每次派发/推进前先读**（`eteams_captain_guide` 快照带 `boardFile` 绝对路径）；成员**开工前先读**（成员简报 `## 队伍留言板` 段带绝对路径）。
+- **写**：每做完一步在末尾**追加一行**「- [时间] 名字：做了什么（结论/交接物）」——领队记编排动作（拆解收口 / 派发某站 / 分诊决定 / 整体收口），成员记本站产出。
+
+读/写是**提示词纪律**（宿主只保证文件存在、不解析内容）；落点：`runtime/docs.ts`（落盘 + `boardFileAbs` / `renderBoardFile`）、`prompts/spawn/member.ts`（简报段 + `MEMBER_RULES`）、`prompts/spawn/captainChild.ts`（领队纪律）、`prompts/steering/dispatch.ts`（开跑批准正文第 1/4 条）、`tools/captainTools.ts`（guide 快照 `boardFile`）。
 
 ---
 
@@ -99,8 +116,8 @@
 | 成员不在链上 → 追加链尾 | 代码 | `ensureChainStation`（assignment.ts:1005） |
 | 站号贴合实际站位 | 代码 | `prepareAssignment` / `applyAssignment`（assignment.ts:927 / :1136） |
 | 完成后继续跑剩余站点、收口 | 代码 | `chainFrontier` + `completeTask`（taskMachine.ts:181 / assignment.ts:1826） |
-| 面板站点完成标记 | 代码 | `webui.ts` `stationStatusOf` + `chainDoneStations`（:163 / :291） |
-| 指派谁、何时派、是否收口 | 模型 | `eteams_assign_task` / `eteams_reassign_task` / `eteams_advance_task` |
+| 面板站点完成/执行中标记 | 代码 | `webui.ts` `stationStatusOf` + `chainDoneStations` / `chainActiveStations`（:163 / :319） |
+| 派发按链当前站推进 / 何时派、是否收口 | 模型（纪律 §4.1） | `eteams_advance_task`（自动按链取人；无链任务才 `eteams_assign_task`），改派 `eteams_reassign_task` |
 | BUG 在当前任务修还是新增任务 | 模型（纪律） | `captainChild.ts` / `personas/captain.ts` |
 
 ---

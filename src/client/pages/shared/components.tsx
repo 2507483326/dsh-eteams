@@ -112,6 +112,18 @@ export function PageHeader({
     </div>
   );
 }
+/** 任务编号徽章（用户 2026-09-14「任务卡片 title 前面加上编号徽章」）：任务
+ * 列表小卡与对话内任务卡标题前的 `#任务号`——跨域复用落点归 shared/（44.2.3）。
+ * shadcn Badge secondary 底座（token 中性底/字），shrink-0 防窄卡被主题截断
+ * 挤压、tabular-nums 让多位数字等宽对齐。 */
+export function TaskIdBadge({ taskId }: { taskId: number }): ReactNode {
+  return (
+    <Badge variant="secondary" className="shrink-0 tabular-nums">
+      #{taskId}
+    </Badge>
+  );
+}
+
 /** ================================== 任务展示态 pill 族（docs/47 DB10 自 pages/tasks/taskPills 纯移动入本文件，跨域复用归 shared/——44.2.3 落点规则；tasks 域四个消费位改导入、零行为变更，原注释逐字随迁） ================================== */
 
 /** 展示态徽标（docs/29 B.3 渲染位）：中性 pill（Badge secondary + 6px dot，

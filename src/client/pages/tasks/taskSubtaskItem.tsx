@@ -50,6 +50,12 @@ const SUBTASK_CARD_CLASS = `mt-1.5 ${TASK_CARD_CLASS}`;
  * 显式标注 boolean——避免字面量 false 收窄成常量条件。 */
 const SUBTASK_REORDER_ENABLED: boolean = false;
 
+/** 小任务列表删除钮开关（用户 2026-09-14「子任务列表暂时隐藏删除按钮」）：
+ * 置 false = 小任务卡不再渲染「删除」钮（subMutable 判据保留，其它编排面
+ * 不动）；恢复 = 置回 true（原删除链路原样，无需改其它代码）。显式标注
+ * boolean——避免字面量 false 收窄成常量条件。 */
+const SUBTASK_DELETE_ENABLED: boolean = false;
+
 /** 小任务卡片（七轮 DA20 调序 + 十轮 DA23 把手化）：**只有左上 grip 把手
  * 可拖**（'eteams-subtask'，ready 才可拖），卡身不可拖。二十五轮 DA38：
  * 整卡点击 = 进小任务详情页的口径撤除；卡身只作为放置目标（同父兄弟卡才亮；
@@ -185,7 +191,7 @@ export function SubtaskItem({
             {task.status === 'ready' && task.chain.length === 0 && (
               <span className={cn(MUTED_CLASS, 'shrink-0')}>需要选择成员</span>
             )}
-            {subMutable && (
+            {SUBTASK_DELETE_ENABLED && subMutable && (
               <DeleteButton label="删除" destructive={false} onClick={onDelete} />
             )}
           </div>

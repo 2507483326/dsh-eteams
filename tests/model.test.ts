@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   applyTransition,
   canTransition,
+  chainActiveStations,
   chainDoneStations,
   chainFrontier,
   chainIndexOfStation,
-  dependenciesSatisfied,
   dependentsOf,
   hasUpcomingStation,
   nextChainStation,
@@ -13,7 +13,6 @@ import {
   stationProgress,
   taskSlug,
   TransitionError,
-  unsatisfiedDependencies,
   wouldCycle,
 } from '../src/host/model/taskMachine';
 import { hasAcceptanceCriteria } from '../src/host/model/contract';
@@ -157,26 +156,7 @@ describe('task state machine edges (8 态，用户迭代 2026-09-11)', () => {
   });
 });
 
-describe('dependency derivation（用户迭代 2026-09-11：不再物化，保持 ready）', () => {
-  it('unsatisfied dependencies list non-completed deps', () => {
-    const t1 = makeTask({ id: 1, status: 'start' });
-    const t2 = makeTask({ id: 2, dependencies: [1] });
-    expect(unsatisfiedDependencies([t1, t2], t2)).toEqual([1]);
-    t1.status = 'completed';
-    expect(dependenciesSatisfied([t1, t2], t2)).toBe(true);
-  });
-
-  it('依赖未完成的任务保持 ready（无物化状态、无事件）', () => {
-    const t1 = makeTask({ id: 1, status: 'paused' });
-    const t2 = makeTask({ id: 2, dependencies: [1], status: 'ready' });
-    expect(dependenciesSatisfied([t1, t2], t2)).toBe(false);
-    // 状态不被依赖派生改写——派发口据 dependenciesSatisfied 拒绝派发。
-    expect(t2.status).toBe('ready');
-    t1.status = 'completed';
-    expect(dependenciesSatisfied([t1, t2], t2)).toBe(true);
-    expect(t2.status).toBe('ready');
-  });
-
+describe('dependency helpers（dependentsOf / wouldCycle）', () => {
   it('dependentsOf finds direct consumers', () => {
     const t1 = makeTask({ id: 1 });
     const t2 = makeTask({ id: 2, dependencies: [1] });
@@ -252,6 +232,23 @@ describe('弱顺序链：站点定位与 frontier 推进（用户 2026-09-13）'
       true,
     ]);
     expect(chainDoneStations(0, [attempt(0, 'succeeded')])).toEqual([]);
+  });
+
+  it('chainActiveStations 派生「在办尝试」所在站（用户 2026-09-14 乱序派发）', () => {
+    // 跳站派发（站 1 在跑、站 0 从未派发，游标仍是 -1）→ 只有站 1 标在办。
+    expect(chainActiveStations(2, [attempt(1, 'running')])).toEqual([false, true]);
+    expect(chainActiveStations(2, [attempt(0, 'pending_accept')])).toEqual([true, false]);
+    // 成功/失败/吊销/paused 都不算在办；越界站号忽略；无链 → 空表。
+    expect(
+      chainActiveStations(2, [
+        attempt(0, 'succeeded'),
+        attempt(1, 'failed'),
+        attempt(1, 'revoked'),
+        attempt(1, 'paused'),
+        attempt(5, 'running'),
+      ]),
+    ).toEqual([false, false]);
+    expect(chainActiveStations(0, [attempt(0, 'running')])).toEqual([]);
   });
 });
 

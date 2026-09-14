@@ -77,13 +77,21 @@ export function createMemberTools(
         },
         additionalProperties: false as const,
       },
-      render: (_a, v) =>
-        text(
+      render: (_a, v) => {
+        // 邮箱摘要必须进 render：model-facing content = render 输出，成员侧没有
+        // 自己的邮箱读取面（eteams_mailbox 读的是领队箱），本条快照缺席即丢信息
+        // （2026-09-14 同类缺陷排查）。
+        const inbox = v.inboxPreview ?? [];
+        return text(
           `已接取任务 ${v.taskId}（attempt_id ${v.attemptId}，token ${v.token}）\n` +
             '后续 eteams_append_progress / eteams_complete_task / eteams_fail_task ' +
             '必须原样携带上面的 attempt_id 与 token。\n\n' +
-            `${v.contract}`,
-        ),
+            `${v.contract}` +
+            (inbox.length > 0
+              ? `\n\n【邮箱摘要（最近 ${inbox.length} 条）】\n${inbox.map((m) => `- ${m}`).join('\n')}`
+              : ''),
+        );
+      },
     },
     execute: async (args, exec) => {
       const { env, caller } = await memberOf(exec);

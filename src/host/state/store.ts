@@ -671,6 +671,60 @@ export function readTeamSync(stateRoot: string, teamId: TeamKey): TeamState | un
   return assembleTeam(db, row);
 }
 
+/** 一行已处置决策（看板「决策面板」『已决策』历史读端）。 */
+export interface ResolvedDecisionRow {
+  id: number;
+  taskId: number;
+  error: string;
+  retryCount: number;
+  choice: string | null;
+  note: string | null;
+  resolvedAt: number | null;
+  createdAt: number;
+}
+
+/**
+ * 最近已处置决策（decisions.status='resolved'，处置时刻降序、最新在前）。
+ * 历史全量留库（writeTeamInTx 只删 open 行），读端按 limit 限量——面板只回看
+ * 最近 N 条。看板「决策面板」『已决策』数据源。
+ */
+export function readRecentResolvedDecisionsSync(
+  stateRoot: string,
+  teamId: TeamKey,
+  limit: number,
+): ResolvedDecisionRow[] {
+  const db = getDb(stateRoot);
+  ensureWorkspaceReady(stateRoot, db);
+  const id = resolveTeamId(db, teamId);
+  if (id === undefined) return [];
+  const rows = db
+    .prepare(
+      'SELECT decision_id, task_id, error, retry_count, choice, note, resolved_time, created_time ' +
+        "FROM decisions WHERE team_id = ? AND status = 'resolved' " +
+        'ORDER BY COALESCE(resolved_time, created_time) DESC, decision_id DESC LIMIT ?',
+    )
+    .all(id, limit) as Array<{
+    decision_id: number;
+    task_id: number;
+    error: string;
+    retry_count: number;
+    choice: string | null;
+    note: string | null;
+    resolved_time: number | null;
+    created_time: number;
+  }>;
+  return rows.map((row) => ({
+    id: row.decision_id,
+    taskId: row.task_id,
+    error: row.error,
+    retryCount: row.retry_count,
+    choice: row.choice,
+    note: row.note,
+    resolvedAt: row.resolved_time,
+    createdAt: row.created_time,
+  }));
+}
+
 // --------------------------------------------------------------------------
 // 写端：一个同步事务里 DELETE 团队行 + 带原号重 INSERT（docs/35 §2）。
 // 只重写 TeamState 支撑的 6 张表——events / mail_messages /
@@ -817,10 +871,12 @@ export function writeTeamInTx(tx: TeamTx, state: TeamState): void {
     }
   }
 
-  // decisions：只存 open 行（resolved 的处置结论已并入任务状态与事件流）。
-  db.prepare('DELETE FROM decisions WHERE team_id = ?').run(teamId);
+  // decisions：open 行整删重建；resolved 行一经写入即留档（看板「决策面板」
+  // 『已决策』历史数据源）——只删 open，resolved 行不参与 DELETE，重载后虽不
+  // 再进内存（loadTasks 只读 open）也留在库里，不被后续写入冲掉。
+  db.prepare("DELETE FROM decisions WHERE team_id = ? AND status = 'open'").run(teamId);
   const insDecision = db.prepare(
-    'INSERT INTO decisions (decision_id, team_id, task_id, attempt_id, error, retry_count, ' +
+    'INSERT OR REPLACE INTO decisions (decision_id, team_id, task_id, attempt_id, error, retry_count, ' +
       'status, choice, note, resolved_time, created_time, update_time) ' +
       'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   );

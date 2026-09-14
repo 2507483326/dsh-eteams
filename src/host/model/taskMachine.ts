@@ -6,9 +6,9 @@
  * converts them into actionable Chinese error text.
  *
  * 「阻塞」不再是状态：原 `ready → wait + blockedFrom` 的依赖物化随 `wait` 撤销
- * 整体退役（依赖未满足的任务保持 ready，派发口用 {@link dependenciesSatisfied}
- * 校验）；大任务（parentId 为空）的 completed↔ready 走 applyTransition 的结构
- * 特例边。
+ * 整体退役——依赖只作**排布提示**（面板执行序按兄弟依赖拓扑排），**不再拦截
+ * 派发**（用户 2026-09-14「闸门拦住去掉吧，不然任意调度时会出问题」）；大任务
+ * （parentId 为空）的 completed↔ready 走 applyTransition 的结构特例边。
  *
  * @module dsh-eteams/model/taskMachine
  */
@@ -35,8 +35,7 @@ export class TransitionError extends Error {
  *
  * 原 11 态边的收敛：`draft`/`wait` 边并入 `ready`；`wait_decision`/`failed`
  * 边并入 `wait_user`。「阻塞」不再是状态（原 `wait + blockedFrom` 物化随
- * wait 撤销退役）——被上游依赖卡住的任务保持 `ready`，是否可派发由
- * {@link dependenciesSatisfied} 在派发口校验。
+ * wait 撤销退役）——依赖不拦截派发（用户 2026-09-14），只作排布提示。
  *
  * `creating`（面板手动创建占位）：完善收口转 ready、放弃转 cancelled；不经
  * 转移进入（建任务直接以 creating 落库）。
@@ -89,19 +88,6 @@ export function applyTransition(task: TaskRecord, to: TaskStatus, now: number): 
   if (to === 'completed') task.completedAt = now;
   task.status = to;
   task.updatedAt = now;
-}
-
-/** Un-satisfied dependency ids of one task against the task list. */
-export function unsatisfiedDependencies(tasks: readonly TaskRecord[], task: TaskRecord): number[] {
-  const byId = new Map(tasks.map((t) => [t.id, t]));
-  return task.dependencies.filter((depId) => byId.get(depId)?.status !== 'completed');
-}
-
-/** True when every dependency is `completed`（派发前置条件；依赖未满足的任务
- * 保持 ready 不物化，由派发口显式校验——用户迭代 2026-09-11「阻塞就 ready
- * 等待就行」）。 */
-export function dependenciesSatisfied(tasks: readonly TaskRecord[], task: TaskRecord): boolean {
-  return unsatisfiedDependencies(tasks, task).length === 0;
 }
 
 /** The next planned chain station, or undefined at/past the end (docs/06.7). */
@@ -170,6 +156,30 @@ export function chainDoneStations(
     }
   }
   return done;
+}
+
+/**
+ * 各站点是否有**在办尝试**（`pending_accept`/`running`，用户 2026-09-14
+ * 「任务71 任务列表中显示 需求明确大师在运行，实际跑的是前端开发」）：弱顺序
+ * 链允许乱序/跳站派发，`chainCursor` 只在站点**完成**时推进（frontier-1），故
+ * 「正在执行的站点」不能按 `chainCursor + 1` 判定——站 1 被直接派发时游标仍是
+ * -1，会把站 0 错显为「current」。展示层据此从在办尝试反查真正的执行站。
+ */
+export function chainActiveStations(
+  chainLength: number,
+  attempts: readonly Pick<AttemptRecord, 'stationIndex' | 'status'>[],
+): boolean[] {
+  const active = new Array<boolean>(chainLength).fill(false);
+  for (const a of attempts) {
+    if (
+      (a.status === 'pending_accept' || a.status === 'running') &&
+      a.stationIndex >= 0 &&
+      a.stationIndex < chainLength
+    ) {
+      active[a.stationIndex] = true;
+    }
+  }
+  return active;
 }
 
 /**

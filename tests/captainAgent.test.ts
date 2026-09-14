@@ -9,11 +9,13 @@ import {
   buildCaptainLabel,
   CAPTAIN_CHILD_DENIED_TOOLS,
   CAPTAIN_LABEL_PREFIX,
-  captainChildTeamOf,
   parseCaptainLabel,
+} from '../src/host/runtime/captainAgent';
+import {
+  captainChildTeamOf,
   registerCaptainChild,
   unregisterCaptainChild,
-} from '../src/host/runtime/captainAgent';
+} from '../src/host/runtime/captainChildRegistry';
 import { createCaptainTools } from '../src/host/tools/captainTools';
 import { createCaptainDispatchTool } from '../src/host/tools/captainDispatch';
 import { createMemberTools } from '../src/host/tools/memberTools';

@@ -144,6 +144,9 @@ describe('D18 对话式新增成员', () => {
     expect(CAPTAIN_SECTION_SHORT).toContain('`eTeam --add-people`');
     expect(CAPTAIN_SECTION_SHORT).toContain('/eteam');
     expect(CAPTAIN_SECTION_SHORT).toContain('角色构建师');
+    // 用户 2026-09-14：绑定团队后启动服务/简单对话仍由本会话直接处理，不转交领队。
+    expect(CAPTAIN_SECTION_SHORT).toContain('启动服务');
+    expect(CAPTAIN_SECTION_SHORT).toContain('仍由本会话直接处理');
   });
 
   it('role builder section carries the direct-call contract (docs/19.8.1)', () => {
@@ -176,6 +179,9 @@ describe('D18 对话式新增成员', () => {
     // 它的问题字段）——旧 interview 参数名 multi_select 不再出现。
     expect(ROLE_BUILDER_CHILD_PERSONA).toContain('eteams_ask_user');
     expect(ROLE_BUILDER_CHILD_PERSONA).toContain('multiSelect');
+    // 提问口径（用户 2026-09-14）：访谈问题会弹到主对话，必须自包含/说人话/
+    // 选项写清后果（口径全文在 eteams_ask_user 的工具 description）。
+    expect(ROLE_BUILDER_CHILD_PERSONA).toContain('提问口径');
     expect(ROLE_BUILDER_CHILD_PERSONA).not.toContain('multi_select');
     expect(ROLE_BUILDER_CHILD_PERSONA).toContain('一次报全');
     // 不指路状态文件（全局/相对状态根布局子代理无从得知，猜路径只会误判）；

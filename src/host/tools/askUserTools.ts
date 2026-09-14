@@ -17,7 +17,7 @@ import type { ETeamsResolvedConfig } from '../config.js';
 import { ETeamsError, stateRootOf, type RuntimeContext } from '../runtime/base.js';
 import { askDegradeHint } from '../prompts/steering/askFallback.js';
 import { runAskUser, type AskCallerView } from '../runtime/askUser.js';
-import { captainChildTaskOf } from '../runtime/captainAgent.js';
+import { captainChildTaskOf } from '../runtime/captainChildRegistry.js';
 import { readBuildParentSession, readBuildSession } from '../runtime/roleBuilder.js';
 import type { TeamState } from '../model/types.js';
 import type { AskQuestion } from '../state/asks.js';
@@ -90,26 +90,33 @@ export function createAskUserTools(
   const askUserTool = defineTool({
     name: 'eteams_ask_user',
     description:
-      '需要用户本人决策时向用户弹问答：DeepSeek 原生问答弹窗直接弹在**用户当前所在会话**（用户正看着你的对话就弹这里，否则弹主对话）并阻塞等你拿到答案；主对话不在线时自动退回弹在你自己的对话（侧边栏会有未决标记）。答完答案同步返回，你在同回合继续。一次问全 ≤5 问（每问 {id, question, header?, options: [{label, description?}], multiSelect?}），推荐项放首位并在 label 尾标注「（推荐）」。返回 mode=degraded 时按 degradeHint 降级：把问题写进汇报/消息文本直接问用户，不要再重试弹窗。',
+      '需要用户本人决策时向用户弹问答：DeepSeek 原生问答弹窗直接弹在**用户当前所在会话**（用户正看着你的对话就弹这里，否则弹主对话）并阻塞等你拿到答案；主对话不在线时自动退回弹在你自己的对话（侧边栏会有未决标记）。答完答案同步返回，你在同回合继续。一次问全 ≤5 问（每问 {id, question, header?, options: [{label, description?}], multiSelect?}）。返回 mode=degraded 时按 degradeHint 降级：把问题写进汇报/消息文本直接问用户，不要再重试弹窗。\n' +
+      '提问口径（用户 2026-09-14）——弹窗会弹到主对话，用户手里只有问题本身、没有你的上下文，必须让没参与这个任务的外行也能直接选：\n' +
+      '1. 自包含：问题里点明是哪个任务/哪一步、在问什么（带任务主题名或用途，不能只写编号），并交代为什么问；\n' +
+      '2. 说人话：不用内部代号、缩写、变量名、文件路径与行话；必须用的术语就地用一句话解释（照跟小学生讲的口径）；\n' +
+      '3. 选项写清后果：label 直接写「选它会怎样」（做什么/不做什么、影响哪部分），description 补一句具体影响或例子；禁止只写「方案 A / 方案 B」「看情况」这类没有信息量的选项；\n' +
+      '4. 具体可判：能用数字/范围/样例说清的就写出来（数量、上限、时长、示例值），不让用户反问「具体指什么」；\n' +
+      '5. 推荐项放首位并在 label 尾标「（推荐）」，description 一句话写明推荐理由。',
     parameters: {
       questions: {
         type: 'array' as const,
         required: true as const,
-        description: '问题列表（一次问全 ≤5 问）',
+        description: '问题列表（一次问全 ≤5 问；每问按上方提问口径写自包含、说人话的问题与选项）',
         items: {
           type: 'object' as const,
           properties: {
             id: str('问题唯一 id'),
-            question: str('问题文本'),
-            header: str('问题题头（可省）'),
+            question: str('问题文本（自包含：点名哪个任务/哪一步、为什么问；说人话：不用代号、缩写与行话）'),
+            header: str('问题题头（可省）：一句话主题，渲染在问题上方'),
             options: {
               type: 'array' as const,
-              description: '2-4 个选项，推荐项放首位并在 label 尾加「（推荐）」',
+              description:
+                '2-4 个选项：每个都写清「选它会怎样」，推荐项放首位并在 label 尾加「（推荐）」；禁止 A/B 代号式无信息量选项',
               items: {
                 type: 'object' as const,
                 properties: {
-                  label: str('选项文案'),
-                  description: str('选项说明（可省）'),
+                  label: str('选项文案（直接写具体做法与后果；推荐项尾标「（推荐）」）'),
+                  description: str('选项说明（可省）：一句具体影响或例子'),
                 },
                 additionalProperties: false,
               },
@@ -150,7 +157,20 @@ export function createAskUserTools(
       },
       render: (_a, v) => {
         if (v.mode === 'degraded') return text(v.degradeHint ?? '问答不可用');
-        return text('用户已作答（答案见 answers）');
+        // 答案正文必须进 render：model-facing content 就是 render 的输出，规范值
+        // （含 answers）执行局部存活、不回放——只写「答案见 answers」会让调用子代
+        // 理拿到空答案（2026-09-14 实况：弹窗已作答但正文未回传）。
+        const answers = v.answers ?? [];
+        if (answers.length === 0) return text('用户已作答（无答案内容）');
+        return text(
+          `用户已作答：\n${answers
+            .map((a) => {
+              const picked = a.selected ?? '';
+              const custom = a.custom !== undefined && a.custom !== '' ? `（自填：${a.custom}）` : '';
+              return `- ${a.id ?? ''}：${picked}${custom}`;
+            })
+            .join('\n')}`,
+        );
       },
     },
     // 会话内行内呈现：默认卡会把整包渲染成大 JSON 行——收敛为一行。

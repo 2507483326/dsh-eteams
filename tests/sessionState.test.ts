@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createSession,
   installSessionState,
+  openSession,
   promptSession,
   rootSessionIdOf,
   sessionCwdOf,
@@ -176,5 +177,73 @@ describe('rootSessionIdOf（面板会话归属：子会话上溯到主对话）'
     expect(rootSessionIdOf('blank')).toBe('blank');
     // a↔b 成环：seen 截断，返回首个重复前的节点（b），不挂死。
     expect(rootSessionIdOf('a')).toBe('b');
+  });
+});
+
+/**
+ * 类实例 fake——对齐宿主真实形状：`ctx.sessions` 直回 SessionRuntime 实例
+ * （普通类、非 cordis Service，服务值无 tracker、cordis 不做 receiver 绑定），
+ * 其 `open`/`create` 与 Session 的 `prompt` 都是依赖 `this` 的类方法。先前的
+ * 单测用 vi.fn/对象字面量（脱离 `this` 也能跑），因此漏掉了「脱离接收者调用」
+ * 这一线上根因（2026-09-14 用真实 cordis 实测：`ctx.svc` 直回实例，
+ * `const m = face.m; m()` 抛 TypeError）。这些用例在修复前必失败。
+ */
+class FakeSessionFace {
+  calls: unknown[][] = [];
+  result: unknown = { ok: true };
+  async prompt(content: unknown, mode: string): Promise<unknown> {
+    this.calls.push([content, mode]);
+    return this.result;
+  }
+}
+
+class FakeSessionsFace {
+  current = '';
+  lastCreate: { cwd?: string } | undefined;
+  session = new FakeSessionFace();
+
+  open(id: string): void {
+    this.current = id;
+  }
+
+  async create(opts?: { cwd?: string }): Promise<string> {
+    this.lastCreate = opts;
+    return 's-new';
+  }
+
+  binding(id: string): { session: FakeSessionFace } | undefined {
+    return id === 's1' ? { session: this.session } : undefined;
+  }
+}
+
+describe('宿主会话方法必须以接收者调用（脱离 this 会静默失败）', () => {
+  it('openSession 真把目标会话选为当前（带 this 调宿主 sessions.open）', () => {
+    const sessions = new FakeSessionsFace();
+    install(sessions);
+    expect(openSession('s-2')).toBe(true);
+    expect(sessions.current).toBe('s-2');
+  });
+
+  it('openSession 空 id / 缺服务 → false，且不抛', () => {
+    install(new FakeSessionsFace());
+    expect(openSession('')).toBe(false);
+    installSessionState(null);
+    expect(openSession('s-1')).toBe(false);
+  });
+
+  it('createSession 带 this 调用，透传 cwd 并取回会话 id', async () => {
+    const sessions = new FakeSessionsFace();
+    install(sessions);
+    expect(await createSession({ cwd: 'C:/w' })).toBe('s-new');
+    expect(sessions.lastCreate).toEqual({ cwd: 'C:/w' });
+  });
+
+  it('promptSession 带 this 把描述投递给目标会话', async () => {
+    const sessions = new FakeSessionsFace();
+    install(sessions);
+    expect(await promptSession('s1', '把 docs 迁移')).toBe(true);
+    expect(sessions.session.calls).toEqual([
+      [[{ type: 'text', text: '把 docs 迁移' }], 'queue'],
+    ]);
   });
 });

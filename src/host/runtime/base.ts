@@ -100,6 +100,23 @@ export interface RuntimeContext {
     resume?(options: {
       resumeSessionId: SessionId;
       signal?: AbortSignal;
+      /**
+       * 显式模型路线（续派冷恢复修复）：宿主把 AgentOptions.provider/model
+       * 直接当作提示词变量 `{{model}}` 的取值（dsh-agent-loop
+       * `context.agent?.options.model`），**不会**回落到适配器默认——省略即
+       * 该变量无值，而部署级 `deployment:persona`（dsh-web-app 配的
+       * `... powered by the {{model}} model ...` 模板）在渲染时严格插值，
+       * 无值即整段装配抛「prompt variable has no value」、冷恢复出来的锚点
+       * 一开回合就失败。见 {@link resumeOptionsOf}。
+       */
+      agentOptions?: { provider?: string; model?: string; reasoningEffort?: string };
+      /**
+       * 未发布 setup 钩子（续派冷恢复修复·第二半）：宿主在 agent 发布前 await
+       * 它，回滚语义与创建同款。冷恢复出来的 agent 只有日记本（会话历史），
+       * 没有 preset 装配（工具/提示词段/skill 都不在会话日志里），所以要在
+       * 这一刻把 preset 重挂回去——见 {@link presetRemountSetup}。
+       */
+      setup?: (agentCtx: unknown) => void | Promise<void>;
     }): Promise<{ agent: Agent; dispose(): Promise<void> }>;
   };
   /** Live subagent listing — used to detect stranded mailboxes. */
@@ -186,6 +203,150 @@ export function sessionDefaultRouteOf(
   } catch {
     return undefined;
   }
+}
+
+/** preset 重挂服务的最小面（`@deepseek-ai/dsh-agent-presets`）。 */
+interface PresetMounterFace {
+  mount(agentCtx: unknown, id?: string): unknown;
+}
+
+/** 会话查询服务的最小面（`@deepseek-ai/dsh-session-query`）。 */
+interface SessionQueryFace {
+  observeSession(sessionId: string, options?: unknown): Promise<ObservationFace>;
+}
+
+/** 一次会话观测的租约（只需 projections 与 `Symbol.dispose`）。 */
+interface ObservationFace {
+  projections?: { values?: Record<string, unknown> };
+}
+
+/**
+ * 按名读宿主服务，绝不让装配因探测服务而失败：cordis 4 下未声明 inject 的
+ * 服务属性访问会直接抛，一律吞错按「服务未挂」处理（与
+ * {@link sessionDefaultRouteOf} 同口径）。`ctx.get` 是正规入口，属性访问是
+ * 给单测 fake / 旧运行时的兜底。
+ */
+function serviceOf(ctx: unknown, key: string): unknown {
+  const withGet = ctx as { get?: (k: string) => unknown };
+  if (typeof withGet.get === 'function') {
+    try {
+      const hit = withGet.get(key);
+      if (hit !== undefined) return hit;
+    } catch {
+      // 未声明 inject / 未激活的服务：吞掉，落到属性访问兜底
+    }
+  }
+  try {
+    return (ctx as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
+}
+
+/** 尽力记一条 warn（日志失败绝不影响冷恢复主流程）。 */
+function warnOf(ctx: unknown, message: string): void {
+  try {
+    (ctx as { logger?: { warn?: (m: string) => void } }).logger?.warn?.(message);
+  } catch {
+    // ignore
+  }
+}
+
+/** 读会话记录里盖的 preset 印章（`agentPreset` 投影）。读不到一律 undefined。 */
+async function recordedPresetId(ctx: unknown, sessionId: string): Promise<string | undefined> {
+  const query = serviceOf(ctx, 'sessionQuery') as SessionQueryFace | undefined;
+  if (query === undefined || typeof query.observeSession !== 'function') return undefined;
+  let observation: ObservationFace | undefined;
+  try {
+    observation = await query.observeSession(sessionId);
+    const value = observation?.projections?.values?.['agentPreset'];
+    return typeof value === 'string' && value !== '' ? value : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    // 观测是租约，读完即还（不还就漏一份活视图）。Symbol.dispose 用鸭子类型
+    // 取，避免依赖 lib esnext.disposable。
+    const disposeSymbol = (Symbol as unknown as { dispose?: symbol }).dispose;
+    const dispose =
+      observation !== undefined && disposeSymbol !== undefined
+        ? (observation as unknown as Record<symbol, unknown>)[disposeSymbol]
+        : undefined;
+    if (typeof dispose === 'function') {
+      try {
+        (dispose as () => void).call(observation);
+      } catch {
+        // ignore
+      }
+    }
+  }
+}
+
+/**
+ * 冷恢复的 preset 重挂 setup（续派冷恢复修复·第二半）。
+ *
+ * 背景：preset 是**注册进 agent 作用域**的装配（工具/提示词段/skill），不写
+ * 进会话日志；`agents.resume` 只把历史读回来，没人重跑注册。于是冷恢复出来
+ * 的锚点会带着 `published without joining an agent preset … empty global
+ * layer` 告警醒来——能说话、没有工具。宿主自己的会话控制器（
+ * `dsh-api-session-controller.resumeObserved`）恢复时会用
+ * `composeAgent` 的 setup 调 `presets.mount(agentCtx, presetId)` 补这一刀，
+ * 本函数照抄同一招。
+ *
+ * 印章（preset id）读 `agentPreset` 会话投影，**读不到就不挂**——挂错 preset
+ * 会让会话历史里已记录的工具调用失效（README 明确禁止中途换组装），所以绝不
+ * 猜默认。服务缺失（TUI/CLI 宿主、旧运行时）或重挂失败只降级：agent 照常
+ * 醒来，只是没有工具（即修复前的行为），绝不拖累冷恢复本身。
+ *
+ * @returns 可直接塞进 `agents.resume` 的 `setup`；无法重挂时 undefined。
+ */
+export async function presetRemountSetup(
+  ctx: unknown,
+  sessionId: SessionId,
+): Promise<((agentCtx: unknown) => Promise<void>) | undefined> {
+  const presets = serviceOf(ctx, 'agentPresets') as PresetMounterFace | undefined;
+  if (presets === undefined || typeof presets.mount !== 'function') return undefined;
+  const presetId = await recordedPresetId(ctx, String(sessionId));
+  if (presetId === undefined) return undefined;
+  return async (agentCtx: unknown): Promise<void> => {
+    try {
+      await presets.mount(agentCtx, presetId);
+    } catch (error) {
+      warnOf(ctx, `eteams: 冷恢复重挂 preset 失败（${String(sessionId)} / ${presetId}）：${String(error)}`);
+    }
+  };
+}
+
+/**
+ * 冷恢复选项（续派冷恢复修复）：把宿主会话默认模型路线（settings
+ * agent-default-model 的即时快照，{@link sessionDefaultRouteOf}）与 preset
+ * 重挂 setup（{@link presetRemountSetup}）随 `agents.resume` 一并交给宿主。
+ *
+ * 路线为什么是硬需求：宿主把 `AgentOptions.model` 直接当作提示词变量
+ * `{{model}}` 的取值且不回落适配器默认，冷恢复不带路线时该变量无值，部署级
+ * `deployment:persona` 段渲染即抛「prompt variable "{{model}}" has no value
+ * for this assembly (section "deployment:persona")」，续派唤醒整条断掉。
+ *
+ * 路线解析失败（旧运行时/单测 fake/启动序竞态，服务未挂）时不带
+ * agentOptions，保持旧行为（与成员 spawn 的降级口径一致）。
+ */
+export async function resumeOptionsOf(
+  ctx: unknown,
+  resumeSessionId: SessionId,
+  signal?: AbortSignal,
+): Promise<{
+  resumeSessionId: SessionId;
+  signal?: AbortSignal;
+  agentOptions?: { provider: string; model: string; reasoningEffort?: string };
+  setup?: (agentCtx: unknown) => Promise<void>;
+}> {
+  const route = sessionDefaultRouteOf(ctx);
+  const setup = await presetRemountSetup(ctx, resumeSessionId);
+  return {
+    resumeSessionId,
+    ...(signal !== undefined ? { signal } : {}),
+    ...(route !== undefined ? { agentOptions: route } : {}),
+    ...(setup !== undefined ? { setup } : {}),
+  };
 }
 
 /**

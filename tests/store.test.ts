@@ -14,6 +14,7 @@ import {
 import {
   atomicWriteText,
   insertTeamRow,
+  readRecentResolvedDecisionsSync,
   readTeam,
   syncTeamMemberRoleMirrorInTx,
   withTeamTx,
@@ -161,6 +162,50 @@ describe('team snapshots', () => {
     expect(again?.tasks).toHaveLength(1);
     expect(again?.taskMembers).toHaveLength(1);
     expect(again?.updatedAt).toBeGreaterThanOrEqual(state.updatedAt);
+  });
+
+  it('resolved 决策留档：open 行整删重建，resolved 行读端可回看', async () => {
+    const state = seedTeam('决策团队');
+    state.pendingDecisions.push({
+      id: 1,
+      taskId: 1,
+      error: '重试超限',
+      retryCount: 3,
+      status: 'open',
+      createdAt: 10,
+    });
+    await writeTeam(root, state);
+    // 尚未处置 → 历史为空；open 行照常进内存。
+    expect(readRecentResolvedDecisionsSync(root, state.id, 30)).toEqual([]);
+    expect((await readTeam(root, state.id))?.pendingDecisions).toHaveLength(1);
+
+    // 处置（内存转 resolved + 结论）后写库即留档。
+    const decision = state.pendingDecisions[0]!;
+    decision.status = 'resolved';
+    decision.choice = 'reassign';
+    decision.resolvedAt = 20;
+    await writeTeam(root, state);
+
+    // 重载后内存只剩 open（此处无）——resolved 行不再进内存，
+    // 但读端仍能回看处置结论（看板「决策面板」已决策数据源）。
+    const loaded = await readTeam(root, state.id);
+    expect(loaded?.pendingDecisions).toEqual([]);
+    expect(readRecentResolvedDecisionsSync(root, state.id, 30)).toEqual([
+      {
+        id: 1,
+        taskId: 1,
+        error: '重试超限',
+        retryCount: 3,
+        choice: 'reassign',
+        note: null,
+        resolvedAt: 20,
+        createdAt: 10,
+      },
+    ]);
+
+    // 再写一次（内存已无该行）：resolved 留档不被 DELETE 冲掉。
+    await writeTeam(root, loaded!);
+    expect(readRecentResolvedDecisionsSync(root, state.id, 30)).toHaveLength(1);
   });
 
   it('writeTeam fills team_members mirror columns from roles（v4/v10 副本列，含头像）', async () => {
@@ -1227,6 +1272,70 @@ describe('v12→v13 任务状态精简迁移（用户迭代 2026-09-11：11 态 
       closeDb(root);
     } finally {
       cleanupTempWorkspace(root);
+    }
+  });
+});
+
+describe('v13→v14 问答弹窗落点列迁移（用户 2026-09-14：决策面板跳转目标）', () => {
+  it('补 delivery_session_id/delivery_is_main 列并按提问会话回填，重开幂等', () => {
+    const legacyRoot = mkdtempSync(join(tmpdir(), 'eteams-mig-v14-'));
+    try {
+      mkdirSync(dbDirOf(legacyRoot), { recursive: true });
+      getDb(legacyRoot); // 建当前全新库（含 delivery 两列）
+      closeDb(legacyRoot);
+      // 模拟 v13 旧库：DROP 两列 + 降版本号，留一条 pending 问答单。
+      const legacy = new DatabaseSync(dbFileOf(legacyRoot));
+      legacy.exec('ALTER TABLE ask_questions DROP COLUMN delivery_session_id');
+      legacy.exec('ALTER TABLE ask_questions DROP COLUMN delivery_is_main');
+      legacy
+        .prepare(
+          'INSERT INTO ask_questions (ask_id, team_id, asking_session_id, asking_name, asking_kind, ' +
+            'questions, status, created_time, update_time) ' +
+            "VALUES ('ask-1', 1, 'member-9', '甲', 'member', '[]', 'pending', 10, 10)",
+        )
+        .run();
+      legacy
+        .prepare("UPDATE schema_meta SET value = '13' WHERE key = 'db_schema_version'")
+        .run();
+      legacy.exec('PRAGMA user_version = 13');
+      legacy.close();
+
+      const db = getDb(legacyRoot);
+      const cols = (
+        db.prepare('PRAGMA table_info(ask_questions)').all() as Array<{ name: string }>
+      ).map((c) => c.name);
+      expect(cols).toContain('delivery_session_id');
+      expect(cols).toContain('delivery_is_main');
+      // 历史行无落点记录 → 回填为提问会话自身，is_main 保持未知（NULL）。
+      expect(
+        db
+          .prepare(
+            'SELECT ask_id, asking_session_id, delivery_session_id, delivery_is_main ' +
+              'FROM ask_questions',
+          )
+          .all(),
+      ).toEqual([
+        {
+          ask_id: 'ask-1',
+          asking_session_id: 'member-9',
+          delivery_session_id: 'member-9',
+          delivery_is_main: null,
+        },
+      ]);
+
+      // 幂等：重开不重复改写（已是记录值），不报错。
+      closeDb(legacyRoot);
+      const again = getDb(legacyRoot);
+      expect(
+        (
+          again
+            .prepare('SELECT delivery_session_id FROM ask_questions WHERE ask_id = ?')
+            .get('ask-1') as { delivery_session_id: string }
+        ).delivery_session_id,
+      ).toBe('member-9');
+      closeDb(legacyRoot);
+    } finally {
+      cleanupTempWorkspace(legacyRoot);
     }
   });
 });

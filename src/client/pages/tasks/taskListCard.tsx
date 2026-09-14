@@ -31,6 +31,7 @@ import {
   CreatingLoadingRow,
   FormErrorNote,
   GroupSummaryChip,
+  TaskIdBadge,
   TaskStatusPill,
 } from '../shared/components';
 import { LIST_COUNT_CLASS } from '../shared/styles';
@@ -124,13 +125,14 @@ export function TaskListCard({
   // 共 x 个任务，已完成 x , 未完成 x 数字用颜色标识一下」）：
   // 每卡统一渲染（十三轮口径），三种身份同格式——总数/已完成/
   // 未完成三分计数（原「进行中」计数不再单列），数字着色：
-  // 已完成 success 绿、未完成 warning 琥珀、总数走行底灰；
-  // 顶层普通任务的指派人沿用同行尾注。
+  // 已完成 success 绿、未完成 warning 琥珀、总数走行底灰。用户 2026-09-14
+  // 「不显示 · 指派 前端开发者 文本会导致换行问题」：撤除原顶层普通任务
+  // 同行的「 · 指派 {assignee}」尾注（行内拼接在窄卡折行；执行人由执行链/
+  // 详情页承担）。
   const progress = (
     <>
       共 {subs.length} 个任务，已完成 <span className="text-success">{done}</span>
       ，未完成 <span className="text-warning">{subs.length - done}</span>
-      {task.kind !== 'group' && task.assignee !== null ? ` · 指派 ${task.assignee}` : ''}
     </>
   );
   const deletable = deletableOf(task, allTasks);
@@ -148,11 +150,13 @@ export function TaskListCard({
       className={cn('eteams-task-card', TASK_CARD_CLASS, openable ? 'cursor-pointer' : 'cursor-default')}
       onClick={openable ? onOpen : undefined}
     >
-      {/* 头行：主题（十四轮 DA27：展示态 pill 挪出头部——用户
-          「状态挪到卡片的左边下面」，入底栏左侧；十二轮 DA25
-          已去 #id 前缀）。2026-09-12：原「本会话」徽标撤除——
-          会话归属由列表页「本会话」分区线标示，卡内不再重复。 */}
+      {/* 头行：编号徽章 + 主题（十四轮 DA27：展示态 pill 挪出头部——用户
+          「状态挪到卡片的左边下面」，入底栏左侧；十二轮 DA25 已去 #id 前缀，
+          用户 2026-09-14「任务卡片 title 前面加上编号徽章」以徽章形式放回）。
+          2026-09-12：原「本会话」徽标撤除——会话归属由列表页「本会话」分区线
+          标示，卡内不再重复。 */}
       <div className="flex min-w-0 items-center gap-1.5">
+        <TaskIdBadge taskId={task.taskId} />
         <div className="truncate text-sm font-semibold text-foreground">{task.subject}</div>
       </div>
       {/* 信息分行（十二轮 DA25 分行 + 十三轮 DA26 统一渲染）：
@@ -208,16 +212,18 @@ export function TaskListCard({
           Badge 的 border-transparent）、hover 淡底（badge.tsx
           secondary 80% 淡化，D19c color-mix 任意值实现）以同色
           hover 压平（hover 后底色不变）；按钮区不冒泡——点详情/删除不触发整卡进
-          详情。 */}
+          详情。用户 2026-09-14「按钮溢出了」：底栏加 flex-wrap（gap-x-2
+          gap-y-1.5）+ 按钮组 ml-auto——三钮（跳转会话/删除/开始）超窄列时
+          换行右对齐，行内不再溢出卡宽。 */}
       <div
-        className="mt-auto flex items-center justify-between gap-2 border-t border-solid pt-2"
+        className="mt-auto flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5 border-t border-solid pt-2"
         onClick={(e) => e.stopPropagation()}
       >
         {/* 状态 pill（docs/panelTaskCommission）。用户迭代 2026-09-11：原 pill
         旁 14px 小 loader 撤除——创建中加载观感上移到卡身进度行
         CreatingLoadingRow（同一加载信号不留两处冗余呈现，pill 只担状态文案）。 */}
         <TaskStatusPill status={task.status} retryCount={task.retryCount} />
-        <div className="flex items-center gap-1.5">
+        <div className="ml-auto flex items-center gap-1.5">
           {/* 二十六轮 DA39：主任务卡「开始」按钮（用户拍板
             「主任务需要加开始按钮，没看到加在那里」——DA38
             只加在详情页标题行，列表页看不到；点击逐个派发

@@ -23,6 +23,7 @@ import {
   executionOrderOf,
   insertionIndexOf,
   isAssignEditable,
+  memberSessionIdOf,
   readonlyStationMember,
 } from '../src/client/features/tasks/taskAssignCore';
 
@@ -243,6 +244,17 @@ describe('employeeBadgeOf（罗列条工号徽章文案，五轮 DA18）', () =>
   it('非 ET- 前缀格式原样保留（不猜格式）', () => {
     expect(employeeBadgeOf('W-007')).toBe('W-007');
     expect(employeeBadgeOf('0009')).toBe('0009');
+  });
+});
+
+describe('memberSessionIdOf（用户 2026-09-14：成员已有实例化会话→绿点+可点击）', () => {
+  it('childId 非空串 = 会话已实例化，原样返回（跳转目标）', () => {
+    expect(memberSessionIdOf({ childId: 'sess-child-1' })).toBe('sess-child-1');
+  });
+  it('null/空串/缺省（未起会话或旧快照）→ null，不画点不可点', () => {
+    expect(memberSessionIdOf({ childId: null })).toBeNull();
+    expect(memberSessionIdOf({ childId: '' })).toBeNull();
+    expect(memberSessionIdOf({})).toBeNull();
   });
 });
 

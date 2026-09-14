@@ -1,7 +1,8 @@
 /**
  * Team work documents (docs/09.1 file layout, D12): `<workspace>/<workRoot>/<team-slug>/`
  * with an idempotent README.md, per-task `tasks/tN-slug/contract.md` views,
- * and create-only `notes.md` scratch files. Docs are NOT state truth —
+ * create-only `notes.md` scratch files, and a create-only `留言板.md` per 大任务
+ * (主任务文件夹根下的队伍留言板，用户 2026-09-14). Docs are NOT state truth —
  * render failures warn but never block (docs/07.2 note).
  *
  * @module dsh-eteams/runtime/docs
@@ -44,6 +45,35 @@ export function taskDirRel(team: TeamState, task: TaskRecord): string {
  */
 export function taskDirAbs(workspace: string, team: TeamState, task: TaskRecord): string {
   return join(workspace, taskDirRel(team, task));
+}
+
+/** 队伍留言板文件名（用户 2026-09-14）：主任务文件夹根下的共享留言板。 */
+export const BOARD_FILE_NAME = '留言板.md';
+
+/** 大任务根（parentId 为空的容器）；传入的已是根则原样返回。 */
+function rootTaskOf(team: TeamState, task: TaskRecord): TaskRecord {
+  if (task.parentId === null) return task;
+  return team.tasks.find((t) => t.id === task.parentId) ?? task;
+}
+
+/**
+ * 留言板绝对路径（用户 2026-09-14「领队要创建一个留言板文件」）：挂在**主任务
+ * 文件夹根**下——同一大任务的领队与全部成员共用一块板（小任务成员经它知道
+ * 别人做到哪、有什么交接与坑）。已分派目录按字面路径、未分派按推算路径。
+ */
+export function boardFileAbs(workspace: string, team: TeamState, task: TaskRecord): string {
+  return join(taskDirAbs(workspace, team, rootTaskOf(team, task)), BOARD_FILE_NAME);
+}
+
+/** 留言板初始内容（create-only）：标题 + 用法；条目由领队/成员自行追加。 */
+export function renderBoardFile(root: TaskRecord): string {
+  return [
+    `# 留言板 · ${root.id} ${root.subject}`,
+    '',
+    '> 领队与成员**派发/开工前先读本文件**（看别人做到哪、有什么交接与坑），',
+    '> **每做完一步在下方追加一行**「- [时间] 名字：做了什么（结论/交接物）」。只记要点，别长篇复述。',
+    '',
+  ].join('\n');
 }
 
 /** Render the idempotent team README (overview view). */
@@ -173,6 +203,12 @@ export function renderTeamDocs(
       const notes = join(tDir, 'notes.md');
       if (!existsSync(notes))
         writeFileSync(notes, `# ${task.id} ${task.subject} · 任务笔记\n\n`, 'utf8');
+    }
+    // 队伍留言板（用户 2026-09-14）：主任务文件夹根下、create-only——领队与
+    // 成员在同一块板上互看进展（读/写由提示词纪律驱动，宿主只保证它存在）。
+    for (const root of team.tasks.filter((t) => t.parentId === null)) {
+      const board = join(taskDirAbs(workspace, team, root), BOARD_FILE_NAME);
+      if (!existsSync(board)) writeFileSync(board, renderBoardFile(root), 'utf8');
     }
   } catch (error) {
     const msg = `eteams: 任务文档渲染失败（不阻塞状态）：${String(error)}`;

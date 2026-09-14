@@ -207,6 +207,9 @@ describe('eteams_ask_user 统一路径（弹窗落在提问子对话）', () => 
     expect(row?.askingKind).toBe('member');
     // relaySessionId 语义收窄为「弹窗所在会话」——恒等于提问会话自身。
     expect(row?.relaySessionId).toBe('member-1');
+    // v14 弹窗落点：主对话不在线 → 落点=提问会话自身、非主对话。
+    expect(row?.deliverySessionId).toBe('member-1');
+    expect(row?.deliveryIsMain).toBe(false);
   });
 
   it('领队（主会话身份）提问 → 就地弹，行 askingKind=captain', async () => {
@@ -277,6 +280,37 @@ describe('eteams_ask_user 统一路径（弹窗落在提问子对话）', () => 
     };
     expect(params?.properties?.questions?.items?.additionalProperties).toBe(true);
   });
+
+  it('工具契约带提问口径：自包含/说人话/选项写清后果（用户 2026-09-14）', () => {
+    // 用户 2026-09-14「问答弹窗出现在主会话时需要具体细节，将问题通过小学生和外行
+    // 都能听懂的方式给到主会话显示出来，不然用户不知道怎么选」：弹窗是原生组件、
+    // 弹到主对话时用户手里只有问题本身——口径全文钉在工具 description 上。
+    const tool = createAskUserTools(config, fakeCtx()).find((t) => t.name === 'eteams_ask_user');
+    if (!tool) throw new Error('eteams_ask_user 未注册');
+    expect(tool.description).toContain('提问口径');
+    expect(tool.description).toContain('自包含');
+    expect(tool.description).toContain('说人话');
+    expect(tool.description).toContain('选它会怎样');
+    expect(tool.description).toContain('禁止只写「方案 A / 方案 B」');
+  });
+
+  it('render 必须回传答案正文（model-facing content = render 输出，2026-09-14 实况）', async () => {
+    // 规范值（含 answers）执行局部存活、不回放——模型只看得到 render 的输出。
+    // render 若只回「答案见 answers」，调用子代理实际拿到空答案。
+    seedTeam();
+    const tool = createAskUserTools(
+      config,
+      fakeCtx({ userQuestions: { ask: fakeAsk('跑测试脚本（推荐）') } }),
+    ).find((t) => t.name === 'eteams_ask_user');
+    if (!tool) throw new Error('eteams_ask_user 未注册');
+    const result = (await tool.execute(askArgs() as never, {
+      agent: agentOf('member-1'),
+      signal: undefined,
+    } as never)) as Record<string, unknown>;
+    const rendered = JSON.stringify(tool.output.render(askArgs() as never, result as never));
+    expect(rendered).toContain('跑测试脚本（推荐）');
+    expect(rendered).not.toContain('答案见 answers');
+  });
 });
 
 // ---------- 弹窗目标=主对话（原生弹窗直接弹在用户正在的窗口） ----------
@@ -305,6 +339,9 @@ describe('eteams_ask_user 弹窗目标主对话', () => {
     const row = readAskSync(root, String(result.askId));
     expect(row?.askingSessionId).toBe('member-1');
     expect(row?.status).toBe('answered');
+    // v14 弹窗落点：主对话在线 → 落点=主对话 cap-1、is_main=true（决策面板跳这里）。
+    expect(row?.deliverySessionId).toBe('cap-1');
+    expect(row?.deliveryIsMain).toBe(true);
   });
 
   it('主对话在线但弹窗被拒 → 退回提问会话自身再试一次（两连弹）', async () => {
@@ -325,7 +362,11 @@ describe('eteams_ask_user 弹窗目标主对话', () => {
     // 第一弹主对话、第二弹提问会话自身——主对话拒收不致命。
     expect((ask.mock.calls[0]![0] as { agent?: unknown }).agent).toMatchObject({ id: 'cap-1' });
     expect((ask.mock.calls[1]![0] as { agent?: unknown }).agent).toMatchObject({ id: 'member-1' });
-    expect(readAskSync(root, String(result.askId))?.status).toBe('answered');
+    const row = readAskSync(root, String(result.askId));
+    expect(row?.status).toBe('answered');
+    // v14：退回提问会话成功 → 落点被更正为提问会话（面板据此跳到子会话作答）。
+    expect(row?.deliverySessionId).toBe('member-1');
+    expect(row?.deliveryIsMain).toBe(false);
   });
 });
 

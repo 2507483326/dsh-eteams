@@ -19,6 +19,12 @@
  *   「正在调度成员」（任务已派发但成员尚未领取 = ready + assignee）> 等待中 >
  *   已挂起 > 待领队 > 待用户 > 已完成。
  *
+ * 用户 2026-09-14「已创建团队任务的 hover 弹层里放本会话锚定的主任务卡片 +
+ * 会话成员」：hover 卡主体由本模块两份新派生供数——{@link anchoredMainTaskOf}
+ * （本会话锚定的主任务，与宿主 `runtime/sessionTeam.ts` 的 `anchoredMainTaskOf`
+ * 同口径，展示层只做镜像、宿主仍是锚点最终裁决）与 {@link sessionMembersOf}
+ * （有子会话的成员，点击切换会话）。
+ *
  * @module dsh-eteams/client/teamBadgeSummary
  */
 import type { TaskView, TeamSnapshot } from './monitor';
@@ -85,4 +91,56 @@ export function teamBadgeSummary(
   }
   if (executing.length > 0) return { executing, statusLine: '' };
   return { executing: [], statusLine: stageLineOf(team.tasks) };
+}
+
+/**
+ * 本会话锚定的主任务（用户 2026-09-14 hover 卡主体）：与宿主
+ * `runtime/sessionTeam.ts` 的 `anchoredMainTaskOf` 同口径——无父
+ * （parentId===null）、无执行链（chain.length===0，排除面板派发时补章了
+ * mainSessionId 的单杆任务）、`mainSessionId` 命中本会话、排除 cancelled，
+ * 取 taskId 最大者；无命中返回 undefined。
+ *
+ * 展示层只做镜像（宿主是锚点的最终裁决，建任务守卫/band 分支都读它）；
+ * sessionId 传会话树根（子代理会话先经 `rootSessionIdOf` 上溯到主对话），
+ * 任务行 `main_session_id` 登记的就是主对话快照。
+ */
+export function anchoredMainTaskOf(
+  team: TeamSnapshot | undefined,
+  sessionId: string | undefined,
+): TaskView | undefined {
+  if (team === undefined || sessionId === undefined || sessionId === '') return undefined;
+  let best: TaskView | undefined;
+  for (const task of team.tasks) {
+    if (task.parentId !== null) continue;
+    if (task.chain.length !== 0) continue;
+    if ((task.sessionId ?? null) !== sessionId) continue;
+    if (task.status === 'cancelled') continue;
+    if (best === undefined || task.taskId > best.taskId) best = task;
+  }
+  return best;
+}
+
+/** 一条「会话成员」：有子会话的成员（名 + 头像 + 该子会话 id）。 */
+export interface SessionMemberEntry {
+  name: string;
+  avatar: { seed: number; salt: number } | null;
+  sessionId: string;
+}
+
+/**
+ * 本任务的会话成员（用户 2026-09-14「点击进入已经有会话的成员会话中」）：取该
+ * 任务的 `memberSessions`（宿主按大任务粒度下发的副本行）里子会话已起的成员
+ * ——**按任务口径**，不能取成员全局最近一行（`MemberView.childId` 是
+ * latestInstanceRow 口径），否则从 A 任务会跳到 B 任务的会话；本任务尚未建
+ * 会话的成员不列（点不进去）。主会话由任务锚 `sessionId` 另行承担，不在本表。
+ * 顺序随宿主副本行（建行序）。task 缺省/旧快照 → 空表。
+ */
+export function sessionMembersOf(task: TaskView | undefined): SessionMemberEntry[] {
+  if (task === undefined) return [];
+  const entries: SessionMemberEntry[] = [];
+  for (const member of task.memberSessions ?? []) {
+    if (member.sessionId === '') continue;
+    entries.push({ name: member.name, avatar: member.avatar, sessionId: member.sessionId });
+  }
+  return entries;
 }

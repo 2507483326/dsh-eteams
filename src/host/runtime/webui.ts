@@ -16,20 +16,18 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { ETeamsResolvedConfig } from '../config.js';
-import type {
-  EventRecord,
-  MemberRecord,
-  TaskRecord,
-  TaskStatus,
-  TeamState,
-} from '../model/types.js';
-import { chainDoneStations } from '../model/taskMachine.js';
+import type { MemberRecord, TaskRecord, TaskStatus, TeamState } from '../model/types.js';
+import { chainActiveStations, chainDoneStations } from '../model/taskMachine.js';
 import { memberBoxKey, readEventsSync, readMailboxSync, recordEvent } from '../state/events.js';
-import { readPendingAsksSync } from '../state/asks.js';
+import { readPendingAsksSync, readRecentAsksSync } from '../state/asks.js';
 import { boardOverview } from '../state/queries.js';
-import { listTeamIds, readTeamSync } from '../state/store.js';
+import { listTeamIds, readRecentResolvedDecisionsSync, readTeamSync } from '../state/store.js';
 import { joinPath, stateRootFor, type RuntimeContext, type RuntimeEnv } from './base.js';
 import { taskDirAbs, taskDirRel } from './docs.js';
+// 看板动态事件域（v14 自 webui 迁出）：summarizeEvent/eventTone 原件，本模块
+// 再导出 summarizeEvent 保持既有 import 路径（tests/webui.test.ts）不变。
+import { eventTone, summarizeEvent } from './activity.js';
+export { summarizeEvent } from './activity.js';
 import { composeCaptainPersona } from '../prompts/personas/captain.js';
 import {
   avatarSeedFor,
@@ -140,6 +138,9 @@ const ACTIVE_STATUSES: TaskStatus[] = ['start', 'wait', 'paused', 'wait_user'];
 /** commission 主题截断长度（描述首行占位主题，完善者收口时回写真主题）。 */
 const COMMISSION_SUBJECT_MAX = 24;
 
+/** 「决策面板」『已决策』历史回看条数上限（历史全量留库，快照只带最近 N 条）。 */
+const DECISION_HISTORY_LIMIT = 30;
+
 /**
  * commission 派发段按团队串行（docs/panelTaskCommission）：建任务后的
  * 「解析父锚 → 派发完善者」段是异步窗口，两次快速提交若无序会并发
@@ -161,17 +162,28 @@ function withCommissionLock<T>(teamKey: string, run: () => Promise<T>): Promise<
 
 /** Station status for chain index `i` given the task state. `doneStations` =
  * 该站已有成功尝试（弱顺序链，用户 2026-09-13）——乱序/追加派发时后段站点也
- * 能正确显示「已完成」，不只认游标。 */
+ * 能正确显示「已完成」，不只认游标。`activeStations` = 该站有在办尝试
+ * （pending_accept/running，用户 2026-09-14）——乱序/跳站派发时「正在执行」
+ * 的是**真正在跑的那一站**，不能按 `cursor + 1`（那只是 frontier）标注。 */
 function stationStatusOf(
   status: TaskStatus,
   chainLength: number,
   cursor: number,
   doneStations: readonly boolean[],
+  activeStations: readonly boolean[],
   i: number,
 ): StationView['stationStatus'] {
   void chainLength;
   if (i <= cursor || doneStations[i] === true) return 'done';
-  if (i === cursor + 1 && (ACTIVE_STATUSES.includes(status) || status === 'ready'))
+  // 在办尝试所在的站 = 正在执行（乱序派发下与 frontier 可能不是同一站）。
+  if (activeStations[i] === true) return 'current';
+  // 无任何在办尝试时（如面板「开始」→ 派发之间的窗口）退回 frontier 口径，
+  // 保持既有观感；有在办尝试时 frontier 不再冒充「正在执行」。
+  if (
+    !activeStations.includes(true) &&
+    i === cursor + 1 &&
+    (ACTIVE_STATUSES.includes(status) || status === 'ready')
+  )
     return 'current';
   return 'pending';
 }
@@ -305,10 +317,26 @@ function taskView(
   // 按满进度口径显示站点。doneStations 由 attempts 派生（弱顺序链，用户
   // 2026-09-13）：乱序/追加派发下后段已完成站点不再错显为 pending。
   const doneStations = chainDoneStations(t.chain.length, t.attempts);
+  const activeStations = chainActiveStations(t.chain.length, t.attempts);
   const stationStatus = (i: number): StationView['stationStatus'] =>
     t.status === 'completed'
       ? 'done'
-      : stationStatusOf(t.status, t.chain.length, t.chainCursor, doneStations, i);
+      : stationStatusOf(t.status, t.chain.length, t.chainCursor, doneStations, activeStations, i);
+  // 本大任务的成员子会话（用户 2026-09-14「会话成员」按任务口径取）：副本行
+  // 按大任务粒度建（同一人每条大任务一行、各绑独立子会话），sessionId 非空 =
+  // 该成员的子会话已起；未建会话的成员不列（点不进去）。领队行不列（主持者，
+  // 不是执行成员）。展示层据此做「会话成员」切换——不能取成员全局最近一行
+  // （那是 latestInstanceRow 口径），否则从 A 任务会跳到 B 任务的会话。
+  const memberSessions = team.taskMembers
+    .filter(
+      (r) => r.mainTaskId === (t.parentId ?? t.id) && r.isLeader !== true && r.sessionId !== '',
+    )
+    .map((r) => ({
+      name: r.name,
+      employeeId: r.employeeId ?? null,
+      sessionId: r.sessionId,
+      avatar: team.members.find((m) => m.employeeId === r.employeeId)?.avatar ?? r.avatar ?? null,
+    }));
   return {
     taskId: t.id,
     subject: t.subject,
@@ -328,12 +356,16 @@ function taskView(
     contractMd: t.contractMd ?? null,
     idempotencyNote: t.idempotencyNote ?? null,
     // 依赖阻塞不再物化（用户迭代 2026-09-11「就 ready 等待就行」）：
-    // blocked/blockedFrom 快照字段随 wait 撤销退役，依赖由派发口校验。
+    // blocked/blockedFrom 快照字段随 wait 撤销退役；依赖也不再拦截派发
+    // （用户 2026-09-14「闸门拦住去掉吧」），快照只下发 dependencies 供面板
+    // 排布执行序（executionOrderOf）。
     statusNote: t.statusNote ?? null,
     workDir: t.workDir ?? null,
     // 主会话 ID 快照（task.main_session_id，v5 落列 v6 改名）：建任务时登记
     // 的主会话（增量字段，客户端可选消费）。
     sessionId: t.mainSessionId ?? null,
+    // 本大任务里已有子会话的成员（会话切换用；口径见上方 memberSessions）。
+    memberSessions,
     status: containerStatusOf(t, team, panelStarted),
     assignee: t.assignee ?? null,
     dependencies: t.dependencies,
@@ -389,6 +421,9 @@ export function teamSnapshot(
   // 组收口产出（docs/26）：task.completed 事件 payload.via='subtasks.completed'
   // 的聚合文本按 taskId 收敛，同任务多次收口取最新一条（Map 覆盖写）。
   const events = readEventsSync(stateRoot, team.id);
+  // 事件 → 任务主题（看板动态时间线的任务标签）：事件表只有松引用 task_id，
+  // 按本团队任务集解析；任务已删（事件仍在）→ null，标签退化为 #id。
+  const taskSubjectById = new Map<number, string>(team.tasks.map((t) => [t.id, t.subject]));
   const groupOutcomes = new Map<number, string>();
   // 面板显式开跑过的容器（用户 2026-09-13「任务开始应该先改状态」）：markGroupStarted
   // 落 `task.started` payload via='panel.start'——containerStatusOf 据此把「领队
@@ -463,8 +498,48 @@ export function teamSnapshot(
       askingName: a.askingName,
       askingKind: a.askingKind,
       askingSessionId: a.askingSessionId,
+      // v14 弹窗落点（看板「决策面板」跳转目标）：deliverySessionId 为实际落点
+      // 会话；isMain 标记落点是否主对话（旧行缺列为 null/false）。
+      mainTaskId: a.mainTaskId ?? null,
+      deliverySessionId: a.deliverySessionId ?? null,
+      deliveryIsMain: a.deliveryIsMain === true,
       questionCount: a.questions.length,
       createdAt: a.createdAt,
+    })),
+    // 『已决策』历史（用户 2026-09-14「做过决策后决策面板还是 0，历史也要显示」）：
+    // 升级决策的处置结论（decisions resolved 行，留库读端）+ 已结束问答单，
+    // 各取最近 DECISION_HISTORY_LIMIT 条（历史全量留库，快照只带回看窗口）。
+    resolvedDecisions: readRecentResolvedDecisionsSync(
+      stateRoot,
+      team.id,
+      DECISION_HISTORY_LIMIT,
+    ).map((d) => ({
+      id: d.id,
+      taskId: d.taskId,
+      error: d.error,
+      retryCount: d.retryCount,
+      createdAt: d.createdAt,
+      resolvedAt: d.resolvedAt,
+      choice: d.choice,
+      note: d.note,
+    })),
+    recentAsks: readRecentAsksSync(stateRoot, team.id, DECISION_HISTORY_LIMIT).map((a) => ({
+      askId: a.askId,
+      askingName: a.askingName,
+      askingKind: a.askingKind,
+      askingSessionId: a.askingSessionId,
+      mainTaskId: a.mainTaskId ?? null,
+      deliverySessionId: a.deliverySessionId ?? null,
+      deliveryIsMain: a.deliveryIsMain === true,
+      questionCount: a.questions.length,
+      createdAt: a.createdAt,
+      answeredAt: a.answeredAt ?? null,
+      status: a.status,
+      // 答案摘要（custom 优先，否则 selected；多题/多选以「；」连接）。
+      answerSummary: (a.answers ?? [])
+        .map((x) => (x.custom !== undefined && x.custom !== '' ? x.custom : x.selected))
+        .filter((s) => s !== '')
+        .join('；'),
     })),
     latestEvents: events.slice(-30).map((e) => ({
       seq: e.seq,
@@ -473,65 +548,16 @@ export function teamSnapshot(
       actorKind: e.actor.kind,
       type: e.type,
       taskId: e.taskId ?? null,
+      // 任务标签主题（看板动态「和任务绑定」）+ 语义色调（行首彩点）。
+      taskSubject: e.taskId !== undefined ? (taskSubjectById.get(e.taskId) ?? null) : null,
+      tone: eventTone(e.type),
       text: summarizeEvent(e),
     })),
   };
 }
 
-/** One-line human summary of an event for the 动态 view. */
-export function summarizeEvent(e: EventRecord): string {
-  const p = (e.payload ?? {}) as Record<string, unknown>;
-  const task = e.taskId !== undefined ? `#${e.taskId}` : '';
-  switch (e.type) {
-    case 'team.created':
-      return `创建团队「${String(p.name ?? '')}」`;
-    case 'plan.questionnaire':
-      return `问询完成（${String(p.count ?? '?')} 问）`;
-    case 'member.added':
-      return `成员「${String(p.name ?? '')}」加入`;
-    case 'member.removed':
-      return `成员「${String(p.name ?? '')}」移除`;
-    case 'leader.removed':
-      return '领队已移出团队';
-    case 'leader.restored':
-      return '领队回到团队';
-    case 'task.created':
-      return `新建任务 ${task}`;
-    case 'task_commissioned':
-      // 面板手动建任务（docs/panelTaskCommission）：派发失败也如实展示。
-      return p.dispatched === true
-        ? `面板创建任务 ${task}，已交${p.hasLeader === true ? '领队' : '主会话'}完善`
-        : `面板创建任务 ${task}（创建中），完善者未送达：${String(p.reason ?? '')}`;
-    case 'task.assigned':
-      return `${task} 指派给 ${String(p.member ?? '')}`;
-    case 'task.claimed':
-      return `${String(p.member ?? '')} 接取 ${task}`;
-    case 'task.progress':
-      return `${task} 进度：${String(p.text ?? '')}`;
-    case 'task.stage_completed':
-      return `${task} 站点完成，下一站 ${String(p.next ?? '?')}`;
-    case 'task.completed':
-      return `${task} 已完成`;
-    case 'task.failed':
-      return `${task} 失败：${String(p.error ?? '')}`;
-    case 'task.retried':
-      return `${task} 第 ${String(p.retry ?? '?')} 次重试`;
-    case 'chain.deviated':
-      return `${task} 偏离执行链：${String(p.note ?? '')}`;
-    case 'task.suspended':
-      return `${task} 已挂起`;
-    case 'task.resumed':
-      return `${task} 已恢复`;
-    case 'task.cancelled':
-      return `${task} 已取消`;
-    case 'decision.requested':
-      return `${task} 待用户处理：${String(p.error ?? '')}`;
-    case 'mail.queued':
-      return `邮件入箱 → ${String(p.to ?? '')}`;
-    default:
-      return e.type;
-  }
-}
+// summarizeEvent/eventTone 已迁至 runtime/activity.ts（v14）；本模块顶部再导出
+// summarizeEvent 保持既有 import 路径。
 
 /**
  * Read every unarchived team across all registered workspaces. 全局单库
@@ -1680,10 +1706,10 @@ export function installWebSurface(
             // 链下一站（复用 assignTask 派发核——起子会话 + 投递指派信 +
             // ready→wait 待接取）。空链 400「需要选择成员」（用户拍板「如果
             // 有任务没有成员，则提示需要选择成员就行」——客户端对空链卡不
-            // 渲染按钮，此处兜底）；链已到末站无下一站同闸另文。依赖未完成/
-            // 执行者占用/领队不在线等由派发核原样拒绝（400 透出）。二十五轮
-            // DA38：主任务（容器）走整体开始分支（逐个派发 ready 小任务，
-            // 跳过卡回传原因）。
+            // 渲染按钮，此处兜底）；链已到末站无下一站同闸另文。执行者占用/
+            // 领队不在线等由派发核原样拒绝（400 透出）；依赖不再拦派发（用户
+            // 2026-09-14）。二十五轮 DA38：主任务（容器）走整体开始分支（逐个
+            // 派发 ready 小任务，跳过卡回传原因）。
             if (
               req.method === 'POST' &&
               segments[0] === 'team' &&
@@ -1759,7 +1785,7 @@ export function installWebSurface(
               // 二十五轮 DA38：主任务（容器）分支——「开始」= 逐个派发全部
               // ready 小任务（用户拍板「主任务启动就代表着小任务需要逐个
               // 开始执行了」）。每卡独立走派发核，无链（「需要选择成员」）/
-              // 依赖未满/占用/起会话失败的卡跳过并回传原因（200 + skipped，
+              // 占用/起会话失败的卡跳过并回传原因（200 + skipped，
               // 面板行内就地提示）；非主任务走下方单任务链派发路径不变。
               if (task.parentId === null && team.tasks.some((x) => x.parentId === task.id)) {
                 try {

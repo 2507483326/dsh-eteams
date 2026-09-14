@@ -21,7 +21,8 @@ import {
   setBuildParentSession,
 } from '../src/host/runtime/roleBuilder';
 import { joinPath } from '../src/host/runtime/base';
-import { readCaptainTurn, unregisterCaptainChild } from '../src/host/runtime/captainAgent';
+import { readCaptainTurn } from '../src/host/runtime/captainAgent';
+import { unregisterCaptainChild } from '../src/host/runtime/captainChildRegistry';
 import { clearSessionTeam, setSessionTeam } from '../src/host/runtime/sessionTeam';
 import { getDb } from '../src/host/state/db';
 import { recordUsage, type UsageRecord } from '../src/host/state/usageStore';
@@ -423,6 +424,8 @@ describe('TeamSnapshot builder (docs/35 §5 面板快照)', () => {
       parentId: number | null;
       folder: string;
       outcome: string | null;
+      /** 本任务里已有子会话的成员（用户 2026-09-14「会话成员」）。 */
+      memberSessions: { name: string; employeeId: number | null; sessionId: string }[];
     }>;
     const v1 = tasks.find((t) => t.taskId === t1)!;
     // 用户迭代 2026-09-11：派发不改状态，派发后仍是 ready（领取才 start）。
@@ -437,10 +440,26 @@ describe('TeamSnapshot builder (docs/35 §5 面板快照)', () => {
     expect(v2.chain).toEqual([]);
     expect(v2.assignee).toBeNull();
 
-    const events = snap.latestEvents as Array<{ type: string; text: string }>;
+    // 用户 2026-09-14「会话成员按任务口径取」：只下发本任务里子会话已起的成员
+    // ——Alice 已派发（子会话已起），t2 无人派发 → 空表（从 A 任务不会串到
+    // B 任务的会话；未起会话的成员不列）。
+    expect(v1.memberSessions.map((m) => m.name)).toEqual(['Alice']);
+    expect(v1.memberSessions[0]!.sessionId).toBe(childIdOf(teamId, 'Alice'));
+    expect(v2.memberSessions).toEqual([]);
+
+    const events = snap.latestEvents as Array<{
+      type: string;
+      text: string;
+      taskSubject: string | null;
+      tone: string;
+    }>;
     expect(events.some((e) => e.type === 'team.created')).toBe(true);
     expect(events.some((e) => e.type === 'member.added' && e.text.includes('Alice'))).toBe(true);
-    expect(events.some((e) => e.type === 'task.assigned' && e.text.includes('Alice'))).toBe(true);
+    const assignedEvent = events.find((e) => e.type === 'task.assigned');
+    expect(assignedEvent?.text).toContain('Alice');
+    // v14：事件带任务标签主题与语义色调（看板动态「和任务绑定」）。
+    expect(assignedEvent?.taskSubject).toBeTruthy();
+    expect(assignedEvent?.tone).toBe('info');
 
     // GET /team/<id>（面板作用域读）与 GET /state 投影同一份快照。
     const scoped = await h.get(`/eteams-api/team/${teamId}`);
@@ -452,6 +471,35 @@ describe('TeamSnapshot builder (docs/35 §5 面板快照)', () => {
     );
     expect(body.maxMembers).toBe(10);
     expect(body.teams.find((t) => t.teamId === teamId)!.leaderRemoved).toBe(false);
+  });
+
+  it('乱序派发时「正在执行」标注真实在跑的站点，不按 chainCursor+1（用户 2026-09-14）', async () => {
+    const h = await installFull();
+    const created = await h.post('/eteams-api/team', { name: '乱序队', sessionId: 'cap-conv' });
+    const { teamId } = json<{ teamId: number }>(created.body);
+    await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Alice', role: 'researcher' });
+    await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Bob', role: 'engineer' });
+    const made = await h.post(`/eteams-api/team/${teamId}/task`, {
+      subject: '跳站任务',
+      chain: [
+        { member: 'Alice', stageBrief: '调研' },
+        { member: 'Bob', stageBrief: '实现' },
+      ],
+    });
+    const t1 = json<{ taskId: number }>(made.body).taskId;
+    await h.post('/eteams-api/presence', { sessionId: 'cap-conv' });
+
+    // 跳过站 0（Alice）直接派发站 1（Bob）：弱顺序链允许，游标仍为 -1——旧实现
+    // 会把站 0 错标为「正在执行」，用户据此报「显示 需求明确大师在运行，实际跑的
+    // 是前端开发」。
+    const assigned = await h.call!('eteams_assign_task', { taskId: t1, member: 'Bob' });
+    expect(assigned.ok).toBe(true);
+
+    const snap = teamSnapshot(readTeam(teamId), workspace, config);
+    const v1 = snap.tasks.find((t) => t.taskId === t1)!;
+    expect(v1.chainCursor).toBe(-1);
+    expect(v1.chain.map((s) => s.stationStatus)).toEqual(['pending', 'current']);
+    expect(v1.assignee).toBe('Bob');
   });
 
   it('summarizes lifecycle events into one-line zh strings', () => {
@@ -1353,6 +1401,8 @@ describe('conversation task workflow (docs/26)', () => {
     expect(submitted.folder).toBe(group.workDir);
     expect(existsSync(join(workspace, group.workDir!, 'contract.md'))).toBe(true);
     expect(existsSync(join(workspace, group.workDir!, 'notes.md'))).toBe(true);
+    // 队伍留言板（用户 2026-09-14）：主任务文件夹根下 create-only 落一块板。
+    expect(existsSync(join(workspace, group.workDir!, '留言板.md'))).toBe(true);
 
     // 1b. 收口：拆解完成后把「创建中」转「待开始」（收口前 startGroupTask 拒绝）。
     // 收口闸要求主任务下至少一个带「## 验收标准」的小任务——先建占位过闸，
@@ -1859,10 +1909,10 @@ describe('conversation task workflow (docs/26)', () => {
     expect(teamAfterSingle.tasks.find((t) => t.id === singleId)!.status).toBe('ready');
     expect(teamAfterSingle.tasks.find((t) => t.id === singleId)!.attempts[0]!.member).toBe('Bob');
 
-    // 依赖未完成的小任务：跳过原因诚实透出（依赖卡未 completed →
-    // 「依赖未完成」，不再被状态闸静默吞掉）。第二个任务单来自第二个对话
-    // （cap-conv-3，各自锚定一个主任务；同队多任务必须多对话，用户迭代
-    // 2026-09-12）。
+    // 依赖未完成的小任务照派（用户 2026-09-14「闸门拦住去掉吧，不然任意调度
+    // 时会出问题」）：依赖只作排布提示，不再拦整体开始的发棒——本卡是组内唯一
+    // ready 卡，直接起棒。第二个任务单来自第二个对话（cap-conv-3，各自锚定一个
+    // 主任务；同队多任务必须多对话，用户迭代 2026-09-12）。
     setSessionTeam('cap-conv-3', {
       teamId: String(teamId),
       name: '接力跳过团队',
@@ -1887,10 +1937,9 @@ describe('conversation task workflow (docs/26)', () => {
     const body3 = json<{ started: number; skipped: { taskId: number; reason: string }[] }>(
       started3.body,
     );
-    expect(body3.started).toBe(0);
-    expect(body3.skipped).toHaveLength(1);
-    expect(body3.skipped[0]!.taskId).toBe(blockedId);
-    expect(body3.skipped[0]!.reason).toContain(`依赖未完成`);
+    expect(body3.started).toBe(1);
+    expect(body3.skipped).toHaveLength(0);
+    expect(readTeam(teamId).tasks.find((t) => t.id === blockedId)!.attempts[0]!.member).toBe('Bob');
   });
 
   it('starts a group task by cold-resuming the recorded main session（三十七轮 DA50）', async () => {

@@ -103,6 +103,15 @@ export function installSessionState(ctx: unknown): void {
   clientCtx = ctx;
 }
 
+/**
+ * 取宿主 sessions 服务面。**所有方法必须带接收者调用**（`face.open(id)`，不能
+ * `const open = face.open; open(id)`）：宿主 `ctx.sessions` 直回 SessionRuntime
+ * 实例（普通类、非 cordis Service——服务值无 tracker，cordis 不做 receiver
+ * 绑定，实测 `const m = face.m; m()` 即抛 TypeError），而 `open`/`create` 等
+ * 方法体依赖 `this`（`this.manager.select(...)`）。脱离接收者的调用会在本
+ * 模块的 try/catch 里被吞成「服务不可用」，表现为「跳转会话」恒弹「目标会话
+ * 不在当前会话列表中」（用户 2026-09-14 复现）。
+ */
 function sessionsFaceOf(): SessionsFace | null {
   const face = (clientCtx as { sessions?: unknown } | null)?.sessions;
   if (typeof face !== 'object' || face === null) return null;
@@ -194,10 +203,12 @@ export function canOpenSession(sessionId: string): boolean {
  */
 export function openSession(sessionId: string): boolean {
   if (sessionId === '') return false;
-  const open = sessionsFaceOf()?.open;
-  if (typeof open !== 'function') return false;
+  const face = sessionsFaceOf();
+  if (face === null || typeof face.open !== 'function') return false;
   try {
-    open(sessionId);
+    // 带接收者调用（见 sessionsFaceOf 注）：脱离 receiver 会丢 this 抛错，
+    // 被这里吞成「不在列表」。
+    face.open(sessionId);
     return true;
   } catch {
     return false;
@@ -223,11 +234,12 @@ export function sessionCwdOf(sessionId: string): string | null {
  * 调用方按错误处理（本仓探测纪律：旧运行时绝不抛错）。
  */
 export async function createSession(opts?: { cwd?: string }): Promise<string | null> {
-  const create = sessionsFaceOf()?.create;
-  if (typeof create !== 'function') return null;
+  const face = sessionsFaceOf();
+  if (face === null || typeof face.create !== 'function') return null;
   try {
     const cwd = opts?.cwd;
-    const result = await create(cwd !== undefined && cwd !== '' ? { cwd } : undefined);
+    // 带接收者调用（见 sessionsFaceOf 注）：`this.manager.create(...)` 依赖 this。
+    const result = await face.create(cwd !== undefined && cwd !== '' ? { cwd } : undefined);
     if (typeof result === 'string' && result !== '') return result;
     const id = (result as { sessionId?: unknown } | null | undefined)?.sessionId;
     return typeof id === 'string' && id !== '' ? id : null;
@@ -243,10 +255,12 @@ export async function createSession(opts?: { cwd?: string }): Promise<string | n
  */
 export async function promptSession(sessionId: string, text: string): Promise<boolean> {
   if (sessionId === '' || text.trim() === '') return false;
-  const prompt = sessionsFaceOf()?.binding?.(sessionId)?.session?.prompt;
-  if (typeof prompt !== 'function') return false;
+  // binding 带接收者调用；session.prompt 同理（见 sessionsFaceOf 注：脱离
+  // receiver 会丢 this 抛错，被吞成投递失败）。
+  const session = sessionsFaceOf()?.binding?.(sessionId)?.session;
+  if (session === undefined || typeof session.prompt !== 'function') return false;
   try {
-    const result = await prompt([{ type: 'text', text }], 'queue');
+    const result = await session.prompt([{ type: 'text', text }], 'queue');
     if (result === null || result === undefined) return false;
     if (typeof result === 'object' && 'ok' in result) {
       return (result as { ok?: unknown }).ok === true;

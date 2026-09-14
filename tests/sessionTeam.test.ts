@@ -27,7 +27,7 @@ import {
   captainChildTeamOf,
   registerCaptainChild,
   unregisterCaptainChild,
-} from '../src/host/runtime/captainAgent';
+} from '../src/host/runtime/captainChildRegistry';
 import { LEADER_NAME } from '../src/host/state/db';
 import { cleanupTempWorkspace } from './support/tmpWorkspace';
 import type { TaskMemberRecord, TaskRecord, TeamState } from '../src/host/model/types';
@@ -162,6 +162,9 @@ describe('sessionTeamSection branches', () => {
     expect(band).toContain('团队未设领队');
     expect(band).toContain('eteams_create_task（parentTaskId=5）');
     expect(band).toContain('ask_user_question');
+    // 提问口径（用户 2026-09-14）：主会话亲自问询也要自包含/说人话/选项写清后果
+    // ——原生弹窗弹在本对话里，用户手里只有问题本身。
+    expect(band).toContain('提问口径');
     expect(band).toContain('不要再 eteams_submit_task');
     // dispatch 只出现在红线「不要调用」里，不出现指令形态（taskId= 调用式）。
     expect(band).not.toContain('eteams_dispatch_captain（taskId=');
@@ -193,6 +196,33 @@ describe('sessionTeamSection branches', () => {
     expect(leaderless).toContain('简单对话/闲聊/纯问答直接回应');
     expect(leaderless).toContain('开跑指令');
     expect(leaderless).toContain('不要增补新任务');
+  });
+
+  it('按链来：开跑/续派按执行链当前站推进、不挑人（用户 2026-09-14）', () => {
+    // 用户 2026-09-14「改成没有特殊情况，按链来」：无领队主会话直接主持时同口径
+    // ——有链按当前站推进（eteams_advance_task 自动按链取人），只有无链任务才
+    // 用 eteams_assign_task 自由指派。
+    setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
+    const leaderless = sessionTeamSection('s-other', () =>
+      team({ hasLeader: false, tasks: [mainTask(5, 's-other', 'ready')] }),
+    );
+    expect(leaderless).toContain('当前站');
+    expect(leaderless).toContain('eteams_advance_task');
+  });
+
+  it('启动服务与简单对话由本会话直接处理，不转交领队（用户 2026-09-14）', () => {
+    // 用户 2026-09-14「绑定团队后对于启动服务、简单对话之类的不用转交领队」：
+    // 起服务/跑本地命令属日常操作，主会话直接执行，不要 eteams_dispatch_captain。
+    setSessionTeam('s-other', { teamId: 'demo', name: '演示团队', boundAt: 1 });
+    const anchored = sessionTeamSection('s-other', () =>
+      team({ tasks: [mainTask(3, 's-other', 'ready')] }),
+    );
+    expect(anchored).toContain('启动服务');
+    expect(anchored).toContain('由本会话直接执行');
+    expect(anchored).toContain('不转交领队、不建任务');
+    const twoStep = sessionTeamSection('s-other', () => team());
+    expect(twoStep).toContain('启动服务');
+    expect(twoStep).toContain('不转交领队、不建任务');
   });
 
   it('falls through to two-step only when the session has no main task（无锚定回退）', () => {
@@ -233,6 +263,8 @@ describe('sessionTeamSection branches', () => {
     expect(removed).toContain('不自批开跑');
     expect(removed).not.toContain('eteams_dispatch_captain');
     expect(removed).not.toContain('由你（本会话）充当领队');
+    // 无锚定主任务的无领队分支（两步走）同样带提问口径。
+    expect(removed).toContain('提问口径');
   });
 
   it('stays silent for a registered captain child (它自己就是领队)', () => {

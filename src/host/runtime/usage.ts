@@ -34,7 +34,7 @@ import {
   type UsageTotals,
 } from '../state/usageStore.js';
 import { findTeamByCaptain } from '../state/store.js';
-import { captainChildTeamOf } from './captainAgent.js';
+import { captainChildTeamOf } from './captainChildRegistry.js';
 import { getSessionTeamId } from './sessionTeam.js';
 import { stateRootFor, type RuntimeLogger } from './base.js';
 

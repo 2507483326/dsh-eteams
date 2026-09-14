@@ -1,5 +1,5 @@
 -- =====================================================================
--- ETeams SQLite schema v13（db_schema_version = 13；v3 成员=角色合并：member
+-- ETeams SQLite schema v14（db_schema_version = 14；v3 成员=角色合并：member
 -- 表精简改名成 roles 角色库表（去 team_id/role_id/model/reasoning_effort，
 -- 新增 profile），班底另起 team_members 表，旧 roles 标签登记表删除；
 -- v4 班底行补 role_name/persona_md/profile 角色信息副本列；v5 任务行补主
@@ -22,7 +22,10 @@
 -- wait_decision/failed 并入 wait_user（旧库经 getDb 迁移回填状态值）；随后
 -- 又恢复独立 wait=待领队分诊（8 态，语义与旧 wait 不同：失败自动重试超限落
 -- wait，领队分诊后 loop 回 ready 或升级 wait_user——TEXT 枚举无结构变更）；
--- task.blocked_from 列弃用不再读写（列保留不 DROP），status 列默认值改 ready
+-- task.blocked_from 列弃用不再读写（列保留不 DROP），status 列默认值改 ready；
+-- v14 问答弹窗落点列：ask_questions 补 delivery_session_id（弹窗实际落在的
+-- 会话 ID）与 delivery_is_main（1=主对话 / 0=提问子会话）——看板「决策面板」
+-- 据此精确跳转到作答会话（旧库经 getDb ALTER + 按提问会话回填）
 -- 主键 = 每张表自己的编号列，统一 INTEGER 自增（schema_meta 例外：key 即主键）
 -- 时间列一律 *_time 结尾（Unix 毫秒）；每张表末尾 created_time / update_time
 -- 枚举 = TEXT（合法值写在列注释里）；JSON = TEXT 存 JSON 字符串
@@ -351,7 +354,9 @@ CREATE TABLE IF NOT EXISTS ask_questions (
   answers        TEXT,                 -- 答案列表（JSON：[{id, selected, custom?}]）；NULL=未答
   status         TEXT NOT NULL DEFAULT 'pending',
                  -- pending=待作答 / answered=已答 / expired=超时 / cancelled=中断
-  relay_session_id TEXT,                -- 转交目标主会话 ID（就地弹=提问会话自身，审计用）
+  relay_session_id TEXT,                -- 转交目标主会话 ID（就地弹=提问会话自身，旧字段，审计用）
+  delivery_session_id TEXT,             -- 弹窗实际落点会话 ID（v14；看板「决策面板」跳转目标）
+  delivery_is_main INTEGER,             -- 1=落点为主对话 / 0=提问子会话 / NULL=未知（v14）
   created_time   INTEGER NOT NULL,     -- 创建时间
   answered_time  INTEGER,              -- 作答时刻；NULL=未答
   update_time    INTEGER NOT NULL      -- 更新时间

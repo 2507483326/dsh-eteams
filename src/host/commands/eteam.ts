@@ -10,10 +10,12 @@
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { CommandDefinition } from '@deepseek-ai/dsh-commands';
+import type { SessionId } from '@deepseek-ai/dsh-session';
 import type { Context } from '@deepseek-ai/cordis';
 import type { ETeamsResolvedConfig } from '../config.js';
 import {
   deliverNotice,
+  resumeOptionsOf,
   type RuntimeContext,
 } from '../runtime/base.js';
 import {
@@ -81,18 +83,19 @@ export async function steerEngageNotice(
     if (live === undefined) {
       const resume = (ctx.agents as {
         resume?: (o: {
-          resumeSessionId: never;
+          resumeSessionId: SessionId;
           signal?: AbortSignal;
+          agentOptions?: { provider?: string; model?: string; reasoningEffort?: string };
+          setup?: (agentCtx: unknown) => void | Promise<void>;
         }) => Promise<{ agent: Agent }>;
       }).resume;
       if (typeof resume !== 'function') {
         diag({ step: 'no-resume-capability', id });
         return 'no-resume-capability';
       }
-      const handle = await resume({
-        resumeSessionId: id as never,
-        signal: new AbortController().signal,
-      });
+      const handle = await resume(
+        await resumeOptionsOf(ctx, id as unknown as SessionId, new AbortController().signal),
+      );
       live = handle.agent;
       resumed = true;
     }

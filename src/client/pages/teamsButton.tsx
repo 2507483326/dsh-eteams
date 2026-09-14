@@ -99,6 +99,7 @@ import Check from 'lucide-react/dist/esm/icons/check.mjs';
 import Plus from 'lucide-react/dist/esm/icons/plus.mjs';
 import Search from 'lucide-react/dist/esm/icons/search.mjs';
 import { ADD_PEOPLE_TEMPLATE, captureInputActions, prefillComposer } from '../lib/addPeople';
+import { activateConversationTab } from '../lib/bridge';
 import { ClientErrorBoundary, recordClientDiag } from '../lib/diagnostics';
 import { enterTeamsPanel } from './teamsPanel';
 import {
@@ -114,15 +115,21 @@ import {
   type SessionIdentity,
 } from '../lib/api';
 import { useActivityMonitor, type TeamSnapshot } from '../lib/monitor';
-import { teamBadgeSummary } from '../lib/teamBadgeSummary';
+import { anchoredMainTaskOf, sessionMembersOf, teamBadgeSummary } from '../lib/teamBadgeSummary';
 import { getApp } from '../store/app';
 import { Avatar } from '../features/avatar/avatar';
 import { cn } from '../lib/cn';
 import { errorMessageOf } from '../lib/errors';
-import { isAddressedSubagentSession } from '../lib/sessionState';
+import {
+  canOpenSession,
+  isAddressedSubagentSession,
+  openSession,
+  rootSessionIdOf,
+} from '../lib/sessionState';
 import { subagentFaceMode, subagentFaceTitle } from '../lib/subagentFace';
 import { matchesQuery } from '../lib/text';
-import { BORDER_L1_CLASS, TEAM_CHIP_CLASS } from './shared/styles';
+import { TaskIdBadge, TaskStatusPill } from './shared/components';
+import { BORDER_L1_CLASS, LIST_COUNT_CLASS, MUTED_CLASS, TEAM_CHIP_CLASS } from './shared/styles';
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
 import { Input } from '../components/ui/input';
@@ -225,12 +232,19 @@ const CLEAR_BUTTON_CLASS =
 const IDENTITY_FACE_CLASS =
   'inline-flex h-7 shrink-0 cursor-default items-center gap-1.5 rounded-full border-none bg-business-tint px-2.5 text-[13px] leading-[18px] font-medium text-primary';
 
-/* 团队徽章 hover 面板（用户迭代 2026-09-12）：锁定徽章悬浮显示执行中任务+人员。
+/* 团队徽章 hover 面板（用户迭代 2026-09-12）：锁定徽章悬浮显示任务信息。
    覆盖 TooltipContent 默认深色小气泡（bg-primary/text-primary-foreground/text-xs/
    px-3 py-1.5）为弹层卡签名（bg-popover + --border 细线 + shadow-md，与
-   PopoverContent 同档）——cn 的 tailwind-merge 按组去重，后写覆盖。 */
+   PopoverContent 同档）——cn 的 tailwind-merge 按组去重，后写覆盖。用户
+   2026-09-14「卡片做高一点」：宽度上限放宽（260 → 320px），卡体由内容撑高。 */
 const BADGE_HOVER_CLASS =
-  'w-max max-w-[260px] rounded-lg border border-solid border-[color:var(--border)] bg-popover px-2.5 py-2 text-popover-foreground shadow-md';
+  'w-max max-w-[320px] rounded-lg border border-solid border-[color:var(--border)] bg-popover px-2.5 py-2 text-popover-foreground shadow-md';
+
+/* 会话成员 chip（用户 2026-09-14「加一个会话成员，点击进入已经有会话的成员
+   会话中」）：hover 卡内可点击切换会话的小胶囊。当前所在会话走高亮底（品牌
+   淡底 + 品牌字，与触发钮选中面同档）。 */
+const SESSION_CHIP_CLASS = `inline-flex max-w-full cursor-pointer items-center gap-1.5 rounded-full border border-solid px-2 py-0.5 text-xs text-foreground hover:bg-muted ${BORDER_L1_CLASS}`;
+const SESSION_CHIP_ACTIVE_CLASS = 'bg-business-tint text-[color:var(--eteams-brand-ink)]';
 
 /** ================================== 常量与映射表 ================================== */
 
@@ -353,10 +367,27 @@ function ClearButton({ onClear }: { onClear: () => void }): ReactNode {
  * （子代理身份不可选、不可换，团队/角色 绑定对子代理会话不成立）。数据来自
  * 宿主 GET /session-identity 的磁盘真相（任务副本行 / 领队副本行 / 构建会话
  * 文件），身份由插件指派而不是用户选择——脸面因此纯展示。
+ *
+ * 用户 2026-09-14「子对话中的团队弹窗也要出现同样的卡片」：身份脸面（hover
+ * 目标）挂与主对话锁定徽章同款的 TeamTaskHoverCard——按身份 teamId 定位队伍、
+ * 按本会话（上溯主对话）解析锚定主任务；无队伍（构建师 / 快照未落地）时退回
+ * 原生 title 兜底。
  */
-function SubagentIdentityFace({ identity }: { identity: SessionIdentity }): ReactNode {
-  return (
-    <span className={IDENTITY_FACE_CLASS} title={subagentFaceTitle(identity)}>
+function SubagentIdentityFace({
+  identity,
+  sessionId,
+}: {
+  identity: SessionIdentity;
+  sessionId: string | undefined;
+}): ReactNode {
+  const state = useActivityMonitor();
+  const team =
+    identity.teamId !== null ? state.teams.find((t) => t.teamId === identity.teamId) : undefined;
+  const face = (
+    <span
+      className={IDENTITY_FACE_CLASS}
+      title={team === undefined ? subagentFaceTitle(identity) : undefined}
+    >
       <Avatar
         name={identity.name}
         seed={identity.avatar?.seed}
@@ -365,6 +396,15 @@ function SubagentIdentityFace({ identity }: { identity: SessionIdentity }): Reac
       />
       <span className={FACE_NAME_CLASS}>{identity.name}</span>
     </span>
+  );
+  if (team === undefined) return face;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{face}</TooltipTrigger>
+      <TooltipContent side="top" className={BADGE_HOVER_CLASS}>
+        <TeamTaskHoverCard team={team} sessionId={sessionId} />
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -406,6 +446,135 @@ function TeamBadgeHover({
 }
 
 /**
+ * 会话成员 chip（用户 2026-09-14「加一个会话成员，点击进入已经有会话的成员
+ * 会话中，并将主会话也加进去」）：头像 + 名字，点击让宿主把该会话选为当前
+ * （openSession），并把视图标签切回「对话」——用户 2026-09-14「点击之后 tab
+ * 切换到对话去」：只切会话不切标签时，用户可能仍停在「团队」标签上、看不到
+ * 刚进的对话。仅在会话列表里（canOpenSession）时由调用方渲染——composer 表面
+ * 没挂 Toaster，点了没反应等于静默 no-op，故按任务页「跳转会话」钮同为门控
+ * 渲染；当前所在会话高亮（品牌淡底）。
+ */
+function SessionMemberChip({
+  name,
+  avatar,
+  sessionId,
+  active,
+}: {
+  name: string;
+  /** 主会话无成员头像，传 null 只显文字。 */
+  avatar: { seed: number; salt: number } | null;
+  sessionId: string;
+  active: boolean;
+}): ReactNode {
+  return (
+    <button
+      type="button"
+      title={`切换到「${name}」会话`}
+      className={cn(SESSION_CHIP_CLASS, active ? SESSION_CHIP_ACTIVE_CLASS : null)}
+      onClick={() => {
+        if (!openSession(sessionId)) return;
+        // 会话切换会重挂宿主的视图标签环——延后一帧再点「对话」标签，避免点到
+        // 正在卸载的旧节点（一次性延后，非轮询/重试）。
+        window.requestAnimationFrame(() => {
+          activateConversationTab();
+        });
+      }}
+    >
+      {avatar !== null && <Avatar name={name} seed={avatar.seed} salt={avatar.salt} size={18} />}
+      <span className="max-w-[120px] truncate">{name}</span>
+    </button>
+  );
+}
+
+/**
+ * 团队徽章 hover 主体（用户 2026-09-14「已创建团队任务的 hover 弹层里放本
+ * 会话锚定的主任务卡片」）：卡片参考任务列表小卡——编号徽章 + 主题（头行）、
+ * 「共 N 个任务，已完成 X，未完成 Y」（进度行）、底栏状态 pill；另加「会话
+ * 成员」一栏（主会话 + 有子会话的成员，点击切换）与右下角「去任务」钮
+ * （enterTeamsPanel 落任务详情页）。锚定任务取不到（刚绑定 / 尚无任务）时
+ * 退回原摘要（TeamBadgeHover：执行中任务 / 阶段文案），旧观感不丢。
+ *
+ * sessionId 传本会话 id；已在子代理会话时先经 rootSessionIdOf 上溯到主对话
+ * 再比对任务锚（任务行 main_session_id 登记的是主对话快照）。
+ */
+function TeamTaskHoverCard({
+  team,
+  sessionId,
+}: {
+  team: TeamSnapshot;
+  sessionId: string | undefined;
+}): ReactNode {
+  // 任务锚按会话树根解析（任务行 main_session_id 登记的是主对话快照）；会话
+  // 成员高亮按**当前真实会话**比对——子对话里上溯出的主会话不该被点亮。
+  const current = rootSessionIdOf(sessionId) ?? sessionId ?? null;
+  const activeSessionId = sessionId ?? null;
+  const task = anchoredMainTaskOf(team, current ?? undefined);
+  if (task === undefined) {
+    return <TeamBadgeHover team={team} captainName={team.captain.name} />;
+  }
+  const subs = team.tasks.filter((t) => t.parentId === task.taskId);
+  const done = subs.filter((t) => t.status === 'completed').length;
+  const mainSession = task.sessionId ?? null;
+  const chips: ReactNode[] = [];
+  if (mainSession !== null && canOpenSession(mainSession)) {
+    chips.push(
+      <SessionMemberChip
+        key="main"
+        name="主会话"
+        avatar={null}
+        sessionId={mainSession}
+        active={activeSessionId === mainSession}
+      />,
+    );
+  }
+  for (const member of sessionMembersOf(task)) {
+    if (!canOpenSession(member.sessionId)) continue;
+    chips.push(
+      <SessionMemberChip
+        key={member.sessionId}
+        name={member.name}
+        avatar={member.avatar}
+        sessionId={member.sessionId}
+        active={activeSessionId === member.sessionId}
+      />,
+    );
+  }
+  return (
+    <div className="flex w-[300px] flex-col gap-2">
+      <div className="flex min-w-0 items-center gap-1.5">
+        <TaskIdBadge taskId={task.taskId} />
+        <div className="truncate text-sm font-semibold text-foreground" title={task.subject}>
+          {task.subject}
+        </div>
+      </div>
+      <div className={LIST_COUNT_CLASS}>
+        共 {subs.length} 个任务，已完成 <span className="text-success">{done}</span>，未完成{' '}
+        <span className="text-warning">{subs.length - done}</span>
+      </div>
+      {chips.length > 0 && (
+        <div className="flex flex-col gap-1">
+          <div className={MUTED_CLASS}>会话成员</div>
+          <div className="flex flex-wrap gap-1.5">{chips}</div>
+        </div>
+      )}
+      <div className="mt-auto flex items-center justify-between gap-2 border-t border-solid pt-2">
+        <TaskStatusPill status={task.status} retryCount={task.retryCount} />
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            enterTeamsPanel({ taskId: task.taskId });
+          }}
+        >
+          去任务
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
  * 触发钮面（团队对话锁定，用户迭代 2026-09-10）：渲染在 Provider 子树内
  * （useActivityMonitor 需 store context），按选中面三分支——
  * - 角色面：头像 + 名字 + hover 清除钮（行为不变）；
@@ -418,6 +587,9 @@ function TeamBadgeHover({
  * 避免挂载瞬间解锁闪烁。
  * 用户迭代 2026-09-12：锁定且队伍在快照里时挂 Tooltip 显示执行中任务+人员
  * （TeamBadgeHover）；原生 title 让位给富面板（失联/未落地分支仍用 title 兜底）。
+ * 用户 2026-09-14「已创建团队任务的 hover 弹层放本会话锚定的主任务卡片 + 会话
+ * 成员 + 去任务」：富面板改由 TeamTaskHoverCard 承担（无锚定任务时内部退回
+ * TeamBadgeHover）。
  */
 function TeamsTriggerButton(props: {
   selectedMember: RosterMember | null;
@@ -425,6 +597,8 @@ function TeamsTriggerButton(props: {
   /** 对话是否已开始（快照 blank 取反）——未开始时锁定不成立（用户迭代
    * 2026-09-13「开始对话后才不能修改」：选中团队后到首条消息前仍可点击换队）。 */
   conversationStarted: boolean;
+  /** 本会话 id（hover 卡据它解析本会话锚定的主任务）。 */
+  sessionId: string | undefined;
   open: boolean;
   onButtonClick: () => void;
   onClear: () => void;
@@ -502,7 +676,7 @@ function TeamsTriggerButton(props: {
       <Tooltip>
         <TooltipTrigger asChild>{button}</TooltipTrigger>
         <TooltipContent side="top" className={BADGE_HOVER_CLASS}>
-          <TeamBadgeHover team={team} captainName={team.captain.name} />
+          <TeamTaskHoverCard team={team} sessionId={props.sessionId} />
         </TooltipContent>
       </Tooltip>
     );
@@ -1069,8 +1243,9 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
           data-eteams="button"
         >
           {mode === 'identity' && identity !== null ? (
-            // 子代理身份面（只读）：身份由插件指派，无弹层、无清除、不可点。
-            <SubagentIdentityFace identity={identity} />
+            // 子代理身份面（只读）：身份由插件指派，无清除、不可选（hover 弹
+            // 本会话锚定任务卡片，点击换会话）。
+            <SubagentIdentityFace identity={identity} sessionId={sessionId} />
           ) : mode === 'interactive' ? (
             <>
               {/* 选中面与锁定态在 TeamsTriggerButton 内（Provider 子树）：
@@ -1079,6 +1254,7 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
                 selectedMember={selectedMember}
                 selectedTeam={selectedTeam}
                 conversationStarted={conversationStarted}
+                sessionId={sessionId}
                 open={open}
                 onButtonClick={onButtonClick}
                 onClear={clearSelection}

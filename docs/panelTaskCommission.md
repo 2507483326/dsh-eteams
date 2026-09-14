@@ -28,7 +28,7 @@ v2 修订：按审核报告修正派发锚一层的事实错误（captainFor 是
 7 态（**用户迭代 2026-09-11 精简**，原 11 态收敛）：`creating/ready/start/paused/wait_user/completed/cancelled`，非法转移抛 `TransitionError`。
 - `draft/ready/wait` → `ready`（统一「待开始」）：草稿与就绪同义，「等待派发」并入 start 语义——**派发不改状态**（任务留 ready），成员领取才 `ready→start`；重试失败/改派也回 ready。
 - `wait_decision/failed` → `wait_user`（统一「待用户」）：待回答问题/待决策/重试超限。
-- 依赖阻塞不再物化（原 `wait + blocked_from` 退役）：被上游卡住的任务保持 ready，**派发口**用 `dependenciesSatisfied` 校验；`blocked_from` 列弃用（保留不 DROP）。
+- 依赖阻塞不再物化（原 `wait + blocked_from` 退役）：`dependencies` 只作排布提示（面板执行序按兄弟依赖拓扑排），**不再拦派发**（用户 2026-09-14「闸门拦住去掉吧」）；`blocked_from` 列弃用（保留不 DROP）。
 - 大任务（容器，`parentId === null`）只用 `creating/ready/start/paused` + `completed`（**可回退标识**，追加小任务即回 ready；无 cancelled——取消 = 取消未完成小任务并回 ready）。
 
 ### 1.3 面板写端与锚点（关键事实）

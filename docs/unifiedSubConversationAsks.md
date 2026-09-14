@@ -80,6 +80,34 @@
 - 卡槽免问：用户调整任务成员卡槽（chain 站点）/执行链/团队成员是正常计划操作，领队不询问、
   不确认、不追问「是否有意」，只现读现状后适配（`prompts/spawn/captainChild.ts` 新增纪律）。
 
+## 提问口径：自包含 + 说人话 + 选项写清后果（2026-09-14）
+
+用户口令：问答弹窗出现在主会话时需要具体细节，将问题通过小学生和外行都能听懂的方式
+给到主会话显示出来，不然用户不知道怎么选。
+
+弹窗是原生组件、载荷只有 `questions`——弹到主对话时，用户手里只有这段问题文本，提问
+子代理脑子里的任务上下文一点都传不过来（实况：问题只有「车门开关的触发方式选哪种？」
+这类短语 +「全部按推荐（A/A/A/A/A）」这类无信息量选项）。所以口径由提问方在文案里
+**自我承担**，不做宿主侧上下文前缀：问题必须**自包含**（点名哪个任务/哪一步、为什么
+问）、**说人话**（无代号/缩写/变量名/文件路径/行话，术语就地一句解释）、**选项写清
+「选它会怎样」**（禁止「方案 A / 方案 B」「看情况」这类选项）、**具体可判**（该给
+数字/范围/样例就给），推荐项放首位并在 label 尾标「（推荐）」。
+
+口径落点（分主次，避免双轨）：
+
+- **全文（5 条）只写一处**：`tools/askUserTools.ts` 的 `eteams_ask_user` 工具
+  description——所有子代理（成员/领队/构建师）弹窗前必读；同文件的 `question` /
+  `options` 参数描述同步具体化。
+- **短句（一句话）**在其余用户可见提问通道复用：`tools/captainTools.ts` 的
+  `eteams_build_report(interview)` 问题描述（访谈问题会原样经 `eteams_ask_user` 弹出并
+  渲染在面板，两处同源）、`prompts/personas/builder.ts` 的意图访谈规则、
+  `prompts/steering/askFallback.ts` 的降级文本提问、`prompts/spawn/captainChild.ts` 的
+  问询（FR-37）纪律、`prompts/spawn/member.ts` 的求助纪律、`prompts/system/sessionTeam.ts`
+  两个指示原生 `ask_user_question` 的无领队分支（文件内常量 `ASK_USER_QUESTION_SPEC`）。
+- 主会话亲自问询走原生 `ask_user_question`，其工具 description 不归本仓库——band 是唯一
+  可控入口。若实况仍漂移，下一步再考虑在 `runtime/askUser.ts` 里给问题自动前缀任务上下文
+  的兜底（本次显式不做：前缀只补出处、补不了解释）。
+
 ## 明确不做
 
 - `eteams_build_wait` 保留现状（已标注遗留/诊断用）。

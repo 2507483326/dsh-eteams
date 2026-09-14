@@ -50,6 +50,10 @@ export interface AskRecord {
   status: AskStatus;
   /** 弹窗所在会话 ID（2026-09-10 统一后恒等于提问会话自身，审计留档）。 */
   relaySessionId?: string;
+  /** 弹窗**实际落在**的会话 ID（v14；看板「决策面板」跳转目标）。 */
+  deliverySessionId?: string;
+  /** 落点是否为主对话（v14）：true=主对话 / false=提问子会话 / 缺省=未知。 */
+  deliveryIsMain?: boolean;
   createdAt: number;
   answeredAt?: number;
   updatedAt: number;
@@ -91,6 +95,8 @@ function askColumns(record: AskRecord): {
   answers: string | null;
   status: string;
   relaySessionId: string | null;
+  deliverySessionId: string | null;
+  deliveryIsMain: number | null;
   createdAt: number;
   answeredTime: number | null;
   updateTime: number;
@@ -106,6 +112,9 @@ function askColumns(record: AskRecord): {
     answers: record.answers !== undefined ? JSON.stringify(record.answers) : null,
     status: record.status,
     relaySessionId: record.relaySessionId ?? null,
+    deliverySessionId: record.deliverySessionId ?? null,
+    deliveryIsMain:
+      record.deliveryIsMain === undefined ? null : record.deliveryIsMain ? 1 : 0,
     createdAt: record.createdAt,
     answeredTime: record.answeredAt ?? null,
     updateTime: record.updatedAt,
@@ -145,6 +154,12 @@ function rowToRecord(row: Record<string, unknown>): AskRecord {
     ...(row['relay_session_id'] !== null && row['relay_session_id'] !== undefined
       ? { relaySessionId: String(row['relay_session_id']) }
       : {}),
+    ...(row['delivery_session_id'] !== null && row['delivery_session_id'] !== undefined
+      ? { deliverySessionId: String(row['delivery_session_id']) }
+      : {}),
+    ...(row['delivery_is_main'] !== null && row['delivery_is_main'] !== undefined
+      ? { deliveryIsMain: Number(row['delivery_is_main']) !== 0 }
+      : {}),
     createdAt: Number(row['created_time']),
     ...(row['answered_time'] !== null && row['answered_time'] !== undefined
       ? { answeredAt: Number(row['answered_time']) }
@@ -155,7 +170,8 @@ function rowToRecord(row: Record<string, unknown>): AskRecord {
 
 const SELECT_COLS =
   'ask_id, team_id, asking_session_id, asking_name, asking_kind, main_task_id, questions, ' +
-  'answers, status, relay_session_id, created_time, answered_time, update_time';
+  'answers, status, relay_session_id, delivery_session_id, delivery_is_main, ' +
+  'created_time, answered_time, update_time';
 
 /** Insert one ask row（独立事务；幂等键冲突整体失败——ask_id 唯一）。 */
 export function insertAskSync(stateRoot: string, record: AskRecord): void {
@@ -164,8 +180,9 @@ export function insertAskSync(stateRoot: string, record: AskRecord): void {
   const c = askColumns(record);
   db.prepare(
     'INSERT INTO ask_questions (ask_id, team_id, asking_session_id, asking_name, asking_kind, ' +
-      'main_task_id, questions, answers, status, relay_session_id, created_time, answered_time, update_time) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'main_task_id, questions, answers, status, relay_session_id, delivery_session_id, ' +
+      'delivery_is_main, created_time, answered_time, update_time) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   ).run(
     c.askId,
     c.teamId,
@@ -177,10 +194,31 @@ export function insertAskSync(stateRoot: string, record: AskRecord): void {
     c.answers,
     c.status,
     c.relaySessionId,
+    c.deliverySessionId,
+    c.deliveryIsMain,
     c.createdAt,
     c.answeredTime,
     c.updateTime,
   );
+}
+
+/**
+ * 回写弹窗**实际落点**（v14）：runAskUser 先按意图落 delivery（面板在待答
+ * 期间即可跳转），若主对话弹窗被拒、退回提问子会话成功，则用本函数把落点
+ * 更正为提问会话。仅改落点两列，不动问答单状态。
+ */
+export function recordAskDeliverySync(
+  stateRoot: string,
+  askId: string,
+  deliverySessionId: string,
+  deliveryIsMain: boolean,
+): void {
+  const db = getDb(stateRoot);
+  ensureWorkspaceReady(stateRoot, db);
+  db.prepare(
+    'UPDATE ask_questions SET delivery_session_id = ?, delivery_is_main = ?, update_time = ? ' +
+      'WHERE ask_id = ?',
+  ).run(deliverySessionId, deliveryIsMain ? 1 : 0, Date.now(), askId);
 }
 
 /** Read one ask row by id（缺失返回 undefined）。 */
@@ -202,6 +240,27 @@ export function readPendingAsksSync(stateRoot: string, teamId: number): AskRecor
       `SELECT ${SELECT_COLS} FROM ask_questions WHERE team_id = ? AND status = 'pending' ORDER BY ask_id`,
     )
     .all(teamId) as Array<Record<string, unknown>>;
+  return rows.map(rowToRecord);
+}
+
+/**
+ * 最近已结束问答单（answered/cancelled/expired；结束时刻降序、最新在前，
+ * limit 限量）。历史全量留库，读端只回看最近 N 条——看板「决策面板」
+ * 『已决策』历史数据源（pending 单走 {@link readPendingAsksSync}）。
+ */
+export function readRecentAsksSync(
+  stateRoot: string,
+  teamId: number,
+  limit: number,
+): AskRecord[] {
+  const db = getDb(stateRoot);
+  ensureWorkspaceReady(stateRoot, db);
+  const rows = db
+    .prepare(
+      `SELECT ${SELECT_COLS} FROM ask_questions WHERE team_id = ? AND status != 'pending' ` +
+        'ORDER BY COALESCE(answered_time, update_time) DESC LIMIT ?',
+    )
+    .all(teamId, limit) as Array<Record<string, unknown>>;
   return rows.map(rowToRecord);
 }
 
