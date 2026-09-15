@@ -418,7 +418,7 @@ export function teamSnapshot(
   // 状态根统一走 stateRootFor（用户迭代 2026-09-04 全局单库：stateDir 绝对
   // 路径时所有工作区共用一个根；相对路径保持 per-workspace）。
   const stateRoot = stateRootFor(config, workspacePath);
-  // The captain (项目牧羊人) is rendered as the leader card on the 团队 page;
+  // The captain (团队领队) is rendered as the leader card on the 团队 page;
   // it is not a roster member, so it travels with the snapshot instead. v7：
   // 领队工号 = 班底领队行自增主键（表自增，建队即入班底领号），异常缺行
   // 按 1 号兜底。
@@ -473,7 +473,7 @@ export function teamSnapshot(
       };
     })(),
     captain: {
-      name: '项目牧羊人',
+      name: LEADER_NAME,
       // 工号格式化显示串：班底领队行（v7）。
       employeeId: formatEmployeeId(leaderBadge),
       role: captainPersona.role,
@@ -483,7 +483,7 @@ export function teamSnapshot(
       personaMd: captainPersona.personaMd ?? null,
       // 头像（用户迭代 2026-09-03）：优先名册领队条目——面板「随机头像」
       // 换脸后团队页领队卡同步；缺省回落固定 (hashName, 7)。
-      avatar: rosterLeader?.avatar ?? { seed: avatarSeedFor('项目牧羊人'), salt: 7 },
+      avatar: rosterLeader?.avatar ?? { seed: avatarSeedFor(LEADER_NAME), salt: 7 },
       // 模型路线（用户迭代 2026-09-04 恢复领队模型选择；v9 存班底领队行
       // leaderRouteOf——provider/model/effort 整组），空 model = 会话默认。
       model: leaderRoute.model,

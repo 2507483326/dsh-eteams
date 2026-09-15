@@ -1,5 +1,5 @@
 -- =====================================================================
--- ETeams SQLite schema v14（db_schema_version = 14；v3 成员=角色合并：member
+-- ETeams SQLite schema v15（db_schema_version = 15；v3 成员=角色合并：member
 -- 表精简改名成 roles 角色库表（去 team_id/role_id/model/reasoning_effort，
 -- 新增 profile），班底另起 team_members 表，旧 roles 标签登记表删除；
 -- v4 班底行补 role_name/persona_md/profile 角色信息副本列；v5 任务行补主
@@ -9,7 +9,7 @@
 -- （AUTOINCREMENT 只增不复用），班底/团队表不加新列；roles.employee_id 弃用
 -- ——列保留不读写；mail_messages 补 employee_id 分箱列、attempts 补
 -- task_member_id 副本行列；v8 领队标识列：roles/team_members/task_members
--- 补 is_leader（项目牧羊人=1 其余=0，领队行查找按标识不按名；旧库经 getDb
+-- 补 is_leader（团队领队=1 其余=0，领队行查找按标识不按名；旧库经 getDb
 -- 迁移回填）；v9 班底/任务成员补 provider 路线列；v10 班底行补 avatar 头像
 -- 副本列（角色修改保存后随 roles.avatar 按 role_id 同步刷新，角色删除不
 -- 进行同步；旧库经 getDb 迁移回填）；v11 子代理用户问答单：新增
@@ -25,7 +25,9 @@
 -- task.blocked_from 列弃用不再读写（列保留不 DROP），status 列默认值改 ready；
 -- v14 问答弹窗落点列：ask_questions 补 delivery_session_id（弹窗实际落在的
 -- 会话 ID）与 delivery_is_main（1=主对话 / 0=提问子会话）——看板「决策面板」
--- 据此精确跳转到作答会话（旧库经 getDb ALTER + 按提问会话回填）
+-- 据此精确跳转到作答会话（旧库经 getDb ALTER + 按提问会话回填）；v15 领队
+-- 改名：保留名 项目牧羊人 → 团队领队（roles/team_members/task_members 旧名
+-- 行改名并兜底 is_leader，无列结构变更；旧库经 getDb 迁移回填）
 -- 主键 = 每张表自己的编号列，统一 INTEGER 自增（schema_meta 例外：key 即主键）
 -- 时间列一律 *_time 结尾（Unix 毫秒）；每张表末尾 created_time / update_time
 -- 枚举 = TEXT（合法值写在列注释里）；JSON = TEXT 存 JSON 字符串
@@ -70,7 +72,7 @@ CREATE TABLE IF NOT EXISTS roles (
   role_id        INTEGER PRIMARY KEY AUTOINCREMENT,  -- 角色 ID，自增（team_members.role_id 引用它）
   role_name      TEXT NOT NULL,                -- 角色名（成员名=角色名；全库唯一，写入代码查重）
   employee_id    INTEGER,                      -- 【v7 弃用】工号已挪到 team_members（表自增主键即工号）；列保留不读写，旧库回滚兼容
-  is_leader      INTEGER NOT NULL DEFAULT 0,   -- 领队标识（v8）：项目牧羊人=1 其余=0；写入层由保留名派生，读端按标识取领队
+  is_leader      INTEGER NOT NULL DEFAULT 0,   -- 领队标识（v8）：团队领队=1 其余=0；写入层由保留名派生，读端按标识取领队
   is_root        INTEGER NOT NULL DEFAULT 0,   -- 主对话注入角色标识（v12）：保留角色 system=1 其余=0；写入层由保留名派生，读端按标识取行
   persona_md     TEXT,                         -- 完整角色手册（Markdown 全文；duty/style/skills 等结构字段写入时烘进手册）
   profile        TEXT,                         -- 一句话简介（列表卡片/详情头展示；独立成列，不再烘进 persona_md）
@@ -145,7 +147,7 @@ CREATE INDEX IF NOT EXISTS idx_task_update  ON task (team_id, update_time DESC);
 -- 5. task_members —— 任务成员副本（有会话锚点；v7：建任务/加成员
 --    时从班底整行复制，工号抄班底行自增主键，行生命周期跟随
 --    所属大任务——删任务→副本级联删）
---    领队也是一行：name='项目牧羊人'、main_task_id 为空（团队级主持行，
+--    领队也是一行：name='团队领队'、main_task_id 为空（团队级主持行，
 --    不是工牌——领队子会话的锚 + has_leader 载体）。
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS task_members (

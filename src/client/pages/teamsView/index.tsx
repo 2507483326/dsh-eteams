@@ -189,9 +189,7 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
           display: getComputedStyle(el).display,
           rect: rectOf(el),
         }));
-        const cursorHits = [
-          ...document.querySelectorAll<HTMLElement>('*'),
-        ]
+        const cursorHits = [...document.querySelectorAll<HTMLElement>('*')]
           .filter((el) => {
             const c = getComputedStyle(el).cursor;
             return c === 'col-resize' || c === 'ew-resize';
@@ -422,7 +420,6 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
           <ETeamsViewRoutes
             team={team}
             now={now}
-            fetchedAt={state.fetchedAt}
             sessionId={sessionId}
             pool={pool}
             roster={roster}

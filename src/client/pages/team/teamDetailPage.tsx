@@ -22,7 +22,6 @@ import {
   removeTeamMember,
   setLeaderModel,
   setMemberModel,
-  setTeamLeaderRemoved,
   type RosterMember,
 } from '../../lib/api';
 import {
@@ -370,12 +369,12 @@ export function TeamDetailPage({
       .finally(() => setModelSavingName(null));
   };
 
+  // 暂时禁止移出领队（需求 2026-09-15「暂时修改团队领队不能移出团队」）：
+  // 领队卡移出钮保留可见（遵循「动作按钮常显、点击期提示」纪律），点击就地
+  // 提示、不发请求。恢复移除能力时还原为 setTeamLeaderRemoved(teamId, true)。
   const removeLeader = (): void => {
     if (detailTeam === null) return;
-    setDetailError(null);
-    void setTeamLeaderRemoved(detailTeam.teamId, true).catch((e) =>
-      setDetailError(errorMessageOf(e)),
-    );
+    setDetailError('团队领队暂时不能移出团队');
   };
 
   if (detailTeam === null) {

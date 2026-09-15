@@ -1,8 +1,9 @@
 /**
  * 看板动态派生层（features/activity/activityView）单测：`activityRowsOf`
- * （任务标签主题解析/兜底、倒序、色调兜底）与 `pendingActionsOf`（决策跳任务
- * 主对话、问答跳弹窗落点、isMain 透传、排序）。用户 2026-09-14「看板里面的
- * 动态改成和任务绑定……另加一个决策面板」。
+ * （任务标签主题解析/兜底、倒序、色调兜底）与 `pendingActionsOf` / `decidedActionsOf`
+ * （三列列镜像：#id 任务号、对话名称（主对话 / 提问代理名）、详情拼装，加跳转
+ * 目标与排序）。用户 2026-09-14「看板里面的动态改成和任务绑定……另加一个决策
+ * 面板」；2026-09-15「都在一行，按照 #任务ID  对话名称  详情 显示」。
  *
  * @module dsh-eteams/tests/activityView
  */
@@ -44,7 +45,7 @@ const team = (over: Partial<TeamSnapshot> = {}): TeamSnapshot => ({
   progress: { completed: 0, total: 0, cancelled: 0, active: 0 },
   leaderRemoved: false,
   captain: {
-    name: '项目牧羊人',
+    name: '团队领队',
     employeeId: 'ET-0001',
     role: 'captain',
     duty: '',
@@ -152,7 +153,7 @@ describe('activityRowsOf（任务绑定时间线）', () => {
 });
 
 describe('pendingActionsOf（决策面板）', () => {
-  it('决策 → 跳任务主对话、isMain=true；问答 → 跳弹窗落点、isMain 透传', () => {
+  it('决策 → 跳任务主对话、列值 #id/主对话/主题·原因；问答 → 跳弹窗落点', () => {
     const actions = pendingActionsOf(
       team({
         pendingDecisions: [{ id: 5, taskId: 3, error: '重试超限', retryCount: 3, createdAt: 50 }],
@@ -175,10 +176,13 @@ describe('pendingActionsOf（决策面板）', () => {
     const decision = actions[0]!;
     expect(decision.sessionId).toBe('cap-1'); // task 3 的主会话
     expect(decision.isMainSession).toBe(true);
-    expect(decision.title).toBe('接口开发');
-    expect(decision.detail).toBe('重试超限');
+    expect(decision.taskId).toBe(3); // #id 列
+    expect(decision.conversationName).toBe('主对话'); // 对话名称列
+    expect(decision.detail).toBe('接口开发 · 重试超限'); // 详情列：主题 · 失败原因
     const ask = actions[1]!;
-    expect(ask.title).toBe('甲 的问答（2 问）');
+    expect(ask.taskId).toBe(3); // #id 列取绑定的大任务
+    expect(ask.conversationName).toBe('主对话'); // 落点主对话
+    expect(ask.detail).toBe('甲 的问答（2 问）');
     expect(ask.sessionId).toBe('cap-1'); // 弹窗落点
     expect(ask.isMainSession).toBe(true);
   });
@@ -205,12 +209,27 @@ describe('pendingActionsOf（决策面板）', () => {
             askingSessionId: 'member-2',
             mainTaskId: 99,
           },
+          {
+            askId: 'ask-3',
+            askingName: '丙',
+            askingKind: 'member',
+            questionCount: 1,
+            createdAt: 3,
+            askingSessionId: 'member-3',
+          },
         ],
       }),
     );
     expect(actions[0]?.sessionId).toBe('cap-2'); // task 7 主会话
     expect(actions[0]?.isMainSession).toBe(false);
+    expect(actions[0]?.conversationName).toBe('甲'); // 非主对话 → 提问代理名
+    expect(actions[0]?.taskId).toBe(7);
     expect(actions[1]?.sessionId).toBe('member-2'); // 任务已删 → 提问会话兜底
+    expect(actions[1]?.conversationName).toBe('乙');
+    expect(actions[1]?.taskId).toBe(99); // 任务已删仍留着任务号
+    // 旧快照缺 mainTaskId：`#id` 列无值（页面留占位），对话名称仍给代理名。
+    expect(actions[2]?.taskId).toBeNull();
+    expect(actions[2]?.conversationName).toBe('丙');
   });
 
   it('按时间升序（最早待处理在前）', () => {
@@ -257,13 +276,14 @@ describe('decidedActionsOf（已决策历史）', () => {
     expect(actions.map((a) => a.key)).toEqual(['rd5', 'rd6']);
     const first = actions[0]!;
     expect(first.kind).toBe('decision');
-    expect(first.title).toBe('接口开发');
-    expect(first.detail).toBe('已换人重派');
+    expect(first.taskId).toBe(3); // #id 列
+    expect(first.conversationName).toBe('主对话'); // 对话名称列
+    expect(first.detail).toBe('接口开发 · 已换人重派'); // 详情列：主题 · 处置结论
     expect(first.at).toBe(80);
     expect(first.sessionId).toBe('cap-1'); // task 3 主会话
     expect(first.isMainSession).toBe(true);
     expect(first.outcome).toBe('ok');
-    expect(actions[1]!.detail).toBe('已挂起 · task cancelled'); // note 追加
+    expect(actions[1]!.detail).toBe('联调 · 已挂起 · task cancelled'); // 主题 · 结论（note 追加）
   });
 
   it('问答：答案摘要 / 状态兜底 / 落点会话 / isMain 透传', () => {
@@ -302,16 +322,18 @@ describe('decidedActionsOf（已决策历史）', () => {
     expect(actions.map((a) => a.key)).toEqual(['raask-1', 'raask-2']);
     const first = actions[0]!;
     expect(first.kind).toBe('ask');
-    expect(first.title).toBe('甲 的问答（2 问）');
-    expect(first.detail).toBe('选项A；自填B');
+    expect(first.taskId).toBe(3);
+    expect(first.conversationName).toBe('主对话'); // 落点主对话
+    expect(first.detail).toBe('甲 的问答（2 问） · 选项A；自填B'); // 问题 · 答案摘要
     expect(first.sessionId).toBe('cap-1');
     expect(first.isMainSession).toBe(true);
     expect(first.outcome).toBe('ok');
     const second = actions[1]!;
-    expect(second.detail).toBe('已取消'); // 无答案 → 状态文案
+    expect(second.detail).toBe('乙 的问答（1 问） · 已取消'); // 无答案 → 状态文案
     expect(second.at).toBe(5);
     expect(second.outcome).toBe('muted');
     expect(second.sessionId).toBe('member-2'); // 任务已删 + 无落点 → 提问会话兜底
+    expect(second.conversationName).toBe('乙'); // 非主对话 → 提问代理名
     expect(second.isMainSession).toBe(false);
   });
 
@@ -346,7 +368,7 @@ describe('decidedActionsOf（已决策历史）', () => {
       }),
     );
     expect(actions.map((a) => a.key)).toEqual(['raa', 'rd1']);
-    expect(actions[1]!.detail).toBe('已处理'); // choice 缺省
+    expect(actions[1]!.detail).toBe('接口开发 · 已处理'); // 主题 · choice 缺省
     expect(decidedActionsOf(team())).toEqual([]); // 旧快照无历史字段
   });
 });

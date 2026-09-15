@@ -43,7 +43,7 @@ v2 修订：按审核报告修正派发锚一层的事实错误（captainFor 是
 
 - `hasLeader` 目前只是 `team` 表的开关（建队开关 + 面板展示消费），对话流程**不分支**：绑定横幅（sessionTeamBand）一律写「团队工作流由持续领队子代理主持——本会话只负责转交与展示」，对无领队团队失真。本设计首次让 `hasLeader` 决定「谁来完善任务」，并顺手把横幅按 `hasLeader` 分支收口。
 - 绑定存内存 Map（runtime/sessionTeam.ts），重启自愈；绑定他队时 resolveCaller 绑定优先，`caller.team` 错配。
-- 领队主持行（`task_members` 中 `name='项目牧羊人'` 且 `mainTaskId IS NULL`）是领队子代理会话锚。
+- 领队主持行（`task_members` 中 `name='团队领队'` 且 `mainTaskId IS NULL`）是领队子代理会话锚。
 
 ---
 

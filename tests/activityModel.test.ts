@@ -52,7 +52,7 @@ const TEAM: TeamSnapshot = {
   progress: { completed: 2, total: 5, cancelled: 0, active: 1 },
   leaderRemoved: false,
   captain: {
-    name: '项目牧羊人',
+    name: '团队领队',
     employeeId: 'ET-0001',
     role: 'captain',
     duty: '拆解',

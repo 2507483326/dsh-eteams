@@ -76,9 +76,10 @@ interface SessionFaceView {
 interface SessionsFace {
   binding?: (sessionId: string) => { session?: SessionFaceView } | undefined;
   subagentAddress?: (sessionId: string) => unknown;
-  /** 会话列表快照（useSessions 标准数据源）：跳转前判定目标会话在不在列表。 */
+  /** 会话列表快照（useSessions 标准数据源）：跳转前判定目标会话在不在列表；
+   * `current` = 宿主持久选中的会话（所有会话作用域表面的共同基准）。 */
   list?: {
-    getSnapshot?: () => { byId?: Record<string, unknown> } | undefined;
+    getSnapshot?: () => { byId?: Record<string, unknown>; current?: unknown } | undefined;
   };
   /** 把某会话选为当前（列表外 id 会 fail loud——调用前先 canOpenSession）。 */
   open?: (sessionId: string) => void;
@@ -120,6 +121,62 @@ function sessionsFaceOf(): SessionsFace | null {
   const face = readClientService(clientCtx, 'sessions');
   if (typeof face !== 'object' || face === null) return null;
   return face as SessionsFace;
+}
+
+/** 工作区登记表里的一员（宿主 WorkspaceView 的结构化投影）。 */
+interface WorkspaceViewLike {
+  workspaceId?: unknown;
+  path?: unknown;
+  sessionIds?: unknown;
+}
+
+/** Client workspaces 服务（WorkspaceRuntime）的结构化读取面。 */
+interface WorkspacesFace {
+  list?: {
+    getSnapshot?: () => { items?: unknown } | undefined;
+  };
+}
+
+/** 取宿主 workspaces 服务面（同 sessions 的降级纪律：缺服务/形态异常 → null）。 */
+function workspacesFaceOf(): WorkspacesFace | null {
+  const face = readClientService(clientCtx, 'workspaces');
+  if (typeof face !== 'object' || face === null) return null;
+  return face as WorkspacesFace;
+}
+
+/**
+ * 某会话所属的 Workspace id——新建对话必须挂在**同一工作区**下，否则落
+ * 「未分组」。
+ *
+ * 分组是宿主的**工作区记账**：真相在 `WorkspaceView.sessionIds`，会话自己的
+ * `cwd` 只钉目录、不构成账目。`session.create` 只给 `cwd` 建出来的会话不在任何
+ * 工作区名下，列表里即 Ungrouped（用户 2026-09-15 复现：ttt1212 下建的团队
+ * 任务，新对话落「未分组」）。宿主 New Session 流程同款落点：见
+ * WorkspaceRuntime.connectWorkspace —— `sessions.create({ workspaceId })`。
+ *
+ * 先按 `sessionIds` 命中定位（权威）；会话未记账时退一步按 `path === cwd` 认领
+ * 同名工作区。缺服务/无命中 → undefined（调用方回退按 cwd 建会话）。
+ */
+export function workspaceIdOfSession(sessionId: string, cwd?: string | null): string | undefined {
+  const items = workspacesFaceOf()?.list?.getSnapshot?.()?.items;
+  if (!Array.isArray(items)) return undefined;
+  const views = items.filter(
+    (raw): raw is WorkspaceViewLike => typeof raw === 'object' && raw !== null,
+  );
+  const idOf = (view: WorkspaceViewLike): string | undefined =>
+    typeof view.workspaceId === 'string' && view.workspaceId !== '' ? view.workspaceId : undefined;
+  if (sessionId !== '') {
+    const owned = views.find(
+      (view) => Array.isArray(view.sessionIds) && view.sessionIds.includes(sessionId),
+    );
+    const ownedId = owned === undefined ? undefined : idOf(owned);
+    if (ownedId !== undefined) return ownedId;
+  }
+  if (cwd !== undefined && cwd !== null && cwd !== '') {
+    const byPath = views.find((view) => view.path === cwd);
+    if (byPath !== undefined) return idOf(byPath);
+  }
+  return undefined;
 }
 
 /**
@@ -220,6 +277,20 @@ export function openSession(sessionId: string): boolean {
 }
 
 /**
+ * 当前会话 id（会话列表快照的 `current`——宿主持久选中的会话）。
+ *
+ * 整页团队页（覆盖层表面）没有槽位下发的 `sessionId`：它挂在 body 下的
+ * 独立 React 根，不在任何会话作用域槽位里。而「添加任务」要沿用来源会话的
+ * 工作区（`sessionCwdOf`），就得先从宿主列表快照取「用户正看着哪个会话」——
+ * 取不到时新对话落宿主默认工作区（用户 2026-09-15 复现：ttt1212 里建的团队
+ * 任务，新对话跑到了 DSH 安装目录）。缺服务/无选中/畸形值 → undefined。
+ */
+export function currentSessionIdOf(): string | undefined {
+  const current = sessionsFaceOf()?.list?.getSnapshot?.()?.current;
+  return typeof current === 'string' && current !== '' ? current : undefined;
+}
+
+/**
  * 当前会话的工作目录（会话列表行快照的 cwd）：新建对话时沿用同一工作区，
  * 避免新对话落到宿主默认目录而与来源对话不在一个工作区。缺服务/无该行/
  * cwd 缺失一律 null，调用方按「宿主默认」兜底。
@@ -236,14 +307,28 @@ export function sessionCwdOf(sessionId: string): string | null {
  * 宿主建一个新会话，返回新会话 id。新 id 在 resolve 时已在列表里（宿主契约：
  * 建完即可 `open`/`binding`——草稿交接据此同步寻址）。能力缺失/建失败 → null，
  * 调用方按错误处理（本仓探测纪律：旧运行时绝不抛错）。
+ *
+ * 目标二选一（宿主契约「at most one of workspaceId / cwd」）：给了 `workspaceId`
+ * 就发 `{ workspaceId }`——会话**记账**到该工作区，列表分组正确；只给 `cwd` 则
+ * 只钉目录、不记账（列表落「未分组」）。故调用方应尽量走 `workspaceIdOfSession`。
  */
-export async function createSession(opts?: { cwd?: string }): Promise<string | null> {
+export async function createSession(opts?: {
+  workspaceId?: string;
+  cwd?: string;
+}): Promise<string | null> {
   const face = sessionsFaceOf();
   if (face === null || typeof face.create !== 'function') return null;
   try {
+    const workspaceId = opts?.workspaceId;
     const cwd = opts?.cwd;
+    const target =
+      workspaceId !== undefined && workspaceId !== ''
+        ? { workspaceId }
+        : cwd !== undefined && cwd !== ''
+          ? { cwd }
+          : undefined;
     // 带接收者调用（见 sessionsFaceOf 注）：`this.manager.create(...)` 依赖 this。
-    const result = await face.create(cwd !== undefined && cwd !== '' ? { cwd } : undefined);
+    const result = await face.create(target);
     if (typeof result === 'string' && result !== '') return result;
     const id = (result as { sessionId?: unknown } | null | undefined)?.sessionId;
     return typeof id === 'string' && id !== '' ? id : null;

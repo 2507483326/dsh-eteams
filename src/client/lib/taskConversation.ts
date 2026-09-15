@@ -13,6 +13,17 @@
  * 在投递之前 await 完成，否则首轮组装时 band 还不在，描述发出去就成了普通
  * 会话（团队没带过去）。
  *
+ * 来源会话（新对话沿用哪个工作区）取 `fromSessionId`，缺省回落宿主当前会话
+ * ——整页团队页（覆盖层）表面没有会话 id（用户 2026-09-15：ttt1212 里建的
+ * 团队任务，新对话跑到了 DSH 安装目录），回落口放在这里而不是给覆盖层补
+ * sessionId：覆盖层所有「有会话才成立」的门控（含成功收页）都以 sessionId
+ * 缺席为表面代理，整体补上会连带翻动那些语义。
+ *
+ * 建会话优先按**工作区 id**（`workspaceIdOfSession`）而不是目录：宿主的分组是
+ * 工作区记账（`WorkspaceView.sessionIds`），`create({ cwd })` 出来的会话不在任何
+ * 工作区名下，列表里落「未分组」（用户 2026-09-15）。宿主 New Session 流程同款
+ * ——`WorkspaceRuntime.connectWorkspace` 就是 `sessions.create({ workspaceId })`。
+ *
  * React-free 且全部依赖经结构探测面注入，能在 node 单测里用假 sessions/HTTP
  * 面驱动（本仓无 React 测试设施，页内逻辑不可测）。
  *
@@ -20,7 +31,14 @@
  */
 import { setSessionTeam } from './api';
 import { errorMessageOf } from './errors';
-import { createSession, openSession, promptSession, sessionCwdOf } from './sessionState';
+import {
+  createSession,
+  currentSessionIdOf,
+  openSession,
+  promptSession,
+  sessionCwdOf,
+  workspaceIdOfSession,
+} from './sessionState';
 
 /** 新建对话编排结果：成功带新会话 id（`warning` = 已落地但某步降级）。 */
 export type TaskConversationOutcome =
@@ -33,7 +51,13 @@ export interface TaskConversationInput {
   readonly description: string;
   /** 要绑定到新对话的团队 id。 */
   readonly teamId: string;
-  /** 来源会话 id（整页团队页表面没有会话，缺省即用宿主默认工作区）。 */
+  /**
+   * 来源会话 id（沿用其工作区）。**整页团队页（覆盖层）表面没有会话 id**——
+   * 它挂在 body 下的独立 React 根，不在任何会话作用域槽位里——缺省时回落到
+   * 宿主的当前会话（`currentSessionIdOf`）；两者都取不到才落宿主默认工作区
+   * （用户 2026-09-15 复现：ttt1212 里建的团队任务，新对话跑到了 DSH 安装
+   * 目录）。
+   */
   readonly fromSessionId?: string;
 }
 
@@ -48,8 +72,17 @@ export interface TaskConversationInput {
 export async function openTaskConversation(
   input: TaskConversationInput,
 ): Promise<TaskConversationOutcome> {
-  const cwd = sessionCwdOf(input.fromSessionId ?? '');
-  const sessionId = await createSession(cwd !== null ? { cwd } : undefined);
+  // 来源会话：调用方给的优先，覆盖层表面（无会话 id）回落宿主当前会话。
+  const source = input.fromSessionId ?? currentSessionIdOf();
+  const cwd = sessionCwdOf(source ?? '');
+  // 建会话优先按**工作区**：主题分组是宿主的记账（WorkspaceView.sessionIds），
+  // 只给 cwd 建出来的会话不在任何工作区名下、列表里落「未分组」（用户
+  // 2026-09-15 复现：ttt1212 下建的团队任务落未分组）。取不到工作区才退按 cwd
+  // 钉目录，两者都没有落宿主默认（用户 2026-09-15 早前那次的症状）。
+  const workspaceId = source === undefined ? undefined : workspaceIdOfSession(source, cwd);
+  const sessionId = await createSession(
+    workspaceId !== undefined ? { workspaceId } : cwd !== null ? { cwd } : undefined,
+  );
   if (sessionId === null) {
     return { ok: false, error: '当前运行时无法新建对话（会话服务不可用），任务未创建。' };
   }

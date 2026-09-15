@@ -65,12 +65,12 @@ describe('subagentFaceTitle（身份面 tooltip）', () => {
     expect(
       subagentFaceTitle({
         kind: 'captain',
-        name: '项目牧羊人',
+        name: '团队领队',
         teamId: '2',
         teamName: '交付队',
         avatar: null,
       }),
-    ).toBe('领队「项目牧羊人」的子代理会话（团队「交付队」）');
+    ).toBe('领队「团队领队」的子代理会话（团队「交付队」）');
   });
 
   it('构建师无团队、后缀不出现', () => {
@@ -121,7 +121,7 @@ function teamOf(tasks: TaskView[], members: string[] = []): TeamSnapshot {
     progress: { completed: 0, total: tasks.length, cancelled: 0, active: 0 },
     leaderRemoved: false,
     captain: {
-      name: '项目牧羊人',
+      name: '团队领队',
       employeeId: 'ET-0001',
       role: 'captain',
       duty: '',
@@ -155,7 +155,7 @@ describe('teamBadgeSummary（团队徽章 hover 摘要）', () => {
         taskOf({ taskId: 7, subject: '写文档', status: 'start', assignee: '张三' }),
         taskOf({ taskId: 9, subject: '跑测试', status: 'start', assignee: '李四' }),
       ]),
-      '项目牧羊人',
+      '团队领队',
     );
     expect(summary.executing).toEqual([
       { taskId: 7, subject: '写文档', member: '张三' },
@@ -167,10 +167,10 @@ describe('teamBadgeSummary（团队徽章 hover 摘要）', () => {
   it('领队不列入——即使它是执行中任务的 assignee', () => {
     const summary = teamBadgeSummary(
       teamOf([
-        taskOf({ taskId: 1, subject: '拆解', status: 'start', assignee: '项目牧羊人' }),
+        taskOf({ taskId: 1, subject: '拆解', status: 'start', assignee: '团队领队' }),
         taskOf({ taskId: 2, subject: '写码', status: 'start', assignee: '张三' }),
       ]),
-      '项目牧羊人',
+      '团队领队',
     );
     expect(summary.executing).toEqual([{ taskId: 2, subject: '写码', member: '张三' }]);
   });
@@ -187,7 +187,7 @@ describe('teamBadgeSummary（团队徽章 hover 摘要）', () => {
 
   it('无执行中任务时按阶段优先级给文案', () => {
     expect(
-      teamBadgeSummary(teamOf([taskOf({ status: 'creating' })]), '项目牧羊人').statusLine,
+      teamBadgeSummary(teamOf([taskOf({ status: 'creating' })]), '团队领队').statusLine,
     ).toBe(TEAM_BADGE_STAGE_LABELS.creating);
     expect(
       teamBadgeSummary(teamOf([taskOf({ status: 'ready', assignee: '张三' })])).statusLine,

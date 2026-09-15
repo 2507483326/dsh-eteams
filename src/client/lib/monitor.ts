@@ -143,7 +143,7 @@ export interface EventView {
   tone?: string;
 }
 
-/** The team leader (项目牧羊人) as projected by the host — not a roster member. */
+/** The team leader (团队领队) as projected by the host — not a roster member. */
 export interface CaptainView {
   name: string;
   /** 工号 (docs/21): host 发格式化显示串（roster 未读兜底 ET-0001）。 */

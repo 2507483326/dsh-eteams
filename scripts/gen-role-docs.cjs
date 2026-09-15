@@ -1,7 +1,9 @@
-// One-shot generator: fetch the five agency-agents-zh role markdown files
+// One-shot generator: fetch the four agency-agents-zh role markdown files
 // verbatim, strip YAML frontmatter, and emit
 // src/host/prompts/personas/roleDocs.ts (JSON-escaped string literals —
-// no manual escaping).
+// no manual escaping). The leader handbook is NOT generated here: it lives
+// hand-written in src/host/prompts/personas/leaderHandbook.ts (2026-09-15
+// 领队改名「项目牧羊人」→「团队领队」，手册换成团队合作守则）。
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -12,7 +14,6 @@ const ROLES = [
   ['后端架构师', 'engineering/engineering-backend-architect.md', 'agz-eng-backend.md'],
   ['UI 设计师', 'design/design-ui-designer.md', 'agz-design-ui.md'],
   ['趣味注入师', 'design/design-whimsy-injector.md', 'agz-design-whimsy.md'],
-  ['项目牧羊人', 'project-management/project-management-project-shepherd.md', 'agz-pm-shepherd.md'],
 ];
 
 function stripFrontmatter(raw) {

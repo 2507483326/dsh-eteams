@@ -15,7 +15,11 @@
  *
  * Role rows are selectable: the selected role's avatar + name
  * (or the team's chip + name) replace the button label, highlighted while a
- * selection is active, with a hover-revealed × to clear. For a role the
+ * selection is active, with a hover-revealed × to clear. 用户 2026-09-15
+ * 「我希望选中团队或者角色后弹窗就隐藏」：团队/角色行点击即收弹层（选中/取消
+ * 同一口径），选中反馈由触发钮脸面 + 列表勾号承担——列表尾部原「对话将以
+ * 「X」的角色输出（再次点击该角色可取消）」提示行随之删除（状态已可视后
+ * 冗余提示行不留）。 For a role the
  * host asserts a system-prompt persona band for the session (per-assembly
  * dynamic section keyed by the session agent) so the conversation speaks as
  * that role — no draft text, nothing sent. For a team the host asserts the
@@ -921,7 +925,12 @@ function TeamsPopup(props: {
                       type="button"
                       className={ROW_CLASS}
                       data-selected={isTeamSelected ? 'true' : undefined}
-                      onClick={() => onSelectTeam({ teamId: t.teamId, name: t.name })}
+                      // 用户 2026-09-15「选中团队或者角色后弹窗就隐藏」：行点击即
+                      // 收弹层（选中/取消同一口径），选中反馈由触发钮脸面承担。
+                      onClick={() => {
+                        onSelectTeam({ teamId: t.teamId, name: t.name });
+                        onClose();
+                      }}
                       // Static title（防闪烁）：切换选中时 title 不变，原生 tooltip
                       // 不会在指针下重弹。
                       title={t.name}
@@ -959,7 +968,12 @@ function TeamsPopup(props: {
                     type="button"
                     className={ROW_CLASS}
                     data-selected={isSelected ? 'true' : undefined}
-                    onClick={() => onSelectMember(m)}
+                    // 用户 2026-09-15「选中团队或者角色后弹窗就隐藏」：行点击即
+                    // 收弹层（选中/取消同一口径），选中反馈由触发钮脸面承担。
+                    onClick={() => {
+                      onSelectMember(m);
+                      onClose();
+                    }}
                     // Static title（防闪烁）：title 随选中变化会让原生 tooltip
                     // 在指针下重弹一次；角色不再展示标签，名字即身份。
                     title={`${m.name}（点击选中/取消，对话将以该角色输出）`}
@@ -979,13 +993,6 @@ function TeamsPopup(props: {
               props.personaError !== undefined && (
                 <div className={ERR_CLASS}>
                   角色接管失败：{props.personaError}——重启 DeepSeek 后重试。
-                </div>
-              )}
-            {tab === 'member' &&
-              selectedMember !== null &&
-              (props.personaError === null || props.personaError === undefined) && (
-                <div className={HINT_CLASS}>
-                  对话将以「{selectedMember.name}」的角色输出（再次点击该角色可取消）。
                 </div>
               )}
           </div>

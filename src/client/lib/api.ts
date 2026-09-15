@@ -216,7 +216,7 @@ export async function setTeamLeaderRemoved(teamId: string, removed: boolean): Pr
   );
 }
 
-/** Delete one roster member. The leader (项目牧羊人) is rejected by the host. */
+/** Delete one roster member. The leader (团队领队) is rejected by the host. */
 export async function deleteRosterMember(name: string): Promise<void> {
   await requestJson(`${API_BASE}/roster/${encodeURIComponent(name)}/remove`, {
     method: 'POST',

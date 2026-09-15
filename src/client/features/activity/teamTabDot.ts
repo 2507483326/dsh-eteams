@@ -1,18 +1,22 @@
 /**
- * 团队 TAB 红点（用户 2026-09-15「有新的待决策内容时，对话上面的团队TAB，需要
+ * 团队 TAB 未读点（用户 2026-09-15「有新的待决策内容时，对话上面的团队TAB，需要
  * 出现红点提示。直到进入面板看到决策，或者决策被回答」）。
+ *
+ * 2026-09-15 同日追加视觉迭代（用户「红点太丑了，变成小绿点吧，小一点，样式
+ * 优化仔细设计一下」）：点从 7px 纯红改 6px 小绿点（浅暗两档，详见 DOT_CSS
+ * 注记）——只动外观，判据与三个驱动信号一字未动。
  *
  * 宿主渲染的视图标签环只认 `{id,label}`（`ViewTab` / `conversation.view` 槽位
  * 注册项只有 id/order/label/priority，label 还只能是字符串或字符串 thunk），
- * 没有徽标/红点席位——所以照 heroTeamsButton 的既有先例走 DOM 注入：在宿主
- * 渲染的团队 tab 按钮里补一枚绝对定位的红点 span。判据（哪些待决策算「新」）
+ * 没有徽标/未读点席位——所以照 heroTeamsButton 的既有先例走 DOM 注入：在宿主
+ * 渲染的团队 tab 按钮里补一枚绝对定位的未读点 span。判据（哪些待决策算「新」）
  * 落在 features/activity/decisionSeen 的已读账本，本模块只管把点画对。
  *
  * 注入纪律（宿主 ConversationRoot.module.css 实测）：
- * - 宿主 tab 按钮 `.tab` 自带 `position:relative`，红点直接以按钮为定位基准；
+ * - 宿主 tab 按钮 `.tab` 自带 `position:relative`，未读点直接以按钮为定位基准；
  *   真遇到 static 才兜底补一条 inline style（宿主换版自愈）；
- * - 该按钮的 `::after` 已被选中态下划线占用，红点必须是真实子元素，不能用伪元素；
- * - 红点 span 不带文本（按钮 textContent 仍是「团队」），bridge 的
+ * - 该按钮的 `::after` 已被选中态下划线占用，未读点必须是真实子元素，不能用伪元素；
+ * - 未读点 span 不带文本（按钮 textContent 仍是「团队」），bridge 的
  *   {@link findETeamsTabButton} 按 textContent 精确匹配标签，不受影响；
  * - 显隐走 `hidden` 属性、不摘节点：React 每秒级重渲染不碰这个非受管子节点，
  *   观察器只在节点真被换掉（会话切换重挂标签环）时补回。
@@ -33,22 +37,34 @@ import { subscribeDecisionSeen, unseenPendingKeys } from './decisionSeen';
 
 /** ================================== 样式类 ================================== */
 
-/** 红点徽标：绝对定位在标签右上角（宿主 tab 无横向内边距，故右移 6px 落在
+/** 未读点徽标：绝对定位在标签右上角（宿主 tab 无横向内边距，故右移 5px 落在
  * 标签环 36px 的间隙里，不压字）；`[hidden]` 显式隐藏（position:absolute 会
  * 块化元素，靠 UA 的 [hidden] 规则不够稳）；pointer-events:none 保证点击仍
- * 落在宿主按钮上。色值直引 tailwind red-500——宿主 chrome 不在 `.eteams-ui`
- * 作用域内，拿不到本仓 token。 */
+ * 落在宿主按钮上。
+ *
+ * 2026-09-15 用户「红点太丑了，变成小绿点吧，小一点，样式优化仔细设计一下」：
+ * 原为 7px 纯红（red-500）实心圆，改小绿点，三处口径——
+ * - 尺寸 7px → 6px（用户「小一点」；偏移取整像素，`top:0` + `right:-5px` 让
+ *   6px 圆的两轴边缘都不落半像素，小圆不糊边）；
+ * - 色值两档直引 `body[data-ds-dark-theme]`（宿主 chrome 不在 `.eteams-ui`
+ *   作用域内、拿不到本仓 token，只能照 styles/eteams.css 的 --success 两档
+ *   逐档直引）：浅色 green-600、暗色 green-400——暗色下不再是刺眼的亮红，
+ *   且与面板里的成功色同源；
+ * - 1.5px 外环取主题底（浅色白 / 暗色 slate-900）作「挖底色」：宿主 tab 的
+ *   悬停/选中底色是带色 pills，实心圆压上去会糊成一团，留一圈底色边缘让小
+ *   圆在任意底上都干净。 */
 const DOT_CSS = `
-.eteams-tab-dot{position:absolute;top:-1px;right:-6px;width:7px;height:7px;border-radius:9999px;background:#ef4444;pointer-events:none}
+.eteams-tab-dot{position:absolute;top:0;right:-5px;width:6px;height:6px;border-radius:9999px;background:#16a34a;box-shadow:0 0 0 1.5px #ffffff;pointer-events:none}
 .eteams-tab-dot[hidden]{display:none}
+body[data-ds-dark-theme] .eteams-tab-dot{background:#4ade80;box-shadow:0 0 0 1.5px #0f172a}
 `;
 
 /** ================================== 常量与映射表 ================================== */
 
-/** 红点 span 的 data-eteams 标记值（幂等注入的锚）。 */
+/** 未读点 span 的 data-eteams 标记值（幂等注入的锚）。 */
 const DOT_FLAG = 'tab-dot';
 
-/** 红点 class（样式表按它落样式）。 */
+/** 未读点 class（样式表按它落样式）。 */
 const DOT_CLASS = 'eteams-tab-dot';
 
 /** 一次性样式标签的 id。 */
@@ -57,7 +73,7 @@ const STYLE_ID = 'eteams-tab-dot-style';
 /** ================================== 模块状态 ================================== */
 
 let installed = false;
-/** 当前挂点的红点元素（宿主换按钮后随之失效）。 */
+/** 当前挂点的未读点元素（宿主换按钮后随之失效）。 */
 let dot: HTMLElement | null = null;
 /** 当前显隐状态（只在变化时写 DOM，避免观察器自激）。 */
 let dotVisible = false;
@@ -78,7 +94,7 @@ function ensureStyle(): void {
 }
 
 /**
- * 红点元素（缺则注入到该按钮）：幂等，返回既有节点。宿主按钮自带
+ * 未读点元素（缺则注入到该按钮）：幂等，返回既有节点。宿主按钮自带
  * position:relative 时不动它，实测 static 才补一条 inline style 作兜底。
  * 导出供宿主换版/单测直接调用。
  */
@@ -97,14 +113,14 @@ export function ensureTeamTabDot(button: HTMLElement): HTMLElement {
   return span;
 }
 
-/** 红点显隐（只在状态真变化时写 DOM）。 */
+/** 未读点显隐（只在状态真变化时写 DOM）。 */
 export function setTeamTabDotVisible(target: HTMLElement | null, on: boolean): void {
   if (target === null) return;
   target.hidden = !on;
 }
 
 /**
- * 待决策红点该不该亮：存在 pending 且未读的行（跨全部团队，见 decisionSeen）。
+ * 待决策未读点该不该亮：存在 pending 且未读的行（跨全部团队，见 decisionSeen）。
  *
  * 备忘到快照数组引用上：`activity/set` 每秒整包替换 teams、引用只在快照更新时
  * 变，而 MutationObserver 在流式渲染时每秒触发数十次 DOM 回调——引用相等即复用
@@ -137,7 +153,7 @@ function syncTeamTabDot(): void {
 }
 
 /**
- * 安装团队 tab 红点（每页一次；`apply()` 里调用）。非浏览器环境与重复调用为
+ * 安装团队 tab 未读点（每页一次；`apply()` 里调用）。非浏览器环境与重复调用为
  * no-op，任何失败只记录不致命（诊断落 client.log）。
  */
 export function installTeamTabDot(): void {
@@ -159,8 +175,8 @@ export function installTeamTabDot(): void {
     observer.observe(root, { childList: true, subtree: true });
     getApp().store.subscribe(scan);
     subscribeDecisionSeen(() => {
-      // 账本变化不经快照：先让 shouldShowDot 的备忘失效，再对账（进入面板标记
-      // 已读后红点即刻熄灭，不必等下一次轮询）。
+      // 账本变化不经快照：先让 shouldShowDot 的备忘失效，再对账（进入面板
+      // 标记已读后点即刻熄灭，不必等下一次轮询）。
       lastTeams = null;
       scan();
     });

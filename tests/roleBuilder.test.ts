@@ -37,9 +37,11 @@ import {
 } from '../src/host/runtime/roleBuilder';
 import type { BuildDraft } from '../src/host/runtime/roleBuilder';
 import { MEMBER_DENIED_TOOLS } from '../src/host/runtime/members';
+import { getDb } from '../src/host/state/db';
 import {
   ensurePresetMembers,
   findRosterMember,
+  readRoster,
   upsertRosterMember,
 } from '../src/host/runtime/roster';
 import { cleanupTempWorkspace } from './support/tmpWorkspace';
@@ -54,6 +56,27 @@ afterEach(() => {
   // roster 写路径已落 SQLite（<stateRoot>/eteams.db）：先关连接（两把键口径）
   // 再退避删目录——tests/support/tmpWorkspace。
   cleanupTempWorkspace(stateRoot);
+});
+
+// v15 领队改名：旧库领队手册（agency-agents-zh 通用 PM 原文，H1 为旧保留名）
+// 在下次预置刷新时换成 personas/leaderHandbook 的团队合作守则；用户自己写过
+// 的手册不匹配 legacy 特征，保持原样。
+describe('领队手册升级（v15 改名）', () => {
+  it('replaces the legacy 项目牧羊人 playbook with the team-lead handbook', async () => {
+    await ensurePresetMembers(stateRoot);
+    const db = getDb(stateRoot);
+    // 旧库领队手册的真实形状：结构摘要 + '# 角色手册' 段里的 agency-agents-zh
+    // 通用 PM 原文（H1 为旧保留名）。
+    db.prepare('UPDATE roles SET persona_md = ? WHERE is_leader = 1').run(
+      "# 人设 · 项目牧羊人\n- 角色：项目牧羊人\n\n---\n\n# 角色手册\n\n# 项目牧羊人\n\n你是**项目牧羊人**，一位项目协调专家。",
+    );
+    const leaderMd = () =>
+      readRoster(stateRoot).find((m) => m.isLeader === true)!.personaMd ?? '';
+    expect(leaderMd()).toContain('# 项目牧羊人');
+
+    await ensurePresetMembers(stateRoot);
+    expect(leaderMd()).toContain('团队合作守则');
+  });
 });
 
 describe('D18 对话式新增成员', () => {
@@ -134,7 +157,7 @@ describe('D18 对话式新增成员', () => {
 
   it('rejects overwriting the leader via upsert (保留名)', async () => {
     await ensurePresetMembers(stateRoot);
-    await expect(upsertRosterMember(stateRoot, { name: '项目牧羊人', role: 'x' })).rejects.toThrow(
+    await expect(upsertRosterMember(stateRoot, { name: '团队领队', role: 'x' })).rejects.toThrow(
       /保留名/,
     );
   });
@@ -155,7 +178,7 @@ describe('D18 对话式新增成员', () => {
     expect(ROLE_BUILDER_SECTION).toContain('eteams_build_report');
     expect(ROLE_BUILDER_SECTION).toContain('eteams_member_save');
     expect(ROLE_BUILDER_SECTION).toContain('awaiting_confirmation');
-    expect(ROLE_BUILDER_SECTION).toContain('项目牧羊人');
+    expect(ROLE_BUILDER_SECTION).toContain('团队领队');
   });
 
   it('生成口径不再要求写 YAML frontmatter（用户迭代 2026-09-15）', () => {

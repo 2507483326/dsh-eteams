@@ -792,7 +792,7 @@ describe('v9→v10 team_members avatar mirror column migration', () => {
 });
 
 // getDb 首次连接时的会话列迁移链（v5 + v6，docs/51）：v4 旧库 task 缺
-// session_id 列——v5 补列后按 task_members 领队行（name=项目牧羊人、
+// session_id 列——v5 补列后按 task_members 领队行（name=团队领队、
 // main_task_id 为空）锚定的 main_session_id 回填（只补 NULL 行：快照语义，
 // 已盖章行不随领队重锚改写）；v6 再把 session_id 改名 main_session_id、
 // task_members 的 main_session_id+child_session_id 合并成 session_id（领队
@@ -856,7 +856,7 @@ describe('v4→v5→v6 task/member session column migration', () => {
       legacy
         .prepare(
           'INSERT INTO task_members (task_member_id, team_id, main_task_id, name, main_session_id, child_session_id, status, created_time, update_time) ' +
-            "VALUES (1, 1, NULL, '项目牧羊人', 'cap-old', 'lead-child', 'ready', 10, 11)",
+            "VALUES (1, 1, NULL, '团队领队', 'cap-old', 'lead-child', 'ready', 10, 11)",
         )
         .run();
       // 任务行：团队 1 一行（从领队行回填）、团队 2 一行（无领队行 → NULL）、
@@ -947,7 +947,7 @@ describe('v6→v7 工牌迁移（工号=班底自增主键：副本重键/邮件
       );
       insRole.run(1, '张三', 5, '# 人设 · 张三');
       insRole.run(2, '李四', 9, '# 人设 · 李四');
-      insRole.run(3, '项目牧羊人', null, '# 人设 · 领队');
+      insRole.run(3, '团队领队', null, '# 人设 · 领队');
       // 班底（v6/v7 同形状）：张三同角色两行——表自增口径下行主键即工号，
       // 同名行天然各拿各号，无需去重。
       const insTm = legacy.prepare(
@@ -963,7 +963,7 @@ describe('v6→v7 工牌迁移（工号=班底自增主键：副本重键/邮件
         'INSERT INTO task_members (task_member_id, team_id, main_task_id, name, employee_id, session_id, status, created_time, update_time) ' +
           'VALUES (?, 1, ?, ?, ?, ?, ?, 10, 11)',
       );
-      insRow.run(10, null, '项目牧羊人', null, '', 'ready');
+      insRow.run(10, null, '团队领队', null, '', 'ready');
       insRow.run(11, null, '张三', null, '', 'staged');
       insRow.run(12, 10, '张三', null, '', 'staged');
       // 存量大任务 + 名字站点执行链（幽灵不在班底 → legacy 保留）。
@@ -1005,7 +1005,7 @@ describe('v6→v7 工牌迁移（工号=班底自增主键：副本重键/邮件
         { team_member_id: 1, role_name: '张三' },
         { team_member_id: 2, role_name: '李四' },
         { team_member_id: 3, role_name: '张三' },
-        { team_member_id: 4, role_name: '项目牧羊人' },
+        { team_member_id: 4, role_name: '团队领队' },
       ]);
 
       // 步骤 2/4/5：团队级 staged 行删除；容器任务按班底全员补副本（李四 +
@@ -1024,7 +1024,7 @@ describe('v6→v7 工牌迁移（工号=班底自增主键：副本重键/邮件
       expect(rows).toHaveLength(4); // 主持行 + 张三锚定副本 + 李四/领队补建副本
       expect(rows[0]).toMatchObject({
         task_member_id: 10,
-        name: '项目牧羊人',
+        name: '团队领队',
         main_task_id: null,
         employee_id: 4,
       });
@@ -1036,7 +1036,7 @@ describe('v6→v7 工牌迁移（工号=班底自增主键：副本重键/邮件
       });
       expect(rows[2]).toMatchObject({ name: '李四', main_task_id: 10, employee_id: 2 });
       expect(rows[3]).toMatchObject({
-        name: '项目牧羊人',
+        name: '团队领队',
         main_task_id: 10,
         employee_id: 4,
       });
@@ -1086,7 +1086,7 @@ describe('v6→v7 工牌迁移（工号=班底自增主键：副本重键/邮件
 });
 
 describe('v7→v8 领队标识迁移（roles/team_members/task_members.is_leader 回填）', () => {
-  it('adds is_leader columns and backfills 项目牧羊人=1 on connect', () => {
+  it('adds is_leader columns and backfills 团队领队=1 on connect', () => {
     // v7 → v8 的形状差只有 3 列（三表 is_leader）——先用当前 DDL 建全新库，
     // 再 DROP 这 3 列并把版本号降回 7，重开连接即走 v8 迁移回填。
     const legacyRoot = mkdtempSync(join(tmpdir(), 'eteams-mig-v8-'));
@@ -1115,37 +1115,37 @@ describe('v7→v8 领队标识迁移（roles/team_members/task_members.is_leader
           'VALUES (?, ?, ?, 10, 11)',
       );
       insRole.run(1, '张三', '# 人设 · 张三');
-      insRole.run(2, '项目牧羊人', '# 人设 · 领队');
+      insRole.run(2, '团队领队', '# 人设 · 领队');
       const insTm = legacy.prepare(
         'INSERT INTO team_members (team_member_id, team_id, role_id, role_name, created_time, update_time) ' +
           'VALUES (?, 1, ?, ?, 10, 11)',
       );
       insTm.run(1, 1, '张三');
-      insTm.run(2, 2, '项目牧羊人');
+      insTm.run(2, 2, '团队领队');
       const insRow = legacy.prepare(
         'INSERT INTO task_members (task_member_id, team_id, main_task_id, name, employee_id, session_id, status, created_time, update_time) ' +
           'VALUES (?, 1, ?, ?, ?, ?, ?, 10, 11)',
       );
-      insRow.run(10, null, '项目牧羊人', 2, '', 'ready');
+      insRow.run(10, null, '团队领队', 2, '', 'ready');
       insRow.run(11, 10, '张三', 1, '', 'staged');
-      insRow.run(12, 10, '项目牧羊人', 2, '', 'staged');
+      insRow.run(12, 10, '团队领队', 2, '', 'staged');
       legacy.close();
 
       const db = getDb(legacyRoot);
 
-      // roles：项目牧羊人=1，其余=0。
+      // roles：团队领队=1，其余=0。
       expect(
         db.prepare('SELECT role_name, is_leader FROM roles ORDER BY role_id').all(),
       ).toEqual([
         { role_name: '张三', is_leader: 0 },
-        { role_name: '项目牧羊人', is_leader: 1 },
+        { role_name: '团队领队', is_leader: 1 },
       ]);
       // team_members：班底领队行=1。
       expect(
         db.prepare('SELECT role_name, is_leader FROM team_members ORDER BY team_member_id').all(),
       ).toEqual([
         { role_name: '张三', is_leader: 0 },
-        { role_name: '项目牧羊人', is_leader: 1 },
+        { role_name: '团队领队', is_leader: 1 },
       ]);
       // task_members：领队主持行与领队任务副本行=1，成员行=0。
       expect(
@@ -1153,9 +1153,9 @@ describe('v7→v8 领队标识迁移（roles/team_members/task_members.is_leader
           .prepare('SELECT name, main_task_id, is_leader FROM task_members ORDER BY task_member_id')
           .all(),
       ).toEqual([
-        { name: '项目牧羊人', main_task_id: null, is_leader: 1 },
+        { name: '团队领队', main_task_id: null, is_leader: 1 },
         { name: '张三', main_task_id: 10, is_leader: 0 },
-        { name: '项目牧羊人', main_task_id: 10, is_leader: 1 },
+        { name: '团队领队', main_task_id: 10, is_leader: 1 },
       ]);
 
       // 幂等：重开连接回填自愈（值不重写、行数不变）。
@@ -1168,6 +1168,71 @@ describe('v7→v8 领队标识迁移（roles/team_members/task_members.is_leader
       expect(
         (again.prepare('SELECT COUNT(*) AS n FROM task_members').get() as { n: number }).n,
       ).toBe(3);
+      closeDb(legacyRoot);
+    } finally {
+      cleanupTempWorkspace(legacyRoot);
+    }
+  });
+});
+
+describe('v14→v15 领队改名迁移（项目牧羊人 → 团队领队）', () => {
+  it('renames the legacy leader rows across the three tables and heals is_leader on connect', () => {
+    const legacyRoot = mkdtempSync(join(tmpdir(), 'eteams-mig-v15-'));
+    try {
+      mkdirSync(dbDirOf(legacyRoot), { recursive: true });
+      getDb(legacyRoot); // 建当前全新库（roles 空）
+      closeDb(legacyRoot);
+      const legacy = new DatabaseSync(dbFileOf(legacyRoot));
+      // 改名前的领队行：三表都还叫旧保留名，is_leader 故意留 0——改名由 v15、
+      // 回填由随后的 v8 按新名自愈。
+      legacy
+        .prepare(
+          'INSERT INTO roles (role_id, role_name, is_leader, persona_md, created_time, update_time) ' +
+            "VALUES (1, '项目牧羊人', 0, '# 人设 · 领队', 10, 11)",
+        )
+        .run();
+      legacy
+        .prepare(
+          'INSERT INTO team_members (team_member_id, team_id, role_id, role_name, is_leader, created_time, update_time) ' +
+            "VALUES (1, 1, 1, '项目牧羊人', 0, 10, 11)",
+        )
+        .run();
+      legacy
+        .prepare(
+          'INSERT INTO task_members (task_member_id, team_id, main_task_id, name, is_leader, created_time, update_time) ' +
+            "VALUES (1, 1, NULL, '项目牧羊人', 0, 10, 11)",
+        )
+        .run();
+      legacy
+        .prepare("UPDATE schema_meta SET value = '14' WHERE key = 'db_schema_version'")
+        .run();
+      legacy.exec('PRAGMA user_version = 14');
+      legacy.close();
+
+      const db = getDb(legacyRoot);
+      expect(db.prepare('SELECT role_name, is_leader FROM roles').all()).toEqual([
+        { role_name: '团队领队', is_leader: 1 },
+      ]);
+      expect(db.prepare('SELECT role_name, is_leader FROM team_members').all()).toEqual([
+        { role_name: '团队领队', is_leader: 1 },
+      ]);
+      expect(db.prepare('SELECT name, is_leader FROM task_members').all()).toEqual([
+        { name: '团队领队', is_leader: 1 },
+      ]);
+
+      // 幂等：重开不再改名、不新增行。
+      closeDb(legacyRoot);
+      const again = getDb(legacyRoot);
+      expect(
+        (again
+          .prepare(`SELECT COUNT(*) AS n FROM roles WHERE role_name = '${LEADER_NAME}'`)
+          .get() as { n: number }).n,
+      ).toBe(1);
+      expect(
+        (again
+          .prepare("SELECT COUNT(*) AS n FROM roles WHERE role_name = '项目牧羊人'")
+          .get() as { n: number }).n,
+      ).toBe(0);
       closeDb(legacyRoot);
     } finally {
       cleanupTempWorkspace(legacyRoot);

@@ -49,8 +49,6 @@ export interface ETeamsRoutesProps {
   team: TeamSnapshot | undefined;
   /** 看板/任务共用：服务器时间（快照 serverTime/fetchedAt 派生）。 */
   now: number;
-  /** 看板：快照拉取时刻（相对时间基准）。 */
-  fetchedAt: number;
   /** 团队：当前宿主会话 id（整页覆盖层 undefined）。 */
   sessionId: string | undefined;
   /** 团队：全部团队池（卡片栅格在这里选择）。 */
@@ -153,12 +151,7 @@ export function ETeamsViewRoutes(props: ETeamsRoutesProps): ReactNode {
   }, [location.pathname, dispatch]);
   return (
     <Routes>
-      <Route
-        path="/board"
-        element={
-          <BoardTab team={props.team} now={props.now} fetchedAt={props.fetchedAt} />
-        }
-      />
+      <Route path="/board" element={<BoardTab team={props.team} now={props.now} />} />
       <Route
         path="/team"
         element={
@@ -237,18 +230,11 @@ export function ETeamsViewRoutes(props: ETeamsRoutesProps): ReactNode {
       <Route path="/tasks" element={<TasksPage pool={props.pool} sessionId={props.sessionId} />} />
       <Route
         path="/tasks/:taskId"
-        element={
-          <TaskDetailRoute pool={props.pool} fallbackTeam={props.team} now={props.now} />
-        }
+        element={<TaskDetailRoute pool={props.pool} fallbackTeam={props.team} now={props.now} />}
       />
       {/* 未知路径兜底：落看板（原 activeTab 畸形兜底 'board' 同口径；正常
           流只在各基础路径间导航，本条是防御位）。 */}
-      <Route
-        path="*"
-        element={
-          <BoardTab team={props.team} now={props.now} fetchedAt={props.fetchedAt} />
-        }
-      />
+      <Route path="*" element={<BoardTab team={props.team} now={props.now} />} />
     </Routes>
   );
 }

@@ -64,8 +64,11 @@ import { SessionModelBadge } from './pages/sessionModelBadge';
  * 选项) and `sessions` (Session Controller 客户端服务，optional —— 子会话
  * 模型徽章的兜底数据源：kit hook 缺席时探测会话绑定上的 modelSelection
  * 持久投影 + subagentAddress 门控，用户迭代 2026-09-09 方案 A；缺服务且
- * 缺 kit 时徽章静默不渲染). */
-export const inject = ['slots', 'uiConversation', 'modelDirectories', 'sessions'];
+ * 缺 kit 时徽章静默不渲染), and `workspaces` (WorkspaceRuntime 客户端服务，
+ * optional —— 「添加任务」新建对话时按来源会话反查其工作区 id，好把新会话
+ * 记账到同一工作区而不是落「未分组」，用户 2026-09-15；缺服务时回落按 cwd
+ * 建会话，只降级不崩). */
+export const inject = ['slots', 'uiConversation', 'modelDirectories', 'sessions', 'workspaces'];
 
 /** Run one registration step; a failure is recorded, never fatal. */
 function guard(step: string, run: () => void): void {

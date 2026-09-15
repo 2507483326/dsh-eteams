@@ -35,11 +35,9 @@ import { ActivityTimeline } from './activityTimeline';
 export function BoardTab({
   team,
   now,
-  fetchedAt,
 }: {
   team: TeamSnapshot | undefined;
   now: number;
-  fetchedAt: number;
 }): ReactNode {
   return (
     // 用户 2026-09-15「决策面板和动态分别占 1/2 高度，这个页面不想出现外部
@@ -59,7 +57,7 @@ export function BoardTab({
       <DecisionPanel team={team} now={now} />
       {/* 动态时间线（用户 2026-09-14）：任务绑定的事件流——行首语义色点 +
       任务标签（#id 主题，可点进详情）+ 事件文本；取代原「最近动态」内联块。 */}
-      <ActivityTimeline team={team} now={now} fetchedAt={fetchedAt} />
+      <ActivityTimeline team={team} now={now} />
     </div>
   );
 }

@@ -151,7 +151,7 @@ export interface MemberRecord {
   persona: PersonaRecord;
   modelRoute: ModelRouteSnapshot;
   avatar: AvatarRecord;
-  /** 领队标识（v8 team_members.is_leader）：项目牧羊人=1 其余=0；领队行查找按它不按名。 */
+  /** 领队标识（v8 team_members.is_leader）：团队领队=1 其余=0；领队行查找按它不按名。 */
   isLeader?: boolean;
   createdAt: number;
 }
@@ -159,7 +159,7 @@ export interface MemberRecord {
 /**
  * One task-member execution instance (docs/27 task_members 表；docs/35
  * §5#12：实例行按大任务粒度建——同一人每条大任务一行、各绑独立子会话；
- * 领队也是一行（name=项目牧羊人、mainTaskId 为空的团队级主持行）。
+ * 领队也是一行（name=团队领队、mainTaskId 为空的团队级主持行）。
  * v7：副本行在建任务/加成员时从班底整行复制（工号抄班底行自增主键），
  * 行生命周期跟随所属大任务（删任务→副本级联删）。
  */
@@ -184,7 +184,7 @@ export interface TaskMemberRecord {
   provider?: string;
   reasoningEffort?: string;
   avatar?: AvatarRecord;
-  /** 领队标识（v8 task_members.is_leader）：项目牧羊人行=1 其余=0；领队行查找按它不按名。 */
+  /** 领队标识（v8 task_members.is_leader）：团队领队行=1 其余=0；领队行查找按它不按名。 */
   isLeader?: boolean;
   createdAt: number;
 }

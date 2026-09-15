@@ -24,9 +24,9 @@ import { builderToolFilter } from '../src/host/runtime/builderPhases';
 
 describe('captain child label', () => {
   it('round-trips build/parse（以领队的名字命名）', () => {
-    const label = buildCaptainLabel('项目牧羊人');
-    expect(label).toBe('eteams-captain:项目牧羊人');
-    expect(parseCaptainLabel(label)).toEqual({ leaderName: '项目牧羊人' });
+    const label = buildCaptainLabel('团队领队');
+    expect(label).toBe('eteams-captain:团队领队');
+    expect(parseCaptainLabel(label)).toEqual({ leaderName: '团队领队' });
   });
 
   it('rejects non-captain labels and empty names', () => {

@@ -260,7 +260,7 @@ describe('eteams_dispatch_captain', () => {
     // persona 段只含领队手册插槽引用（2026-09-08：手册走团队成员表缓存，
     // 由 index.ts 注册的 prompt 变量按装配注入，真实 {{}} 不经插值）。
     expect(spec.request.persona).toBe(captainChildPersona('{{eteams_leader_handbook}}'));
-    expect(spec.request.persona).toContain('角色手册（领队 · 项目牧羊人）');
+    expect(spec.request.persona).toContain('角色手册（团队领队）');
     expect(spec.request.toolFilter?.deny).toEqual([...CAPTAIN_CHILD_DENIED_TOOLS]);
     expect(spec.request.parent).toBe(captain);
     expect(spec.request.prompt).toHaveLength(1);
@@ -339,7 +339,7 @@ describe('eteams_dispatch_captain', () => {
       root,
       {
         name: LEADER_NAME,
-        role: '领队（项目牧羊人）',
+        role: '团队领队',
         personaMd: '# 角色库新手册（应被忽略）',
       },
       { allowLeader: true },

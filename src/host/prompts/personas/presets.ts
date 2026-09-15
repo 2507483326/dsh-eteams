@@ -19,7 +19,7 @@ import { ROLE_DOCS } from './roleDocs.js';
 /**
  * Preset seeding order for roster members (name = role). The host seeds one
  * roster member per role on first panel access. 2026-09：按用户要求精简默认
- * 角色——只保留 角色构建师（领队 项目牧羊人 由 defaultCaptainPersona 单独
+ * 角色——只保留 角色构建师（领队 团队领队 由 defaultCaptainPersona 单独
  * 注入）；前端开发者 / 后端架构师 / UI 设计师 / 趣味注入师 不再预置入库，
  * ROLE_TEMPLATES 仍保留，手动新增成员按角色标签照常套用。
  */

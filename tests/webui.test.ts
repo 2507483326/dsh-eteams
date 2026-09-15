@@ -395,9 +395,9 @@ describe('TeamSnapshot builder (docs/35 §5 面板快照)', () => {
       personaMd: string | null;
       avatar: { seed: number; salt: number };
     };
-    expect(captain.name).toBe('项目牧羊人');
+    expect(captain.name).toBe('团队领队');
     expect(captain.employeeId).toMatch(/^ET-\d{4}$/);
-    expect(captain.personaMd).toContain('核心使命');
+    expect(captain.personaMd).toContain('团队合作守则');
     expect(typeof captain.avatar.seed).toBe('number');
 
     const members = snap.members as Array<{
@@ -557,7 +557,7 @@ describe('panel write routes (M5 first slice)', () => {
       members: { name: string; role: string; avatar?: unknown }[];
     }>(first.body);
     expect(seeded.members.map((m) => m.name)).toEqual(
-      expect.arrayContaining(['角色构建师', '项目牧羊人', 'system']),
+      expect.arrayContaining(['角色构建师', '团队领队', 'system']),
     );
     expect(seeded.members).toHaveLength(3);
     for (const p of seeded.members) expect(p.avatar).toBeDefined();
@@ -585,7 +585,7 @@ describe('panel write routes (M5 first slice)', () => {
     expect(removed.code).toBe(200);
 
     // 领队路由特判 400；角色构建师走 removeRosterMember 的系统保留校验 404。
-    const leaderAttempt = await h.post('/eteams-api/roster/项目牧羊人/remove', {});
+    const leaderAttempt = await h.post('/eteams-api/roster/团队领队/remove', {});
     expect(leaderAttempt.code).toBe(400);
     const builderAttempt = await h.post('/eteams-api/roster/角色构建师/remove', {});
     expect(builderAttempt.code).toBe(404);
@@ -593,7 +593,7 @@ describe('panel write routes (M5 first slice)', () => {
     const r = await h.get('/eteams-api/roster');
     const parsed = json<{ members: { name: string }[] }>(r.body);
     expect(parsed.members.find((m) => m.name === 'Temp')).toBeUndefined();
-    expect(parsed.members.find((m) => m.name === '项目牧羊人')).toBeDefined();
+    expect(parsed.members.find((m) => m.name === '团队领队')).toBeDefined();
     expect(parsed.members.find((m) => m.name === '角色构建师')).toBeDefined();
   });
 
@@ -612,7 +612,7 @@ describe('panel write routes (M5 first slice)', () => {
     });
     expect(added.code).toBe(200);
     // v7：领队也入班底（建队即发 ET-0001）——加一人后班底 = 领队 + Dave。
-    expect(readTeam(teamId).members.map((m) => m.name)).toEqual(['项目牧羊人', 'Dave']);
+    expect(readTeam(teamId).members.map((m) => m.name)).toEqual(['团队领队', 'Dave']);
 
     const removed = await h.post(`/eteams-api/team/${teamId}/member/Dave/remove`, {});
     expect(removed.code).toBe(200);
@@ -685,7 +685,7 @@ describe('panel write routes (M5 first slice)', () => {
       (m) => m.name === 'Cara',
     )!;
     expect(member.avatar.seed).toBe(stored.avatar!.seed);
-    expect((snap.captain as { name: string }).name).toBe('项目牧羊人');
+    expect((snap.captain as { name: string }).name).toBe('团队领队');
   });
 
   it('carries the preset personaMd through adoption and spawn rendering', async () => {
@@ -694,13 +694,14 @@ describe('panel write routes (M5 first slice)', () => {
     const created = await h.post('/eteams-api/team', { name: '手册团队', sessionId: 'sess-panel' });
     const teamId = json<{ teamId: number }>(created.body).teamId;
     await h.post(`/eteams-api/team/${teamId}/member`, { name: '角色构建师', fromRoster: true });
-    const md = readTeam(teamId).members[0]!.persona.personaMd;
+    const builder = readTeam(teamId).members.find((m) => m.name === '角色构建师')!;
+    const md = builder.persona.personaMd;
     expect(md).toBeDefined();
     // 逐字原文（agency-agents-zh），不是蒸馏摘要。
     expect(md).toContain('核心使命');
     expect(md).toContain('关键规则');
     const { renderPersonaBlock } = await import('../src/host/prompts/personas/framework');
-    const block = renderPersonaBlock(readTeam(teamId).members[0]!.persona, '角色构建师');
+    const block = renderPersonaBlock(builder.persona, '角色构建师');
     expect(block).toContain('# 角色手册');
     expect(block).toContain('核心使命');
   });
@@ -821,7 +822,7 @@ describe('panel write routes (M5 first slice)', () => {
     )!;
     expect(member.employeeId).toMatch(/^ET-\d{4}$/);
     const captain = snap.captain as { name: string; employeeId: string };
-    expect(captain.name).toBe('项目牧羊人');
+    expect(captain.name).toBe('团队领队');
     expect(captain.employeeId).toMatch(/^ET-\d{4}$/);
   });
 
@@ -2678,7 +2679,7 @@ describe('GET /board 跨团队聚合 (docs/35 §6 Q1/Q3/Q4/Q5/Q9)', () => {
     expect(a.members.find((m) => m.name === 'Alice')!.activeTasks).toBe(2);
     expect(a.members.find((m) => m.name === 'Bob')!.activeTasks).toBe(0);
     expect(a.members.find((m) => m.name === 'Bob')!.isLeader).toBe(false);
-    expect(a.members.find((m) => m.name === '项目牧羊人')!.isLeader).toBe(true);
+    expect(a.members.find((m) => m.name === '团队领队')!.isLeader).toBe(true);
     expect(a.members).toHaveLength(3);
 
     const b = teams.find((t) => t.teamId === teamB)!;
@@ -3097,7 +3098,7 @@ describe('GET /session-identity (子代理身份面)', () => {
         memberSessions: { name: string; sessionId: string }[];
       }>
     ).find((x) => x.taskId === task.id)!;
-    expect(groupView.memberSessions.map((m) => m.name)).toEqual(['项目牧羊人']);
+    expect(groupView.memberSessions.map((m) => m.name)).toEqual(['团队领队']);
     expect(groupView.memberSessions[0]!.sessionId).toBe(leaderRow.sessionId);
     expect(
       team.taskMembers.filter((r) => r.mainTaskId === task.id && r.sessionId === '').length,
@@ -3117,7 +3118,7 @@ describe('GET /session-identity (子代理身份面)', () => {
     }>(got.body);
     expect(body.empty).toBe(false);
     expect(body.kind).toBe('captain');
-    expect(body.name).toBe('项目牧羊人');
+    expect(body.name).toBe('团队领队');
     expect(body.teamId).toBe(String(teamId));
     expect(body.teamName).toBe('领队身份队');
     expect(body.avatar).not.toBeNull();

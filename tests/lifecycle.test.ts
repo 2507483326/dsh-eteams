@@ -375,7 +375,7 @@ describe('lifecycle (offline full flow)', () => {
 
     // v7 决策 5：建大任务即按班底全员铺副本（含领队）；领队班底行 ET-0001
     //（表自增：建队即入班底领首号）。
-    const leaderTemplate = teamAfterCreate.members.find((m) => m.name === '项目牧羊人')!;
+    const leaderTemplate = teamAfterCreate.members.find((m) => m.name === '团队领队')!;
     expect(leaderTemplate.employeeId).toBe(1);
     const replicaIdsOf = (rootId: number) =>
       teamAfterCreate.taskMembers

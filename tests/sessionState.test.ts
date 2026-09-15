@@ -13,11 +13,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   canOpenSession,
   createSession,
+  currentSessionIdOf,
   installSessionState,
   openSession,
   promptSession,
   rootSessionIdOf,
   sessionCwdOf,
+  workspaceIdOfSession,
 } from '../src/client/lib/sessionState';
 
 /** 装一个只带 sessions 面的假 client ctx。 */
@@ -47,6 +49,16 @@ describe('createSession（宿主建会话，New Session 流程同源）', () => 
     expect(create).toHaveBeenLastCalledWith(undefined);
     await createSession();
     expect(create).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it('给 workspaceId 走工作区（宿主「二选一」：workspaceId 压过 cwd）', async () => {
+    const create = vi.fn(async () => 's1');
+    install({ create });
+    await createSession({ workspaceId: 'w-1', cwd: 'C:/work' });
+    expect(create).toHaveBeenLastCalledWith({ workspaceId: 'w-1' });
+    // 空 workspaceId 视同没给，回落 cwd。
+    await createSession({ workspaceId: '', cwd: 'C:/work' });
+    expect(create).toHaveBeenLastCalledWith({ cwd: 'C:/work' });
   });
 
   it('缺服务 / 缺方法 / 抛错 / 空 id / 非串 id → null（降级不抛）', async () => {
@@ -127,6 +139,57 @@ describe('sessionCwdOf（新对话沿用来源会话工作区）', () => {
     expect(sessionCwdOf('')).toBeNull();
     install({});
     expect(sessionCwdOf('s1')).toBeNull();
+  });
+});
+
+describe('currentSessionIdOf（覆盖层表面取当前会话——新对话据此沿用其工作区）', () => {
+  it('列表快照 current 有值 → 返回；缺服务 / 无选中 / 畸形值 → undefined', () => {
+    install({ list: { getSnapshot: () => ({ byId: {}, current: 's-cur' }) } });
+    expect(currentSessionIdOf()).toBe('s-cur');
+    install({ list: { getSnapshot: () => ({ byId: {} }) } });
+    expect(currentSessionIdOf()).toBeUndefined();
+    install({ list: { getSnapshot: () => ({ byId: {}, current: '' }) } });
+    expect(currentSessionIdOf()).toBeUndefined();
+    install({ list: { getSnapshot: () => ({ byId: {}, current: 42 }) } });
+    expect(currentSessionIdOf()).toBeUndefined();
+    install({});
+    expect(currentSessionIdOf()).toBeUndefined();
+    installSessionState(null);
+    expect(currentSessionIdOf()).toBeUndefined();
+  });
+});
+
+describe('workspaceIdOfSession（新对话挂回来源会话的工作区，否则落「未分组」）', () => {
+  /** 装一个只带 workspaces 面的假 client ctx。 */
+  const installWorkspaces = (items: unknown): void =>
+    installSessionState({ workspaces: { list: { getSnapshot: () => ({ items }) } } });
+
+  it('sessionIds 记账命中 → 该工作区（cwd 不参与）', () => {
+    installWorkspaces([
+      { workspaceId: 'w-1', path: 'C:/a', sessionIds: ['s-other'] },
+      { workspaceId: 'w-2', path: 'C:/work', sessionIds: ['s-old'] },
+    ]);
+    expect(workspaceIdOfSession('s-old', 'C:/work')).toBe('w-2');
+    expect(workspaceIdOfSession('s-old', 'C:/nowhere')).toBe('w-2');
+  });
+
+  it('会话未记账时退一步按 path === cwd 认领；无命中 → undefined', () => {
+    installWorkspaces([{ workspaceId: 'w-1', path: 'C:/a', sessionIds: [] }]);
+    expect(workspaceIdOfSession('s-ghost', 'C:/a')).toBe('w-1');
+    expect(workspaceIdOfSession('s-ghost', 'C:/b')).toBeUndefined();
+    expect(workspaceIdOfSession('s-ghost')).toBeUndefined();
+    expect(workspaceIdOfSession('s-ghost', null)).toBeUndefined();
+  });
+
+  it('缺服务 / items 非数组 / 畸形行 / 畸形 id → undefined（降级不抛）', () => {
+    install({});
+    expect(workspaceIdOfSession('s-1', 'C:/work')).toBeUndefined();
+    installWorkspaces('nope');
+    expect(workspaceIdOfSession('s-1', 'C:/work')).toBeUndefined();
+    installWorkspaces([null, 42, { workspaceId: 7, path: 'C:/work', sessionIds: ['s-1'] }]);
+    expect(workspaceIdOfSession('s-1', 'C:/work')).toBeUndefined();
+    installSessionState(null);
+    expect(workspaceIdOfSession('s-1', 'C:/work')).toBeUndefined();
   });
 });
 
@@ -267,6 +330,8 @@ describe('sessions 服务不活跃（cordis inactive context）→ 一律降级�
     expect(canOpenSession('s')).toBe(false);
     expect(openSession('s')).toBe(false);
     expect(sessionCwdOf('s')).toBeNull();
+    expect(currentSessionIdOf()).toBeUndefined();
+    expect(workspaceIdOfSession('s', 'C:/work')).toBeUndefined();
     expect(await createSession()).toBeNull();
     expect(await promptSession('s', 'x')).toBe(false);
   });

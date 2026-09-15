@@ -39,7 +39,7 @@ export interface RosterMember {
   role: string;
   /** 一句话简介（列表卡片与详情头展示；空/缺省=不展示）。 */
   profile?: string;
-  /** 领队标识（v8 roles.is_leader）：项目牧羊人=1 其余=0；领队条目按它识别不按名。 */
+  /** 领队标识（v8 roles.is_leader）：团队领队=1 其余=0；领队条目按它识别不按名。 */
   isLeader?: boolean;
   /**
    * 主对话注入角色标识（v12 roles.is_root）：保留角色 system=1 其余=0。
@@ -99,7 +99,7 @@ function rosterPersona(m: RosterMember, name: string): PersonaRecord {
 
 /** roles 角色行 → RosterMember（手册全文解析回六字段；profile 列值优先）。
  * v7：roles.employee_id 弃用不读——工号在班底（team_members.employee_id）。
- * v8：is_leader 标识随行读出（项目牧羊人=1）。
+ * v8：is_leader 标识随行读出（团队领队=1）。
  * v12：is_root 行特判——persona_md 是注入主对话的原文（默认空），不经
  * personaFromMd 解析（解析会把无结构标记的原文丢弃、空文回退成烘制脚手架，
  * 编辑回显与再保存都会污染原文），逐字透传。 */
@@ -193,7 +193,7 @@ export async function upsertRosterMember(
   if (role === '') throw new Error('角色不能为空');
   // 领队保留名（docs/19.10）：removeRosterMember 拒删；upsert 默认同样拒绝
   // 覆盖，防止对话流/构建器写路径意外改写领队人设。面板的显式编辑（用户
-  // 迭代 2026-09-03「项目牧羊人也可以编辑」）经 allowLeader 放行——用户
+  // 迭代 2026-09-03「领队也可以编辑」）经 allowLeader 放行——用户
   // 主动保存与成员详情「同步到该角色」走这条路，代理侧写路径保持拒绝。
   if (name === LEADER_NAME && options?.allowLeader !== true) {
     throw new Error('领队成员为保留名，不可通过 upsert 覆盖');
@@ -280,7 +280,7 @@ const PROTECTED_FROM_DELETE: readonly string[] = [LEADER_NAME, ROLE_BUILDER_NAME
 
 /**
  * Seed the preset members (agency-agents-zh roles, name = role; 2026-09 起
- * 默认仅角色构建师) plus the leader (项目牧羊人) into a workspace roster on
+ * 默认仅角色构建师) plus the leader (团队领队) into a workspace roster on
  * first access. Idempotent and non-destructive: existing entries (including
  * user edits to a preset) are never overwritten; only missing presets are
  * inserted. 播种本体在 state/import.ts 的 seedPresetRows（与首启导入同一
@@ -304,14 +304,17 @@ export async function ensurePresetMembers(stateRoot: string): Promise<void> {
     if (
       leader !== undefined &&
       captain.personaMd !== undefined &&
-      staleDistilledDoc(leader.personaMd) &&
-      leader.duty === captain.duty &&
-      leader.style === captain.style &&
-      leader.skills === captain.skills
+      (isLegacyLeaderDoc(leader.personaMd) ||
+        (staleDistilledDoc(leader.personaMd) &&
+          leader.duty === captain.duty &&
+          leader.style === captain.style &&
+          leader.skills === captain.skills))
     ) {
       upgradePresetHandbook(tx, {
         name: LEADER_NAME,
-        personaMd: captain.personaMd,
+        // 写完整人设（结构摘要 + '# 角色手册' 段），与新建库的 personaToMd 形状
+        // 一致——只写裸手册会让读端 personaFromMd 解析不出 personaMd。
+        personaMd: personaToMd(captain, LEADER_NAME),
         now,
       });
     }
@@ -349,6 +352,16 @@ function staleDistilledDoc(md: string | undefined): boolean {
   return md !== undefined && md.includes('## 交付标准') && !md.includes('核心使命');
 }
 
+/**
+ * Detects the leader's pre-rename handbook — the generic project-manager
+ * playbook imported verbatim from agency-agents-zh, whose H1 carries the old
+ * reserved name 「项目牧羊人」. v15 领队改名后它的 H1 与新名不符，据此换成
+ * personas/leaderHandbook 的团队合作守则；用户自己写过的手册不匹配，保持原样。
+ */
+function isLegacyLeaderDoc(md: string | undefined): boolean {
+  return md !== undefined && md.includes('# 项目牧羊人');
+}
+
 /** 事务内按名写 roles 角色行手册（陈旧手册升级用，不碰工号/头像）；
  * 写完顺手刷新 team_members 里该角色的副本列（v4 镜像随角色行走）。 */
 function upgradePresetHandbook(
@@ -363,7 +376,7 @@ function upgradePresetHandbook(
 
 /**
  * Remove one roster entry by name (v3：删 roles 角色行). The leader
- * (项目牧羊人) and the role builder (角色构建师) are system members and
+ * (团队领队) and the role builder (角色构建师) are system members and
  * protected: deletion is rejected (用户模型：领队/角色构建师不可删除).
  * 用户迭代 2026-09-10「角色删除和团队不挂钩」：不再检查 team_members 班底
  * 引用——删角色只摘角色库条目；在团成员照常持有工牌（班底行 role_id 悬空、

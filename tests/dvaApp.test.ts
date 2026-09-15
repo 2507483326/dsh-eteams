@@ -39,7 +39,7 @@ describe('dvaApp bootstrap（S6）', () => {
           workDir: null,
           progress: { completed: 2, total: 5, cancelled: 0, active: 1 },
           captain: {
-            name: '项目牧羊人',
+            name: '团队领队',
             role: 'captain',
             duty: '拆解',
             style: '直接',

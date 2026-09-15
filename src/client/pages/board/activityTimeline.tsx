@@ -25,17 +25,12 @@ const TIMELINE_BODY_CLASS = 'min-h-0 flex-1 space-y-0.5 overflow-y-auto';
 const TASK_TAG_CLASS =
   'inline rounded bg-muted px-1.5 py-px text-xs text-foreground underline-offset-2 hover:underline';
 
-/** 数据更新行空档占位（fetchedAt=0 尚未拉到快照）。 */
-const FETCH_AT_EMPTY = '—';
-
 export function ActivityTimeline({
   team,
   now,
-  fetchedAt,
 }: {
   team: TeamSnapshot | undefined;
   now: number;
-  fetchedAt: number;
 }): ReactNode {
   const navigate = useNavigate();
   const rows = activityRowsOf(team);
@@ -73,10 +68,7 @@ export function ActivityTimeline({
             </span>
           </div>
         ))}
-        {rows.length === 0 && <div className={`${MUTED_CLASS} text-center`}>暂无动态</div>}
-      </div>
-      <div className={`shrink-0 ${MUTED_CLASS}`}>
-        数据更新于 {fetchedAt === 0 ? FETCH_AT_EMPTY : relativeTime(fetchedAt, now)}
+        {rows.length === 0 && <div className={`${MUTED_CLASS} pt-3 text-center`}>暂无动态</div>}
       </div>
     </Card>
   );

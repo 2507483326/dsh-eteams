@@ -155,9 +155,7 @@ export function TeamPage({ sessionId, pool, team, onSelectTeam }: TeamPageProps)
         }}
         title="新增团队"
         description={
-          canCreate
-            ? '只需名称即可创建——目标与任务在对话中与领队继续完善。'
-            : '当前还没有进行中的对话——开始对话后才能创建团队。'
+          canCreate ? undefined : '当前还没有进行中的对话——开始对话后才能创建团队。'
         }
       >
         <Input

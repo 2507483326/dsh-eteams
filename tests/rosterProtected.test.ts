@@ -1,5 +1,5 @@
 /**
- * Roster protection (docs/13.8.2, 用户反馈): the leader (项目牧羊人) and the
+ * Roster protection (docs/13.8.2, 用户反馈): the leader (团队领队) and the
  * role builder (角色构建师) are system members — deletion is rejected, and
  * the role builder sits right under the leader in the panel order (client
  * memberRank mirrors this).

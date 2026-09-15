@@ -12,6 +12,11 @@
  * 组合与呈现收口在此；分层纪律：features 只依赖 lib/ 与同级 features，不碰
  * pages（页面组件在 pages/board 消费本模块）。
  *
+ * 2026-09-15 用户迭代「都在一行，按照 #任务ID  对话名称  详情 显示」：决策
+ * 面板行由「标题 + 副行」两行收成**一行三列**，投影随之下沉为列镜像——
+ * `taskId`（`#id` 列）、`conversationName`（对话名称列：主对话 / 提问代理名）、
+ * `detail`（详情列，原 title 与 detail 两段以「 · 」拼好），页面只管渲染。
+ *
  * @module dsh-eteams/client/activityView
  */
 import type { Tone } from '../tasks/taskDisplayStatus';
@@ -40,18 +45,27 @@ export interface ActivityRow {
   taskSubject: string | null;
 }
 
-/** 决策面板一行（待决策 / 待问答统一接口）。 */
+/**
+ * 决策面板一行（待决策 / 待问答统一接口）：**列镜像**——面板一行三列
+ * （`#id` · 对话名称 · 详情），投影直接给出三列的值，页面不再自行拼装
+ * （用户 2026-09-15「都在一行，按照 #任务ID  对话名称  详情 显示」）。
+ */
 export interface PendingAction {
   /** 稳定键：决策 `d<id>` / 问答 `a<askId>`。 */
   key: string;
   kind: 'decision' | 'ask';
   at: number;
-  /** 主标题：决策取任务主题/#id，问答取「<提问者> 的问答（N 问）」。 */
-  title: string;
-  /** 补充说明：决策取失败原因，问答为空串。 */
-  detail: string;
+  /** `#id` 列：问答取绑定的大任务号，决策取本任务号；null = 无绑定任务
+   * （旧快照缺 mainTaskId / 任务已删）。 */
   taskId: number | null;
   taskSubject: string | null;
+  /** 对话名称列：弹窗落点会话——主对话 → 「主对话」，落点退回提问子会话时
+   * 显示提问代理名（用户 2026-09-15「不是主对话对话名称显示对应的代理名
+   * 称」）；决策恒「主对话」。 */
+  conversationName: string;
+  /** 详情列：问答=「<提问者> 的问答（N 问）」；决策=任务主题（有失败原因时
+   * 以「 · 」追加）。 */
+  detail: string;
   /** 跳转目标会话 id（问答=弹窗实际落点；决策=任务主对话）；null=无法定位。 */
   sessionId: string | null;
   /** 落点是否主对话（决策恒 true；问答按宿主记录，未知按否）。 */
@@ -84,12 +98,34 @@ export function activityRowsOf(team: TeamSnapshot | undefined): ActivityRow[] {
     }));
 }
 
+/** 对话名称列的主对话档（非主对话档 = 提问代理名，见 conversationNameOf）。 */
+const MAIN_CONVERSATION = '主对话';
+
+/**
+ * 对话名称列取值：落点为主对话 → 「主对话」；否则为提问代理名——弹窗退回的
+ * 是提问子代理自己的会话，那个会话正是该代理的对话。
+ */
+function conversationNameOf(isMainSession: boolean, askingName: string): string {
+  return isMainSession ? MAIN_CONVERSATION : askingName;
+}
+
+/** 详情列拼装：各段去空后以「 · 」连接（空段不留分隔符，全空 → 空串）。 */
+function detailTextOf(parts: readonly (string | null | undefined)[]): string {
+  return parts
+    .map((part) => (part ?? '').trim())
+    .filter((part) => part !== '')
+    .join(' · ');
+}
+
 /**
  * 决策面板：待决策 + 待问答统一成可点击项（按时间升序，最早待处理在前）。
- * - 决策：跳转目标 = 任务主对话（`task.sessionId`，`main_session_id`），
- *   isMain=true；任务已删 → sessionId null（按钮点击兜底提示）。
- * - 问答：跳转目标 = 弹窗实际落点 `deliverySessionId`（v14）；旧行缺列时退
- *   化为该任务主对话、再退提问会话 `askingSessionId`；isMain 按记录透传。
+ * - 决策：`#id` = 本任务号；对话名称恒「主对话」；详情 = 任务主题 · 失败原因；
+ *   跳转目标 = 任务主对话（`task.sessionId`，`main_session_id`），任务已删 →
+ *   sessionId null（按钮点击兜底提示）。
+ * - 问答：`#id` = 绑定的大任务号；对话名称按弹窗落点（主对话 / 提问代理名）；
+ *   详情 = 「<提问者> 的问答（N 问）」；跳转目标 = 弹窗实际落点
+ *   `deliverySessionId`（v14），旧行缺列时退化为该任务主对话、再退提问会话
+ *   `askingSessionId`。
  */
 export function pendingActionsOf(team: TeamSnapshot | undefined): PendingAction[] {
   if (team === undefined) return [];
@@ -102,10 +138,10 @@ export function pendingActionsOf(team: TeamSnapshot | undefined): PendingAction[
       key: `d${d.id}`,
       kind: 'decision',
       at: d.createdAt,
-      title: subject ?? `#${d.taskId}`,
-      detail: d.error,
       taskId: d.taskId,
       taskSubject: subject,
+      conversationName: MAIN_CONVERSATION,
+      detail: detailTextOf([subject, d.error]),
       sessionId: task?.sessionId ?? null,
       isMainSession: true,
     });
@@ -114,36 +150,40 @@ export function pendingActionsOf(team: TeamSnapshot | undefined): PendingAction[
     const mainTaskId = a.mainTaskId ?? null;
     const task = mainTaskId !== null ? taskById.get(mainTaskId) : undefined;
     const subject = task?.subject ?? null;
+    const isMainSession = a.deliveryIsMain ?? false;
     tasks.push({
       key: `a${a.askId}`,
       kind: 'ask',
       at: a.createdAt,
-      title: `${a.askingName} 的问答（${a.questionCount} 问）`,
-      detail: '',
       taskId: mainTaskId,
       taskSubject: subject,
+      conversationName: conversationNameOf(isMainSession, a.askingName),
+      detail: `${a.askingName} 的问答（${a.questionCount} 问）`,
       sessionId: a.deliverySessionId ?? task?.sessionId ?? a.askingSessionId ?? null,
-      isMainSession: a.deliveryIsMain ?? false,
+      isMainSession,
     });
   }
   return tasks.sort((x, y) => x.at - y.at);
 }
 
-/** 决策面板「已决策」历史一行（已处置决策 / 已结束问答，统一接口）。 */
+/** 决策面板「已决策」历史一行（已处置决策 / 已结束问答，统一接口）：与
+ * {@link PendingAction} 同款**列镜像**（`#id` · 对话名称 · 详情）。 */
 export interface DecidedAction {
   /** 稳定键：决策 `rd<id>` / 问答 `ra<askId>`。 */
   key: string;
   kind: 'decision' | 'ask';
   /** 处置/作答时刻（缺省回退创建时刻）。 */
   at: number;
-  /** 主标题：决策取任务主题/#id，问答取「<提问者> 的问答（N 问）」。 */
-  title: string;
-  /** 处置结论（决策，含备注）或答案摘要（问答，无答案时给状态文案）。 */
+  /** `#id` 列：问答取绑定的大任务号，决策取本任务号；null = 无绑定任务。 */
+  taskId: number | null;
+  taskSubject: string | null;
+  /** 对话名称列（口径同 {@link PendingAction}；决策恒「主对话」）。 */
+  conversationName: string;
+  /** 详情列：决策=任务主题 · 处置结论（含备注）；问答=「<提问者> 的问答
+   * （N 问）」· 答案摘要（无答案时给状态文案）。 */
   detail: string;
   /** 语义色调：决策=ok；问答 answered=ok / cancelled、expired=muted。 */
   outcome: 'ok' | 'muted';
-  taskId: number | null;
-  taskSubject: string | null;
   /** 回顾目标会话（决策=任务主对话；问答=弹窗落点→任务主对话→提问会话）。 */
   sessionId: string | null;
   isMainSession: boolean;
@@ -185,11 +225,11 @@ export function decidedActionsOf(team: TeamSnapshot | undefined): DecidedAction[
       key: `rd${d.id}`,
       kind: 'decision',
       at: d.resolvedAt ?? d.createdAt,
-      title: subject ?? `#${d.taskId}`,
-      detail: decisionOutcomeLabel(d.choice, d.note),
-      outcome: 'ok',
       taskId: d.taskId,
       taskSubject: subject,
+      conversationName: MAIN_CONVERSATION,
+      detail: detailTextOf([subject, decisionOutcomeLabel(d.choice, d.note)]),
+      outcome: 'ok',
       sessionId: task?.sessionId ?? null,
       isMainSession: true,
     });
@@ -198,17 +238,21 @@ export function decidedActionsOf(team: TeamSnapshot | undefined): DecidedAction[
     const mainTaskId = a.mainTaskId ?? null;
     const task = mainTaskId !== null ? taskById.get(mainTaskId) : undefined;
     const subject = task?.subject ?? null;
+    const isMainSession = a.deliveryIsMain ?? false;
     items.push({
       key: `ra${a.askId}`,
       kind: 'ask',
       at: a.answeredAt ?? a.createdAt,
-      title: `${a.askingName} 的问答（${a.questionCount} 问）`,
-      detail: a.answerSummary !== '' ? a.answerSummary : (ASK_STATUS_LABEL[a.status] ?? ''),
-      outcome: a.status === 'answered' ? 'ok' : 'muted',
       taskId: mainTaskId,
       taskSubject: subject,
+      conversationName: conversationNameOf(isMainSession, a.askingName),
+      detail: detailTextOf([
+        `${a.askingName} 的问答（${a.questionCount} 问）`,
+        a.answerSummary !== '' ? a.answerSummary : (ASK_STATUS_LABEL[a.status] ?? ''),
+      ]),
+      outcome: a.status === 'answered' ? 'ok' : 'muted',
       sessionId: a.deliverySessionId ?? task?.sessionId ?? a.askingSessionId ?? null,
-      isMainSession: a.deliveryIsMain ?? false,
+      isMainSession,
     });
   }
   return items.sort((x, y) => y.at - x.at).slice(0, 30);

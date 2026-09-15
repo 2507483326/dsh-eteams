@@ -34,9 +34,9 @@ import {
   TaskIdBadge,
   TaskStatusPill,
 } from '../shared/components';
-import { LIST_COUNT_CLASS } from '../shared/styles';
+import { LIST_COUNT_CLASS, TASK_LIST_CARD_CLASS } from '../shared/styles';
 
-/** 列表页任务小卡（十一轮 DA24 与团队列表小卡同款三段式，十二轮 DA25 修订：
+/* 列表页任务小卡（十一轮 DA24 与团队列表小卡同款三段式，十二轮 DA25 修订：
  * 头行（主题截断，**无 #id 前缀**）、信息**逐行分行**（进度行/汇总 chip 行/
  * 阻塞行各自独立）、文件夹行（点击打开）、底栏（border-t 分区）；十三轮 DA26
  * 修订：内容行顶格对齐、每卡必有进度行（无小任务显「小任务 0」）、底栏
@@ -46,8 +46,8 @@ import { LIST_COUNT_CLASS } from '../shared/styles';
  * 描边压平 hover、工作目录改幽灵文字钮；底色/边框/悬停由 .eteams-task-card
  * 样式表接管，p-3.5 = 卡内高度呼吸感）。cursor-pointer 移出常量——
  * 2026-09-10 起只有当前会话卡整卡可点（其它任务卡不可点进详情，见头注）；
- * 2026-09-11 起创建中卡也不可点（见头注）。 */
-const TASK_CARD_CLASS = 'flex min-w-0 flex-col gap-2 rounded-xl p-3.5';
+ * 2026-09-11 起创建中卡也不可点（见头注）。布局类 TASK_LIST_CARD_CLASS 已迁
+ * shared/styles（对话内任务卡复用同一布局，2026-09-15）。 */
 
 /** 列表卡删除按钮显隐判据（十二轮 DA25，用户拍板「仅可删除的卡显示」）——
  * 与 host deleteTask 守卫（assignment.ts）同口径：本身 creating/ready
@@ -147,7 +147,11 @@ export function TaskListCard({
     // 创建中卡 2026-09-13 起同可进）；不可点卡身不加 cursor-pointer
     // （悬停语义与行为一致）。
     <div
-      className={cn('eteams-task-card', TASK_CARD_CLASS, openable ? 'cursor-pointer' : 'cursor-default')}
+      className={cn(
+        'eteams-task-card',
+        TASK_LIST_CARD_CLASS,
+        openable ? 'cursor-pointer' : 'cursor-default',
+      )}
       onClick={openable ? onOpen : undefined}
     >
       {/* 头行：编号徽章 + 主题（十四轮 DA27：展示态 pill 挪出头部——用户

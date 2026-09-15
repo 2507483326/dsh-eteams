@@ -29,7 +29,7 @@ task_members  任务成员副本：建任务时整班复制（含领队），emp
               主键，main_task_id = 本任务；派发起会话后 session_id 落在自己的
               副本行上
               行生命周期跟随所属大任务：任务删除 → 副本级联删除
-              领队的「团队级主持行」（main_task_id 为空、name=项目牧羊人）保留——
+              领队的「团队级主持行」（main_task_id 为空、name=团队领队）保留——
               它不是工牌，是领队子会话的锚 + has_leader 载体，实现需要
 ```
 
@@ -87,7 +87,7 @@ task_members  任务成员副本：建任务时整班复制（含领队），emp
 `getDb` 内按列形状检测触发（table_info 幂等，与现有迁移惯例一致；**检测只看 `mail_messages.employee_id` 与 `attempts.task_member_id` 两列**——team/roles/team_members 三表 v6/v7 形状一致，不加列），单事务：
 
 1. `mail_messages` 加 `employee_id INTEGER`；`attempts` 加 `task_member_id INTEGER`（缺哪列补哪列）。
-2. 现存团队级 staged 行删除（`main_task_id IS NULL AND name != '项目牧羊人'`）。
+2. 现存团队级 staged 行删除（`main_task_id IS NULL AND name != '团队领队'`）。
 3. **5.2（验收 M1）：存量队补建领队班底行**——v6 领队不入班底；有主持行且班底无领队行的队 INSERT 领队班底行（无显式号 → 落库即领自增主键号），主持行 employee_id 同步此号；主持行/角色行缺失的队跳过（加回领队时走 setLeaderRemoved 续号路径自补）。
 4. **5.5（终审 B3）：每个现存容器任务按班底全员补建副本行**——employee_id 抄班底行主键、status=staged、session_id 空；现存锚定行保持原状态原会话不动（副本补建跳过该成员该任务已有行）。**只补容器**（`parent_id IS NULL`）——副本行只锚定大任务，小任务共享容器的副本行（验收 m4 修订）。
 5. 任务锚定副本行 employee_id 按名 join 本队班底行重键到新主键号（**EXISTS 守卫**：join 不到的孤儿保留旧号，不刷成 NULL）；主持行已在第 3 步同步。

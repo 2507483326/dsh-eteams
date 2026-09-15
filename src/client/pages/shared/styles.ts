@@ -13,7 +13,7 @@ import { DOT_BASE_CLASS, DOT_TONE_CLASS, type Tone } from '../../features/tasks/
 /** ================================== 常量与映射表 ================================== */
 
 /** The leader is a member too — default-joined, undeletable (用户定稿模型). */
-export const LEADER_NAME = '项目牧羊人';
+export const LEADER_NAME = '团队领队';
 /** The role-builder persona is a system member as well: undeletable,
  * listed right under the leader (用户反馈：角色构建师不能删除). */
 export const ROLE_BUILDER_NAME = '角色构建师';
@@ -136,6 +136,12 @@ export const CARD_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(240px,1f
  * ——底栏三钮（跳转会话/删除/开始）在 260px 档挤爆卡宽，加宽后单行容纳；
  * 看板任务小卡共用同栅格，一并受益）。 */
 export const TASK_GRID_CLASS = 'grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3';
+
+/** 任务列表小卡布局类（十四轮 DA27 卡内纵向排布：头行/信息行/文件夹行/底栏
+ * ——底色/边框/悬停由 .eteams-task-card 样式表接管，见 ROLE_LIST_CSS）。
+ * 对话内任务卡（pages/taskCard）复用同一布局类，两处卡面同构（2026-09-15
+ * 用户「对话里面的任务卡片完全按照任务列表中的任务卡片样式来」）。 */
+export const TASK_LIST_CARD_CLASS = 'flex min-w-0 flex-col gap-2 rounded-xl p-3.5';
 
 /** 团队列表小卡栅格（用户迭代 2026-09-07：团队卡加宽一档——最小 240px 自
  * 适应列，窄列少宽列多；角色列表维持 210px 原档、任务卡 260px 仍宽一档）。

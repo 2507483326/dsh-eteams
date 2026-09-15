@@ -42,7 +42,7 @@ function teamOf(hasLeader: boolean): TeamState {
     taskMembers: [],
     tasks: [],
     members: [
-      { name: '项目牧羊人', isLeader: true },
+      { name: '团队领队', isLeader: true },
       { name: 'Alice', isLeader: false },
     ],
     pendingDecisions: [],
@@ -51,7 +51,7 @@ function teamOf(hasLeader: boolean): TeamState {
 
 const BRIEFING_INPUT = {
   teamName: '甲队',
-  leaderName: '项目牧羊人',
+  leaderName: '团队领队',
   projectRoot: 'C:/ws',
   taskDir: 'C:/ws/teams/3-登录服务',
   boardFile: 'C:/ws/teams/3-登录服务/留言板.md',
@@ -80,7 +80,7 @@ describe('memberBriefing（通用成员模板：工作目录/留言板/纪要/�
     expect(text).toContain('## 文档产出');
     expect(text).toContain('C:/ws/teams/3-登录服务/文档');
     expect(text).toContain('## 你的领队');
-    expect(text).toContain('项目牧羊人');
+    expect(text).toContain('团队领队');
     expect(text).toContain('## 实时汇报（必须发给领队）');
     expect(text).toContain('开工即报');
     expect(text).toContain('遇问题即报');
@@ -117,7 +117,7 @@ describe('taskBriefing（runtime 组装：有领队=领队名，无领队=主会
 
   it('有领队：领队名 + 任务目录 + 留言板与纪要绝对路径', () => {
     const text = taskBriefing(env, teamOf(true), taskOf());
-    expect(text).toContain('项目牧羊人');
+    expect(text).toContain('团队领队');
     expect(text).toContain('3-登录服务');
     expect(text).toContain('留言板.md');
     expect(text).toContain('3-登录服务.纪要.md');

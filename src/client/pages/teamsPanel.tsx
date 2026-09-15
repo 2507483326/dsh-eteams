@@ -268,7 +268,12 @@ function TeamsOverlay({ onClose }: { onClose: () => void }): ReactNode {
           inputActions on mount) and writes the canonical template straight
           into the machine draft via the official setDraft — sendable on plain
           enter（未开始 hero 的锁定 composer 不响应合成事件，claim 舞蹈在此
-          不可用，见 addPeople）. */}
+          不可用，见 addPeople）.
+          sessionId 保持 undefined：本页所有「有会话才成立」的门控（团队页
+          canCreate、任务页本会话分区与「已挂任务」闸、成功收页）都以它为表面
+          代理。「添加任务」的新对话工作区不走这里——由 openTaskConversation
+          在缺来源会话时回落宿主当前会话（用户 2026-09-15：覆盖层补 sessionId
+          会让新对话被整页盖住、看不见跳转）。 */}
             <ETeamsView {...({ sessionId: undefined } as unknown as ConvViewProps)} />
           </div>
         </div>

@@ -32,7 +32,14 @@ interface Probe {
 }
 
 /** 装一个可用的假会话面：s-old 有工作区，create 出 s-new。 */
-function installHappyPath(overrides: { promptResult?: unknown; openThrows?: boolean } = {}): Probe {
+function installHappyPath(
+  overrides: {
+    promptResult?: unknown;
+    openThrows?: boolean;
+    current?: string;
+    workspaces?: unknown;
+  } = {},
+): Probe {
   const order: string[] = [];
   const create = vi.fn(async () => {
     order.push('create');
@@ -47,8 +54,14 @@ function installHappyPath(overrides: { promptResult?: unknown; openThrows?: bool
     if (overrides.openThrows === true) throw new Error('nope');
   });
   installSessionState({
+    ...(overrides.workspaces === undefined ? {} : { workspaces: overrides.workspaces }),
     sessions: {
-      list: { getSnapshot: () => ({ byId: { 's-old': { cwd: 'C:/work' } } }) },
+      list: {
+        getSnapshot: () => ({
+          byId: { 's-old': { cwd: 'C:/work' } },
+          ...(overrides.current === undefined ? {} : { current: overrides.current }),
+        }),
+      },
       create,
       binding: (id: string) => (id === 's-new' ? { session: { prompt } } : undefined),
       open,
@@ -80,7 +93,46 @@ describe('openTaskConversation（正常链）', () => {
     expect(probe.order).toEqual(['create', 'bind', 'prompt', 'open']);
   });
 
-  it('无来源会话（整页团队页表面）：不传 cwd，落宿主默认工作区', async () => {
+  it('来源会话有工作区：按 workspaceId 建会话（记账到工作区，不落「未分组」）', async () => {
+    const probe = installHappyPath({
+      current: 's-old',
+      workspaces: {
+        list: {
+          getSnapshot: () => ({
+            items: [{ workspaceId: 'w-1', path: 'C:/work', sessionIds: ['s-old'] }],
+          }),
+        },
+      },
+    });
+    const outcome = await openTaskConversation({ description: '整理仓库', teamId: 'team-1' });
+    expect(outcome).toEqual({ ok: true, sessionId: 's-new' });
+    expect(probe.create).toHaveBeenCalledWith({ workspaceId: 'w-1' });
+  });
+
+  it('覆盖层表面（无 fromSessionId）：回落宿主当前会话，由其工作区建会话', async () => {
+    const probe = installHappyPath({
+      current: 's-old',
+      workspaces: {
+        list: {
+          getSnapshot: () => ({
+            items: [{ workspaceId: 'w-1', path: 'C:/work', sessionIds: ['s-old'] }],
+          }),
+        },
+      },
+    });
+    const outcome = await openTaskConversation({ description: '整理仓库', teamId: 'team-1' });
+    expect(outcome).toEqual({ ok: true, sessionId: 's-new' });
+    expect(probe.create).toHaveBeenCalledWith({ workspaceId: 'w-1' });
+  });
+
+  it('取不到工作区（缺 workspaces 面）：退按来源会话 cwd 钉目录', async () => {
+    const probe = installHappyPath({ current: 's-old' });
+    const outcome = await openTaskConversation({ description: '整理仓库', teamId: 'team-1' });
+    expect(outcome).toEqual({ ok: true, sessionId: 's-new' });
+    expect(probe.create).toHaveBeenCalledWith({ cwd: 'C:/work' });
+  });
+
+  it('无来源会话且无当前会话（会话服务不可用）：不传目标，落宿主默认工作区', async () => {
     const probe = installHappyPath();
     const outcome = await openTaskConversation({ description: '整理仓库', teamId: 'team-1' });
     expect(outcome).toEqual({ ok: true, sessionId: 's-new' });

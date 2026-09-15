@@ -108,7 +108,7 @@ lib/                    构建产物（gitignore）：index.js（宿主 CJS）�
 ## 项目存储
 
 - **单库 SQLite**：`<stateDir>/db/eteams.db`。`stateDir` 配绝对路径 = 全局单库——所有工作区共用一个 eteams.db、一份角色库、一份用量台账（当前 profile 配 `C:/Users/epat/.eteams`）；配相对路径 = per-workspace 旧口径（`<workspace>/<stateDir>`）。连接按状态根缓存（同进程单连接），WAL + `synchronous=NORMAL` + `busy_timeout=3000` 构成单写多读。
-- **Schema v6，12 张表**：`schema_meta`（元数据键值）、`team`、`roles`（角色库）、`team_members`（班底）、`task`（大/小任务，含合同 MD、成员链、游标、重试计数、状态说明、阻塞还原点、工作目录）、`task_members`（执行实例，领队行 `name='项目牧羊人'` 且 `main_task_id` 为空）、`attempts`（一行一次尝试，含一次性 token、进度、结果、变更文件）、`events`（追加审计事件）、`mail_messages`（邮箱）、`decisions`（升级决策）、`task_status_changes`（状态流转记录）、`usage_detail` + `usage_daily_total`（用量明细与日总计，DB 即唯一存储）。
+- **Schema v6，12 张表**：`schema_meta`（元数据键值）、`team`、`roles`（角色库）、`team_members`（班底）、`task`（大/小任务，含合同 MD、成员链、游标、重试计数、状态说明、阻塞还原点、工作目录）、`task_members`（执行实例，领队行 `name='团队领队'` 且 `main_task_id` 为空）、`attempts`（一行一次尝试，含一次性 token、进度、结果、变更文件）、`events`（追加审计事件）、`mail_messages`（邮箱）、`decisions`（升级决策）、`task_status_changes`（状态流转记录）、`usage_detail` + `usage_daily_total`（用量明细与日总计，DB 即唯一存储）。
 - **任务工作文档**（用户 2026-09-15 扁平化）：`<workspace>/teams/<主任务号>-slug/` —— 一个主任务一个目录（主任务与其全部小任务共用），下 `留言板.md`（create-only，领队+全员共用一块）+ 每任务一份 `<任务号>-slug.纪要.md`（上半段宿主幂等渲染的合同视图、下半段纪要正文）+ `计划/`、`文档/` 两个只建目录、内容自由的夹。旧布局（`tasks/`、`sub/`、`contract.md`、`notes.md`、团队 `README.md`）不迁移、不兼容。
 - **schema 副本约束**：[schema.sql](src/host/state/schema.sql) 与 `src/host/state/db.ts` 内嵌 `SCHEMA_SQL` 常量必须逐字一致（宿主是单文件 bundle 读不到同目录资产，故内嵌一份；schema.sql 是审核对照副本）。版本迁移在 `getDb` 内 ALTER + 回填。
 

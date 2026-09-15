@@ -10,7 +10,11 @@
  *   失效——button.tsx 先例）；
  * - Viewport 就地渲染（Radix Toast 无 portal）：**Toaster 必须挂在
  *   `.eteams-ui` 子树内**（挂载位 = 团队面板根，teamsView/index.tsx）；
- *   useToast store 是模块级单例，其它表面以后要发 toast 需自挂 Toaster。
+ *   useToast store 是模块级单例，其它表面以后要发 toast 需自挂 Toaster；
+ * - 本仓扩展 `warning` 变体（上游仅 default/destructive）：点击期提示这类
+ *   「不是错误、但当前不能做」的文案需要 amber 语义（2026-09-15）——边框/
+ *   文字走 --warning token、与 destructive 变体同构，底色回默认 bg-background
+ *   （alert.tsx 同款扩展先例，扩展已在变体表内注释标记）。
  *
  * 消费：hooks/useToast.ts（toast()/useToast 全局单例 store）+ ui/toaster.tsx。
  *
@@ -31,6 +35,9 @@ const toastVariants = cva(
       variant: {
         default: 'border bg-background',
         destructive: 'group border-destructive bg-destructive text-destructive-foreground',
+        // 本仓扩展（2026-09-15）：amber 警示档，结构同 destructive、底色回
+        // 默认 bg-background——用于「不是错误、但当前不能做」的点击期提示。
+        warning: 'border-warning bg-background text-warning',
       },
     },
     defaultVariants: {

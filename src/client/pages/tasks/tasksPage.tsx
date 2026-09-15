@@ -16,8 +16,8 @@
  * shared、taskListCard、taskDialogs。面板手动建任务（用户迭代 2026-09-11）：
  * ＋「添加任务」按钮 + addTaskDialog 弹窗（描述 + 选团队）——提交
  * **新开一个对话**并把描述与团队带过去（lib/taskConversation 编排），任务单
- * 由该对话的团队工作流从零建立；目标团队默认当前会话绑定的团队（仅
- * 有团队可选时渲染按钮）。
+ * 由该对话的团队工作流从零建立；目标团队默认当前会话绑定的团队（渲染
+ * 闸门见 2026-09-15 二次迭代注记）。
  *
  * 用户迭代 2026-09-12「任务列表直接加线将本会话和其它会话隔离开来」：
  * 列表按会话归属分两段——本会话一段（「本会话」分区线 + 其下本会话卡/
@@ -34,6 +34,14 @@
  * 团队」同款 sm 钮，2026-09-12 的「按钮落分区线下」就地撤销），空态文案
  * 收成「暂无任务」；页头计数补「共」并与标题底部对齐（同日列表页头口径，
  * 同 rosterPage/teamPage）。
+ *
+ * 用户迭代 2026-09-15（二次）「不，需要显示添加按钮，点击按钮时再提示用户」
+ * +「提示用户 用 warning」：「＋ 添加任务」改**常显**——2026-09-12「本会话已
+ * 有任务就不再给添加入口」与「无可选团队不渲染」两条渲染期闸门就地撤销，
+ * 限制改为**点击时提示**（openAddDialog 先判：无可选团队 / 本会话已有任务
+ * 各弹一枚 **warning 档 toast**（不是错误、只是当前受阻——amber 语义走
+ * toast.tsx 本仓扩展的 warning 变体），说明为什么不能加），按钮不再随状态
+ * 无声消失（对齐「可点动作禁止静默 no-op」）。
  *
  * @module dsh-eteams/client/pages/tasks/tasksPage
  */
@@ -85,8 +93,9 @@ export interface TasksPageProps {
  * 瞬态 useState（编辑弹窗入口在详情页，本页仅删除确认可达），删除成功后
  * refreshActivitySoon 回拉快照；folderError/startError 瞬态错误行内就地
  * 显示（槽在 TaskListCard）。添加任务弹窗同为瞬态 useState：open/
- * description/teamId/busy/error，头部行按钮打开（仅有团队可选时渲染）、
- * teamId 默认当前会话绑定团队（每次打开重置，防残留）。
+ * description/teamId/busy/error，头部行按钮**常显**打开（限制改到点击期
+ * 提示，见 openAddDialog + 2026-09-15 二次迭代注记）、teamId 默认当前会话
+ * 绑定团队（每次打开重置，防残留）。
  */
 export function TasksPage({ pool, sessionId }: TasksPageProps): ReactNode {
   const navigate = useNavigate();
@@ -115,9 +124,32 @@ export function TasksPage({ pool, sessionId }: TasksPageProps): ReactNode {
 
   /* —— 事件处理 —— */
 
-  // 打开弹窗：描述清空、目标团队回填当前会话绑定的团队（取不到落队首）——
-  // 每次打开重置，防上一次草稿/悬空团队 id 残留。
+  // 打开弹窗：先过点击期闸门（用户 2026-09-15「需要显示添加按钮，点击按钮
+  // 时再提示用户」+「提示用户 用 warning」）——按钮常显，原先「渲染期不满足
+  // 条件就不出按钮」的两条限制（无可选团队 / 本会话已有任务）移到这里，点击
+  // 时各弹一枚 warning 档 toast（不是错误、只是当前受阻）说清原因，不再让
+  // 按钮无声消失（可点动作禁止静默 no-op）。通过后描述清空、目标团队回填当前
+  // 会话绑定的团队（取不到落队首）——每次打开重置，防上一次草稿/悬空团队 id
+  // 残留。
   const openAddDialog = (): void => {
+    if (pool.length === 0) {
+      toast({
+        variant: 'warning',
+        title: '无法添加任务',
+        description: '还没有可选的团队，请先创建一个团队。',
+      });
+      return;
+    }
+    // 一个会话只挂一个任务（用户迭代 2026-09-12）：本会话已有任务即不放开
+    // 入口——2026-09-15 起改为点击时提示（覆盖层无会话上下文，不拦）。
+    if (hasSession && sessionTasks.length > 0) {
+      toast({
+        variant: 'warning',
+        title: '本会话已有任务',
+        description: '一个会话只能挂一个任务；再建任务请新开一个对话。',
+      });
+      return;
+    }
     const fallback = pool[0]?.teamId ?? '';
     setAddDesc('');
     setAddTeamId(fallback);
@@ -317,12 +349,8 @@ export function TasksPage({ pool, sessionId }: TasksPageProps): ReactNode {
   const isCurrentSession = (t: TaskView): boolean => hasSession && t.sessionId === sessionId;
   const sessionTasks = hasSession ? mainTasks.filter(isCurrentSession) : [];
   const otherTasks = hasSession ? mainTasks.filter((t) => !isCurrentSession(t)) : mainTasks;
-  // 一个会话只挂一个任务（用户迭代 2026-09-12）：本会话已有任务即不再给
-  // 添加入口（2026-09-15 起按钮落卡头行最右，见渲染处）；无可选团队开弹窗
-  // 无意义亦不渲染。
-  const canAddTask = hasSession && pool.length > 0 && sessionTasks.length === 0;
   // 空态判据只看总量（用户 2026-09-15「然后显示暂无任务就行」）：列表无卡即
-  // 显示「暂无任务」，与是否还有添加入口无关（按钮已挪进卡头行，不再顶掉
+  // 显示「暂无任务」，与是否还有添加入口无关（按钮常显在卡头行，不再顶掉
   // 空态文案）。
   const showEmpty = mainTasks.length === 0;
 
@@ -386,14 +414,14 @@ export function TasksPage({ pool, sessionId }: TasksPageProps): ReactNode {
               <span className={LIST_COUNT_CLASS}>共 {mainTasks.length} 个</span>
             </div>
             <span className="min-w-0 flex-1" />
-            {/* 一个会话只挂一个任务：本会话已有任务就不再给添加入口；无可选
-                团队不渲染（开弹窗无意义）。 */}
-            {canAddTask && (
-              <Button type="button" variant="outline" size="sm" onClick={openAddDialog}>
-                <Plus className="h-3.5 w-3.5" />
-                添加任务
-              </Button>
-            )}
+            {/* 「＋ 添加任务」**常显**（用户 2026-09-15「需要显示添加按钮，
+                点击按钮时再提示用户」）：原先「本会话已有任务 / 无可选团队
+                就不渲染」的渲染期闸门就地撤销，两条限制移进 openAddDialog
+                的点击期提示（按钮不再无声消失）。 */}
+            <Button type="button" variant="outline" size="sm" onClick={openAddDialog}>
+              <Plus className="h-3.5 w-3.5" />
+              添加任务
+            </Button>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
             {/* 分区线只在该段有卡时渲染（用户 2026-09-15「任务列表为空时不展示

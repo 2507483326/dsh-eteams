@@ -14,6 +14,9 @@
  * 渲染端 5 分支大三元链拆 buildView 视图键 → BUILD_VIEW_META 文案表（键由
  * 归属/轮询态推导，三元只算键名）；轮询 setTimeout 链语义原样保留（不并
  * usePoll，44.2.2/M7-8 注记）。
+ * 用户 2026-09-15「转圈圈完全变成圆的，然后改成橙色」：状态行 spinner 由
+ * border/rounded 技法（宿主压圆角渲染成方角）换成 SVG 圆环 + warning 橙
+ * （CardSpinner，推理见该组件头注），注入式 keyframes 随撤。
  *
  * @module dsh-eteams/client/buildCard
  */
@@ -43,8 +46,6 @@ type BuildViewKey =
 
 /** ================================== 样式类 ================================== */
 
-const SPIN_KEYFRAMES = '@keyframes eteams-card-spin{to{transform:rotate(360deg)}}';
-
 /** 状态 pill（S24-2 D22e 官网圆 pill 口径：中性半透明底 + 12px medium；
  * 原 layer-2 淡底任意值直引收敛到 --eteams-pill-bg token。状态字色仍由
  * BUILD_SESSION_META.toneClass 经 tailwind-merge 覆盖中性字色——彩底撤、彩
@@ -54,9 +55,6 @@ const STATUS_PILL_CLASS =
 /** 访谈待作答 pill（D22e 品牌档：品牌淡底 token + brand-ink 字 token）。 */
 const INTERVIEW_PILL_CLASS =
   'rounded-full bg-business-tint px-2.5 py-0.5 text-xs font-semibold text-[color:var(--eteams-brand-ink)]';
-/** 进度 spinner（标准 border 技法：brand 主色描边、顶部透明、keyframes 旋转）。 */
-const SPINNER_CLASS =
-  'inline-block h-3 w-3 rounded-full border-2 border-solid border-primary border-t-transparent [animation:eteams-card-spin_0.9s_linear_infinite]';
 
 /** ================================== 常量与映射表 ================================== */
 
@@ -95,6 +93,42 @@ const BUILD_VIEW_META: Record<
  *   本身会把桌面切到对话视图,卡片在对话里实时刷新;openMemberBuilder 只
  *   保留卡片点击跳转（用户主动）。
  */
+
+/** ================================== 进度 spinner ================================== */
+
+/**
+ * 状态行进度 spinner（用户 2026-09-15「转圈圈完全变成圆的，然后改成橙色」）：
+ * 原 border/rounded 技法（border-2 + border-t-transparent 缺口环）在宿主
+ * 侧样式压过 border-radius 时渲染成方角——与 stepGlyph 同因（见该模块头注）。
+ * 改 SVG `<circle>` 矢量形状 + 内建 `<animateTransform>`：不经 CSS 圆角通道，
+ * 宿主样式无从干扰，也不再依赖注入式 keyframes（SPIN_KEYFRAMES 随撤）。
+ * 色走 warning token（橙），与构建台「进行中」档的 StepDot 同色。
+ */
+function CardSpinner(): ReactNode {
+  return (
+    <svg viewBox="0 0 10 10" className="h-3 w-3 shrink-0" aria-hidden>
+      <circle
+        cx="5"
+        cy="5"
+        r="3.75"
+        fill="none"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeDasharray="15.5 8"
+        style={{ stroke: 'var(--warning)' }}
+      >
+        <animateTransform
+          attributeName="transform"
+          type="rotate"
+          from="0 5 5"
+          to="360 5 5"
+          dur="1s"
+          repeatCount="indefinite"
+        />
+      </circle>
+    </svg>
+  );
+}
 
 /** ================================== 主组件 ================================== */
 
@@ -220,7 +254,6 @@ export function EteamBuildCard(props: { node?: unknown }): ReactNode {
       同 store 无害。本表面自身暂无 store hook，Provider 供子树按 dva 拓扑
       消费 useSelector/useDispatch。 */}
       <Provider store={getApp().store}>
-        <style>{SPIN_KEYFRAMES}</style>
         {/* 表面根（D19b/S14）：对话内卡片不在任何 .eteams-ui 作用域内——根
       自身不承工具类（`.eteams-ui .utility` 后代选择器机制），这里挂作用域
       类承载 token 变量与字面量，卡片样式全部迁内层。 */}
@@ -263,7 +296,7 @@ export function EteamBuildCard(props: { node?: unknown }): ReactNode {
               <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
                 {BUILD_VIEW_META[buildView].spin ? (
                   <>
-                    <span className={SPINNER_CLASS} />
+                    <CardSpinner />
                     <span>
                       {buildView === 'building'
                         ? `${BUILD_VIEW_META.building.text}${
