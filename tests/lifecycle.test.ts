@@ -16,6 +16,7 @@ import { resolveConfig, type ETeamsResolvedConfig } from '../src/host/config';
 import { createCaptainTools } from '../src/host/tools/captainTools';
 import { createMemberTools } from '../src/host/tools/memberTools';
 import { addMember, setLeaderModel, setMemberModel } from '../src/host/runtime/teamOps';
+import { minutesFileName } from '../src/host/runtime/docs';
 import {
   assignTask,
   cancelTask,
@@ -352,7 +353,8 @@ describe('lifecycle (offline full flow)', () => {
     );
     expect(doc.ok).toBe(true);
 
-    // 任务文件夹（work_dir 归任务）：团队 README + 小任务 contract/notes 物化
+    // 任务目录（用户 2026-09-15 扁平化）：一个主任务一个目录，主任务与小任务
+    // 共用；团队 README / tasks// sub/ 全部撤除。
     const teamAfterCreate = readTeam(teamId);
     const group = teamAfterCreate.tasks.find((t) => t.id === groupId)!;
     const sub = teamAfterCreate.tasks.find((t) => t.id === subId)!;
@@ -360,11 +362,16 @@ describe('lifecycle (offline full flow)', () => {
     expect(sub.parentId).toBe(groupId);
     // 十六轮 DA29：合同单字段回读（contract_md 列原样装回）。
     expect(sub.contractMd).toContain('支持 CSV 导出');
-    expect(existsSync(join(workspace, 'teams', '导出功能团队', 'README.md'))).toBe(true);
-    expect(existsSync(join(workspace, sub.workDir!, 'contract.md'))).toBe(true);
-    expect(existsSync(join(workspace, sub.workDir!, 'notes.md'))).toBe(true);
-    // 队伍留言板挂在**主任务**文件夹根下（小任务成员共享同一块，用户 2026-09-14）。
-    expect(existsSync(join(workspace, group.workDir!, '留言板.md'))).toBe(true);
+    expect(group.workDir).toMatch(/^teams\//);
+    expect(sub.workDir).toBeUndefined();
+    const groupDir = join(workspace, group.workDir!);
+    expect(existsSync(join(workspace, 'teams', '导出功能团队'))).toBe(false);
+    expect(existsSync(join(groupDir, '留言板.md'))).toBe(true);
+    // 计划 / 文档两个夹由宿主只建目录（内容自由）；纪要每任务一份（含小任务）。
+    expect(existsSync(join(groupDir, '计划'))).toBe(true);
+    expect(existsSync(join(groupDir, '文档'))).toBe(true);
+    expect(existsSync(join(groupDir, minutesFileName(group)))).toBe(true);
+    expect(existsSync(join(groupDir, minutesFileName(sub)))).toBe(true);
 
     // v7 决策 5：建大任务即按班底全员铺副本（含领队）；领队班底行 ET-0001
     //（表自增：建队即入班底领首号）。
@@ -1188,7 +1195,7 @@ describe('面板手动建任务（docs/panelTaskCommission）', () => {
       1,
     );
     expect(task.workDir).toMatch(/^teams\//);
-    expect(existsSync(join(workspace, task.workDir!, 'contract.md'))).toBe(true);
+    expect(existsSync(join(workspace, task.workDir!, minutesFileName(task)))).toBe(true);
     // task.created 事件带初始 status（审计可回溯「这个容器是创建中来的」）。
     const events = readEventsSync(root, created.teamId);
     const createdEvent = events.find((e) => e.type === 'task.created' && e.taskId === task.id);
@@ -1259,10 +1266,14 @@ describe('面板手动建任务（docs/panelTaskCommission）', () => {
     expect(done.status).toBe('ready');
     expect(done.subject).toBe('迁移文档结构');
     expect(done.description).toBe('完善后的任务说明');
-    // 改主题即目录改名（work_dir 归任务）：新目录存在、旧目录清空。
+    // 改主题即目录改名（work_dir 归主任务）：新目录存在、旧目录清空，且该份纪要
+    // 文件名跟着新主题走（不留「旧名 + 新名」两份）。
     expect(done.workDir).not.toBe(oldDir);
-    expect(existsSync(join(workspace, done.workDir!, 'contract.md'))).toBe(true);
+    expect(existsSync(join(workspace, done.workDir!, minutesFileName(done)))).toBe(true);
     expect(existsSync(join(workspace, oldDir))).toBe(false);
+    expect(existsSync(join(workspace, done.workDir!, minutesFileName({ ...done, subject: '未命名任务' })))).toBe(
+      false,
+    );
     // 事件：task.updated（via=commission.finalize）+ 问询留档 plan.questionnaire。
     const events = readEventsSync(root, teamId);
     const updated = events.find((e) => e.type === 'task.updated' && e.taskId === group.id);

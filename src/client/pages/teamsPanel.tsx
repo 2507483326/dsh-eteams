@@ -30,11 +30,13 @@
  * 宿主层级台账：内容 z-auto < 浮层 100 < 模态 1000 < toast/onboarding 1100
  * （primitives 各 module.css 实测）。
  *
- * Pending jump signals (新增角色 / select-team) are staged BEFORE
+ * Pending jump signals (新增角色 / 新增团队 / select-team) are staged BEFORE
  * either surface opens, so the panel consumes them on mount — the same
  * mount-time consumption pattern as openMemberBuilder (docs/19.16).
- * （新增团队不再走跳转信号——用户反馈 2026-09：一进团队页就弹新增弹窗很突兀，
- * 创建入口收敛为团队页头右上角的「＋ 新增团队」按钮。）
+ * （新增团队只走「落团队页」信号、不自开新增弹窗——用户反馈 2026-09：一进
+ * 团队页就弹新增弹窗很突兀，创建入口收敛为团队页头右上角的「＋ 新增团队」
+ * 按钮。用户 2026-09-15「点新增团队没有跳到对应的团队卡片」补齐该导航信号：
+ * 无信号时面板按 ui.activeNav 恢复上次页签，落点不是团队页。）
  *
  * S11 样式迁移（docs/21-client-ui-stack.md 21.6 / D19b/D19c）：全屏页的
  * inline style 迁 Tailwind 类。pane 矩形（left/top/width/height）是实时测量
@@ -80,6 +82,8 @@ export interface TeamsPanelOptions {
   readonly memberBuilder?: boolean;
   /** Land on the 角色 tab (roster page, no add form). */
   readonly roster?: boolean;
+  /** Land on the 团队 tab (team card grid, no add form). */
+  readonly team?: boolean;
   /** Select this team after landing (teamId). */
   readonly teamId?: string;
   /** Land on the Tasks page for this task（/tasks/:taskId）. */

@@ -44,14 +44,13 @@ import { TasksPage } from '../tasks/tasksPage';
  * 数据流与迁移前逐位一致（壳 useSelector/useActivityMonitor → props）。
  */
 export interface ETeamsRoutesProps {
-  /** 看板：当前团队快照（undefined=尚无团队，BoardTab 空态兜底）。 */
+  /** 看板：当前团队快照（undefined=尚未建队，看板照常渲染——团队相关子卡
+   * 由 activityView 选择器兜成空态）。 */
   team: TeamSnapshot | undefined;
   /** 看板/任务共用：服务器时间（快照 serverTime/fetchedAt 派生）。 */
   now: number;
   /** 看板：快照拉取时刻（相对时间基准）。 */
   fetchedAt: number;
-  /** 看板：快照加载失败原文（BoardTab 空态文案与壳错误条共用）。 */
-  error: string | null;
   /** 团队：当前宿主会话 id（整页覆盖层 undefined）。 */
   sessionId: string | undefined;
   /** 团队：全部团队池（卡片栅格在这里选择）。 */
@@ -157,12 +156,7 @@ export function ETeamsViewRoutes(props: ETeamsRoutesProps): ReactNode {
       <Route
         path="/board"
         element={
-          <BoardTab
-            team={props.team}
-            now={props.now}
-            fetchedAt={props.fetchedAt}
-            error={props.error}
-          />
+          <BoardTab team={props.team} now={props.now} fetchedAt={props.fetchedAt} />
         }
       />
       <Route
@@ -252,12 +246,7 @@ export function ETeamsViewRoutes(props: ETeamsRoutesProps): ReactNode {
       <Route
         path="*"
         element={
-          <BoardTab
-            team={props.team}
-            now={props.now}
-            fetchedAt={props.fetchedAt}
-            error={props.error}
-          />
+          <BoardTab team={props.team} now={props.now} fetchedAt={props.fetchedAt} />
         }
       />
     </Routes>

@@ -31,7 +31,6 @@ import {
   chainIndexOfStation,
   hasUpcomingStation,
   nextChainStation,
-  taskSlug,
   wouldCycle,
 } from '../model/taskMachine.js';
 import { hasAcceptanceCriteria } from '../model/contract.js';
@@ -69,7 +68,7 @@ import {
   wakeMember,
   type Wake,
 } from './notifier.js';
-import { renderTeamDocs, taskDirAbs, teamWorkDirRel } from './docs.js';
+import { renderTeamDocs, taskDirAbs, taskRootDirRel } from './docs.js';
 import { drainMembers, interruptMember, sendAssignmentInTx, spawnMember } from './members.js';
 import { captainChildParentOf } from './captainChildRegistry.js';
 import { anchoredMainTaskOfCaller } from './sessionTeam.js';
@@ -81,7 +80,7 @@ import {
   reportFailedMail,
   suspendedNotice,
 } from '../prompts/handoff/mails.js';
-import { ensureTaskWorkDir, rmTree, routeToTaskMemberFields, withTeam } from './teamOps.js';
+import { ensureGroupWorkDir, rmTree, routeToTaskMemberFields, withTeam } from './teamOps.js';
 
 /** 空唤醒动作（收件人不存在/未起会话时的占位）。 */
 const noWake: Wake = () => Promise.resolve(false);
@@ -331,8 +330,9 @@ export async function createTask(
         });
       }
     }
-    // work_dir 归任务（docs/35 §3#8）：建任务即分配，撞名 -N 后缀。
-    task.workDir = ensureTaskWorkDir(env, team, task);
+    // work_dir 归任务（docs/35 §3#8，用户 2026-09-15 扁平化）：只有主任务分配
+    // 目录 `teams/<主任务号>-slug`，小任务共用它（不再有自己的目录与 work_dir）。
+    if (task.parentId === null) task.workDir = ensureGroupWorkDir(env, team, task);
     emit(tx, team.id, who.actor, 'task.created', {
       taskId: task.id,
       payload: {
@@ -340,7 +340,7 @@ export async function createTask(
         deps,
         chain: chain.map((s) => s.member),
         status: task.status,
-        workDir: task.workDir,
+        ...(task.workDir !== undefined ? { workDir: task.workDir } : {}),
       },
     });
     return { team, task };
@@ -520,11 +520,12 @@ export async function finalizeCommissionTask(
 }
 
 /**
- * 改主题后的任务目录改名（work_dir 归任务，docs/35 §3#8）：按新主题重算
- * work_dir，与旧路径不同即 renameSync（中文路径安全）；父任务改名时 sub/
- * 下小任务的 work_dir 前缀一并更新。目标路径已被其他任务占用（主题改回
- * 历史名等）或旧目录未物化时静默跳过——文档渲染会在新路径补齐。渲染不
- * 阻塞状态（docs/07.2），失败只留旧目录孤儿。
+ * 改主题后的目录改名（用户 2026-09-15 扁平化）：只有**主任务**有目录，按新主题
+ * 重算 `teams/<主任务号>-slug`，与旧路径不同即 renameSync（中文路径安全）；小任务
+ * 主题改写只影响它自己那份纪要文件名，由物化时的同号改名兜住（runtime/docs.ts
+ * writeMinutesFile）。目标路径已被其他任务占用（主题改回历史名等）或旧目录未
+ * 物化时静默跳过——文档渲染会在新路径补齐。渲染不阻塞状态（docs/07.2），失败
+ * 只留旧目录孤儿。
  */
 function renameTaskFolder(
   env: RuntimeEnv,
@@ -532,13 +533,8 @@ function renameTaskFolder(
   task: TaskRecord,
   oldDir: string | undefined,
 ): void {
-  const parentDir =
-    task.parentId !== null ? team.tasks.find((t) => t.id === task.parentId)?.workDir : undefined;
-  if (task.parentId !== null && parentDir === undefined) return; // 父目录未物化，无从改名
-  const nextDir =
-    parentDir !== undefined
-      ? `${parentDir}/sub/${taskSlug(task)}`
-      : `${teamWorkDirRel(team)}/tasks/${taskSlug(task)}`;
+  if (task.parentId !== null) return;
+  const nextDir = taskRootDirRel(team, task);
   if (nextDir === oldDir) return;
   if (team.tasks.some((t) => t.id !== task.id && t.workDir === nextDir)) return;
   task.workDir = nextDir;
@@ -547,19 +543,12 @@ function renameTaskFolder(
     renameSync(join(env.workspace, oldDir), join(env.workspace, nextDir));
   } catch (error) {
     env.ctx.logger.warn(`eteams: 任务文件夹重命名失败（不阻塞状态）：${String(error)}`);
-    return;
-  }
-  // 父任务整体改名：sub/ 下小任务的 work_dir 前缀一并更新（docs/26）。
-  for (const sub of team.tasks) {
-    if (sub.parentId === task.id && sub.workDir?.startsWith(`${oldDir}/sub/`)) {
-      sub.workDir = `${nextDir}/sub/${sub.workDir.slice(oldDir.length + 5)}`;
-    }
   }
 }
 
 /**
  * Delete an unclaimed task（creating/ready 未开始可删，docs/06.4）：组任务级联
- * 删除全部小任务（要求全部未开始）；任务文件夹一并移除（rmTree 手动递归，
+ * 删除全部小任务（要求全部未开始）；主任务目录一并移除（rmTree 手动递归，
  * 规避本机 rmSync 对中文路径的静默失效）。
  */
 export async function deleteTask(env: RuntimeEnv, who: OpActor, taskId: number): Promise<void> {
@@ -609,7 +598,9 @@ export async function deleteTask(env: RuntimeEnv, who: OpActor, taskId: number):
       if (row.sessionId !== '') drained.push(row.sessionId);
       return false;
     });
-    const dir = taskDirAbs(env.workspace, team, task);
+    // 只有主任务有目录（用户 2026-09-15 扁平化）：删单个小任务不得连带删掉
+    // 整个组的目录（留言板/纪要/计划/文档都在那）。
+    const dir = task.parentId === null ? taskDirAbs(env.workspace, team, task) : undefined;
     team.tasks = team.tasks.filter((t) => !doomedIds.has(t.id));
     emit(tx, team.id, who.actor, 'task.deleted', {
       taskId: task.id,
@@ -619,7 +610,7 @@ export async function deleteTask(env: RuntimeEnv, who: OpActor, taskId: number):
         ...(drained.length > 0 ? { drainedReplicas: drained.length } : {}),
       },
     });
-    if (existsSync(dir)) {
+    if (dir !== undefined && existsSync(dir)) {
       try {
         rmTree(dir);
       } catch (error) {

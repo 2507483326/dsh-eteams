@@ -11,6 +11,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  canOpenSession,
   createSession,
   installSessionState,
   openSession,
@@ -245,5 +246,39 @@ describe('宿主会话方法必须以接收者调用（脱离 this 会静默失�
     expect(sessions.session.calls).toEqual([
       [[{ type: 'text', text: '把 docs 迁移' }], 'queue'],
     ]);
+  });
+});
+
+/**
+ * 服务不活跃降级回归（用户 2026-09-15「团队面板渲染失败：cannot get required
+ * service "sessions" in inactive context」）：真实 cordis 下服务提供方一旦不
+ * 活跃，`ctx.sessions` 的属性读取会**抛错**（不是回 undefined），而 `teamsView`
+ * 顶部渲染就调 rootSessionIdOf —— 裸读取把抛错带进首帧、被 ClientErrorBoundary
+ * 捕获成整面板降级。此处用「属性读抛错」的假 ctx 钉住降级契约。
+ */
+describe('sessions 服务不活跃（cordis inactive context）→ 一律降级不抛', () => {
+  it('属性读取抛 inactive context 时不外抛，各探测面按缺服务兜底', async () => {
+    installSessionState({
+      get sessions(): unknown {
+        throw new Error('cannot get required service "sessions" in inactive context');
+      },
+    });
+    expect(rootSessionIdOf('main')).toBe('main');
+    expect(canOpenSession('s')).toBe(false);
+    expect(openSession('s')).toBe(false);
+    expect(sessionCwdOf('s')).toBeNull();
+    expect(await createSession()).toBeNull();
+    expect(await promptSession('s', 'x')).toBe(false);
+  });
+
+  it('cordis 反射读（ctx.get）在场且服务不活跃：反射读回 undefined，同样降级', () => {
+    installSessionState({
+      get: () => undefined,
+      get sessions(): unknown {
+        throw new Error('cannot get required service "sessions" in inactive context');
+      },
+    });
+    expect(rootSessionIdOf('child')).toBe('child');
+    expect(canOpenSession('s')).toBe(false);
   });
 });

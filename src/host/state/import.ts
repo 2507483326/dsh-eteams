@@ -253,23 +253,14 @@ function personaFromFields(
   };
 }
 
-/** 旧任务目录 slug：`t3-login`（docs/36 建议 6：字面路径，不改名迁移）。 */
-function legacyTaskSlug(id: number, subject: string): string {
-  return `t${id}-${sanitizeKey(subject).slice(0, 40)}`;
-}
-
-/** 旧目录布局的任务工作目录：tasks/tN-slug，小任务挂父目录 sub/ 下。 */
-function legacyTaskDir(
-  base: string,
-  task: LegacyTask,
-  id: number,
-  parentId: number | null,
-  parentSubject: string | undefined,
-): string {
-  if (parentId !== null && parentSubject !== undefined) {
-    return `${base}/tasks/${legacyTaskSlug(parentId, parentSubject)}/sub/${legacyTaskSlug(id, task.subject)}`;
-  }
-  return `${base}/tasks/${legacyTaskSlug(id, task.subject)}`;
+/**
+ * 导入任务的工作目录（用户 2026-09-15 扁平化）：一个主任务一个目录
+ * `teams/<任务号>-slug`（与 runtime/docs 的 taskRootDirRel 同规则）；小任务不落
+ * work_dir——它们共用主任务目录，读取侧由 taskDirRel 上溯到主任务。
+ */
+function importedTaskDir(id: number, subject: string, parentId: number | null): string | null {
+  if (parentId !== null) return null;
+  return `teams/${id}-${sanitizeKey(subject).slice(0, 40)}`;
 }
 
 // --------------------------------------------------------------------------
@@ -768,7 +759,7 @@ function importLegacyTeam(
     insertTaskMemberRow(tx, row);
   }
 
-  // ---- 任务 / 尝试（t1/a1 → 整数；work_dir 存字面旧目录）----
+  // ---- 任务 / 尝试（t1/a1 → 整数；work_dir 只有主任务有）----
   const insertTask = db.prepare(
     'INSERT INTO task (task_id, team_id, parent_id, subject, description, depend_tasks, ' +
       'member_chain_list, chain_cursor, status, current_member, current_member_id, ' +
@@ -782,13 +773,10 @@ function importLegacyTeam(
       'ended_time, created_time, update_time) ' +
       'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   );
-  const base = old.workDir ?? `teams/${sanitizeKey(teamName)}`;
-  const subjectOf = new Map(tasks.map((t) => [t.id, t.subject]));
   for (const t of tasks) {
     const taskId = maps.task.get(t.id);
     if (taskId === undefined) continue;
     const parentId = t.parentId !== undefined ? (maps.task.get(t.parentId) ?? null) : null;
-    const parentSubject = t.parentId !== undefined ? subjectOf.get(t.parentId) : undefined;
     // blocked_from 弃用恒写 NULL（用户迭代 2026-09-11：依赖阻塞不再物化，
     // 旧 blocked 态已映射为 ready）。
     const blockedFrom = null;
@@ -830,7 +818,7 @@ function importLegacyTeam(
         null,
       t.idempotencyNote ?? null,
       blockedFrom,
-      legacyTaskDir(base, t, taskId, parentId, parentSubject),
+      importedTaskDir(taskId, t.subject, parentId),
       t.completedAt ?? null,
       t.createdAt ?? now,
       t.updatedAt ?? now,

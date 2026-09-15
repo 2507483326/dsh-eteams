@@ -6,7 +6,7 @@
  *
  * @module dsh-eteams/runtime/teamOps
  */
-import { existsSync, readdirSync, rmdirSync, unlinkSync } from 'node:fs';
+import { readdirSync, rmdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { JsonValue } from '@deepseek-ai/dsh-session';
@@ -39,11 +39,11 @@ import {
 import { hashName, leaderFlagOf, LEADER_NAME, nextAutoincrementId, personaFromMd, personaToMd, ROOT_ROLE_NAME } from '../state/db.js';
 import { insertEventInTx, insertMailInTx } from '../state/events.js';
 import { defaultCaptainPersona } from '../prompts/personas/captain.js';
-import { applyTransition, sanitizeKey, taskSlug } from '../model/taskMachine.js';
+import { applyTransition, sanitizeKey } from '../model/taskMachine.js';
 import { ETeamsError, captainActor, memberActor, stateRootOf, type RuntimeEnv } from './base.js';
 import { clearSessionTeamForTeam, getSessionTeamId } from './sessionTeam.js';
 import { rosterProfilesAcrossWorkspaces } from './workspaces.js';
-import { renderTeamDocs, teamWorkDirRel } from './docs.js';
+import { renderTeamDocs, taskRootDirRel } from './docs.js';
 import { findRosterMember, ROLE_BUILDER_NAME, upsertRosterMember } from './roster.js';
 import { interruptMember, drainMembers } from './members.js';
 import { readBuildPresence } from './roleBuilder.js';
@@ -171,30 +171,14 @@ export async function createTeam(
 }
 
 /**
- * 幂等分配任务工作目录（docs/35 §3#8，work_dir 归任务）：父任务下挂
- * `<父 work_dir>/sub/<任务号>-<slug>`，顶层任务在 `teams/<团队>/tasks/`
- * 之下。撞名（对比集 = 其他任务的 work_dir + 目录已存在）在叶子段加
- * -2、-3 后缀保留。只算路径不建目录——目录随文档渲染物化。
+ * 幂等分配**主任务**工作目录（用户 2026-09-15 扁平化）：`teams/<主任务号>-slug`，
+ * 主任务与其全部小任务共用这个根；小任务不再分配自己的 work_dir（taskDirRel
+ * 上溯主任务）。任务号唯一 → 不需要撞名后缀。只算路径不建目录——目录随文档
+ * 渲染物化。
  */
-export function ensureTaskWorkDir(env: RuntimeEnv, team: TeamState, task: TaskRecord): string {
+export function ensureGroupWorkDir(env: RuntimeEnv, team: TeamState, task: TaskRecord): string {
   if (task.workDir !== undefined) return task.workDir;
-  const leaf = taskSlug(task);
-  const parentDir =
-    task.parentId !== null ? team.tasks.find((t) => t.id === task.parentId)?.workDir : undefined;
-  const base =
-    parentDir !== undefined ? `${parentDir}/sub/${leaf}` : `${teamWorkDirRel(team)}/tasks/${leaf}`;
-  const taken = new Set<string>();
-  for (const other of team.tasks) {
-    if (other.id === task.id || other.workDir === undefined) continue;
-    taken.add(other.workDir);
-  }
-  let workDir = base;
-  if (taken.has(workDir) || existsSync(join(env.workspace, workDir))) {
-    let n = 2;
-    while (taken.has(`${base}-${n}`) || existsSync(join(env.workspace, `${base}-${n}`))) n++;
-    workDir = `${base}-${n}`;
-  }
-  return workDir;
+  return taskRootDirRel(team, task);
 }
 
 /**

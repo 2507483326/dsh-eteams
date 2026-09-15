@@ -5,7 +5,9 @@
  * see scripts/wrap-client.mjs) with `inject: ['slots']`. Registers:
  *
  * 1. the 团队 tab — an entry in the `conversation.view` ring (id `eteams`,
- *    order 100) hosting the M4 activity panel (概览/成员/任务/动态 + 抽屉);
+ *    order 100) hosting the M4 activity panel (概览/成员/任务/动态 + 抽屉),
+ *    plus its 待决策红点 (用户 2026-09-15; the ring's ViewTab has no badge
+ *    seat, so the dot is DOM-injected — see features/activity/teamTabDot);
  * 2. the 团队 button — an entry at the right end of the composer tool row
  *    (`conversation.input.right`), opening the tabbed 团队/成员 popup whose
  *    team rows and 新增 shortcuts jump straight to the 团队 tab page; beside
@@ -41,6 +43,7 @@ import { EteamBuildCard } from './pages/buildCard';
 import { ETEAMS_TAB_LABEL, ETEAMS_VIEW_ID } from './lib/bridge';
 import { installClientDiagnostics, recordClientDiag } from './lib/diagnostics';
 import { errorMessageOf } from './lib/errors';
+import { installTeamTabDot } from './features/activity/teamTabDot';
 import { ETeamsView } from './pages/teamsView/index';
 import { installHeroTeamsButton } from './pages/heroTeamsButton';
 import { installModelCatalog } from './lib/modelCatalog';
@@ -110,6 +113,12 @@ export function apply(ctx: Context): void {
     ),
   );
 
+  // 团队 tab 红点（用户 2026-09-15「有新的待决策内容时，对话上面的团队TAB，
+  // 需要出现红点提示。直到进入面板看到决策，或者决策被回答」）：视图标签环只认
+  // {id,label}、没有徽标席位，故走 DOM 注入补一枚红点——与 conversation.view
+  // 注册同序安装（标签环挂载即可被观察器捕获）。
+  guard('team-tab-dot', () => installTeamTabDot());
+
   guard('conversation.input.right', () =>
     ctx.slots.inject('conversation.input.right', () => {
       // 两个占位一次注入（iterable effect：事务性安装、逆序卸载）。
@@ -147,10 +156,12 @@ export function apply(ctx: Context): void {
   // 会话未开始的新会话屏（hero）没有可供插件入驻的 additive 槽位——
   // hero 行两个席位都是 single 且已被宿主占用——因此走 DOM 注入：
   // 在「标准模式」旁补一枚团队按钮（heroTeamsButton 模块头有完整推理）。
-  // 落点 = 团队 tab 页（创建走页头「＋ 新增团队」按钮，不再自开弹窗——
-  // 用户反馈 2026-09）；对话未开始时宿主渲染不出标签环，enterTeamsPanel
-  // 会改落整页团队页（teamsPanel 模块头有推理）。
-  guard('hero.teams-button', () => installHeroTeamsButton(() => enterTeamsPanel()));
+  // 落点 = 团队页卡片栅格（team 信号显式落 /team；创建走页头「＋ 新增团队」
+  // 按钮，不再自开弹窗——用户反馈 2026-09）；对话未开始时宿主渲染不出标签环，
+  // enterTeamsPanel 会改落整页团队页（teamsPanel 模块头有推理）。用户
+  // 2026-09-15「点新增团队没有跳到对应的团队卡片」：无信号时面板按
+  // ui.activeNav 恢复上次页签，hero 按钮同款漂移一并收口。
+  guard('hero.teams-button', () => installHeroTeamsButton(() => enterTeamsPanel({ team: true })));
 
   guard('conversation.chat.commandview', () =>
     ctx.slots.inject('conversation.chat.commandview', () =>

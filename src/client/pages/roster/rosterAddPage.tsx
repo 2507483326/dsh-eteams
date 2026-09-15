@@ -262,7 +262,7 @@ export function RosterAddPage({
               </div>
               <div className={FORM_ROW_CLASS}>
                 <span className={FORM_LABEL_CLASS}>
-                  角色手册（Markdown：frontmatter + 身份/使命/规则/领域专章/沟通风格/交付标准）
+                  角色手册（Markdown：身份/使命/规则/领域专章/沟通风格/交付标准）
                 </span>
                 <MdEditor value={personaMd} onChange={setPersonaMd} minHeight={300} />
               </div>
@@ -357,7 +357,6 @@ export function RosterAddPage({
                   <IconPlusOutline16 />
                 </span>
                 <div className={cn(LINE_CLASS, 'font-semibold')}>新增角色</div>
-                <Pill tone="muted">选择创建方式</Pill>
               </div>
               <div className="mt-3 flex flex-col gap-2.5">
                 <button

@@ -158,6 +158,14 @@ describe('D18 对话式新增成员', () => {
     expect(ROLE_BUILDER_SECTION).toContain('项目牧羊人');
   });
 
+  it('生成口径不再要求写 YAML frontmatter（用户迭代 2026-09-15）', () => {
+    // 生成侧（常驻段 + 预设规则）与落库侧口径一致：手册只写正文，
+    // name/description/emoji/color 不进 persona_md。
+    expect(ROLE_BUILDER_SECTION).toContain('手册不写 YAML frontmatter');
+    expect(ROLE_BUILDER_PRESET.rules.join('\n')).toContain('不写 YAML frontmatter');
+    expect(ROLE_BUILDER_PRESET.rules.join('\n')).not.toContain('emoji/color 按领域随机');
+  });
+
   it('build child prompt is one fetch-first sentence — everything else rides the guide tool (用户迭代 2026-09-10)', () => {
     // 用户钦定的一句话：构建对话里只此一段——播报纪律、回合任务、快照、
     // 父会话等所需内容全部经规程/工具面获取，提示词一律不带。
@@ -314,6 +322,21 @@ describe('D18 对话式新增成员', () => {
     });
     expect(fresh.status).toBe('active');
     expect(fresh.startedAt).toBeGreaterThanOrEqual(s1.startedAt);
+  });
+
+  it('上报草稿的手册 frontmatter 在边沿剥除（persona_md 只存正文）', async () => {
+    await reportBuildProgress(stateRoot, { status: 'active', request: 'frontmatter' });
+    const s = await reportBuildProgress(stateRoot, {
+      step: '起草统一手册',
+      draft: {
+        name: 'qa-master',
+        role: 'reviewer',
+        profile: '功能验收与缺陷台账专家',
+        personaMd:
+          '---\nname: 测试大师\ndescription: 一段话简介\nemoji: 🧪\ncolor: green\n---\n\n## 身份与记忆\n正文',
+      },
+    });
+    expect(s.draft?.personaMd).toBe('## 身份与记忆\n正文');
   });
 
   it('derives stepsDone from the canonical timeline (2026-09-08 蓝点乱序反馈)', async () => {

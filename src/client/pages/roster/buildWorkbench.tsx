@@ -435,7 +435,7 @@ export function BuildWorkbench({ build, addMode, onConfirmed }: BuildWorkbenchPr
           </div>
           <div className={FORM_ROW_CLASS}>
             <span className={FORM_LABEL_CLASS}>
-              人设手册（统一 Markdown：frontmatter + 身份/使命/规则/领域专章/沟通风格）
+              人设手册（统一 Markdown：身份/使命/规则/领域专章/沟通风格）
             </span>
             <MdEditor
               value={draftEdit.personaMd}

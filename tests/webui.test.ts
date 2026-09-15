@@ -13,6 +13,7 @@ import { ETeamsConfig, type ETeamsResolvedConfig } from '../src/host/config';
 import { createCaptainTools } from '../src/host/tools/captainTools';
 import { createMemberTools } from '../src/host/tools/memberTools';
 import { installWebSurface, summarizeEvent, teamSnapshot } from '../src/host/runtime/webui';
+import { minutesFileName } from '../src/host/runtime/docs';
 import {
   cancelBuildSession,
   markBuilderChild,
@@ -1399,10 +1400,14 @@ describe('conversation task workflow (docs/26)', () => {
     expect(group.parentId).toBeNull();
     expect(submitted.taskId).toBe(group.id);
     expect(submitted.folder).toBe(group.workDir);
-    expect(existsSync(join(workspace, group.workDir!, 'contract.md'))).toBe(true);
-    expect(existsSync(join(workspace, group.workDir!, 'notes.md'))).toBe(true);
-    // 队伍留言板（用户 2026-09-14）：主任务文件夹根下 create-only 落一块板。
+    // 用户 2026-09-15 扁平化：一个主任务一个目录 —— 留言板 + 每任务一份纪要 +
+    // 计划/、文档/ 两个夹；contract.md / notes.md 已并入纪要。
+    expect(existsSync(join(workspace, group.workDir!, minutesFileName(group)))).toBe(true);
+    expect(existsSync(join(workspace, group.workDir!, '计划'))).toBe(true);
+    expect(existsSync(join(workspace, group.workDir!, '文档'))).toBe(true);
     expect(existsSync(join(workspace, group.workDir!, '留言板.md'))).toBe(true);
+    expect(existsSync(join(workspace, group.workDir!, 'contract.md'))).toBe(false);
+    expect(existsSync(join(workspace, group.workDir!, 'notes.md'))).toBe(false);
 
     // 1b. 收口：拆解完成后把「创建中」转「待开始」（收口前 startGroupTask 拒绝）。
     // 收口闸要求主任务下至少一个带「## 验收标准」的小任务——先建占位过闸，
@@ -1436,7 +1441,9 @@ describe('conversation task workflow (docs/26)', () => {
     team = readTeam(teamId);
     const subRec = team.tasks.find((t) => t.id === subId)!;
     expect(subRec.parentId).toBe(group.id);
-    expect(subRec.workDir).toContain('/sub/');
+    // 小任务不再有自己的目录与 work_dir（共用主任务目录）。
+    expect(subRec.workDir).toBeUndefined();
+    expect(existsSync(join(workspace, group.workDir!, minutesFileName(subRec)))).toBe(true);
 
     // 3. 面板修改（主题 + 成员槽）与删除。
     const upd = await h.post(`/eteams-api/team/${teamId}/task/${subId}/update`, {
@@ -1495,10 +1502,12 @@ describe('conversation task workflow (docs/26)', () => {
       status: string;
     }>;
     const subView = views.find((t) => t.taskId === subId)!;
+    const groupView = views.find((t) => t.taskId === group.id)!;
     expect(subView.kind).toBe('task');
     expect(subView.parentId).toBe(group.id);
-    expect(subView.folder).toContain('sub/');
-    const groupView = views.find((t) => t.taskId === group.id)!;
+    // 一个主任务一个目录：小任务快照的 folder 也指向主任务目录（不再有 sub/）。
+    expect(subView.folder).toBe(groupView.folder);
+    expect(subView.folder).not.toContain('sub/');
     expect(groupView.kind).toBe('group');
     expect(groupView.status).toBe('completed');
     expect(groupView.outcome).toContain('映射表完成');
@@ -2346,8 +2355,9 @@ describe('panel task commission (docs/panelTaskCommission)', () => {
     const firstLine = description.split('\n')[0]!;
     expect(task.subject).toBe(firstLine.slice(0, 24));
     expect(task.mainSessionId).toBe('cap-conv');
-    // 与对话建任务同口径：建任务即物化文档树（contract.md）。
-    expect(existsSync(join(workspace, task.workDir!, 'contract.md'))).toBe(true);
+    // 与对话建任务同口径：建任务即物化文档树（留言板 + 本任务纪要 + 计划/文档夹）。
+    expect(existsSync(join(workspace, task.workDir!, '留言板.md'))).toBe(true);
+    expect(existsSync(join(workspace, task.workDir!, minutesFileName(task)))).toBe(true);
 
     // 有领队 → dispatchCaptainCore 建立本任务的领队副本子代理（durable id
     // 落领队副本行——v8+ 主持行取消）。
@@ -3060,6 +3070,9 @@ describe('GET /session-identity (子代理身份面)', () => {
     const h = await installFull();
     const created = await h.post('/eteams-api/team', { name: '领队身份队', sessionId: 'cap-conv' });
     const teamId = json<{ teamId: number }>(created.body).teamId;
+    // 加一个成员：她的班底副本行建任务时铺下但未起会话（sessionId 空串），
+    // 用来锁定「未起会话的成员不进 memberSessions」。
+    await h.post(`/eteams-api/team/${teamId}/member`, { name: 'Alice', role: 'researcher' });
     const res = await h.post(`/eteams-api/team/${teamId}/task/commission`, {
       description: '盘点资料',
       sessionId: 'cap-conv',
@@ -3071,6 +3084,24 @@ describe('GET /session-identity (子代理身份面)', () => {
       (r) => r.mainTaskId === task.id && r.isLeader === true,
     )!;
     expect(leaderRow.sessionId).toMatch(/^sess-child-/);
+
+    // 用户 2026-09-14（hover 弹窗「会话成员」按任务口径取）：
+    // ① 领队会话必须下发——领队的子会话挂在 isLeader=1 那行上，单按班底
+    //    members 取会漏掉领队（旧实现症状「领队已经有会话了但没显示」）；
+    // ② 任务还在创建中（commission 容器）时，班底副本行 sessionId 仍为空串
+    //    —— 不入 memberSessions（不会把还没有会话的成员放出来）。
+    const snap = teamSnapshot(team, workspace, config);
+    const groupView = (
+      snap.tasks as Array<{
+        taskId: number;
+        memberSessions: { name: string; sessionId: string }[];
+      }>
+    ).find((x) => x.taskId === task.id)!;
+    expect(groupView.memberSessions.map((m) => m.name)).toEqual(['项目牧羊人']);
+    expect(groupView.memberSessions[0]!.sessionId).toBe(leaderRow.sessionId);
+    expect(
+      team.taskMembers.filter((r) => r.mainTaskId === task.id && r.sessionId === '').length,
+    ).toBeGreaterThan(0);
 
     const got = await h.get(
       `/eteams-api/session-identity?sessionId=${encodeURIComponent(leaderRow.sessionId)}`,

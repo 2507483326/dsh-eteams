@@ -5,11 +5,13 @@
  * teams (live, via the shared activity monitor) and the role library
  * (roster), with one creation shortcut pinned to the footer of each tab:
  *
- * - 「＋ 新增团队」 jumps straight to the 团队 tab page (real host tab when
- *   visible, the full-page 团队页 otherwise) with the creation form open;
- * - 「＋ 新增角色」 prefills the `eTeam --add-people` command into the
- *   composer draft (never auto-send; clipboard fallback) and jumps to the
- *   role-builder view of the 团队 tab page (D18-1).
+ * - 「＋ 新增团队」 jumps straight to the 团队 page (the team card grid on the
+ *   real host tab when visible, on the full-page 团队页 otherwise) — 创建不自开
+ *   弹窗，走页头「＋ 新增团队」按钮（用户反馈 2026-09）；
+ * - 「＋ 新增角色」 jumps to the 角色 list page (roster) and does NOT touch
+ *   the composer draft — prefilling is the roster add page's own explicit
+ *   「填充」 action (用户 2026-09-15「不应该填充才对」；同日「改成跳到角色列表
+ *   页面」——不再直落新增工作台).
  *
  * Role rows are selectable: the selected role's avatar + name
  * (or the team's chip + name) replace the button label, highlighted while a
@@ -31,9 +33,7 @@
  * 提示重选；挂载对账以宿主 GET /session-team 为真相源（本地镜像兜底重
  * 申）。角色面不随发送清空。 Clicking the button ALWAYS toggles this popup
  * (opened on the tab matching the selection) — panel navigation stays with
- * the 新增 shortcuts — except the locked badge, which never opens it. When
- * the slot's `inputActions` kit is unavailable the prefill degrades to
- * clipboard copy.
+ * the 新增 shortcuts — except the locked badge, which never opens it.
  *
  * S11 样式迁移（docs/21-client-ui-stack.md 21.6 / D19b/D19c/D19g）：弹层与
  * 按钮面的 inline style 与手写注入样式表（POPUP_CSS）全部迁到 Tailwind 类 +
@@ -93,12 +93,11 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { Provider } from 'react-redux';
-import { writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives';
 // lucide 深层图标导入（dialog.tsx 先例：深层 .mjs 只进用到的图标）。
 import Check from 'lucide-react/dist/esm/icons/check.mjs';
 import Plus from 'lucide-react/dist/esm/icons/plus.mjs';
 import Search from 'lucide-react/dist/esm/icons/search.mjs';
-import { ADD_PEOPLE_TEMPLATE, captureInputActions, prefillComposer } from '../lib/addPeople';
+import { captureInputActions } from '../lib/addPeople';
 import { activateConversationTab } from '../lib/bridge';
 import { ClientErrorBoundary, recordClientDiag } from '../lib/diagnostics';
 import { enterTeamsPanel } from './teamsPanel';
@@ -143,7 +142,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '../components/ui/toolti
  * session 作用域槽位组件下发 `sessionId`（会话 id 直传 prop）与 `useSession`
  * （会话快照选择器——子代理门控判定用，InputBar/子会话模型徽章同款读取），
  * owner 不传任何东西——故全部可选。`inputActions` 是 conversation 输入域
- * 专属的既有 prop（草稿写入动作，prefillComposer 用）。曾有 `useSession`
+ * 专属的既有 prop——本按钮只用它登记捕获桥（整页团队页「填充」的写路兜底），
+ * 弹层自己不再写草稿。曾有 `useSession`
  * 在途选择器（2026-09-07 一次性选择的发送清空沿检测）——锁定语义下选择
  * 常驻已随该语义移除；本员随子代理身份面（用户迭代 2026-09-10）以标准
  * 座位身份回归，与当年用途无关。
@@ -228,9 +228,11 @@ const CLEAR_BUTTON_CLASS =
 
 /* 子代理身份面（用户迭代 2026-09-10）：沿用触发钮选中面的胶囊观感（同档
    高/字号/内距，品牌淡底 + 品牌字），去掉 group/hover 与清除钮——子代理
-   会话上没有可选可清的东西，脸面是纯只读标识。 */
+   会话上没有可选可清的东西，脸面是纯只读标识。用户 2026-09-14「弹出卡片的
+   徽章要有手型光标」：它是 hover 卡（TeamTaskHoverCard）的触发目标，取
+   cursor-pointer（preflight 关，Button/span 默认是箭头）。 */
 const IDENTITY_FACE_CLASS =
-  'inline-flex h-7 shrink-0 cursor-default items-center gap-1.5 rounded-full border-none bg-business-tint px-2.5 text-[13px] leading-[18px] font-medium text-primary';
+  'inline-flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border-none bg-business-tint px-2.5 text-[13px] leading-[18px] font-medium text-primary';
 
 /* 团队徽章 hover 面板（用户迭代 2026-09-12）：锁定徽章悬浮显示任务信息。
    覆盖 TooltipContent 默认深色小气泡（bg-primary/text-primary-foreground/text-xs/
@@ -253,7 +255,7 @@ const SESSION_CHIP_ACTIVE_CLASS = 'bg-business-tint text-[color:var(--eteams-bra
  * 字面量件、消费位拼接（条件式只选组装形态）；两支文案与收编前逐串一致。 */
 const TEAM_EMPTY_META: Record<'error' | 'noTeam', string> = {
   error: '状态加载失败：',
-  noTeam: '还没有团队——点下方「新增团队」创建。',
+  noTeam: '还没有团队',
 };
 
 /** 弹层页脚新增钮两 tab 查表（M6）：outline dashed 档两处逐字同文（variant/
@@ -563,6 +565,7 @@ function TeamTaskHoverCard({
           type="button"
           variant="outline"
           size="sm"
+          className="cursor-pointer"
           onClick={() => {
             enterTeamsPanel({ taskId: task.taskId });
           }}
@@ -622,11 +625,10 @@ function TeamsTriggerButton(props: {
     <Button
       variant="ghost"
       size="sm"
-      className="group h-7 rounded-full border-none px-2.5 text-[13px] leading-[18px] font-medium normal-case tracking-normal data-[selected=true]:bg-business-tint data-[selected=true]:text-primary data-[locked=true]:cursor-default"
+      className="group h-7 cursor-pointer rounded-full border-none px-2.5 text-[13px] leading-[18px] font-medium normal-case tracking-normal data-[selected=true]:bg-business-tint data-[selected=true]:text-primary"
       data-selected={
         props.selectedMember !== null || props.selectedTeam !== null ? 'true' : undefined
       }
-      data-locked={locked ? 'true' : undefined}
       title={
         props.selectedMember !== null
           ? undefined
@@ -689,12 +691,14 @@ function TeamsTriggerButton(props: {
  * in-place surface). It floats ABOVE the trigger with a small gap — the
  * button sits at the bottom of the window, and a below-placement (or a
  * viewport-clamped flip) would cover the 「团队」 label it belongs to.
+ * 水平**居中对齐触发钮本身**（用户 2026-09-15「对话里面的团队弹窗居中弹出」，
+ * 同日修正「居中……应该根据徽章」）：卡片中心对「团队」按钮（选中态即徽章）的
+ * 横向中心——不是整块对话区的中心，也不是右对齐其右缘（旧口径）。
  * Bottom-anchored（`bottom` + `maxHeight`，不用 `top`）：卡片高度与定位解耦，
  * 团队/角色 tab 切换、列表加载只向上长高，位置永不回跳（无闪烁）。
  */
 function TeamsPopup(props: {
   anchor: HTMLElement;
-  inputActions?: { setDraft: (text: string) => void };
   selectedMember: RosterMember | null;
   selectedTeam: { teamId: string; name: string } | null;
   personaError?: string | null;
@@ -709,9 +713,10 @@ function TeamsPopup(props: {
   // 两个 tab 列表不同，残留关键词只会造成"莫名空列表"。
   const [query, setQuery] = useState('');
   const panelRef = useRef<HTMLDivElement | null>(null);
-  // Hand-rolled above-placement: right-aligned to the trigger, BOTTOM edge
-  // `gap` above its top edge, clamped to the viewport. Until the first
-  // measurement the panel stays invisible (no flash at 0,0).
+  // Hand-rolled above-placement: horizontally CENTERED on the trigger badge
+  // (the 「团队」 button itself), BOTTOM edge `gap` above that button's top
+  // edge, clamped to the viewport. Until the first measurement the panel stays
+  // invisible (no flash at 0,0).
   const [pos, setPos] = useState<CSSProperties | null>(null);
   // Anti-flicker positioning（用户反馈：切换 tab/成员时闪一下）：continuous
   // rAF tracking instead of event listeners. Events left gaps — selecting
@@ -736,7 +741,13 @@ function TeamsPopup(props: {
       const w = panel.offsetWidth;
       const margin = 8;
       const gap = 6;
-      const left = Math.min(Math.max(r.right - w, margin), window.innerWidth - margin - w);
+      // 水平居中（用户 2026-09-15「对话里面的团队弹窗居中弹出」→「居中……应该
+      // 根据徽章」）：卡片中心对齐「团队」触发钮（选中态即徽章）自身的水平中心
+      // ——不再右对齐其右缘（旧口径），也不按 composer 容器中心（宿主工具行与
+      // 输入域同属整块对话区，取容器中心会跑到整个对话框的中间去）。视口护栏
+      // 两条不变，窄窗口下夹在两端。
+      const centered = r.left + r.width / 2 - w / 2;
+      const left = Math.min(Math.max(centered, margin), window.innerWidth - margin - w);
       const bottom = Math.max(margin, window.innerHeight - r.top + gap);
       // 顶部护栏 = 旧 `top = max(margin, …)` 的等价表达：可用空间不足时收
       // 面板（maxHeight），列表内部滚动——而不是把顶边推出视口。
@@ -808,19 +819,20 @@ function TeamsPopup(props: {
 
   const addTeam = (): void => {
     onClose();
-    // 落团队 tab/整页团队页；创建走页头「＋ 新增团队」按钮，不再自开弹窗
-    // （用户反馈 2026-09：一进团队页就弹新增弹窗很突兀）。
-    enterTeamsPanel();
+    // 落团队页（/team 卡片栅格）：带 team 信号——无信号时面板按 ui.activeNav
+    // 恢复上次页签，落不到团队卡片（用户 2026-09-15「点新增团队没有跳到对应
+    // 的团队卡片」）。创建仍走页头「＋ 新增团队」按钮，不自开弹窗（用户反馈
+    // 2026-09：一进团队页就弹新增弹窗很突兀）。
+    enterTeamsPanel({ team: true });
   };
 
   const addMember = (): void => {
     onClose();
-    // D18-1：命令进输入框（覆盖前确认），退化为复制；均不自动发送。
-    const outcome = prefillComposer(props.inputActions);
-    if (outcome === 'copied') {
-      void writeClipboard(ADD_PEOPLE_TEMPLATE).catch(() => undefined);
-    }
-    enterTeamsPanel({ memberBuilder: true });
+    // 跳角色列表页，不碰输入框草稿（用户 2026-09-15「新增角色不应该自动
+    // 填充」）：填充是新增页「AI 创建」里显式点「填充」才做的事。落列表而
+    // 非新增工作台（同日「改成跳到角色列表页面」）：新增入口交给列表页头
+    // 的「＋ 新增角色」按钮（与「＋ 新增团队」落卡片栅格同款收口）。
+    enterTeamsPanel({ roster: true });
   };
 
   const teams = state.teams;
@@ -828,6 +840,9 @@ function TeamsPopup(props: {
   // roster 为 null（加载中）时取空数组——可空类型无法从 roster 的判断收窄，
   // 恒定数组让下方 JSX 链的"无匹配"分支直接用 length 判断。
   const visibleRoster = (roster ?? []).filter((m) => matchesQuery(m.name, query));
+  // 搜索框可见性（用户迭代 2026-09-15「没有团队时不显示上面的搜索」，
+  // rosterPage「空列表不渲染搜索框」同款）：当前 tab 无可筛条目即整个撤掉。
+  const showSearch = tab === 'team' ? teams.length > 0 : roster !== null && roster.length > 0;
 
   return (
     /* Portal 作用域根（D19b/S11）：弹层挂在 body 下，不在表面根子树里，
@@ -869,18 +884,20 @@ function TeamsPopup(props: {
           {/* 搜索框（rail 官网 Quick search 签名缩窄档）：放大镜绝对定位，
               Input 去 border 改 ring。内层 relative 只包 Input 本体——外层
               pt-2/pb-0.5 不对称，top-1/2 若以外层为基准会整体偏上。 */}
-          <div className="flex-none px-1.5 pb-0.5 pt-2">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                type="text"
-                value={query}
-                placeholder="搜索"
-                onChange={(e) => setQuery(e.target.value)}
-                className={POPUP_SEARCH_CLASS}
-              />
+          {showSearch && (
+            <div className="flex-none px-1.5 pb-0.5 pt-2">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  type="text"
+                  value={query}
+                  placeholder="搜索"
+                  onChange={(e) => setQuery(e.target.value)}
+                  className={POPUP_SEARCH_CLASS}
+                />
+              </div>
             </div>
-          </div>
+          )}
 
           <div className={LIST_CLASS}>
             {tab === 'team' && teamDead && (
@@ -1263,7 +1280,6 @@ export function TeamsButton(props: TeamsButtonProps): ReactNode {
                 ? createPortal(
                     <TeamsPopup
                       anchor={anchorEl}
-                      inputActions={props.inputActions}
                       selectedMember={selectedMember}
                       selectedTeam={selectedTeam}
                       personaError={personaError}

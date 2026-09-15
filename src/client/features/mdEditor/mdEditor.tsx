@@ -33,8 +33,8 @@
  *    markdownShortcutPlugin 只覆盖逐字打键。在容器上加捕获相 onPaste：
  *    剪贴板纯文本命中 Markdown 语法特征时 preventDefault，改走公开方法
  *    insertMarkdown（mdast→Lexical 导入管线，插在当前选区）；普通文本与
- *    富文本 HTML 粘贴不受影响。粘贴文本自带的 frontmatter 一律剥除（本
- *    编辑器的 frontmatter 区由原文档管理，正文落点在光标处）。
+ *    富文本 HTML 粘贴不受影响。粘贴内容原样插入，frontmatter 围栏也不再
+ *    特殊剥除（见第 7 条）。
  * 6. 裸 JSX 式标签中和（用户反馈 2026-09-07「角色构建师 点编辑后 md 编辑器
  *    是空的」）——mdxeditor 的 markdown 导入走严格 MDX 解析（core 常驻
  *    micromark-extension-mdx-jsx），正文里裸的 `<X>`/`<Y>`/`</X>` 未闭合直接
@@ -42,6 +42,12 @@
  *    的「访谈开场」行即含此类占位符，其它角色手册无）。markdown 进编辑器前
  *    （挂载 prop / 受控同步 / 粘贴）经 neutralizeJsxLikeTags 把裸标签转义为
  *    字面文本（`\<`），围栏与行内 code span 不动——见 ./jsxLikeTags。
+ * 7. frontmatter 不再特殊处理（用户迭代 2026-09-15）：生成侧（角色构建师提示词）
+ *    已不再要求写 YAML frontmatter，落库/上报边沿（host personaToMd / roleBuilder）
+ *    也会兜底剥掉，编辑器因此也不挂 frontmatterPlugin——mdxeditor 的原生做法是把
+ *    它渲染成一个默认关闭的弹窗节点（正文里什么都不画），会造成「编辑时看不到
+ *    完整 md」；改为按普通 Markdown 渲染（`---` = 分隔线），读写两侧一致，内容
+ *    不再被悄悄藏起来。
  *
  * @module dsh-eteams/client/mdEditor
  */
@@ -68,7 +74,6 @@ import {
   MDXEditor,
   type MDXEditorMethods,
   markdownShortcutPlugin,
-  frontmatterPlugin,
   headingsPlugin,
   listsPlugin,
   ListsToggle,
@@ -163,9 +168,6 @@ function ensureMdxStyles(): void {
   }
 }
 
-/** frontmatter 围栏（仅识别文档开头的 `---` 块）。 */
-const FRONTMATTER_RE = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/;
-
 /**
  * 判定一段纯文本是否「像 Markdown」：命中原生语法标记才接管粘贴，普通
  * 句子/代码片段仍走默认粘贴。宽松匹配即可——本编辑器就是 Markdown 写作
@@ -174,7 +176,6 @@ const FRONTMATTER_RE = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/;
 function looksLikeMarkdown(text: string): boolean {
   if (text.length === 0 || text.length > 200_000) return false;
   return (
-    FRONTMATTER_RE.test(text) || // frontmatter
     /^ {0,3}#{1,6} \S/m.test(text) || // ATX 标题
     /^ {0,3}(?:```|~~~)/m.test(text) || // 围栏代码块
     /^ {0,3}> ?\S/m.test(text) || // 引用
@@ -208,7 +209,8 @@ const CODE_BLOCK_LANGUAGES = [
 ];
 
 /**
- * 人设 Markdown 编辑器（所见即所得）。frontmatter + 正文一站编辑：
+ * 人设 Markdown 编辑器（所见即所得）。整份正文一站编辑（frontmatter 围栏也
+ * 按普通 Markdown 渲染，见模块注释第 7 条）：
  * 标题/列表/引用/表格/链接/代码块（CodeMirror 高亮）/分隔线，工具栏随
  * 焦点出现；不再需要编辑 ↔ 预览切换（入门文档："No more need for
  * edit ↔ preview"）。预览语义由 MarkdownText 保留给只读场景。
@@ -222,8 +224,8 @@ export function MdEditor({
   value,
   onChange,
   minHeight = 320,
-  placeholder = '开始撰写角色手册：frontmatter + 身份 / 使命 / 规则 / 领域专章…',
-  headerNote = 'frontmatter + 正文 · 所见即所得',
+  placeholder = '开始撰写角色手册：身份 / 使命 / 规则 / 领域专章…',
+  headerNote = '正文 · 所见即所得',
   readOnly = false,
 }: {
   value: string;
@@ -273,7 +275,6 @@ export function MdEditor({
       quotePlugin(),
       thematicBreakPlugin(),
       markdownShortcutPlugin(),
-      frontmatterPlugin(),
       codeBlockPlugin({ defaultCodeBlockLanguage: 'ts' }),
       codeMirrorPlugin({
         codeBlockLanguages: CODE_BLOCK_LANGUAGES,
@@ -327,16 +328,12 @@ export function MdEditor({
     if (target.closest('.eteams-mdx-content') === null) return; // 弹窗输入框等
     const text = e.clipboardData?.getData('text/plain') ?? '';
     if (!looksLikeMarkdown(text)) return;
-    // 粘贴稿的 frontmatter 一律剥除：本编辑器的 frontmatter 区由原文档
-    // 管理，且光标处插入 frontmatter 节点无意义；正文为空时（只贴了个
-    // frontmatter）不接管，默认粘贴至少可见可编辑。
-    const pasted = text.replace(FRONTMATTER_RE, '');
-    if (pasted.trim() === '') return;
     e.preventDefault();
     e.stopPropagation();
     // 粘贴稿同样过裸标签中和（模块注释第 6 条）：insertMarkdown 走同一条
-    // 导入管线，裸 `<X>` 会让插入整体失败。
-    methodsRef.current?.insertMarkdown(neutralizeJsxLikeTags(pasted));
+    // 导入管线，裸 `<X>` 会让插入整体失败。frontmatter 不再特殊处理
+    // （第 7 条），粘贴内容原样插入。
+    methodsRef.current?.insertMarkdown(neutralizeJsxLikeTags(text));
   };
 
   return (

@@ -27,6 +27,14 @@
  * 任务就不再给添加入口），标题行的添加按钮撤除。原卡内「本会话」徽标
  * 随之撤除（归属由分区线表达，卡内不再重复）。
  *
+ * 用户迭代 2026-09-15「任务列表为空时不展示本会话区分线，添加任务按钮
+ * 不应该在任务 title 右边吗，然后显示暂无任务就行」：分区线只在**该段有
+ * 卡**时渲染（本会话/其它会话各自判空，空列表不再出现光秃秃的「本会话」
+ * 线）；「＋ 添加任务」自分区线下移回卡头行最右（与团队页页头「＋ 新增
+ * 团队」同款 sm 钮，2026-09-12 的「按钮落分区线下」就地撤销），空态文案
+ * 收成「暂无任务」；页头计数补「共」并与标题底部对齐（同日列表页头口径，
+ * 同 rosterPage/teamPage）。
+ *
  * @module dsh-eteams/client/pages/tasks/tasksPage
  */
 import { useState, type ReactNode } from 'react';
@@ -310,9 +318,13 @@ export function TasksPage({ pool, sessionId }: TasksPageProps): ReactNode {
   const sessionTasks = hasSession ? mainTasks.filter(isCurrentSession) : [];
   const otherTasks = hasSession ? mainTasks.filter((t) => !isCurrentSession(t)) : mainTasks;
   // 一个会话只挂一个任务（用户迭代 2026-09-12）：本会话已有任务即不再给
-  // 添加入口（按钮落分区线下，见渲染处）；无可选团队开弹窗无意义亦不渲染。
+  // 添加入口（2026-09-15 起按钮落卡头行最右，见渲染处）；无可选团队开弹窗
+  // 无意义亦不渲染。
   const canAddTask = hasSession && pool.length > 0 && sessionTasks.length === 0;
-  const showEmpty = mainTasks.length === 0 && !canAddTask;
+  // 空态判据只看总量（用户 2026-09-15「然后显示暂无任务就行」）：列表无卡即
+  // 显示「暂无任务」，与是否还有添加入口无关（按钮已挪进卡头行，不再顶掉
+  // 空态文案）。
+  const showEmpty = mainTasks.length === 0;
 
   // 三十一轮 DA44④：列表卡身抽 taskListCard（TaskListCard）——subs 统计/
   // deletable 判据随迁卡内现算（task/allTasks 进 props，allTasks 取归属团队
@@ -360,38 +372,46 @@ export function TasksPage({ pool, sessionId }: TasksPageProps): ReactNode {
         {/* 平铺小卡栅格（十一…十五轮 DA24…DA28 视觉口径不变；2026-09-10
         用户拍板「直接显示所有任务」）。2026-09-12 会话归属分区（用户
         「任务列表直接加线将本会话和其它会话隔离开来」）：本会话一段
-        （「本会话」分区线 + 其下本会话卡/添加按钮）、其它会话一段
-        （「其它会话」分区线 + 其下其它卡），**两段各自独立栅格**——同段
-        卡片横排、两段纵向堆叠，不让本会话卡与其它卡混进同一行。 */}
+        （「本会话」分区线 + 其下本会话卡）、其它会话一段（「其它会话」分区线
+        + 其下其它卡），**两段各自独立栅格**——同段卡片横排、两段纵向堆叠，
+        不让本会话卡与其它卡混进同一行。2026-09-15：分区线只在该段有卡时
+        渲染（空列表不出现光秃秃的线），添加按钮上移卡头行最右。 */}
         <Card className={cn(PANEL_CARD_CLASS, 'pb-3 flex min-h-0 flex-1 flex-col')}>
+          {/* 卡头行（用户 2026-09-15「添加任务按钮不应该在任务 title 右边
+            吗」）：标题 + 计数子行（同日列表页头口径「共 N 个」+ 底部对齐，
+            同 rosterPage/teamPage），「＋ 添加任务」压轴贴行最右。 */}
           <div className="mb-2.5 flex items-center gap-2">
-            <h3 className={LIST_TITLE_CLASS}>任务</h3>
-            <span className={LIST_COUNT_CLASS}>{mainTasks.length} 个</span>
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            {hasSession && <SessionDivider label="本会话" />}
-            {/* 一个会话只挂一个任务：本会话已有任务就不再给添加入口；无任务
-                时分区线下即添加按钮（无可选团队不渲染）。 */}
+            <div className="flex min-w-0 flex-none items-baseline gap-2">
+              <h3 className={cn(LIST_TITLE_CLASS, 'flex-none')}>任务</h3>
+              <span className={LIST_COUNT_CLASS}>共 {mainTasks.length} 个</span>
+            </div>
+            <span className="min-w-0 flex-1" />
+            {/* 一个会话只挂一个任务：本会话已有任务就不再给添加入口；无可选
+                团队不渲染（开弹窗无意义）。 */}
             {canAddTask && (
-              <Button type="button" variant="outline" className="w-full" onClick={openAddDialog}>
+              <Button type="button" variant="outline" size="sm" onClick={openAddDialog}>
                 <Plus className="h-3.5 w-3.5" />
                 添加任务
               </Button>
             )}
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {/* 分区线只在该段有卡时渲染（用户 2026-09-15「任务列表为空时不展示
+                本会话区分线」）——空列表不再出现光秃秃的「本会话」线。 */}
+            {sessionTasks.length > 0 && <SessionDivider label="本会话" />}
             {sessionTasks.length > 0 && (
               <div className={TASK_GRID_CLASS}>{sessionTasks.map(renderCard)}</div>
             )}
-            {hasSession && otherTasks.length > 0 && (
-              <SessionDivider label="其它会话" className="mt-5" />
+            {otherTasks.length > 0 && (
+              <SessionDivider
+                label="其它会话"
+                className={sessionTasks.length > 0 ? 'mt-5' : undefined}
+              />
             )}
             {otherTasks.length > 0 && (
               <div className={TASK_GRID_CLASS}>{otherTasks.map(renderCard)}</div>
             )}
-            {showEmpty && (
-              <div className={EMPTY_CLASS}>
-                还没有任务。在对话中把任务交给团队，或计划批准后任务会出现在这里。
-              </div>
-            )}
+            {showEmpty && <div className={EMPTY_CLASS}>暂无任务</div>}
           </div>
         </Card>
         {dialogs}

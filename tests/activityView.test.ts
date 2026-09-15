@@ -350,3 +350,15 @@ describe('decidedActionsOf（已决策历史）', () => {
     expect(decidedActionsOf(team())).toEqual([]); // 旧快照无历史字段
   });
 });
+
+describe('无团队（尚未建队时看板照常渲染）', () => {
+  // 用户 2026-09-15「看板，团队为空时，还是显示原来的东西，不需要还没有团队
+  // 提示」：看板不再有「还没有团队」早退分支，决策面板与动态卡在 team
+  // undefined 时照常挂载——三个选择器必须把缺省当空快照（各自空列表、
+  // 不抛错），卡内走自己的空态行（暂无待决策 / 暂无已决策 / 暂无动态）。
+  it('三个选择器收到 undefined 团队 → 各自空列表', () => {
+    expect(activityRowsOf(undefined)).toEqual([]);
+    expect(pendingActionsOf(undefined)).toEqual([]);
+    expect(decidedActionsOf(undefined)).toEqual([]);
+  });
+});

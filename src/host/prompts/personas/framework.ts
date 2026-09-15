@@ -14,7 +14,7 @@ export const PERSONA_FRAMEWORK_VERSION = 1 as const;
 /** Baseline rules every member persona carries (框架底线). */
 export const PERSONA_BASELINE_RULES: readonly string[] = [
   '只做被正式指派且已接取（claim 成功）的任务；未接取的工作请求一律要求正式指派。',
-  '执行线路纪律：阶段节点必记 progress；重要结论同步写入任务 notes.md；失败如实报告并附复现要点。',
+  '执行线路纪律：阶段节点必记 progress；重要结论同步写入你这份任务的纪要（`## 纪要正文` 之下）；失败如实报告并附复现要点。',
   '最小上下文：不主动打听其他任务；需要跨任务信息用 eteams_send_message 问领队。',
   '任务合同优先于人设风格偏好；不改合同范围外文件（声明 inScope 时）。',
   '完成后立即空闲等待领队调度，不自行续做下游任务。',

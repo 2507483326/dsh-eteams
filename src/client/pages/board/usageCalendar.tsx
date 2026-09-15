@@ -6,12 +6,14 @@
  * （PANEL_CARD_CLASS 卡壳），日历与 meta 行居中显示；格子无装饰扁平化
  * （renderBlock 去包内 hairline 描边，见 usageFlatBlock）。
  * 用户迭代 2026-09-05：数据源改**全应用口径**（fetchAppUsageCalendar →
- * GET /usage/calendar，不按团队/归属过滤，workspace 桶一并计入，标题加
- * 「全应用」标注）；meta 行前置「今日 X tokens」——今天那格本就在全年
- * 零填充响应里（usageTodayKey 本地拼装），无需新接口。
+ * GET /usage/calendar，不按团队/归属过滤，workspace 桶一并计入）；meta 行
+ * 前置「今日 X tokens」——今天那格本就在全年零填充响应里（usageTodayKey
+ * 本地拼装），无需新接口。
  * 用户迭代 2026-09-05（二）：档位改固定「AI 代码工程师强度」标尺（0 空 +
  * 10 万/100 万/300 万三道台阶，见 USAGE_LEVEL_STEPS），不再按当年四分位
  * 相对划分；tooltip 行首带档位名（轻度/常规/高强度/满负荷）。
+ * 用户迭代 2026-09-15：去掉标题「全应用」标注，空态 meta 行去掉后半句
+ * （「应用今年还没有消耗——…」，只留「今日 X tokens」）。
  * M5 结构性改造（docs/44 44.3，行为零变更）：44.3 横幅分区——档位表
  * （USAGE_LEVEL_STEPS/USAGE_LEVEL_NAMES）已表驱动，保持原样仅归组。
  *
@@ -219,14 +221,11 @@ export function UsageCalendarCard(): ReactNode {
   const firstLoad = calendar === null && error === null;
 
   return (
-    <Card className={PANEL_CARD_CLASS}>
+    // shrink-0（用户 2026-09-15 看板等分布局）：日历卡在看板弹性列里保持
+    // 自身内容高，不被下方两个 flex-1 面板挤压。
+    <Card className={cn(PANEL_CARD_CLASS, 'shrink-0')}>
       <div className="flex items-center justify-between">
-        <div className={cn(SECTION_TITLE_CLASS, 'mb-0 flex items-center gap-2')}>
-          Token 消耗
-          {/* 口径标注（2026-09-05 用户迭代：数据源全应用——含普通对话与各
-          团队，非单团队视图）。 */}
-          <span className={cn(MUTED_CLASS, 'text-xs font-normal')}>全应用</span>
-        </div>
+        <div className={cn(SECTION_TITLE_CLASS, 'mb-0')}>Token 消耗</div>
         {/* 年份切换：右箭头到未来年禁用（28.5.2——未来年无数据可看）。 */}
         <div className="flex items-center gap-1">
           <Button
@@ -302,7 +301,7 @@ export function UsageCalendarCard(): ReactNode {
             : hasData && totals !== undefined
               ? `今日 ${usageNum(todayTotal)} tokens · 全年合计 ${usageNum(totals.totalTokens)} tokens · ${usageNum(totals.calls)} 次调用`
               : calendar !== null
-                ? `今日 ${usageNum(todayTotal)} tokens · 应用今年还没有消耗——发起对话或成员执行任务后这里会逐日亮起。`
+                ? `今日 ${usageNum(todayTotal)} tokens`
                 : ''}
         </div>
       </div>

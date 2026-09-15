@@ -12,7 +12,7 @@ import type { ETeamsResolvedConfig } from '../config.js';
 import { ETeamsError, stateRootOf, type RuntimeContext } from '../runtime/base.js';
 import { recordEvent } from '../state/events.js';
 import { readTeam } from '../state/store.js';
-import { boardFileAbs, taskDirRel } from '../runtime/docs.js';
+import { boardFileAbs, docDirAbs, groupDirAbs, minutesFileAbs, planDirAbs, taskDirRel } from '../runtime/docs.js';
 import {
   createTeam,
   addMember,
@@ -830,9 +830,9 @@ export function createCaptainTools(
   const createTaskTool = defineTool({
     name: 'eteams_create_task',
     description:
-      '创建任务：一句主题 + 合同（description/contractMd/idempotencyNote，合同统一写在一篇 Markdown 里：验收标准/允许改动/禁止改动/交付物分节）+ 显式 dependencies + 可选执行链 chain。对话任务拆解（docs/26）：传 parentTaskId 把本任务挂为对应主任务（任务单）下的小任务——chain 站点即成员槽，成员按序接力；小任务文件夹落在主任务文件夹 sub/ 下。**拆解小任务必须带 parentTaskId**：本对话已有主任务时漏传会被宿主拒绝、不入库（否则会静默建成顶层任务，主任务页的小任务列表里看不到）；首次创建主任务请用 eteams_submit_task（本工具建的是任务，不是任务单容器）。**小任务必须带含非空「## 验收标准」段的合同**（二级标题、标题文字精确为「验收标准」，段内非空）：收口会逐个校验，缺段即拒绝收口。',
+      '创建任务：一句主题 + 合同（description/contractMd/idempotencyNote，合同统一写在一篇 Markdown 里：验收标准/允许改动/禁止改动/交付物分节）+ 显式 dependencies + 可选执行链 chain。对话任务拆解（docs/26）：传 parentTaskId 把本任务挂为对应主任务（任务单）下的小任务——chain 站点即成员槽，成员按序接力；**一个主任务一个目录**（用户 2026-09-15 扁平化：`teams/<主任务号>-slug/`，小任务与主任务共用同一目录，不再各自建文件夹）。**拆解小任务必须带 parentTaskId**：本对话已有主任务时漏传会被宿主拒绝、不入库（否则会静默建成顶层任务，主任务页的小任务列表里看不到）；首次创建主任务请用 eteams_submit_task（本工具建的是任务，不是任务单容器）。**小任务必须带含非空「## 验收标准」段的合同**（二级标题、标题文字精确为「验收标准」，段内非空）：收口会逐个校验，缺段即拒绝收口。',
     parameters: {
-      subject: strR('任务主题（一句话，作为文件夹 slug）'),
+      subject: strR('任务主题（一句话；主任务用它作目录名，小任务用它作纪要文件名）'),
       parentTaskId: int(
         '父主任务号（拆解小任务必填：挂到对应任务单下；本对话已有主任务时漏传会被拒绝）',
       ),
@@ -1312,7 +1312,7 @@ export function createCaptainTools(
   const captainGuideTool = defineTool({
     name: 'eteams_captain_guide',
     description:
-      '领取领队规程与本回合任务（领队子代理每回合第一步先调本工具）：返回 guide=工作流程全文（含回合决策表 + 角色手册）、turn=本回合种类（dispatch=主对话转交 / commission=面板任务完善 / start=面板开始批准 / none=无待处理转交）、snapshot=快照 JSON（taskId 锚定主任务 / boardFile 队伍留言板绝对路径 / teamStatus 团队现状 / latestMessage 本回合转交内容 / parentSessionId 发起会话 id）。只读幂等，可重复领取。',
+      '领取领队规程与本回合任务（领队子代理每回合第一步先调本工具）：返回 guide=工作流程全文（含回合决策表 + 角色手册）、turn=本回合种类（dispatch=主对话转交 / commission=面板任务完善 / start=面板开始批准 / none=无待处理转交）、snapshot=快照 JSON（taskId 锚定主任务 / taskDir 任务目录绝对路径 / boardFile 队伍留言板 / planDir 计划目录 / docDir 文档目录 / minutesFile 主任务纪要 / teamStatus 团队现状 / latestMessage 本回合转交内容 / parentSessionId 发起会话 id）。只读幂等，可重复领取。',
     parameters: {},
     output: {
       schema: {
@@ -1324,7 +1324,7 @@ export function createCaptainTools(
             '本回合种类：dispatch=主对话转交 / commission=面板任务完善 / start=面板开始批准 / none=无待处理转交',
           ),
           snapshot: str(
-            '会话快照 JSON（taskId 锚定主任务 / boardFile 队伍留言板绝对路径 / teamStatus 团队现状 / latestMessage 本回合转交内容 / parentSessionId 发起会话 id）',
+            '会话快照 JSON（taskId 锚定主任务 / taskDir 任务目录 / boardFile 队伍留言板 / planDir 计划目录 / docDir 文档目录 / minutesFile 主任务纪要 / teamStatus 团队现状 / latestMessage 本回合转交内容 / parentSessionId 发起会话 id）',
           ),
         },
         additionalProperties: false as const,
@@ -1365,14 +1365,25 @@ export function createCaptainTools(
         replicaTaskId ?? (registryTaskId !== undefined ? Number(registryTaskId) : null);
       const turnRec =
         anchoredTaskId !== null ? readCaptainTurn(root, String(anchoredTaskId)) : null;
-      // 队伍留言板绝对路径（用户 2026-09-14）：锚定主任务文件夹根下的
-      // 留言板.md——派发/推进前先读、每完成一个编排动作追加一行。
+      // 任务目录与固定文件路径（用户 2026-09-14 留言板；2026-09-15 扁平化增
+      // 计划/文档/纪要）：一个主任务一个目录，路径全部由宿主算好下发，领队照抄
+      // ——不自己拼名字、不新建重复文件。
       const anchoredTask =
         anchoredTaskId !== null
           ? caller.team.tasks.find((t) => t.id === anchoredTaskId)
           : undefined;
+      const taskDir =
+        anchoredTask !== undefined ? groupDirAbs(env.workspace, caller.team, anchoredTask) : null;
       const boardFile =
         anchoredTask !== undefined ? boardFileAbs(env.workspace, caller.team, anchoredTask) : null;
+      const planDir =
+        anchoredTask !== undefined ? planDirAbs(env.workspace, caller.team, anchoredTask) : null;
+      const docDir =
+        anchoredTask !== undefined ? docDirAbs(env.workspace, caller.team, anchoredTask) : null;
+      const minutesFile =
+        anchoredTask !== undefined
+          ? minutesFileAbs(env.workspace, caller.team, anchoredTask)
+          : null;
       // 团队现状快照与 eteams_team_status 同一视图（含构建会话行）。
       const view = teamView(env, caller.team);
       const build = readBuildSession(root);
@@ -1386,7 +1397,11 @@ export function createCaptainTools(
         turn: turnRec === null ? 'none' : turnRec.turn,
         snapshot: JSON.stringify({
           ...(anchoredTaskId !== null ? { taskId: anchoredTaskId } : {}),
+          ...(taskDir !== null ? { taskDir } : {}),
           ...(boardFile !== null ? { boardFile } : {}),
+          ...(planDir !== null ? { planDir } : {}),
+          ...(docDir !== null ? { docDir } : {}),
+          ...(minutesFile !== null ? { minutesFile } : {}),
           teamStatus: view,
           latestMessage: turnRec?.message ?? '',
           parentSessionId: turnRec?.parentSessionId ?? null,

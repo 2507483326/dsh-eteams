@@ -80,10 +80,12 @@ import {
   consumePendingGotoAdd,
   consumePendingGotoRoster,
   consumePendingGotoTask,
+  consumePendingGotoTeam,
   consumePendingSelectTeam,
   GOTO_ADD_EVENT,
   GOTO_ROSTER_EVENT,
   GOTO_TASK_EVENT,
+  GOTO_TEAM_EVENT,
   SELECT_TEAM_EVENT,
 } from '../../lib/bridge';
 import { navIdOfPath } from '../../lib/status';
@@ -252,6 +254,12 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
       consumePendingGotoRoster();
       navigate('/roster');
     };
+    // 「团队页」信号（弹层页脚「新增团队」/hero「团队」按钮，用户 2026-09-15
+    // 「点新增团队没有跳到对应的团队卡片」）：落团队卡片栅格，不自开新增弹窗。
+    const hTeam = (): void => {
+      consumePendingGotoTeam();
+      navigate('/team');
+    };
     // 「任务」信号（卡片「打开任务」直达，用户迭代 2026-09-12「任务创建好后，
     // 主会话应该有一个卡片让用户跳转到任务页面」）：带 taskId 落任务详情
     // （/tasks/:taskId），不带落任务列表。detail 可能是数字或数字串。
@@ -276,6 +284,7 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
     };
     window.addEventListener(GOTO_ADD_EVENT, h);
     window.addEventListener(GOTO_ROSTER_EVENT, hRoster);
+    window.addEventListener(GOTO_TEAM_EVENT, hTeam);
     window.addEventListener(GOTO_TASK_EVENT, onTask);
     window.addEventListener(SELECT_TEAM_EVENT, hSelect);
     // 补消费挂载前的跳转信号：跳转方先点宿主 tab 再触发本面板
@@ -284,12 +293,14 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
     // 短暂呈现持久页签后跳转，零观感差异）。
     if (consumePendingGotoAdd()) h();
     if (consumePendingGotoRoster()) hRoster();
+    if (consumePendingGotoTeam()) hTeam();
     const pendingTask = consumePendingGotoTask();
     if (pendingTask !== null) hTask(pendingTask);
     hSelect();
     return () => {
       window.removeEventListener(GOTO_ADD_EVENT, h);
       window.removeEventListener(GOTO_ROSTER_EVENT, hRoster);
+      window.removeEventListener(GOTO_TEAM_EVENT, hTeam);
       window.removeEventListener(GOTO_TASK_EVENT, onTask);
       window.removeEventListener(SELECT_TEAM_EVENT, hSelect);
     };
@@ -398,7 +409,8 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
             />
           )}
           {/* 顶栏（用户反馈）：团队切换改为「团队」页的卡片栅格，这里只保留
-            状态加载失败的就地提示；空态兜底在 BoardTab。 */}
+            状态加载失败的就地提示（看板不再有自带空态脚注，用户 2026-09-15
+            「不需要还没有团队提示」）。 */}
           {state.error !== null && (
             <FormErrorNote className="mb-3">状态加载失败：{state.error}</FormErrorNote>
           )}
@@ -411,7 +423,6 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
             team={team}
             now={now}
             fetchedAt={state.fetchedAt}
-            error={state.error}
             sessionId={sessionId}
             pool={pool}
             roster={roster}

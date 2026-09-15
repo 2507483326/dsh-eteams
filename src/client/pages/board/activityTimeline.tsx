@@ -16,8 +16,10 @@ import { relativeTime, type TeamSnapshot } from '../../lib/monitor';
 import { Card } from '../../components/ui/card';
 import { MUTED_CLASS, PANEL_CARD_CLASS, SECTION_TITLE_CLASS } from '../shared/styles';
 
-/** 时间线可视高度（约 12 行，超出滚动；快照窗口 30 条不撑爆看板）。 */
-const TIMELINE_BODY_CLASS = 'max-h-[360px] space-y-0.5 overflow-y-auto';
+/** 时间线可视区（用户 2026-09-15 看板等分布局）：原固定 max-h-[360px] 改
+ * flex-1 吃卡内余高——动态卡与决策面板各占 1/2 看板余高，超出在这里内滚，
+ * 不再撑出外层页面滚动条。 */
+const TIMELINE_BODY_CLASS = 'min-h-0 flex-1 space-y-0.5 overflow-y-auto';
 
 /** 任务标签 chip（有主题时可点进详情）。 */
 const TASK_TAG_CLASS =
@@ -31,15 +33,15 @@ export function ActivityTimeline({
   now,
   fetchedAt,
 }: {
-  team: TeamSnapshot;
+  team: TeamSnapshot | undefined;
   now: number;
   fetchedAt: number;
 }): ReactNode {
   const navigate = useNavigate();
   const rows = activityRowsOf(team);
   return (
-    <Card className={PANEL_CARD_CLASS}>
-      <div className={SECTION_TITLE_CLASS}>动态</div>
+    <Card className={`flex min-h-0 flex-1 flex-col ${PANEL_CARD_CLASS}`}>
+      <div className={`shrink-0 ${SECTION_TITLE_CLASS}`}>动态</div>
       <div className={TIMELINE_BODY_CLASS}>
         {rows.map((r) => (
           <div
@@ -71,9 +73,9 @@ export function ActivityTimeline({
             </span>
           </div>
         ))}
-        {rows.length === 0 && <div className={MUTED_CLASS}>暂无动态</div>}
+        {rows.length === 0 && <div className={`${MUTED_CLASS} text-center`}>暂无动态</div>}
       </div>
-      <div className={MUTED_CLASS}>
+      <div className={`shrink-0 ${MUTED_CLASS}`}>
         数据更新于 {fetchedAt === 0 ? FETCH_AT_EMPTY : relativeTime(fetchedAt, now)}
       </div>
     </Card>

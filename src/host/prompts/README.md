@@ -15,7 +15,7 @@
 ## 边界（不属于本目录的「像提示词的东西」）
 
 - **工具 description 与工具结果 instruction 文本**（如 busy detail）：工具契约的一部分，随工具定义留在 `../tools/`。合同渲染**不在**此列——`renderContract` 是 handoff 模板、住在 `handoff/mails.ts`；`model/contract.ts` 只是旧四数组 → MD 的迁移合成助手（state/db、state/import 消费）。
-- **邮件/唤醒投递封皮**（如 teamOps 的 `[来自 …]` 前缀包装、notifier 的传输层）与**磁盘文档渲染**（runtime/docs.ts 的 notes.md / 留言板.md 落盘）：传输/落盘层，不属提示词面。
+- **邮件/唤醒投递封皮**（如 teamOps 的 `[来自 …]` 前缀包装、notifier 的传输层）与**磁盘文档渲染**（runtime/docs.ts 的 留言板.md / `<任务号>.纪要.md` 落盘）：传输/落盘层，不属提示词面。
 - **人设的磁盘存取与快照查询**：状态属 runtime；本目录只收文本组装（纯函数），查表 / 读盘由 runtime 薄壳完成后传参进来。
 - **命令 handler 内一次性 UX 文本**（busy 提示、降级 notice）：随 handler 留在 `../commands/`；可复用 / 契约性模型文本（如激活消息 buildActivationMessage）才进命令面文件。
 
@@ -30,7 +30,7 @@
 | system/rootPrompt.ts | 主对话注入 band 文本组装（角色库保留角色 system 的手册 MD 逐字嵌入，8000 字截断自述） | runtime/rootPrompt.ts 薄壳 |
 | spawn/captainChild.ts | 领队子代理人格（含回合决策表，经 persona 系统段 + eteams_captain_guide 的 render 模型通道同文返回）+ 一句话回合提示词 captainTurnBrief（任务/现状/父会话等所需内容全部经规程与工具面获取）+ 手册拼装 | tools/captainDispatch.ts、tools/captainTools.ts、runtime/captainAgent.ts |
 | spawn/builderPhases.ts | 构建回合提示词（全相位同一句「身份 + 调 eteams_build_guide 领规程」——任务/快照/父会话等所需内容全部经规程与工具面获取，docs/19.16 持续构建子代理） | runtime/builderPhases.ts |
-| spawn/member.ts | 成员欢迎包（通用简报 memberBriefing：工作目录/队伍留言板/领队/三节点汇报 + 规则 + 工具表） | runtime/members.ts |
+| spawn/member.ts | 成员欢迎包（通用简报 memberBriefing：工程根/任务目录/队伍留言板/本任务纪要/文档目录 + 领队 + 三节点汇报 + 规则 + 工具表） | runtime/members.ts |
 | handoff/mails.ts | 指派 / 汇报 / 婉拒 / 挂起 / 取消模板 | runtime/assignment.ts、runtime/members.ts、runtime/docs.ts、tools/memberTools.ts |
 | personas/framework.ts | 人设框架（字段渲染 / 合并 / 摘要 / 回退执行提示） | state/、runtime/、prompts 内部 |
 | personas/presets.ts | ROLE_TEMPLATES、PRESET_MEMBER_ROLES、defaultPersonaFor | runtime/roster.ts、runtime/teamOps.ts、state/import.ts |

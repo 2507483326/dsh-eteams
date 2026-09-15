@@ -9,6 +9,7 @@
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { stripFrontmatter } from '../state/db.js';
 import { atomicWriteText } from '../state/store.js';
 import { avatarSeedFor, upsertRosterMember } from './roster.js';
 import type { BuildPhaseKind } from '../prompts/spawn/builderPhases.js';
@@ -302,6 +303,12 @@ function sanitizeReportDraft(draft: BuildDraft): BuildDraft {
   const out = { ...draft } as Record<string, unknown>;
   for (const key of DRAFT_STRING_KEYS) {
     if (out[key] !== undefined && typeof out[key] !== 'string') delete out[key];
+  }
+  // frontmatter 不进 persona_md（与 personaToMd 写库口径一致）：上报边沿就把
+  // 手册开头的 YAML 围栏剥掉，草稿/预览/确认页与落库内容一致，读路径按普通
+  // Markdown 原样读出，两端都不必再判断「这段是不是 frontmatter」。
+  if (typeof out.personaMd === 'string') {
+    out.personaMd = stripFrontmatter(out.personaMd.trim()).trim();
   }
   if (out.rules !== undefined) {
     const rules = Array.isArray(out.rules)

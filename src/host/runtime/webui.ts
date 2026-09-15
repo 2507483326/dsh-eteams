@@ -324,19 +324,31 @@ function taskView(
       : stationStatusOf(t.status, t.chain.length, t.chainCursor, doneStations, activeStations, i);
   // 本大任务的成员子会话（用户 2026-09-14「会话成员」按任务口径取）：副本行
   // 按大任务粒度建（同一人每条大任务一行、各绑独立子会话），sessionId 非空 =
-  // 该成员的子会话已起；未建会话的成员不列（点不进去）。领队行不列（主持者，
-  // 不是执行成员）。展示层据此做「会话成员」切换——不能取成员全局最近一行
-  // （那是 latestInstanceRow 口径），否则从 A 任务会跳到 B 任务的会话。
-  const memberSessions = team.taskMembers
-    .filter(
-      (r) => r.mainTaskId === (t.parentId ?? t.id) && r.isLeader !== true && r.sessionId !== '',
-    )
-    .map((r) => ({
+  // 该成员的子会话已起；未起会话的行不列（任务还在创建中时不会把没有会话的
+  // 成员放出来）。**领队行也要列**——领队子会话是独立可切换的会话，而它的
+  // 会话挂在 isLeader=1 的那行上（建任务铺的班底副本行 sessionId 恒空，派发
+  // 领队时另铺 isLeader=1 行），只按班底取会漏掉领队。展示层据此做「会话
+  // 成员」切换——不能取成员全局最近一行（那是 latestInstanceRow 口径），否则
+  // 从 A 任务会跳到 B 任务的会话。同一 sessionId 去重（防重复行出重键）。
+  const seenSessions = new Set<string>();
+  const memberSessions: {
+    name: string;
+    employeeId: number | null;
+    sessionId: string;
+    avatar: { seed: number; salt: number } | null;
+  }[] = [];
+  for (const r of team.taskMembers) {
+    if (r.mainTaskId !== (t.parentId ?? t.id) || r.sessionId === '') continue;
+    if (seenSessions.has(r.sessionId)) continue;
+    seenSessions.add(r.sessionId);
+    const avatar = team.members.find((m) => m.employeeId === r.employeeId)?.avatar ?? r.avatar;
+    memberSessions.push({
       name: r.name,
       employeeId: r.employeeId ?? null,
       sessionId: r.sessionId,
-      avatar: team.members.find((m) => m.employeeId === r.employeeId)?.avatar ?? r.avatar ?? null,
-    }));
+      avatar: avatar === undefined ? null : { seed: avatar.seed, salt: avatar.salt },
+    });
+  }
   return {
     taskId: t.id,
     subject: t.subject,

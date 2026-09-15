@@ -207,9 +207,14 @@ export function TeamPage({ sessionId, pool, team, onSelectTeam }: TeamPageProps)
       目标行也只在有真目标时出现（用户迭代 2026-09 九）。 */}
       {pool.length > 0 && (
         <Card className={cn(PANEL_CARD_CLASS, 'pb-3 flex min-h-0 flex-1 flex-col')}>
+          {/* 标题 + 计数（2026-09-15 列表页头口径，同 rosterPage/tasksPage）：
+            计数补「共」并与标题底部对齐——收进 items-baseline 子行，不再受
+            外层 items-center 摆布。 */}
           <div className="mb-2.5 flex items-center gap-2">
-            <h3 className={LIST_TITLE_CLASS}>团队</h3>
-            <span className={LIST_COUNT_CLASS}>{pool.length} 个</span>
+            <div className="flex min-w-0 flex-none items-baseline gap-2">
+              <h3 className={cn(LIST_TITLE_CLASS, 'flex-none')}>团队</h3>
+              <span className={LIST_COUNT_CLASS}>共 {pool.length} 个</span>
+            </div>
           </div>
           <div className={cn(TEAM_GRID_CLASS, 'min-h-0 flex-1 content-start overflow-y-auto')}>
             {pool.map((t) => {

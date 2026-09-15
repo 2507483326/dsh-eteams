@@ -21,7 +21,7 @@ import { fallbackTeamMemberPersona } from '../prompts/personas/framework.js';
 import { memberBriefing, memberWelcome } from '../prompts/spawn/member.js';
 import { neutralizeInterpolation } from './sessionPersona.js';
 import { registerMemberSession } from './usage.js';
-import { boardFileAbs, taskDirAbs } from './docs.js';
+import { boardFileAbs, docDirAbs, groupDirAbs, minutesFileAbs } from './docs.js';
 import { taskMemberBadge } from './roster.js';
 
 /** Label prefix identifying eteams member children. */
@@ -102,11 +102,13 @@ export function memberTemplateOf(team: TeamState, ref: string | number): MemberR
 }
 
 /**
- * 通用成员简报组装（用户迭代 2026-09-11；2026-09-14 增队伍留言板）：runtime
- * 侧现读四个值——任务文件夹绝对路径（taskDirAbs）、队伍留言板绝对路径
- * （boardFileAbs，主任务文件夹根下）、领队名（班底 is_leader 行，无领队时是主
- * 会话）、团队名——交给纯文本 memberBriefing。出生包与每次指派信共用，
- * 保证「工作目录 / 留言板 / 领队 / 三节点汇报」始终在成员上下文里。
+ * 通用成员简报组装（用户迭代 2026-09-11；2026-09-14 增队伍留言板；2026-09-15
+ * 扁平化）：runtime 侧现读五个绝对路径——工程根（工作区根，代码产出写这里）、
+ * 任务目录（groupDirAbs，一个主任务一个目录）、队伍留言板（boardFileAbs）、
+ * 本任务纪要（minutesFileAbs）、文档目录（docDirAbs）——连同领队名（班底
+ * is_leader 行，无领队时是主会话）交给纯文本 memberBriefing。出生包与每次指派
+ * 信共用，保证「工作目录 / 留言板 / 纪要 / 文档 / 领队 / 三节点汇报」始终在成员
+ * 上下文里，且路径全部由宿主算好（模型照抄、不自己拼名字、不新建重复文件）。
  */
 export function taskBriefing(env: RuntimeEnv, team: TeamState, task: TaskRecord): string {
   const leader = team.hasLeader
@@ -115,8 +117,11 @@ export function taskBriefing(env: RuntimeEnv, team: TeamState, task: TaskRecord)
   return memberBriefing({
     teamName: team.name,
     leaderName: leader,
-    workDir: taskDirAbs(env.workspace, team, task),
+    projectRoot: env.workspace,
+    taskDir: groupDirAbs(env.workspace, team, task),
     boardFile: boardFileAbs(env.workspace, team, task),
+    minutesFile: minutesFileAbs(env.workspace, team, task),
+    docDir: docDirAbs(env.workspace, team, task),
   });
 }
 

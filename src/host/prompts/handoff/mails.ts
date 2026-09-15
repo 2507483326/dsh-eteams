@@ -19,7 +19,7 @@ export function renderContract(task: TaskRecord): string {
   }
   if (task.idempotencyNote) lines.push(`幂等说明：${task.idempotencyNote}`);
   if (task.dependencies.length > 0)
-    lines.push(`前置依赖：${task.dependencies.join('、')}（产物见对应任务文件夹）`);
+    lines.push(`前置依赖：${task.dependencies.join('、')}（产物见对应任务目录与 文档/）`);
   return lines.join('\n');
 }
 
@@ -64,7 +64,7 @@ export function assignmentMail(
     '1. eteams_claim_task 接取（获得 attempt_id 与 token）；接不了就 eteams_decline_task 并说明原因。',
     '2. 开工与阶段节点用 eteams_append_progress 记录。',
     '3. 完成 eteams_complete_task（output + changed_paths）；失败 eteams_fail_task 写明障碍。',
-    '4. 结论同步写入任务 notes.md（teams 目录）。',
+    '4. 结论同步写入你这份任务的纪要（简报已给绝对路径，写在 `## 纪要正文` 之下）。',
     '',
     `attempt_id：${opts.attemptId}`,
   ]

@@ -45,7 +45,7 @@ export type TaskStatus =
 export interface ChainStation {
   /** 站点成员工号（数字 = v7 工号站点；字符串 = legacy 名字站点）。 */
   member: number | string;
-  /** What this stage contributes to the task (rendered into contract.md). */
+  /** What this stage contributes to the task (rendered into the task 纪要/合同视图). */
   stageBrief: string;
 }
 
@@ -220,7 +220,7 @@ export interface TaskRecord {
    * 任务合同全文（task.contract_md，Markdown）。十六轮 DA29：原四数组
    * （验收标准/范围内/范围外/交付物）合并为一篇 MD 统一管理——工具写入
    * （eteams_create_task/eteams_update_task 的 contractMd 参数）、面板渲染
-   * （MarkdownText）、派发邮件与 contract.md 均透传原文；旧库/旧导入由
+   * （MarkdownText）、派发邮件与任务纪要（纪要上半段合同视图）均透传原文；旧库/旧导入由
    * contractMdFromLegacyArrays 合成回填。
    */
   contractMd?: string;

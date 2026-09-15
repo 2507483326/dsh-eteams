@@ -11,6 +11,7 @@ import {
   consumePendingGotoAdd,
   consumePendingGotoRoster,
   consumePendingGotoTask,
+  consumePendingGotoTeam,
   consumePendingSelectTeam,
   ETEAMS_TAB_LABEL,
   GOTO_TASK_EVENT,
@@ -220,14 +221,16 @@ describe('teamsTabVisible (DOM stub)', () => {
 
 describe('pending jump signals', () => {
   it('stage + consume is one-shot for every signal kind', () => {
-    stageTeamSignals({ memberBuilder: true, roster: true, teamId: 't1', taskId: 7 });
+    stageTeamSignals({ memberBuilder: true, roster: true, team: true, teamId: 't1', taskId: 7 });
     expect(consumePendingGotoAdd()).toBe(true);
     expect(consumePendingGotoRoster()).toBe(true);
+    expect(consumePendingGotoTeam()).toBe(true);
     expect(consumePendingSelectTeam()).toBe('t1');
     expect(consumePendingGotoTask()).toBe(7);
     // consumed flags must not leak into a later mount
     expect(consumePendingGotoAdd()).toBe(false);
     expect(consumePendingGotoRoster()).toBe(false);
+    expect(consumePendingGotoTeam()).toBe(false);
     expect(consumePendingSelectTeam()).toBe(null);
     expect(consumePendingGotoTask()).toBe(null);
   });
@@ -236,6 +239,7 @@ describe('pending jump signals', () => {
     stageTeamSignals({ memberBuilder: true });
     expect(consumePendingGotoAdd()).toBe(true);
     expect(consumePendingGotoRoster()).toBe(false);
+    expect(consumePendingGotoTeam()).toBe(false);
     expect(consumePendingSelectTeam()).toBe(null);
     expect(consumePendingGotoTask()).toBe(null);
   });

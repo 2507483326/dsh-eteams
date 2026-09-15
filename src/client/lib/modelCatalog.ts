@@ -16,6 +16,7 @@
  * @module dsh-eteams/client/modelCatalog
  */
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+import { readClientService } from './serviceFace';
 
 /** One adapter-owned reasoning effort (wire shape mirrors dsh-host-apiproxy sessions). */
 export interface CatalogEffort {
@@ -123,7 +124,9 @@ interface ResolverFace {
 }
 
 function resolverOf(): ResolverFace | null {
-  const face = (catalogCtx as { modelDirectories?: unknown } | null)?.modelDirectories;
+  // 经 readClientService 读取（服务不活跃时裸属性访问会抛 inactive context，
+  // 见 serviceFace 模块头）；服务缺席/暂不可用一律回 null → 静态回退。
+  const face = readClientService(catalogCtx, 'modelDirectories');
   if (typeof face !== 'object' || face === null) return null;
   const resolver = face as ResolverFace;
   if (typeof resolver.directoryFor !== 'function') return null;
@@ -152,7 +155,7 @@ export function sharedCatalogStore(): {
   getSnapshot: () => SharedCatalogSnapshot | undefined;
   subscribe: (listener: () => void) => () => void;
 } | null {
-  const face = (catalogCtx as { modelDirectories?: unknown } | null)?.modelDirectories;
+  const face = readClientService(catalogCtx, 'modelDirectories');
   if (typeof face !== 'object' || face === null) return null;
   const store = (face as { catalog?: { store?: unknown } }).catalog?.store;
   if (typeof store !== 'object' || store === null) return null;
@@ -177,7 +180,7 @@ export function sharedCatalogStore(): {
  * 的数据」）。服务/结构缺席 → null（旧运行时回落会话级路径）。
  */
 function sharedCatalogLoad(): (() => Promise<unknown>) | null {
-  const face = (catalogCtx as { modelDirectories?: unknown } | null)?.modelDirectories;
+  const face = readClientService(catalogCtx, 'modelDirectories');
   if (typeof face !== 'object' || face === null) return null;
   const catalog = (face as { catalog?: unknown }).catalog;
   if (typeof catalog !== 'object' || catalog === null) return null;

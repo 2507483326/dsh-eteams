@@ -105,7 +105,7 @@ dsh plugin --profile desktop add C:\eTeam   # 安装到 DSH profile（live link�
 - **Schema v7，12 表**：`schema_meta`（键值元数据）、`team`、`roles`（角色库；`employee_id` 弃用列保留）、`team_members`（班底，行自增主键即工牌 + 副本列）、`task`（大/小任务：合同 MD、成员链（站点=工号数字，legacy 名字串兼容）、链游标 -1=未开始、重试计数、状态说明、blockedFrom、work_dir 分配后固定）、`task_members`（任务成员副本，建任务整班复制；领队主持行 `name='项目牧羊人'`、`main_task_id` 空）、`attempts`（一行一次尝试：kind=initial/stage/retry/reassign、一次性 token、`task_member_id` 归属精确到副本行、进度 JSON、结果、变更文件）、`events`（只追加审计）、`mail_messages`（收件箱按 (team_id, employee_id) 分箱，`message_id` 幂等）、`decisions`（升级决策）、`task_status_changes`、`usage_detail` + `usage_daily_total`（用量，DB 即唯一存储）。
 - **写路径纪律**：无外键/CHECK/UNIQUE，规则全在写入代码；团队写 = 单 `BEGIN IMMEDIATE` 事务内 DELETE 该团队全部行 + **原号重 INSERT**（崩溃要么整体回滚要么整体生效，主键号稳定供 UI 引用）。时间列一律 `*_time`（Unix 毫秒）、枚举 TEXT（合法值写在列注释）、JSON 存 TEXT。
 - **schema.sql 与 db.ts 双份**：[schema.sql](src/host/state/schema.sql) 必须与 `src/host/state/db.ts` 内嵌 `SCHEMA_SQL` 常量**逐字一致**（bundle 内读不到同目录资产故内嵌；schema.sql 是审核对照副本）。改表 = `DB_SCHEMA_VERSION` +1，旧库在 `getDb` 里 ALTER + 回填。
-- **任务工作文档**：`<workspace>/<workRoot>/<team-slug>/`（默认 `teams/`）下 `README.md` + `tasks/tN-slug/contract.md`（幂等渲染）+ `notes.md`（create-only）。
+- **任务工作文档**（用户 2026-09-15 扁平化）：`<workspace>/teams/<主任务号>-slug/` —— **一个主任务一个目录**（团队名不进路径，主任务与其全部小任务共用），目录下 `留言板.md`（create-only，领队+全员共用一块）、每任务一份 `<任务号>-slug.纪要.md`（上半段宿主幂等渲染的合同视图 + 下半段纪要正文），以及只建目录、内容自由的 `计划/`、`文档/`。旧布局（`tasks/tN-slug/`、`sub/`、`contract.md`、`notes.md`、团队 `README.md`）不迁移、不兼容。
 
 ## 流程大白话（先看这个，小学生版）
 

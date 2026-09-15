@@ -18,8 +18,8 @@
         # 这一个根——一个 eteams.db、一份成员库、一份用量台账；相对路径 =
         # per-workspace（<workspace>/<stateDir>，旧口径）。
         stateDir: C:/Users/epat/.eteams
-        # Per-team working directory root: `<workspace>/<workRoot>/<team-slug>/`
-        # (README.md, tasks/, notes.md — see docs/12).
+        # Task working directory root: `<workspace>/<workRoot>/<主任务号>-slug/`
+        # (一个主任务一个目录：留言板.md + <任务号>-slug.纪要.md + 计划/ + 文档/).
         workRoot: teams
         # Hard cap on concurrently existing members per team.
         maxMembers: 20

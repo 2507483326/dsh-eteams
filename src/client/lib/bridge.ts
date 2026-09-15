@@ -28,6 +28,9 @@ export const SELECT_TEAM_EVENT = 'eteams:select-team';
 /** Custom window event: a surface asks the panel to open the 成员 tab (roster page). */
 export const GOTO_ROSTER_EVENT = 'eteams:goto-roster';
 
+/** Custom window event: a surface asks the panel to open the 团队 page (card grid). */
+export const GOTO_TEAM_EVENT = 'eteams:goto-team';
+
 /** Custom window event: a surface asks the panel to open the Tasks page (CustomEvent detail: taskId). */
 export const GOTO_TASK_EVENT = 'eteams:goto-task';
 
@@ -43,6 +46,9 @@ let pendingGotoAdd = false;
 
 /** Pending 成员-tab jump signal — same mount-time consumption. */
 let pendingGotoRoster = false;
+
+/** Pending 团队-page jump signal — same mount-time consumption. */
+let pendingGotoTeam = false;
 
 /** Pending team selection (teamId) — consumed once on panel mount. */
 let pendingSelectTeam: string | null = null;
@@ -61,6 +67,13 @@ export function consumePendingGotoAdd(): boolean {
 export function consumePendingGotoRoster(): boolean {
   const value = pendingGotoRoster;
   pendingGotoRoster = false;
+  return value;
+}
+
+/** Whether a 团队-page jump is waiting; consumes it (one-shot). */
+export function consumePendingGotoTeam(): boolean {
+  const value = pendingGotoTeam;
+  pendingGotoTeam = false;
   return value;
 }
 
@@ -95,6 +108,8 @@ export function stageTeamSignals(
   opts: {
     memberBuilder?: boolean;
     roster?: boolean;
+    /** Land on the 团队 page（/team，卡片栅格，不开新增弹窗）。 */
+    team?: boolean;
     teamId?: string;
     /** Open the Tasks page（/tasks/:taskId）on landing. */
     taskId?: number;
@@ -107,6 +122,10 @@ export function stageTeamSignals(
   if (opts.roster === true) {
     pendingGotoRoster = true;
     dispatchSignal(GOTO_ROSTER_EVENT);
+  }
+  if (opts.team === true) {
+    pendingGotoTeam = true;
+    dispatchSignal(GOTO_TEAM_EVENT);
   }
   if (opts.teamId !== undefined) {
     pendingSelectTeam = opts.teamId;
@@ -189,8 +208,12 @@ export function activateConversationTab(): boolean {
  * (`<div role="tablist"><button role="tab" onClick={() => actions.setView(id)}>`).
  * Only the first tier of {@link activateETeamsTab} (exact-label tab buttons),
  * with the same exclusions ([data-eteams] DOM, open menu/dialog/listbox).
+ *
+ * Exported for the 待决策红点 injector (features/activity/teamTabDot): the badge
+ * must land on exactly the element this module treats as the 团队 tab, so both
+ * sides share one lookup instead of forking the selector.
  */
-function findETeamsTabButton(): HTMLButtonElement | undefined {
+export function findETeamsTabButton(): HTMLButtonElement | undefined {
   if (typeof document === 'undefined') return undefined;
   const excluded = (el: Element): boolean => el.closest(EXCLUDED_ANCESTORS) !== null;
   const textOf = (el: Element): string => (el.textContent ?? '').trim();

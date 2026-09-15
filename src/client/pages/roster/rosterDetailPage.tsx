@@ -219,7 +219,7 @@ export function RosterDetailPage({ members, team, onDeleted }: RosterDetailPageP
                 value={detailDraftName}
                 onChange={(e) => setDetailDraftName(e.target.value)}
                 aria-label="角色名称"
-                className="h-9 max-w-[420px] text-lg font-semibold"
+                className="h-9 w-full text-lg font-semibold"
               />
             ) : (
               <div className="text-lg font-semibold tracking-tight text-foreground">
@@ -232,7 +232,7 @@ export function RosterDetailPage({ members, team, onDeleted }: RosterDetailPageP
                 onChange={(e) => setDetailDraftProfile(e.target.value)}
                 aria-label="角色简介"
                 placeholder="一句话简介，展示在角色列表卡片上"
-                className="mt-1.5 h-8 max-w-[420px] text-sm"
+                className="mt-1.5 h-8 w-full text-sm"
               />
             ) : (
               <>
@@ -282,10 +282,9 @@ export function RosterDetailPage({ members, team, onDeleted }: RosterDetailPageP
         <div className={cn(SECTION_TITLE_CLASS, 'flex items-center gap-2')}>
           <span>角色手册（Markdown）</span>
         </div>
-        {/* root 提示行只在手册为空时显示（用户反馈：有内容后撤）——注入说明
-        由页头库内简介交代，这句只在空手册的引导场景出现；以已保存的
-        persona_md 为准，编辑中不打断。 */}
-        {detail.isRoot === true && (detail.personaMd ?? '').trim() === '' && (
+        {/* root 提示行：编辑态常显（用户反馈：手册有内容后编辑时看不到注入
+        说明），只读态仍只在空手册的引导场景出现；以已保存的 persona_md 为准。 */}
+        {detail.isRoot === true && (detailEditing || (detail.personaMd ?? '').trim() === '') && (
           <div className={cn(MUTED_CLASS, 'mb-2 text-sm')}>
             这是注入主对话的特殊角色：保存的手册(MD)会注入主对话窗口的 system 提示词；该角色不能加入团队。
           </div>

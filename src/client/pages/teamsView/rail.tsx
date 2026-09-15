@@ -35,9 +35,6 @@ const RAIL_CLASS = `flex w-[84px] shrink-0 flex-col gap-[3px] border-r border-so
  * 208px（官网 15rem 等比收窄的 S24-2 加宽档）+ 右分隔线；列表自带连续左
  * 细线（官网 `border-l border-slate-100`，token 化走 --border）。 */
 const RAIL_WIDE_CLASS = `flex w-[208px] shrink-0 flex-col border-r border-solid pr-4 pt-1 ${BORDER_L1_CLASS}`;
-/** 宽栏分组标题（官网 h5：`text-sm mb-3 font-semibold text-slate-900` 的
- * token 版——D22d 侧栏全档 14px/24）。 */
-const RAIL_TITLE_CLASS = 'mb-3 text-sm font-semibold leading-6 text-foreground';
 /** 宽栏导航列表（官网 ul：`space-y-2 border-l` 的 token 版）。 */
 const RAIL_LIST_CLASS = `space-y-2 border-l border-solid ${BORDER_L1_CLASS}`;
 
@@ -109,11 +106,10 @@ export function PanelRail({ railWide }: PanelRailProps): ReactNode {
   // activeNav 兜底同口径）。
   const activeTab = navIdOfPath(location.pathname);
   return railWide ? (
-    /* docs/22 S22-2 宽栏：官网 docs 侧栏签名——分组标题 + 连续左细线列表 +
-      链接自带左边线三态（激活 = sky 文字 + 同色左线 + semibold）；宽栏筛选
-      框已随用户迭代 2026-09-08 撤除。 */
+    /* docs/22 S22-2 宽栏：官网 docs 侧栏签名——连续左细线列表 + 链接自带左
+       边线三态（激活 = sky 文字 + 同色左线 + semibold）；分组标题已随用户
+       迭代 2026-09-15 撤除，宽栏筛选框已随用户迭代 2026-09-08 撤除。 */
     <div className={RAIL_WIDE_CLASS}>
-      <h5 className={RAIL_TITLE_CLASS}>团队面板</h5>
       <div className={RAIL_LIST_CLASS}>
         {NAV_ITEMS.map((t) => (
           <button

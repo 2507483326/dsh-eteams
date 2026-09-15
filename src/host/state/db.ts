@@ -1319,6 +1319,21 @@ export function hashName(name: string): number {
 // 可逐字还原。
 // --------------------------------------------------------------------------
 
+/**
+ * 剥除手册开头的 YAML frontmatter 围栏（仅识别文档首块的成对 `---`，
+ * CRLF 兼容；无围栏原样返回）。
+ *
+ * persona_md 只存正文：frontmatter（name/description/emoji/color）不落库。
+ * 它没有任何消费方，而写进去只会坏渲染——读侧宿主 MarkdownText 无
+ * frontmatter 扩展（`---` 变分隔线、后面几行被末尾 `---` 吞成 setext 标题），
+ * 编辑侧 MDXEditor 又把它变成不可见的弹窗节点。写库时剥掉，读路径按普通
+ * Markdown 原样读出，两端都不必再做「这段是不是 frontmatter」的判断。
+ */
+const FRONTMATTER_FENCE_RE = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/;
+export function stripFrontmatter(md: string): string {
+  return md.replace(FRONTMATTER_FENCE_RE, '');
+}
+
 /** 把 PersonaRecord 烘成 persona_md 全文（六字段 + 可选手册一体）。 */
 export function personaToMd(persona: PersonaRecord, name: string): string {
   // 简介（v3）独立成 roles.profile 列，不再烘进手册——persona_md 只烘
@@ -1333,9 +1348,12 @@ export function personaToMd(persona: PersonaRecord, name: string): string {
     ...persona.rules.map((r) => `  - ${r}`),
     `- 执行提示：${persona.executionPrompt}`,
   ].join('\n');
-  const playbook = persona.personaMd !== undefined && persona.personaMd.trim() !== ''
-    ? `${summary}\n\n---\n\n# 角色手册\n\n${persona.personaMd.trim()}`
-    : summary;
+  // 手册开头的 frontmatter 不落库（见 stripFrontmatter）：剥完为空则整本
+  // 只剩结构摘要。
+  const manual =
+    persona.personaMd === undefined ? '' : stripFrontmatter(persona.personaMd.trim()).trim();
+  const playbook =
+    manual !== '' ? `${summary}\n\n---\n\n# 角色手册\n\n${manual}` : summary;
   return playbook;
 }
 

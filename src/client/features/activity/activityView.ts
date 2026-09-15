@@ -65,7 +65,10 @@ export interface PendingAction {
  * 主题优先取事件自带 `taskSubject`，缺失时按 `taskId` 现查快照任务集（旧
  * 运行时兼容）；任务已删 → null。
  */
-export function activityRowsOf(team: TeamSnapshot): ActivityRow[] {
+export function activityRowsOf(team: TeamSnapshot | undefined): ActivityRow[] {
+  // 无团队（看板在尚未建队时照常渲染，用户 2026-09-15「看板，团队为空时，
+  // 还是显示原来的东西，不需要还没有团队提示」）→ 空时间线。
+  if (team === undefined) return [];
   const subjectById = new Map<number, string>(team.tasks.map((t) => [t.taskId, t.subject]));
   return [...team.latestEvents]
     .sort((a, b) => b.at - a.at || b.seq - a.seq)
@@ -88,7 +91,8 @@ export function activityRowsOf(team: TeamSnapshot): ActivityRow[] {
  * - 问答：跳转目标 = 弹窗实际落点 `deliverySessionId`（v14）；旧行缺列时退
  *   化为该任务主对话、再退提问会话 `askingSessionId`；isMain 按记录透传。
  */
-export function pendingActionsOf(team: TeamSnapshot): PendingAction[] {
+export function pendingActionsOf(team: TeamSnapshot | undefined): PendingAction[] {
+  if (team === undefined) return [];
   const taskById = new Map(team.tasks.map((t) => [t.taskId, t]));
   const tasks: PendingAction[] = [];
   for (const d of team.pendingDecisions) {
@@ -170,7 +174,8 @@ const ASK_STATUS_LABEL: Record<string, string> = {
  * 口径与 {@link pendingActionsOf} 一致（决策=任务主对话；问答=弹窗落点→任务
  * 主对话→提问会话）；任务主题按快照现查，已删任务退化为 null。
  */
-export function decidedActionsOf(team: TeamSnapshot): DecidedAction[] {
+export function decidedActionsOf(team: TeamSnapshot | undefined): DecidedAction[] {
+  if (team === undefined) return [];
   const taskById = new Map(team.tasks.map((t) => [t.taskId, t]));
   const items: DecidedAction[] = [];
   for (const d of team.resolvedDecisions ?? []) {

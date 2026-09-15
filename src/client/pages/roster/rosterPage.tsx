@@ -137,14 +137,23 @@ export function RosterPage({
         {/* 页头（用户迭代 2026-09-03）：搜索框与「角色」标题平齐（同一行），
           右侧留新增入口；空列表不渲染搜索框。 */}
         <div className="mb-2.5 flex items-center gap-2">
-          <h3 className={cn(LIST_TITLE_CLASS, 'flex-none')}>角色</h3>
-          <span className={LIST_COUNT_CLASS}>{members.length} 个</span>
+          {/* 标题 + 计数（用户迭代 2026-09-15「共x 个，然后底部对齐，而不是
+          居中」）：计数补「共」，并与标题**底部对齐**——原先两件同受外层
+          items-center 摆布，计数在标题行高里居中；此处把标题/计数收进一条
+          items-baseline 子行，右移不再受输入框/按钮高度牵动。 */}
+          <div className="flex min-w-0 flex-none items-baseline gap-2">
+            <h3 className={cn(LIST_TITLE_CLASS, 'flex-none')}>角色</h3>
+            <span className={LIST_COUNT_CLASS}>共 {members.length} 个</span>
+          </div>
           <span className="min-w-0 flex-1" />
           {members.length > 0 && (
+            // 搜索框高度对齐「新增角色」按钮档（用户迭代 2026-09-15「新增
+            // 角色和搜索框高度不一致，搜索框高度变小保持一致」）：sm 按钮 h-8，
+            // Input 默认 h-9 高一档，就地 h-8 覆盖。
             <Input
               value={query}
               placeholder="搜索角色名…"
-              className="w-[200px]"
+              className="h-8 w-[200px]"
               onChange={(e) => {
                 setQuery(e.target.value);
                 setPage(0); // 新搜索从头翻页

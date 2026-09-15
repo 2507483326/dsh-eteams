@@ -53,39 +53,17 @@ export const EMPTY_EDIT: DraftEdit = {
   rulesText: '',
 };
 
-/**
- * 手册 frontmatter 的 description 一段话——构建师按 agency 规格自写的简介，
- * 确认表单在构建师漏报 profile 时拿它预填（docs/19.20，结构化提取而非合成）。
- * 规格：仅取文档开头围栏块（\r?\n CRLF 兼容，同 mdEditor 口径）内行首
- * description: 后的单行纯量，两侧成对引号剥除；块标量指示符（>/| 开头）
- * 视为缺失返回空串。
- */
-const FRONTMATTER_FENCE_RE = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
-const DESCRIPTION_LINE_RE = /^description:[ \t]+(.*)$/;
-
-export function profileFromManual(personaMd: string | undefined): string {
-  const fence = FRONTMATTER_FENCE_RE.exec(personaMd ?? '');
-  if (fence === null) return '';
-  for (const line of (fence[1] ?? '').split(/\r?\n/)) {
-    const m = DESCRIPTION_LINE_RE.exec(line);
-    if (m === null) continue;
-    const raw = (m[1] ?? '').trim();
-    if (/^[>|]/.test(raw)) return '';
-    const quoted = raw.length >= 2 && ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'")));
-    return (quoted ? raw.slice(1, -1) : raw).trim();
-  }
-  return '';
-}
-
 export function fromBuildDraft(d: BuildDraft): DraftEdit {
   return {
     // 草稿浅合并累积（docs/19.6.2），构建中 name/role 允许尚未上报——归一
     // 成空串，防 undefined 溢进表单态（受控 input 与下游 trim 链会崩）。
     name: d.name ?? '',
     role: d.role ?? '',
-    // 简介预填（docs/19.20）：构建师漏报（null/undefined）时退回手册
-    // frontmatter 的 description；空串= 显式留空，不预填。
-    profile: d.profile ?? profileFromManual(d.personaMd),
+    // 简介只取构建师上报值：persona_md 不再带 frontmatter（写库/上报边沿
+    // 已剥），也不再从手册里猜 description 当简介——那种解析口径随手册
+    // 形态漂移，误差大。漏报时置空串（宿主侧 requireAwaitingDraft 本就
+    // 拒绝空 profile 进待确认）。
+    profile: d.profile ?? '',
     duty: d.duty ?? '',
     style: d.style ?? '',
     skills: d.skills ?? '',

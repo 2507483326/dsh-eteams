@@ -38,6 +38,7 @@
  *
  * @module dsh-eteams/client/sessionState
  */
+import { readClientService } from './serviceFace';
 
 /** Snapshot-store face（dsh-client-store 家族：裸 getSnapshot + subscribe）。 */
 export interface SnapshotStoreFace<T> {
@@ -113,7 +114,10 @@ export function installSessionState(ctx: unknown): void {
  * 不在当前会话列表中」（用户 2026-09-14 复现）。
  */
 function sessionsFaceOf(): SessionsFace | null {
-  const face = (clientCtx as { sessions?: unknown } | null)?.sessions;
+  // 经 readClientService 读取（先反射读再兜底属性读）：服务当前不活跃时裸
+  // 属性访问会抛 cannot get required service "sessions" in inactive context
+  // （用户 2026-09-15 团队面板渲染失败根因），该助手一律降级回 undefined。
+  const face = readClientService(clientCtx, 'sessions');
   if (typeof face !== 'object' || face === null) return null;
   return face as SessionsFace;
 }
