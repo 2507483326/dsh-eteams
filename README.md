@@ -1,8 +1,5 @@
 <div align="center">
 
-<!-- 可选：项目 Logo。把图片存到 docs/images/logo.png 后取消下一行注释
-<img src="docs/images/logo.png" alt="ETeams" width="88" />
--->
 
 # ETeams
 
@@ -15,18 +12,9 @@
 [![Node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-339933?style=flat-square)](package.json)
 [![Platform](https://img.shields.io/badge/DeepSeek%20Harness-plugin-6E56CF?style=flat-square)](https://github.com/deepseek-ai)
 
-[安装](#安装) · [三步上手](#三步上手) · [核心能力](#核心能力) · [界面](#界面) · [工具一览](#工具一览) · [配置](#配置)
-
 </div>
 
----
 
-<!-- ⬇ 截图位 ①：保存到 docs/images/panel-board.png（建议 1600×900，2x 更佳） -->
-<p align="center">
-  <img src="docs/images/panel-board.png" alt="ETeams 面板 · 看板" width="880" />
-  <br />
-  <sub><b>看板</b> —— 团队目标、成员状态与实时动态，一屏总览</sub>
-</p>
 
 ## 这是什么
 
@@ -46,7 +34,7 @@ ETeams 给 DeepSeek Harness 装上「一支团队」：你把目标丢给**领�
 | **3 · 创建任务** | 对话里说清目标 → 领队拆解、你批准 → 自动派发执行，全程在面板围观。      |
 
 ## 界面
-![看板]('./pic/看板.png')
+![看板](./pic/看板.png)
 ![角色](./pic/角色.png)
 ![团队](./pic/团队.png)
 ![任务](./pic/任务.png)
