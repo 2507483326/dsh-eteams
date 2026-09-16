@@ -279,10 +279,30 @@ export function findETeamsTabButton(): HTMLButtonElement | undefined {
  * not-started hero screen): the tab buttons still exist in the DOM but the
  * view ring renders nothing, so clicking them would silently no-op. Callers
  * use this to pick the landing surface (tab click vs overlay panel).
+ *
+ * NOTE（用户 2026-09-16）: this probe is NOT sufficient on its own — it cannot
+ * tell "the tab of the pane the user is looking at" from a tab that merely has
+ * layout (a session surface parked elsewhere, off-screen, or faded out still
+ * reports an offsetParent). Prefer {@link teamsTabUsable} as the gate.
  */
 export function teamsTabVisible(): boolean {
   const tab = findETeamsTabButton();
   return tab !== undefined && tab.offsetParent !== null;
+}
+
+/**
+ * Whether the host's 团队 tab is a usable landing surface for this entry.
+ *
+ * `heroRowPresent` = the not-started (hero) screen is showing — passed in by
+ * the caller because the landmark selector lives with the hero button injector
+ * （pages/heroTeamsButton）。On that screen the host's view ring is not usable
+ * at all, so every entry must land on our own full-page 团队页 instead of
+ * clicking a tab（用户 2026-09-16「点击对话框上面的 标准模式 旁边的 团队」：
+ * 先前按 {@link teamsTabVisible} 决定，探针为真却把面板挂进看不见的会话视图面
+ * → 表现为「没反应」）。
+ */
+export function teamsTabUsable(heroRowPresent: boolean): boolean {
+  return !heroRowPresent && teamsTabVisible();
 }
 
 /**

@@ -159,14 +159,14 @@ export function apply(ctx: Context): void {
   // 会话未开始的新会话屏（hero）没有可供插件入驻的 additive 槽位——
   // hero 行两个席位都是 single 且已被宿主占用——因此走 DOM 注入：
   // 在「标准模式」旁补一枚团队按钮（heroTeamsButton 模块头有完整推理）。
-  // 落点 = 团队页卡片栅格（team 信号显式落 /team；创建走页头「＋ 新增团队」
-  // 按钮，不再自开弹窗——用户反馈 2026-09）；对话未开始时宿主渲染不出标签环，
-  // enterTeamsPanel 会改落整页团队页（teamsPanel 模块头有推理）。用户
-  // 2026-09-15「点新增团队没有跳到对应的团队卡片」：无信号时面板按
-  // ui.activeNav 恢复上次页签；落点自 2026-09-16 起由面板路由直接消费
-  // （lib/bridge 的 pendingLandingPath），整页团队页与宿主页签两条路都按
-  // 入口声明的目标页打开。
-  guard('hero.teams-button', () => installHeroTeamsButton(() => enterTeamsPanel({ team: true })));
+  // 落点（用户 2026-09-16「点击对话框上面的 标准模式 旁边的 团队，应该跳面板
+  // 页面」+「点击还是进入到团队而不是看板」）：这枚按钮只是**面板入口**，不带
+  // `{ team: true }`——面板按自己的页签语义开（新会话经 bundle 重载后 store 新建，
+  // 落默认页 看板；同页内再点则回到上次所在页签），不再被强行拽到团队卡片栅格。
+  // 只有明确指向团队页的入口（弹层里的「＋ 新增团队」，用户 2026-09-15
+  // 「点新增团队没有跳到对应的团队卡片」）才带 team 信号。对话未开始时宿主渲染
+  // 不出可用的标签环，enterTeamsPanel 会改落整页团队页（teamsPanel 模块头有推理）。
+  guard('hero.teams-button', () => installHeroTeamsButton(() => enterTeamsPanel()));
 
   guard('conversation.chat.commandview', () =>
     ctx.slots.inject('conversation.chat.commandview', () =>

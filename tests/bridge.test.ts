@@ -20,6 +20,7 @@ import {
   openTask,
   requestCloseTeamsPage,
   stageTeamSignals,
+  teamsTabUsable,
   teamsTabVisible,
 } from '../src/client/lib/bridge';
 
@@ -215,6 +216,33 @@ describe('teamsTabVisible (DOM stub)', () => {
     const { restore } = stubDocument(el('div', { ownText: 'nothing' }));
     try {
       expect(teamsTabVisible()).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+});
+
+describe('teamsTabUsable (未开始屏一律不用宿主 tab)', () => {
+  it('is false on the not-started screen even when a tab has layout', () => {
+    // 用户 2026-09-16「没反应」：hero 屏上标签环照样有 offsetParent，点它会把
+    // 面板挂进看不见的会话视图面——hero 行在时一律不算可用。
+    const tab = el('button', { attrs: { role: 'tab' } });
+    tab.ownText = ETEAMS_TAB_LABEL;
+    tab.offsetParent = el('div');
+    const { restore } = stubDocument(tab);
+    try {
+      expect(teamsTabVisible()).toBe(true);
+      expect(teamsTabUsable(true)).toBe(false);
+      expect(teamsTabUsable(false)).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it('is false when no tab is usable at all', () => {
+    const { restore } = stubDocument(el('div', { ownText: 'nothing' }));
+    try {
+      expect(teamsTabUsable(false)).toBe(false);
     } finally {
       restore();
     }

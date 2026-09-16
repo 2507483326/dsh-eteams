@@ -10,8 +10,8 @@
  * tab ring on the not-started screen. {@link enterTeamsPanel} picks the
  * landing surface instead:
  *
- * 1. the real 团队 tab when it is visible (in-conversation) — the sanctioned
- *    `actions.setView` path;
+ * 1. the real 团队 tab when it is **usable**（会话已开始且标签环真能用，
+ *    {@link teamsTabUsable}）——the sanctioned `actions.setView` path;
  * 2. otherwise the full-page 团队页: the whole {@link ETeamsView} on a
  *    plugin-owned fixed layer that fills the app's CONTENT PANE — measured
  *    live from the hero row's ancestor chain, so the page never covers the
@@ -20,6 +20,12 @@
  *    root is a fluid flex row, not a fixed-width card). This is what the
  *    hero button（标准模式 neighbor）and the composer popup land on while the
  *    conversation has not started.
+ *
+ * 未开始屏（hero 行在）一律走 2：用户 2026-09-16 报「点击对话框上面的 标准模式
+ * 旁边的 团队」表现为「没反应」——hero 屏上宿主标签环也能通过 offsetParent
+ * 可见性探测，点它会把面板挂进用户看不见的会话视图面；改由 {@link teamsTabUsable}
+ * 把关后，这块屏上的入口必定落我们自己的覆盖层（并带落点路径，见
+ * lib/bridge 的 pendingLandingPath）。
  *
  * 层级（用户反馈 2026-09：设置弹窗被拦）：页面用 z-[500]——压过宿主内容层
  * （conversation/hero 均 z-auto），但低于宿主模态层（dsh-client-ui-primitives
@@ -70,7 +76,7 @@ import {
   CLOSE_TEAMS_PAGE_EVENT,
   activateETeamsTab,
   stageTeamSignals,
-  teamsTabVisible,
+  teamsTabUsable,
 } from '../lib/bridge';
 import { errorMessageOf } from '../lib/errors';
 import { BackButton } from '../components/backButton';
@@ -119,15 +125,25 @@ let overlayContainer: HTMLDivElement | null = null;
 
 /**
  * Enter the 团队面板: stage the requested signals, then activate the real
- * 团队 tab when the host renders it visibly, else open the full-page
+ * 团队 tab when the host renders it **usably**, else open the full-page
  * 团队页.
+ *
+ * 判据是 {@link teamsTabUsable}（未开始屏一律不算可用）而不是裸的 tab 可见性
+ * 探针：用户 2026-09-16「点击对话框上面的 标准模式 旁边的 团队」实测「没反应」
+ * ——hero 屏上宿主那圈标签环通过了 offsetParent 探测（指针点不到/挂在别处会话面
+ * 里也算「有 offsetParent」），点击落进了看不见的宿主视图区，面板等于没出现。
+ * 未开始屏一律落我们自己的整页团队页（z-[500] 覆盖层，必定可见）。
  */
 export function enterTeamsPanel(opts: TeamsPanelOptions = {}): void {
   stageTeamSignals(opts);
-  if (teamsTabVisible()) {
+  const heroRowPresent =
+    typeof document !== 'undefined' && document.querySelector(HERO_ROW_SELECTOR) !== null;
+  if (teamsTabUsable(heroRowPresent)) {
+    recordClientDiag('panel-entry', `hero=${heroRowPresent} action=tab`);
     activateETeamsTab();
     return;
   }
+  recordClientDiag('panel-entry', `hero=${heroRowPresent} action=overlay`);
   openTeamsOverlay();
 }
 

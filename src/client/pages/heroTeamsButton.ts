@@ -17,11 +17,12 @@
  *   whole row including our node); the observer re-injects on the next hero
  *   render, so new-chat screens always get the button;
  * - click → the installed click handler: {@link enterTeamsPanel} (real 团队
- *   tab when the host renders it visibly, the full-screen 团队页 on the
- *   not-started screen — the host cannot render its tab ring before the
- *   session's first prompt, see teamsPanel.ts). The handler is INJECTED by
- *   the composition root so this DOM module stays free of the React import
- *   graph.
+ *   tab when the host renders it **usably**, the full-screen 团队页 on the
+ *   not-started screen — the host cannot render a usable tab ring before the
+ *   session's first prompt, see teamsPanel.ts / teamsTabUsable). The handler is
+ *   INJECTED by the composition root so this DOM module stays free of the React
+ *   import graph; it carries no landing page of its own（这枚按钮只是面板入口，
+ *   落点用面板自己的页签语义——用户 2026-09-16「点击还是进入到团队而不是看板」）。
  *
  * M6 结构性改造（docs/44 44.3，行为零变更）：按 lib 模板横幅分区（样式类
  * = 注入样式表字符串 HERO_BUTTON_CSS → 常量与映射表 = 选择器/标记/样式 id
