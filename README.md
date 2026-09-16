@@ -18,9 +18,9 @@
 
 ## 这是什么
 
-ETeams 给 DeepSeek Harness 装上「一支团队」：你把目标丢给**领队**，领队把目标拆成任务、按**执行链**派给**成员**，每个成员在自己的子会话里独立干活，进度、失败、决策全程落库、实时可见。
+ETeams 给 DeepSeek Harness 装上「一支团队」：你把目标丢给**领队**，领队把目标拆成任务、按**执行链**派给**成员**，每个成员在自己的子会话里独立干活，进度、失败、决策实时可见。
 
-不是「一个大模型假装多个人」，而是真实的多会话协作：**每个任务都是新人新会话**，谁在做、做到哪一步、出了什么问题，看得见、查得到、管得住。
+不是「一个大模型假装多个人」，而是真实的多会话协作，你可以自由调度成员，并给每个成员不同的模型。
 
 - **包名** `dsh-eteams`，插件 id `eteams`，双端单包（宿主端 + 浏览器端）。
 - **自包含**：构建产物已内联全部依赖，无运行时安装负担；状态存本机 SQLite（内置 `node:sqlite`），不联网、不上传。
@@ -54,7 +54,7 @@ dsh plugin --profile desktop add dsh-eteams
 **方式三：本地源码（开发调试）**
 
 ```bash
-git clone https://github.com/2507483326/eTeam && cd eTeam
+git clone <repo-url> && cd eTeam
 pnpm install && pnpm build
 dsh plugin --profile desktop add C:\eTeam
 ```
