@@ -39,10 +39,10 @@ import { Card } from '../../components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs';
 import { Pill } from '../shared/components';
 import {
+  BOARD_PANEL_CARD_CLASS,
   LIST_COUNT_CLASS,
   LIST_TITLE_CLASS,
   MUTED_CLASS,
-  PANEL_CARD_CLASS,
 } from '../shared/styles';
 import { JumpConversationButton } from './jumpConversationButton';
 
@@ -54,6 +54,14 @@ const ID_COL_CLASS = `${LIST_COUNT_CLASS} w-10 shrink-0 tabular-nums`;
 const CONVERSATION_COL_CLASS = `${LIST_COUNT_CLASS} max-w-[7rem] shrink-0 truncate`;
 /** 详情列：吃余宽、单行截断（`title` 兜底全文）。 */
 const DETAIL_COL_CLASS = 'min-w-0 flex-1 truncate text-sm text-foreground';
+
+/* 本卡高度口径（用户 2026-09-16「三个面板应该是占满整屏的……使用flex布局，限制
+ * 最小高度」+「决策面板 没有最小高度了」+「最小高度太小了，至少300px 然后待决策
+ * 中没有数据时，没有待决策的提示也没有看见了」）：与动态卡共用
+ * BOARD_PANEL_CARD_CLASS（flex 吃看板余高 + min-h-[300px] 下限）——下限太低时
+ * 卡身固定件就吃满整高，空态行（「暂无待决策」）被挤到可视区外，看着既没下限也
+ * 丢了空态提示；余高不足时卡先冻在下限，溢出的列表内容由页签内容区的
+ * `min-h-0 flex-1 overflow-y-auto` 内滚吸收——内部滚动条优先，不撑出外部滚动条。 */
 
 /**
  * 决策面板一行（待决策 / 已决策共用）：一行三列 = `#任务ID` · `对话名称` ·
@@ -115,10 +123,13 @@ export function DecisionPanel({
     if (tab === 'pending' && team !== undefined) markPendingDecisionsSeen(team);
   }, [tab, team]);
   return (
-    // 看板等分布局（用户 2026-09-15）：卡成弹性列吃 1/2 余高——标题与页签
-    // 条固定（shrink-0），列表区 flex-1 min-h-0 + 内滚（外层看板根定高，
-    // 卡内溢出不再撑出页面滚动条）。
-    <Card className={`flex min-h-0 flex-1 flex-col ${PANEL_CARD_CLASS}`}>
+    // 用户 2026-09-16「三个面板应该是占满整屏的，和团队这种应该是一样的啊，使用
+    // flex布局，限制最小高度」+「决策面板 没有最小高度了」+「至少300px 然后待决策
+    // 中没有数据时，没有待决策的提示也没有看见了」：本卡与动态卡按 flex 吃满看板
+    // 余高（三者合起来占满整屏），并保 300px 的下限——下限要留得下卡身固定件与
+    // 空态行/几行列表（口径见 BOARD_PANEL_CARD_CLASS）。标题与页签条固定
+    // （shrink-0），故压缩时页签条始终完整可见。
+    <Card className={BOARD_PANEL_CARD_CLASS}>
       <div className="mb-2.5 flex shrink-0 items-center gap-2">
         <h3 className={LIST_TITLE_CLASS}>决策面板</h3>
       </div>

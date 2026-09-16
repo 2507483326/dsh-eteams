@@ -33,6 +33,10 @@ import {
   readAllPendingAsksSync,
   readAskSync,
 } from '../src/host/state/asks';
+import {
+  registerCaptainChild,
+  unregisterCaptainChild,
+} from '../src/host/runtime/captainChildRegistry';
 import { insertTeamRow, withTeamTx, writeTeamInTx } from '../src/host/state/store';
 import { joinPath } from '../src/host/runtime/base';
 import { LEADER_NAME } from '../src/host/runtime/roster';
@@ -342,6 +346,30 @@ describe('eteams_ask_user 弹窗目标主对话', () => {
     // v14 弹窗落点：主对话在线 → 落点=主对话 cap-1、is_main=true（决策面板跳这里）。
     expect(row?.deliverySessionId).toBe('cap-1');
     expect(row?.deliveryIsMain).toBe(true);
+  });
+
+  it('领队子代理提问 → 问答单落注册表任务锚（面板 #任务ID 列，用户 2026-09-16）', async () => {
+    // 用户 2026-09-16「主对话 领队 的问答（1 问）没有显示任务 ID」：领队分支
+    // 算出的注册表任务锚原先只用来查主会话、没写进视图——落库
+    // main_task_id=NULL，看板「决策面板」`#任务ID` 列恒为占位符 `—`。
+    const team = seedTeam();
+    registerCaptainChild('cap-child-1', String(team.id), root, '1', 'cap-1');
+    try {
+      const result = await callAsk(
+        askArgs(),
+        agentOf('cap-child-1'),
+        withLiveAgent(fakeCtx({ userQuestions: { ask: fakeAsk('A') } }), 'cap-1'),
+      );
+      expect(result).toMatchObject({ ok: true, mode: 'self' });
+      const row = readAskSync(root, String(result.askId));
+      expect(row?.askingKind).toBe('captain');
+      expect(row?.mainTaskId).toBe(1);
+      // 任务锚同时是弹窗目标主会话的取材口：落点仍是主对话 cap-1。
+      expect(row?.deliverySessionId).toBe('cap-1');
+      expect(row?.deliveryIsMain).toBe(true);
+    } finally {
+      unregisterCaptainChild('cap-child-1');
+    }
   });
 
   it('主对话在线但弹窗被拒 → 退回提问会话自身再试一次（两连弹）', async () => {

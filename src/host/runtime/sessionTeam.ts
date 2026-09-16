@@ -153,6 +153,33 @@ export function anchoredMainTaskOfCaller(
 }
 
 /**
+ * 调用会话视角的**主会话快照**（建任务时落 `task.main_session_id` 的值）：
+ * 领队子代理会话换回它主持的大任务登记的发起会话，其余会话按自身原样返回。
+ *
+ * 为什么建任务要过这一道（用户 2026-09-16「同一个 task 表里 main_session_id
+ * 两种格式并存」）：领队子代理拆解小任务时 `env.sessionId` 是**子会话 id**
+ * （`captainAgent` 自生成的裸 uuid），主对话是宿主建的会话（带 `session-`
+ * 前缀）——照抄会让同一对话的任务行一半前缀一半没有。id 形态是宿主与 eTeam
+ * 各自生成的命名空间，剥前缀会让 `agents.get/resume` 找不到会话，所以统一
+ * 方向是**来源**：任务行一律登记发起对话的主会话。
+ *
+ * 线索与 {@link anchoredMainTaskOfCaller} 同源：领队副本行（持久，`isLeader
+ * && session_id = 本子会话`——其 mainTaskId 即主持的大任务，大任务行的快照
+ * 就是发起会话）优先，注册表（进程内，重启后丢失）兜底；主会话/无领队会话
+ * 没有这两条线索，按自身判定（原判据不变）。空串返回 undefined（无会话来源
+ * 的任务保持未登记）。
+ */
+export function mainSessionSnapshotOf(team: TeamState, sessionId: string): string | undefined {
+  if (sessionId === '') return undefined;
+  const replica = team.taskMembers.find((r) => r.isLeader === true && r.sessionId === sessionId);
+  if (replica !== undefined && replica.mainTaskId !== null) {
+    const owner = team.tasks.find((t) => t.id === replica.mainTaskId)?.mainSessionId;
+    if (owner !== undefined && owner !== '') return owner;
+  }
+  return captainChildParentOf(sessionId) ?? sessionId;
+}
+
+/**
  * The 团队绑定 band for one assembly. `''` contributes nothing — only a
  * session with an active binding sees it. `liveTeam` resolves the current
  * on-disk snapshot (undefined = team deleted/archived → 失效提示).

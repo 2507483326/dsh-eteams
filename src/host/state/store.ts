@@ -543,7 +543,7 @@ function loadTasks(
       // 列保留在库里不 DROP）。
       'SELECT task_id, parent_id, subject, description, depend_tasks, member_chain_list, ' +
         'chain_cursor, status, current_member, retry_count, status_note, contract_md, ' +
-        'idempotency_note, work_dir, main_session_id, completed_time, ' +
+        'idempotency_note, work_dir, task_dir, main_session_id, completed_time, ' +
         'created_time, update_time FROM task WHERE team_id = ? ORDER BY task_id',
     )
     .all(teamId) as Array<{
@@ -561,6 +561,7 @@ function loadTasks(
     contract_md: string | null;
     idempotency_note: string | null;
     work_dir: string | null;
+    task_dir: string | null;
     main_session_id: string | null;
     completed_time: number | null;
     created_time: number;
@@ -597,6 +598,7 @@ function loadTasks(
       retryCount: row.retry_count,
       ...(row.status_note !== null ? { statusNote: row.status_note } : {}),
       ...(row.work_dir !== null ? { workDir: row.work_dir } : {}),
+      ...(row.task_dir !== null ? { taskDir: row.task_dir } : {}),
       ...(row.main_session_id !== null ? { mainSessionId: row.main_session_id } : {}),
       createdAt: row.created_time,
       updatedAt: row.update_time,
@@ -807,8 +809,8 @@ export function writeTeamInTx(tx: TeamTx, state: TeamState): void {
     'INSERT INTO task (task_id, team_id, parent_id, subject, description, depend_tasks, ' +
       'member_chain_list, chain_cursor, status, current_member, current_member_id, main_session_id, ' +
       'retry_count, status_note, contract_md, idempotency_note, ' +
-      'blocked_from, work_dir, completed_time, created_time, update_time) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'blocked_from, work_dir, task_dir, completed_time, created_time, update_time) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   );
   for (const t of state.tasks) {
     insTask.run(
@@ -830,6 +832,7 @@ export function writeTeamInTx(tx: TeamTx, state: TeamState): void {
       // blocked_from 弃用恒写 NULL（列保留不 DROP；用户迭代 2026-09-11）。
       null,
       t.workDir ?? null,
+      t.taskDir ?? null,
       t.completedAt ?? null,
       t.createdAt,
       t.updatedAt,

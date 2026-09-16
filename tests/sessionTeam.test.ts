@@ -20,6 +20,7 @@ import {
   conversationStarted,
   getSessionTeamBinding,
   getSessionTeamId,
+  mainSessionSnapshotOf,
   sessionTeamSection,
   setSessionTeam,
 } from '../src/host/runtime/sessionTeam';
@@ -403,6 +404,43 @@ describe('anchoredMainTaskOf（锚定判据：本会话的主任务容器，删�
     expect(
       anchoredMainTaskOf(team({ tasks: [mainTask(1, 's-other', 'ready')] }), ''),
     ).toBeUndefined();
+  });
+});
+
+describe('mainSessionSnapshotOf（任务行快照来源：领队子会话换回发起对话，用户 2026-09-16）', () => {
+  /** 领队副本行（已派发：session_id = 领队子会话，mainTaskId = 主持的大任务）。 */
+  function dispatchedLeader(childId: string, mainTaskId: number): TaskMemberRecord {
+    return { ...leaderRow(1), isLeader: true, sessionId: childId, mainTaskId };
+  }
+
+  it('领队副本行命中 → 换回它主持的大任务登记的发起会话（不靠注册表）', () => {
+    // 持久线索优先：宿主重启后注册表已空，副本行仍在。
+    const t = team({
+      taskMembers: [dispatchedLeader('s-child', 7)],
+      tasks: [mainTask(7, 'session-cap', 'start')],
+    });
+    expect(mainSessionSnapshotOf(t, 's-child')).toBe('session-cap');
+  });
+
+  it('副本行未登记（首次派发）→ 注册表记的直接父兜底', () => {
+    registerCaptainChild('s-child', '1', root, '7', 'session-cap');
+    expect(mainSessionSnapshotOf(team(), 's-child')).toBe('session-cap');
+  });
+
+  it('副本行的大任务快照为空 → 注册表兜底（不落空串）', () => {
+    const t = team({
+      taskMembers: [dispatchedLeader('s-child', 7)],
+      tasks: [mainTask(7, '', 'creating')],
+    });
+    registerCaptainChild('s-child', '1', root, '7', 'session-cap');
+    expect(mainSessionSnapshotOf(t, 's-child')).toBe('session-cap');
+  });
+
+  it('主对话/无任何线索的子会话 → 原样返回；空串 → undefined', () => {
+    const t = team();
+    expect(mainSessionSnapshotOf(t, 'session-cap')).toBe('session-cap');
+    expect(mainSessionSnapshotOf(t, 'stranger')).toBe('stranger');
+    expect(mainSessionSnapshotOf(t, '')).toBeUndefined();
   });
 });
 

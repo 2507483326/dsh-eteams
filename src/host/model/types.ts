@@ -241,8 +241,18 @@ export interface TaskRecord {
      等待，不再物化）——列保留在库里不 DROP，内存与类型不再读写。 */
   /** 当前状态说明（task.status_note；挂起原因等并入这列）。 */
   statusNote?: string;
-  /** 任务工作目录（相对工作区；分配后固定，旧任务按字面路径导入）。 */
+  /**
+   * 当前会话目录（task.work_dir，绝对路径）：建任务时把发起会话的工作区
+   * 盖在这里并**冻结**——任务归属哪个目录从此由任务行自己说了算，不再随
+   * 之后是谁在调用而漂移。小任务恒空，读取侧由 rootTaskOf 上溯主任务。
+   */
   workDir?: string;
+  /**
+   * 任务目录（task.task_dir，相对 work_dir）：`teams/<主任务号>-slug`，
+   * 建任务时分配、改主题时重算。绝对任务目录 = work_dir + task_dir。小任务
+   * 恒空（与主任务共用一块留言板/一个计划夹），读取侧 taskDirRel 上溯。
+   */
+  taskDir?: string;
   /**
    * 主会话 ID 快照（task.main_session_id，v5 落列 v6 改名）：建任务时登记
    * 的主会话 ID（对话工具=调用方会话；面板=绑定会话透传；导入=旧

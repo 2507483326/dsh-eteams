@@ -362,9 +362,13 @@ describe('lifecycle (offline full flow)', () => {
     expect(sub.parentId).toBe(groupId);
     // 十六轮 DA29：合同单字段回读（contract_md 列原样装回）。
     expect(sub.contractMd).toContain('支持 CSV 导出');
-    expect(group.workDir).toMatch(/^teams\//);
+    // 目录归属两列（用户 2026-09-16）：work_dir = 建任务时冻结的当前会话目录
+    // （绝对），task_dir = 相对的任务目录；小任务两列皆空、共用主任务目录。
+    expect(group.workDir).toBe(workspace);
+    expect(group.taskDir).toMatch(/^teams\//);
     expect(sub.workDir).toBeUndefined();
-    const groupDir = join(workspace, group.workDir!);
+    expect(sub.taskDir).toBeUndefined();
+    const groupDir = join(group.workDir!, group.taskDir!);
     expect(existsSync(join(workspace, 'teams', '导出功能团队'))).toBe(false);
     expect(existsSync(join(groupDir, '留言板.md'))).toBe(true);
     // 计划 / 文档两个夹由宿主只建目录（内容自由）；纪要每任务一份（含小任务）。
@@ -1190,12 +1194,13 @@ describe('面板手动建任务（docs/panelTaskCommission）', () => {
     });
     expect(task.status).toBe('creating');
     expect(task.parentId).toBeNull();
-    // 建大任务即全员铺副本（含领队）+ work_dir 即分配 + 文档树物化。
+    // 建大任务即全员铺副本（含领队）+ 目录两列即分配 + 文档树物化。
     expect(readTeam(created.teamId).taskMembers.filter((r) => r.mainTaskId === task.id)).toHaveLength(
       1,
     );
-    expect(task.workDir).toMatch(/^teams\//);
-    expect(existsSync(join(workspace, task.workDir!, minutesFileName(task)))).toBe(true);
+    expect(task.workDir).toBe(workspace);
+    expect(task.taskDir).toMatch(/^teams\//);
+    expect(existsSync(join(task.workDir!, task.taskDir!, minutesFileName(task)))).toBe(true);
     // task.created 事件带初始 status（审计可回溯「这个容器是创建中来的」）。
     const events = readEventsSync(root, created.teamId);
     const createdEvent = events.find((e) => e.type === 'task.created' && e.taskId === task.id);
@@ -1250,7 +1255,7 @@ describe('面板手动建任务（docs/panelTaskCommission）', () => {
       kind: 'group',
       status: 'creating',
     });
-    const oldDir = group.workDir!;
+    const oldDir = group.taskDir!;
     // 收口闸要求主任务下至少一个带「## 验收标准」的小任务。
     await createTask(env, who(teamId), {
       subject: '迁移目录结构',
@@ -1266,14 +1271,16 @@ describe('面板手动建任务（docs/panelTaskCommission）', () => {
     expect(done.status).toBe('ready');
     expect(done.subject).toBe('迁移文档结构');
     expect(done.description).toBe('完善后的任务说明');
-    // 改主题即目录改名（work_dir 归主任务）：新目录存在、旧目录清空，且该份纪要
-    // 文件名跟着新主题走（不留「旧名 + 新名」两份）。
-    expect(done.workDir).not.toBe(oldDir);
-    expect(existsSync(join(workspace, done.workDir!, minutesFileName(done)))).toBe(true);
+    // 改主题即目录改名（task_dir 归主任务）：新目录存在、旧目录清空，且该份纪要
+    // 文件名跟着新主题走（不留「旧名 + 新名」两份）。基址是任务自己的 work_dir
+    // （冻结的会话目录），改名永远发生在任务绑定的那个工作区里。
+    expect(done.taskDir).not.toBe(oldDir);
+    expect(done.workDir).toBe(workspace);
+    expect(existsSync(join(done.workDir!, done.taskDir!, minutesFileName(done)))).toBe(true);
     expect(existsSync(join(workspace, oldDir))).toBe(false);
-    expect(existsSync(join(workspace, done.workDir!, minutesFileName({ ...done, subject: '未命名任务' })))).toBe(
-      false,
-    );
+    expect(
+      existsSync(join(done.workDir!, done.taskDir!, minutesFileName({ ...done, subject: '未命名任务' }))),
+    ).toBe(false);
     // 事件：task.updated（via=commission.finalize）+ 问询留档 plan.questionnaire。
     const events = readEventsSync(root, teamId);
     const updated = events.find((e) => e.type === 'task.updated' && e.taskId === group.id);
@@ -1414,7 +1421,7 @@ describe('收口拆解质量闸（docs/taskOrchestrationRefinement 议题一）'
 describe('主会话锚定（用户迭代 2026-09-12：子代理不挂在领队下面）', () => {
   const who = (teamId: number): OpActor => ({ teamId, actor: { kind: 'user', name: '用户' } });
 
-  it('领队子代理拆解的小任务派发成员时，父锚换成主会话（不挂到领队子代理下）', async () => {
+  it('领队子代理拆解的小任务：行快照登记发起对话的主会话，派发父锚同源', async () => {
     const created = await cap<{ teamId: number }>('eteams_create_team', { name: '锚定团队' });
     const teamId = created.teamId;
     const member = await cap<{ employeeId: number }>('eteams_add_member', {
@@ -1424,27 +1431,53 @@ describe('主会话锚定（用户迭代 2026-09-12：子代理不挂在领队�
     });
     // 主对话建容器（main_session_id 快照 = cap-1）并收口转 ready。
     const group = await submitReady('导出主任务');
-    // 领队子代理（独立会话）拆解小任务：小任务行快照记的是领队子会话
-    // （既有口径，不改），但派发成员时锚点要换回它的主会话父（cap-1）——否则
-    // 成员子代理挂到领队子代理下，harness 顶部列表要先展开领队才看得到其它
-    // 子代理（用户迭代 2026-09-12）。
+    // 领队子代理（独立会话）拆解小任务。注册表**先于**子代理装配登记（真实
+    // 派发流程：registerCaptainChild → startContinuable），任务行快照因此登记
+    // **发起对话的主会话**而非子会话（用户 2026-09-16：同一对话的任务行不许
+    // 两种 id 格式并存——子会话是裸 uuid，主对话带 session- 前缀）。
     const leaderEnv: RuntimeEnv = { ...runtimeEnvFor(), sessionId: 'leader-child-1' };
-    const sub = await createTask(leaderEnv, who(teamId), {
-      subject: '执行小任务',
-      parentTaskId: group.taskId,
-    });
-    expect(readTeam(teamId).tasks.find((t) => t.id === sub.id)!.mainSessionId).toBe(
-      'leader-child-1',
-    );
-    // 模拟领队子代理派发时的注册表条目（直接父 = 主会话 cap-1）。
-    registerCaptainChild('leader-child-1', String(teamId), root, String(sub.id), 'cap-1');
+    registerCaptainChild('leader-child-1', String(teamId), root, String(group.taskId), 'cap-1');
     try {
+      const sub = await createTask(leaderEnv, who(teamId), {
+        subject: '执行小任务',
+        parentTaskId: group.taskId,
+      });
+      expect(readTeam(teamId).tasks.find((t) => t.id === sub.id)!.mainSessionId).toBe('cap-1');
       await cap('eteams_assign_task', { taskId: sub.id, member: String(member.employeeId) });
     } finally {
       unregisterCaptainChild('leader-child-1');
     }
     // spawn 的父锚是主会话（cap-1）——成员子代理与领队子代理平级，
     // harness 顶部子代理列表无需展开领队即可见。
+    expect(childByEmployee(member.employeeId).request.parent.id).toBe('cap-1');
+  });
+
+  it('存量行快照仍记领队子会话时，派发父锚换回主会话（v16 迁移前的旧数据）', async () => {
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '旧数据团队' });
+    const teamId = created.teamId;
+    const member = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: 'Bob',
+      role: 'engineer',
+      teamId,
+    });
+    const group = await submitReady('旧数据主任务');
+    const leaderEnv: RuntimeEnv = { ...runtimeEnvFor(), sessionId: 'leader-child-1' };
+    registerCaptainChild('leader-child-1', String(teamId), root, String(group.taskId), 'cap-1');
+    try {
+      const sub = await createTask(leaderEnv, who(teamId), {
+        subject: '旧数据小任务',
+        parentTaskId: group.taskId,
+      });
+      // 造出 v16 迁移前的行形状：快照误记领队子会话（迁移补不到的老库，
+      // 或大任务快照本身为空的边角）。
+      getDb(root)
+        .prepare('UPDATE task SET main_session_id = ? WHERE task_id = ?')
+        .run('leader-child-1', sub.id);
+      await cap('eteams_assign_task', { taskId: sub.id, member: String(member.employeeId) });
+    } finally {
+      unregisterCaptainChild('leader-child-1');
+    }
+    // captainFor 按注册表把子会话换回主会话父——成员子代理不挂到领队子代理下。
     expect(childByEmployee(member.employeeId).request.parent.id).toBe('cap-1');
   });
 });

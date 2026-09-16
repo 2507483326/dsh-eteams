@@ -56,6 +56,22 @@ let pendingSelectTeam: string | null = null;
 /** Pending tasks-page jump (taskId) — same mount-time consumption. */
 let pendingGotoTask: number | null = null;
 
+/**
+ * Pending landing path (面板落点) — the entry call's target page, consumed by
+ * the panel's own MemoryRouter at mount (routes.tsx initialEntries).
+ *
+ * Why a separate channel from the `pendingGoto*` flags above（用户 2026-09-16
+ * 「点击对话框上面的 标准模式 旁边的 团队，应该跳面板页面」，实测表现为「面板
+ * 出来了但落在别的页签」）：those flags are consumed by whichever panel surface
+ * mounts or handles the window event first, and the landing decision then falls
+ * back to the persisted tab (`ui.activeNav`) — so an entry whose panel had not
+ * mounted yet (the hero chip's full-page 团队页, a fresh React root) landed on
+ * the last visited tab whenever anything else ate the flag first. The landing
+ * path is only ever consumed by a router that is actually mounting, so the
+ * entry's target page travels with the open instead of racing other surfaces.
+ */
+let pendingLandingPath: string | null = null;
+
 /** Whether a jump request is waiting; consumes it (one-shot). */
 export function consumePendingGotoAdd(): boolean {
   const value = pendingGotoAdd;
@@ -91,6 +107,17 @@ export function consumePendingGotoTask(): number | null {
   return value;
 }
 
+/**
+ * The pending panel landing path, if any; consumes it (one-shot). Read by the
+ * panel's MemoryRouter initializer — the one place that decides which page a
+ * freshly mounted panel opens on（路由自己消费，见 pendingLandingPath 说明）。
+ */
+export function consumePendingLandingPath(): string | null {
+  const value = pendingLandingPath;
+  pendingLandingPath = null;
+  return value;
+}
+
 /** Dispatch a window CustomEvent when a DOM/window exists (best effort). */
 function dispatchSignal(name: string, detail?: string | number): void {
   if (typeof window !== 'undefined' && typeof window.CustomEvent === 'function') {
@@ -98,23 +125,41 @@ function dispatchSignal(name: string, detail?: string | number): void {
   }
 }
 
+/** What a 团队入口 asks the panel to do (teamsPanel 的 TeamsPanelOptions 结构同源). */
+export interface TeamSignalOptions {
+  memberBuilder?: boolean;
+  roster?: boolean;
+  /** Land on the 团队 page（/team，卡片栅格，不开新增弹窗）。 */
+  team?: boolean;
+  teamId?: string;
+  /** Open the Tasks page（/tasks/:taskId）on landing. */
+  taskId?: number;
+}
+
+/**
+ * 入口语义 → 面板落点路径（与 lib/status 的 NAV_ITEMS 路由表同源口径）。
+ * 语义只表达「去哪个域」，具体路径在这里一次算清——面板路由挂载时直接用它，
+ * 不再让落点在「谁先消费标记」的竞争里丢失。没有指定域的入口（只选团队等）
+ * 返回 null，落点交给路由的持久页签恢复。
+ */
+export function landingPathOf(opts: TeamSignalOptions = {}): string | null {
+  if (opts.taskId !== undefined) return `/tasks/${opts.taskId}`;
+  if (opts.memberBuilder === true || opts.roster === true) return '/roster';
+  if (opts.team === true) return '/team';
+  return null;
+}
+
 /**
  * Stage the cross-component jump signals WITHOUT clicking any tab: pending
  * flags for the about-to-mount panel, window events for the mounted one.
  * Splitting this from the tab click lets callers decide the landing surface
- * (real 团队 tab when visible, full-page 团队页 otherwise).
+ * (real 团队 tab when visible, full-page 团队页 otherwise). It also stages the
+ * landing path, so a panel that mounts afterwards opens on the requested page
+ * regardless of who consumed the flags（用户 2026-09-16 导航漂移修复）。
  */
-export function stageTeamSignals(
-  opts: {
-    memberBuilder?: boolean;
-    roster?: boolean;
-    /** Land on the 团队 page（/team，卡片栅格，不开新增弹窗）。 */
-    team?: boolean;
-    teamId?: string;
-    /** Open the Tasks page（/tasks/:taskId）on landing. */
-    taskId?: number;
-  } = {},
-): void {
+export function stageTeamSignals(opts: TeamSignalOptions = {}): void {
+  const landing = landingPathOf(opts);
+  if (landing !== null) pendingLandingPath = landing;
   if (opts.memberBuilder === true) {
     pendingGotoAdd = true;
     dispatchSignal(GOTO_ADD_EVENT);
@@ -160,6 +205,9 @@ export function requestCloseTeamsPage(): void {
  */
 export function openMemberBuilder(): boolean {
   pendingGotoAdd = true;
+  // 落点同 stageTeamSignals 口径（角色域；新增工作台由 pendingGotoAdd 在挂载
+  // 后展开），用户 2026-09-16 导航漂移修复。
+  pendingLandingPath = landingPathOf({ memberBuilder: true });
   if (typeof window !== 'undefined' && typeof window.CustomEvent === 'function') {
     window.dispatchEvent(new CustomEvent(GOTO_ADD_EVENT));
   }
@@ -178,6 +226,9 @@ export function openMemberBuilder(): boolean {
  */
 export function openTask(taskId: number): boolean {
   pendingGotoTask = taskId;
+  // 落点同 stageTeamSignals 口径：任务卡片入口也要把目标页交给面板路由
+  // （用户 2026-09-16 导航漂移修复）。
+  pendingLandingPath = landingPathOf({ taskId });
   dispatchSignal(GOTO_TASK_EVENT, taskId);
   return activateETeamsTab();
 }

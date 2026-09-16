@@ -1,5 +1,5 @@
 -- =====================================================================
--- ETeams SQLite schema v15（db_schema_version = 15；v3 成员=角色合并：member
+-- ETeams SQLite schema v17（db_schema_version = 17；v3 成员=角色合并：member
 -- 表精简改名成 roles 角色库表（去 team_id/role_id/model/reasoning_effort，
 -- 新增 profile），班底另起 team_members 表，旧 roles 标签登记表删除；
 -- v4 班底行补 role_name/persona_md/profile 角色信息副本列；v5 任务行补主
@@ -27,7 +27,13 @@
 -- 会话 ID）与 delivery_is_main（1=主对话 / 0=提问子会话）——看板「决策面板」
 -- 据此精确跳转到作答会话（旧库经 getDb ALTER + 按提问会话回填）；v15 领队
 -- 改名：保留名 项目牧羊人 → 团队领队（roles/team_members/task_members 旧名
--- 行改名并兜底 is_leader，无列结构变更；旧库经 getDb 迁移回填）
+-- 行改名并兜底 is_leader，无列结构变更；旧库经 getDb 迁移回填）；v16 子代理
+-- 能力缺口 + 常设路线：新增 capability_gaps / routing_memos 两张纯新表（DDL
+-- IF NOT EXISTS 直接建，无 ALTER/回填）；v17 任务目录归属（用户 2026-09-16）：
+-- task 补 task_dir 任务目录列——work_dir 收窄为「当前会话目录」（绝对路径，
+-- 建任务时冻结），绝对任务目录 = work_dir + task_dir，不再随调用者漂移；旧行
+-- 的 work_dir 是旧语义的相对任务目录，按「不管之前的任务」口径不回填、不搬，
+-- 此类行不参与物化（isCurrentLayout 判为旧布局）
 -- 主键 = 每张表自己的编号列，统一 INTEGER 自增（schema_meta 例外：key 即主键）
 -- 时间列一律 *_time 结尾（Unix 毫秒）；每张表末尾 created_time / update_time
 -- 枚举 = TEXT（合法值写在列注释里）；JSON = TEXT 存 JSON 字符串
@@ -131,7 +137,8 @@ CREATE TABLE IF NOT EXISTS task (
   contract_md       TEXT,                -- 任务合同全文（Markdown，十六轮 DA29：原 acceptance/in_scope/out_of_scope/deliverables 四数组列合并——验收标准/允许改动/禁止改动/交付物统一写在这篇 MD 里；旧库由 getDb 迁移 ALTER + 回填，旧四列物理残留不再读写）
   idempotency_note  TEXT,                -- 幂等说明（重跑安全的前提，派发提示词渲染）
   blocked_from      TEXT,                -- 阻塞前的状态（11 态之一）；解除阻塞时还原到它，NULL=未阻塞
-  work_dir          TEXT,                -- 任务工作目录（相对工作区；建任务时分配，分配后固定——撞名 -N 后缀有状态，不可重推导）
+  work_dir          TEXT,                -- 当前会话目录（绝对路径：建任务时把发起会话的工作区盖在这里并冻结——任务归属从此由任务行自己说了算，不随之后谁在调用而漂移；小任务恒空）
+  task_dir          TEXT,                -- 任务目录（相对 work_dir：teams/<主任务号>-slug；建任务时分配、改主题时重算；绝对任务目录 = work_dir + task_dir。两列不齐 = 旧布局，不参与物化）
   completed_time    INTEGER,             -- 完成时间
   created_time      INTEGER NOT NULL,    -- 创建时间
   update_time       INTEGER NOT NULL     -- 更新时间（主键 task_id 已在列级声明，表上不再写 PRIMARY KEY）
@@ -366,3 +373,66 @@ CREATE TABLE IF NOT EXISTS ask_questions (
 
 CREATE INDEX IF NOT EXISTS idx_ask_questions_status ON ask_questions (status);
 CREATE INDEX IF NOT EXISTS idx_ask_questions_team   ON ask_questions (team_id, status);
+
+-- ---------------------------------------------------------------------
+-- 14. capability_gaps —— 子代理能力缺口（v16；被拒之后的结构化上报）
+--     子代理撞到「换做法也过不去」的拒绝（越界写入 / 需要外部能力 / 策略
+--     拒绝）时落一行：记录精确操作、风险分级与已试替代，供领队做**结构性**
+--     决定（代执行 / 放宽后重派 / 拆站），而不是为单次操作求许可。gap_id
+--     由调用方生成（uuid），主键即幂等键。
+--     **不关联问答单**：交付操作给主会话是「消息 + 精确 argv」，人类由主会话
+--     自己的原生审批流问到（挂在真实工具调用上，比合成弹窗更准）；若路线
+--     本身只有用户能定，领队用既有的 eteams_ask_user 问——那是它本来就在做
+--     的事，不需要跨表关联。
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS capability_gaps (
+  gap_id         TEXT PRIMARY KEY,     -- 缺口 ID（uuid，调用方生成）
+  team_id        INTEGER NOT NULL,     -- 属于哪个团队（team.team_id）
+  task_id        INTEGER,              -- 相关任务（task.task_id，松引用）
+  attempt_id     INTEGER,              -- 相关尝试（attempts.attempt_id，松引用）
+  asking_session_id TEXT NOT NULL,     -- 上报子代理会话 ID（来源，面板定位）
+  asking_name    TEXT NOT NULL,        -- 上报者展示名（成员名 / '领队'）
+  station_index  INTEGER,              -- 执行链站点下标（领队判「这一站的固定需求」）
+  risk           TEXT NOT NULL,        -- medium / high（high 一律 refuse、不落表）
+  operation      TEXT NOT NULL,        -- 操作块（JSON：{summary, argv, cwd, writes, reason}）
+  why            TEXT NOT NULL,        -- 挂钩哪条验收标准（未挂钩不上报）
+  tried          TEXT,                 -- 已试替代（JSON 字符串数组）；NULL=未试
+  suggested_route TEXT,                -- 模型建议路线（领队/人类可推翻）
+  status         TEXT NOT NULL DEFAULT 'open',
+                 -- open=待处置 / routed=已定路线 / resolved=已解决 / refused=已否 / expired=超时
+  route          TEXT,                 -- 最终路线：main-executes / widen-and-redelegate / split-stage
+  route_note     TEXT,                 -- 决定理由 / 用户原话
+  decided_by     TEXT,                 -- captain / user；NULL=未决定
+  decided_time   INTEGER,              -- 决定时刻；NULL=未决定
+  created_time   INTEGER NOT NULL,     -- 创建时间
+  update_time    INTEGER NOT NULL      -- 更新时间
+);
+
+CREATE INDEX IF NOT EXISTS idx_capability_gaps_team ON capability_gaps (team_id, status);
+CREATE INDEX IF NOT EXISTS idx_capability_gaps_task ON capability_gaps (task_id, status);
+
+-- ---------------------------------------------------------------------
+-- 15. routing_memos —— 常设路线备忘（v16；一次结构决定的沉淀）
+--     记住「这一类活儿以后由谁干」，**不是授权**——它绝不使子代理获得任何
+--     权限，只让同类缺口不再重复升级（执行侧看到它时按既定路线转交，而不是
+--     放行）。operation_class 由宿主归一（<workspaceRoot>::<base>::<args>），
+--     不接受模型自由书写的通配串；作用域限 (team_id, task_id)——跨工作区不
+--     继承；有寿命（expire_time）。high 风险缺口永不落本表。
+--     唯一性 (team_id, task_id, operation_class) 由写入代码保证（本设计不用
+--     UNIQUE 约束）；task_id 可空，NULL=团队级路线。
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS routing_memos (
+  memo_id        INTEGER PRIMARY KEY AUTOINCREMENT,  -- 备忘号（全库自增）
+  team_id        INTEGER NOT NULL,     -- 属于哪个团队（team.team_id）
+  task_id        INTEGER,              -- 相关任务（task.task_id，松引用）；NULL=团队级
+  operation_class TEXT NOT NULL,       -- 宿主归一的操作类（<workspaceRoot>::<base>::<args>）
+  route          TEXT NOT NULL,        -- main-executes / widen-and-redelegate / split-stage
+  note           TEXT,                 -- 决定理由 / 用户原话
+  decided_by     TEXT NOT NULL,        -- captain / user（必填：路线必须有出处）
+  gap_id         TEXT,                 -- 来源缺口（capability_gaps.gap_id，松引用）
+  created_time   INTEGER NOT NULL,     -- 创建时间
+  expire_time    INTEGER,              -- 到期时刻；NULL=不自动过期（随任务收口清理）
+  update_time    INTEGER NOT NULL      -- 更新时间
+);
+
+CREATE INDEX IF NOT EXISTS idx_routing_memos_scope ON routing_memos (team_id, operation_class);

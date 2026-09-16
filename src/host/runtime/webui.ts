@@ -1489,7 +1489,10 @@ export function installWebSurface(
               const mainSessionId = typeof body.sessionId === 'string' ? body.sessionId : '';
               try {
                 const task = await createTask(
-                  envFor(ctx, config, workspacePath),
+                  // 任务目录归属（2026-09-16）：env.workspace 建任务时冻结进
+                  // task.work_dir，取发起会话的真实 cwd；拿不到才退回面板定位
+                  // 到的那个工作区（不能反着来——那会把任务钉在注册表首个工作区）。
+                  envFor(ctx, config, sessionWorkspaceOf(ctx, mainSessionId) ?? workspacePath),
                   { teamId: team.id, actor: { kind: 'user', name: '用户' } },
                   {
                     subject,
@@ -1535,11 +1538,15 @@ export function installWebSurface(
                 return;
               }
               const { team, workspacePath } = located;
-              const env = envFor(ctx, config, workspacePath);
               // v6 主会话快照：客户端从活跃对话上报 sessionId——无领队路径
               // 的唤醒目标与任务行快照都靠它（整页覆盖层无 sessionId 时退
               // captainFor 的心跳/冷恢复梯度）。
               const sessionId = typeof body.sessionId === 'string' ? body.sessionId : '';
+              // 任务目录归属（2026-09-16）：建任务时 env.workspace 冻结进
+              // task.work_dir，必须是发起会话的真实 cwd——不能在
+              // locateTeam 的 workspacePath 上建（全局单库下它 = 注册表首个
+              // 工作区，与会话无关，任务文档因此会落到别的工作区）。
+              const env = envFor(ctx, config, sessionWorkspaceOf(ctx, sessionId) ?? workspacePath);
               // 绑定守卫：会话已绑定其他团队 → resolveCaller 绑定优先会错配
               // caller.team，完善者调 eteams_* 必报「任务不存在」。提前变成
               // 可诊断的明确失败（任务仍创建，留在创建中可删）。
@@ -1908,7 +1915,7 @@ export function installWebSurface(
               return;
             }
             // DA25：列表卡文件夹路径可点击，系统文件管理器中打开）。目录由
-            // workspacePath + 任务 work_dir 现算（taskDirAbs），缺失 400；
+            // 任务自己的 work_dir + task_dir 现算（taskDirAbs），缺失 400；
             // 打开器可经 WebSurfaceOptions 注入（测试不真拉 explorer）。
             if (
               req.method === 'POST' &&
@@ -2470,6 +2477,20 @@ export function rootForWrites(ctx: Context, config: ETeamsResolvedConfig): strin
 /** Runtime env for a panel-driven mutation in one workspace. */
 function envFor(ctx: Context, config: ETeamsResolvedConfig, workspace: string): RuntimeEnv {
   return { ctx: ctx as unknown as RuntimeContext, config, workspace };
+}
+
+/**
+ * 面板路由的**当前会话目录**（2026-09-16 任务目录归属）：建任务时 env.workspace
+ * 会被冻结进 `task.work_dir`，所以它必须是发起会话的真实 cwd——而不是
+ * `locateTeam` 的 `workspacePath`（全局单库下各工作区状态根归一，那个值等于
+ * 注册表首个工作区，与会话在哪毫无关系，正是任务文档落到别的工作区的来源）。
+ *
+ * 会话不在场 / 拿不到 cwd 时返回 undefined，调用方退回 `workspacePath`。
+ */
+function sessionWorkspaceOf(ctx: Context, sessionId: string): string | undefined {
+  if (sessionId === '') return undefined;
+  const cwd = (ctx as unknown as RuntimeContext).agents?.get(sessionId)?.session?.header?.cwd;
+  return typeof cwd === 'string' && cwd !== '' ? cwd : undefined;
 }
 
 /** Synthesize the captain Agent identity from a session id (staged ops only need id). */

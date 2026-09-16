@@ -21,7 +21,7 @@ import { fallbackTeamMemberPersona } from '../prompts/personas/framework.js';
 import { memberBriefing, memberWelcome } from '../prompts/spawn/member.js';
 import { neutralizeInterpolation } from './sessionPersona.js';
 import { registerMemberSession } from './usage.js';
-import { boardFileAbs, docDirAbs, groupDirAbs, minutesFileAbs } from './docs.js';
+import { boardFileAbs, docDirAbs, groupDirAbs, minutesFileAbs, taskWorkRootOf } from './docs.js';
 import { taskMemberBadge } from './roster.js';
 
 /** Label prefix identifying eteams member children. */
@@ -88,6 +88,9 @@ export const MEMBER_DENIED_TOOLS: readonly string[] = [
   'eteams_delete_team',
   'eteams_dispatch_captain',
   'eteams_captain_guide',
+  // 能力缺口的**处置**面（v16）：成员只准上报（eteams_report_gap 不在禁刀里），
+  // 不准给自己定路线——否则「领队分诊」这层就白设了。
+  'eteams_route_gap',
 ];
 
 /**
@@ -103,12 +106,17 @@ export function memberTemplateOf(team: TeamState, ref: string | number): MemberR
 
 /**
  * 通用成员简报组装（用户迭代 2026-09-11；2026-09-14 增队伍留言板；2026-09-15
- * 扁平化）：runtime 侧现读五个绝对路径——工程根（工作区根，代码产出写这里）、
- * 任务目录（groupDirAbs，一个主任务一个目录）、队伍留言板（boardFileAbs）、
- * 本任务纪要（minutesFileAbs）、文档目录（docDirAbs）——连同领队名（班底
- * is_leader 行，无领队时是主会话）交给纯文本 memberBriefing。出生包与每次指派
- * 信共用，保证「工作目录 / 留言板 / 纪要 / 文档 / 领队 / 三节点汇报」始终在成员
- * 上下文里，且路径全部由宿主算好（模型照抄、不自己拼名字、不新建重复文件）。
+ * 扁平化）：runtime 侧现读五个绝对路径——工程根（task.work_dir，建任务时冻结的
+ * 当前会话目录，代码产出写这里）、任务目录（groupDirAbs，一个主任务一个目录）、
+ * 队伍留言板（boardFileAbs）、本任务纪要（minutesFileAbs）、文档目录
+ * （docDirAbs）——连同领队名（班底 is_leader 行，无领队时是主会话）交给纯文本
+ * memberBriefing。出生包与每次指派信共用，保证「工作目录 / 留言板 / 纪要 /
+ * 文档 / 领队 / 三节点汇报」始终在成员上下文里，且路径全部由宿主算好（模型照抄、
+ * 不自己拼名字、不新建重复文件）。
+ *
+ * 工程根取任务自己的 work_dir 而非调用方工作区（2026-09-16 归属拆分）：成员看到
+ * 的目录因此与任务绑定、不随领队/成员子会话开在哪个工作区而变（此前成员简报会
+ * 把别的工作区当工程根，成员照它写代码就写错了地方）。
  */
 export function taskBriefing(env: RuntimeEnv, team: TeamState, task: TaskRecord): string {
   const leader = team.hasLeader
@@ -117,7 +125,7 @@ export function taskBriefing(env: RuntimeEnv, team: TeamState, task: TaskRecord)
   return memberBriefing({
     teamName: team.name,
     leaderName: leader,
-    projectRoot: env.workspace,
+    projectRoot: taskWorkRootOf(env.workspace, team, task),
     taskDir: groupDirAbs(env.workspace, team, task),
     boardFile: boardFileAbs(env.workspace, team, task),
     minutesFile: minutesFileAbs(env.workspace, team, task),
@@ -180,7 +188,12 @@ export async function spawnMember(
     // 作用域——副本行 = (工号, 大任务)，同名成员各是各的子会话。
     label: buildMemberLabel(row.mainTaskId ?? 0, row.employeeId ?? 0, row.name),
     request: {
-      prompt: [{ type: 'text', text: memberWelcome(team, row.name, template, taskBriefing(env, team, task)) }],
+      prompt: [
+        {
+          type: 'text',
+          text: memberWelcome(team, row.name, template, taskBriefing(env, team, task)),
+        },
+      ],
       parent: captain,
       persona: personaText,
       toolFilter: { deny: [...MEMBER_DENIED_TOOLS] },

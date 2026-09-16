@@ -14,10 +14,11 @@
  * 相对划分；tooltip 行首带档位名（轻度/常规/高强度/满负荷）。
  * 用户迭代 2026-09-15：去掉标题「全应用」标注，空态 meta 行去掉后半句
  * （「应用今年还没有消耗——…」，只留「今日 X tokens」）。
- * 用户迭代 2026-09-15（二）：格子 hover 加同色柔光动画（原话「我希望 token
- * 消耗的 格子划过有一些动画效果」，方案经用户选定「同色柔光」档——不改尺寸、
- * 零几何风险）：光晕色由格子自身 fill 落到 CSS color 承载（usageFlatBlock），
- * CSS 侧 currentColor 驱动 drop-shadow，见 ensureUsageCalendarStyles 覆盖三。
+ * 用户迭代 2026-09-15（二）→ 2026-09-16 修订：格子 hover 动画初版落「同色柔光」
+ * （brightness/saturate + currentColor drop-shadow），用户随即指出「应该是边框
+ * 变浅蓝色，而不是变白」——柔光的 brightness() 会把浅色/空档填充乘到近纯白、
+ * 在白卡上等于消失；改为**只换描边色、填充与占位不动**（描边宽度两态常驻占位，
+ * 符合「视觉微调不改变元素占位」），见 ensureUsageCalendarStyles 覆盖三。
  * M5 结构性改造（docs/44 44.3，行为零变更）：44.3 横幅分区——档位表
  * （USAGE_LEVEL_STEPS/USAGE_LEVEL_NAMES）已表驱动，保持原样仅归组。
  *
@@ -94,15 +95,20 @@ function ensureUsageCalendarStyles(): void {
       // 是浅底深字，浮在暗面板上刺眼）。同标签源序在后，同特异性覆盖生效。
       ".react-activity-calendar__tooltip[data-color-scheme='dark']{background-color:hsl(0 0% 10%);color:hsl(0 0% 94%);}" +
       ".react-activity-calendar__tooltip[data-color-scheme='dark'] .react-activity-calendar__tooltip-arrow{fill:hsl(0 0% 10%);}" +
-      // 覆盖三：格子 hover 同色柔光（用户迭代 2026-09-15「我希望 token 消耗的
-      // 格子划过有一些动画效果」，方案经用户选定「同色柔光」档）：只提亮 +
-      // 同色光晕，不动尺寸/摆位（SVG 内改几何会顶到邻格间隙、底部一行还会被
-      // scroll-container 的 overflow-y:hidden 裁切）。光晕色取 currentColor
-      // = 该格注入的 color，即它自己的 fill（usageFlatBlock），亮暗两档自然
-      // 同色，不另查色板。选择器限定带 data-date 的数据格，图例色块（无该
-      // 属性）不受影响。prefers-reduced-motion 只关过渡、留瞬时反馈。
-      '.react-activity-calendar__calendar rect[data-date]{transition:filter .18s ease;}' +
-      '.react-activity-calendar__calendar rect[data-date]:hover{filter:brightness(1.2) saturate(1.2) drop-shadow(0 0 4px currentColor);}' +
+      // 覆盖三：格子 hover 描边亮起（用户迭代 2026-09-16「应该是边框变浅蓝色，
+      // 而不是变白」，推翻 2026-09-15 的同色柔光档）：原 brightness() 会把浅色档
+      // (#bae6fd) 与空档 (#f1f5f9) 的填充乘到近纯白、在白卡上等于消失，故改为
+      // **只换描边色、填充不动**。常驻 `stroke:transparent` + `stroke-width:1` 占位
+      // （透明↔蓝只换色，格子尺寸与摆位零变化，几何风险与柔光档同级）；`!important`
+      // 用于压过 usageFlatBlock 内联的 `stroke:none`。强调色取**色板外**的两档，
+      // 保证与每一档填充都有对比——浅色主题 #0284c7 比色板最亮档 (#0ea5e9) 更深、
+      // 暗色主题 #7dd3fc 比最亮档 (#38bdf8) 更浅；若直接取格色/主色，命中对应档
+      // 时描边与填充同色、hover 等于没画（本文件色板见 USAGE_CALENDAR_THEME）。
+      // 选择器限定带 data-date 的数据格，图例色块（无该属性）不受影响。
+      // prefers-reduced-motion 只关过渡、留瞬时反馈。
+      '.react-activity-calendar__calendar rect[data-date]{stroke:transparent !important;stroke-width:1;transition:stroke .18s ease;}' +
+      '.react-activity-calendar__calendar rect[data-date]:hover{stroke:#0284c7 !important;}' +
+      'body[data-ds-dark-theme] .react-activity-calendar__calendar rect[data-date]:hover{stroke:#7dd3fc !important;}' +
       '@media (prefers-reduced-motion:reduce){.react-activity-calendar__calendar rect[data-date]{transition:none;}}';
     document.head.appendChild(style);
   } catch {
@@ -161,18 +167,12 @@ function usageTooltipText(day: UsageDay | undefined, activity: Activity): string
  * 阴影/高光边），经 `renderBlock` + cloneElement 以 `stroke:'none'` 覆写——
  * 数据格与图例色块都只留纯色方块（圆角 blockRadius=2 属几何规格保留，见
  * docs/28.5.2 几何行）。
- * hover 柔光取色（用户迭代 2026-09-15）：把该格自身的 fill 落到 CSS `color`
- * 上，CSS 侧的 drop-shadow(currentColor) 便与填充同源同色——不查色板、不看
- * 暗色判定，包换色/改档色板也自动跟随。图例色块（renderColorLegend 复用本
- * 函数）一并带上 color，但 hover 规则只认数据格的 data-date，二者无涉。 */
+ * hover 描边（用户迭代 2026-09-16「边框变浅蓝色」）：由 ensureUsageCalendarStyles
+ * 覆盖三经 `!important` 压过这里的 `stroke:none` 后接管（透明↔强调蓝只换描边色），
+ * 故此处不再为「同色柔光」注入 `color`——原 currentColor 光晕取色随该档一并撤除。 */
 function usageFlatBlock(block: BlockElement): ReactElement {
-  const fill = block.props.fill;
   return cloneElement(block, {
-    style: {
-      ...block.props.style,
-      stroke: 'none',
-      ...(typeof fill === 'string' ? { color: fill } : {}),
-    },
+    style: { ...block.props.style, stroke: 'none' },
   });
 }
 

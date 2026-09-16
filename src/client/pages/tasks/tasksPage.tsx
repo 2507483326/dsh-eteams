@@ -33,7 +33,8 @@
  * 线）；「＋ 添加任务」自分区线下移回卡头行最右（与团队页页头「＋ 新增
  * 团队」同款 sm 钮，2026-09-12 的「按钮落分区线下」就地撤销），空态文案
  * 收成「暂无任务」；页头计数补「共」并与标题底部对齐（同日列表页头口径，
- * 同 rosterPage/teamPage）。
+ * 同 rosterPage/teamPage）。其中「分区线只在该段有卡时渲染」「总量口径的
+ * 『暂无任务』」两条已于 2026-09-16 撤销（见下条）。
  *
  * 用户迭代 2026-09-15（二次）「不，需要显示添加按钮，点击按钮时再提示用户」
  * +「提示用户 用 warning」：「＋ 添加任务」改**常显**——2026-09-12「本会话已
@@ -42,6 +43,15 @@
  * 各弹一枚 **warning 档 toast**（不是错误、只是当前受阻——amber 语义走
  * toast.tsx 本仓扩展的 warning 变体），说明为什么不能加），按钮不再随状态
  * 无声消失（对齐「可点动作禁止静默 no-op」）。
+ *
+ * 用户迭代 2026-09-16「任务中，没有当前会话或者其它会话，应该出现提示没有
+ * 当前会话任务，横线应该一直存在」：推翻 2026-09-15「空列表不出现光秃秃的
+ * 线」——两条分区线**常显**（本会话 / 其它会话各一条），某段无卡时**其线下**
+ * 给该段的空态提示（「没有本会话任务」/「没有其它会话任务」，面数按段说，
+ * 不再只出总量口径的一句话）；原先「两段都空时只出『暂无任务』」的总空态
+ * 随之撤除（分区线已表达分段，空态按段就近表达）。整页覆盖层表面
+ * （sessionId undefined，任务全归「其它会话」）同口径——本会话段恒为空态
+ * 提示，不再因无会话上下文整段不分。
  *
  * @module dsh-eteams/client/pages/tasks/tasksPage
  */
@@ -60,7 +70,6 @@ import { TaskDndProvider } from '../../features/tasks/taskAssign';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import {
-  EMPTY_CLASS,
   LIST_COUNT_CLASS,
   LIST_TITLE_CLASS,
   PANEL_CARD_CLASS,
@@ -349,10 +358,6 @@ export function TasksPage({ pool, sessionId }: TasksPageProps): ReactNode {
   const isCurrentSession = (t: TaskView): boolean => hasSession && t.sessionId === sessionId;
   const sessionTasks = hasSession ? mainTasks.filter(isCurrentSession) : [];
   const otherTasks = hasSession ? mainTasks.filter((t) => !isCurrentSession(t)) : mainTasks;
-  // 空态判据只看总量（用户 2026-09-15「然后显示暂无任务就行」）：列表无卡即
-  // 显示「暂无任务」，与是否还有添加入口无关（按钮常显在卡头行，不再顶掉
-  // 空态文案）。
-  const showEmpty = mainTasks.length === 0;
 
   // 三十一轮 DA44④：列表卡身抽 taskListCard（TaskListCard）——subs 统计/
   // deletable 判据随迁卡内现算（task/allTasks 进 props，allTasks 取归属团队
@@ -403,7 +408,8 @@ export function TasksPage({ pool, sessionId }: TasksPageProps): ReactNode {
         （「本会话」分区线 + 其下本会话卡）、其它会话一段（「其它会话」分区线
         + 其下其它卡），**两段各自独立栅格**——同段卡片横排、两段纵向堆叠，
         不让本会话卡与其它卡混进同一行。2026-09-15：分区线只在该段有卡时
-        渲染（空列表不出现光秃秃的线），添加按钮上移卡头行最右。 */}
+        渲染（空列表不出现光秃秃的线），添加按钮上移卡头行最右；2026-09-16
+        分区线撤回常显（该段无卡时线下给该段空态提示，见下）。 */}
         <Card className={cn(PANEL_CARD_CLASS, 'pb-3 flex min-h-0 flex-1 flex-col')}>
           {/* 卡头行（用户 2026-09-15「添加任务按钮不应该在任务 title 右边
             吗」）：标题 + 计数子行（同日列表页头口径「共 N 个」+ 底部对齐，
@@ -424,22 +430,21 @@ export function TasksPage({ pool, sessionId }: TasksPageProps): ReactNode {
             </Button>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
-            {/* 分区线只在该段有卡时渲染（用户 2026-09-15「任务列表为空时不展示
-                本会话区分线」）——空列表不再出现光秃秃的「本会话」线。 */}
-            {sessionTasks.length > 0 && <SessionDivider label="本会话" />}
-            {sessionTasks.length > 0 && (
+            {/* 两条分区线**常显**（用户 2026-09-16「横线应该一直存在」）：某段
+                无卡时其线下给该段空态提示，不再把线连同标签一起藏掉
+                （2026-09-15「空列表不出现光秃秃的线」就地撤销）。 */}
+            <SessionDivider label="本会话" />
+            {sessionTasks.length > 0 ? (
               <div className={TASK_GRID_CLASS}>{sessionTasks.map(renderCard)}</div>
+            ) : (
+              <div className={SECTION_EMPTY_CLASS}>没有本会话任务</div>
             )}
-            {otherTasks.length > 0 && (
-              <SessionDivider
-                label="其它会话"
-                className={sessionTasks.length > 0 ? 'mt-5' : undefined}
-              />
-            )}
-            {otherTasks.length > 0 && (
+            <SessionDivider label="其它会话" className="mt-5" />
+            {otherTasks.length > 0 ? (
               <div className={TASK_GRID_CLASS}>{otherTasks.map(renderCard)}</div>
+            ) : (
+              <div className={SECTION_EMPTY_CLASS}>没有其它会话任务</div>
             )}
-            {showEmpty && <div className={EMPTY_CLASS}>暂无任务</div>}
           </div>
         </Card>
         {dialogs}
@@ -448,9 +453,15 @@ export function TasksPage({ pool, sessionId }: TasksPageProps): ReactNode {
   );
 }
 
+/** 分区空态行（用户 2026-09-16「应该出现提示没有当前会话任务」）：某段无卡时
+ * 在**它自己的分区线下**就地提示该段为空，两段各说各话。纯文字不画框——两段
+ * 同时为空时不会叠出两个虚线框（对立于原总量口径的 EMPTY_CLASS 总空态，已撤）。 */
+const SECTION_EMPTY_CLASS = 'py-1 text-center text-xs leading-5 text-muted-foreground';
+
 /** 会话分区线（用户迭代 2026-09-12「-本会话-------」）：任务列表按会话归属
  * 分段的标题线——短横线夹标签、右侧长横线收尾（Separator 同款 bg-border
- * token）。两段各一条（label=本会话 / 其它会话），线在段上、内容在段下。 */
+ * token）。两段各一条（label=本会话 / 其它会话），线在段上、内容在段下。
+ * 2026-09-16 起**常显**（该段无卡时线照留、线下走 SECTION_EMPTY_CLASS）。 */
 function SessionDivider({ label, className }: { label: string; className?: string }): ReactNode {
   return (
     <div className={cn('mb-2.5 flex items-center gap-2', className)}>

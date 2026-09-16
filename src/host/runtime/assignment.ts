@@ -68,10 +68,10 @@ import {
   wakeMember,
   type Wake,
 } from './notifier.js';
-import { renderTeamDocs, taskDirAbs, taskRootDirRel } from './docs.js';
+import { renderTeamDocs, taskDirAbs, taskRootDirRel, taskWorkRootOf } from './docs.js';
 import { drainMembers, interruptMember, sendAssignmentInTx, spawnMember } from './members.js';
 import { captainChildParentOf } from './captainChildRegistry.js';
-import { anchoredMainTaskOfCaller } from './sessionTeam.js';
+import { anchoredMainTaskOfCaller, mainSessionSnapshotOf } from './sessionTeam.js';
 import { readBuildPresence } from './roleBuilder.js';
 import {
   cancelledNotice,
@@ -80,7 +80,7 @@ import {
   reportFailedMail,
   suspendedNotice,
 } from '../prompts/handoff/mails.js';
-import { ensureGroupWorkDir, rmTree, routeToTaskMemberFields, withTeam } from './teamOps.js';
+import { ensureGroupTaskDir, rmTree, routeToTaskMemberFields, withTeam } from './teamOps.js';
 
 /** 空唤醒动作（收件人不存在/未起会话时的占位）。 */
 const noWake: Wake = () => Promise.resolve(false);
@@ -181,8 +181,10 @@ export async function captainFor(
  * Create a task with contract + optional execution chain (docs/07.3.1).
  * docs/26：`kind:'group'` 即对话提交的主任务容器（不经执行链、无依赖）；小
  * 任务声明 `parentTaskId` 挂到组下——chain 站点即成员槽（可多成员接力），
- * 文件夹嵌套在组文件夹 sub/ 下。建队即可用（docs/35 §5#1，无计划期）：新
- * 任务一律 ready；建任务即分配 work_dir 并物化文档树。
+ * 小任务与主任务**共用同一个任务目录**（2026-09-15 扁平化，不再有 sub/；也不再
+ * 有自己的 work_dir/task_dir）。建队即可用（docs/35 §5#1，无计划期）：新
+ * 任务一律 ready；建任务即分配目录两列（task_dir + 冻结的 work_dir）并物化
+ * 文档树。
  */
 export async function createTask(
   env: RuntimeEnv,
@@ -296,9 +298,13 @@ export async function createTask(
       chainCursor: -1,
       // 面板手动创建路径传 'creating' 占位（完善收口后转 ready）；其余一律 ready。
       status: params.status ?? 'ready',
-      // v6 主会话快照：建任务调用方会话（工具路径 = envForAgent 注入的
-      // env.sessionId；面板路由显式透传；导入传旧值），落库后不变。
-      mainSessionId: params.mainSessionId ?? env.sessionId,
+      // v6 主会话快照：建任务**发起对话的主会话**（工具路径 = envForAgent
+      // 注入的 env.sessionId；面板路由显式透传；导入传旧值），落库后不变。
+      // 来源纠正（用户 2026-09-16）：领队子代理拆解小任务时调用方是子会话
+      // （裸 uuid），换回它主持的大任务登记的发起会话——否则同一对话的任务
+      // 行一半带 session- 前缀一半不带，面板「本会话任务」比对与锚点判据都
+      // 得绕着走（见 sessionTeam.mainSessionSnapshotOf）。
+      mainSessionId: mainSessionSnapshotOf(team, sessionId),
       attempts: [],
       retryCount: 0,
       createdAt: tx.now,
@@ -330,9 +336,14 @@ export async function createTask(
         });
       }
     }
-    // work_dir 归任务（docs/35 §3#8，用户 2026-09-15 扁平化）：只有主任务分配
-    // 目录 `teams/<主任务号>-slug`，小任务共用它（不再有自己的目录与 work_dir）。
-    if (task.parentId === null) task.workDir = ensureGroupWorkDir(env, team, task);
+    // 目录归属两列（用户 2026-09-16 拆分）：只有主任务分配——task_dir 是相对
+    // 的任务目录 `teams/<主任务号>-slug`，work_dir 是**当前会话目录**（发起
+    // 会话的工作区绝对路径，在这里冻结）。小任务共用主任务目录（不再有自己的
+    // 目录与这两列）。绝对任务目录 = work_dir + task_dir，此后与调用者无关。
+    if (task.parentId === null) {
+      task.taskDir = ensureGroupTaskDir(team, task);
+      task.workDir = env.workspace;
+    }
     emit(tx, team.id, who.actor, 'task.created', {
       taskId: task.id,
       payload: {
@@ -340,6 +351,7 @@ export async function createTask(
         deps,
         chain: chain.map((s) => s.member),
         status: task.status,
+        ...(task.taskDir !== undefined ? { taskDir: task.taskDir } : {}),
         ...(task.workDir !== undefined ? { workDir: task.workDir } : {}),
       },
     });
@@ -395,7 +407,7 @@ export async function updateTask(
       }
       params.chain = chain;
     }
-    const oldDir = task.workDir;
+    const oldDir = task.taskDir;
     if (params.dependencies !== undefined) task.dependencies = params.dependencies;
     if (params.chain !== undefined) task.chain = params.chain;
     if (params.subject !== undefined && params.subject.trim() !== '')
@@ -408,8 +420,8 @@ export async function updateTask(
       taskId: task.id,
       payload: { fields: Object.keys(params).filter((k) => k !== 'taskId') },
     });
-    // 改主题会改目录名（work_dir 归任务，docs/35 §3#8）：重算目标路径并改名，
-    // 随本次快照一并落库；小任务目录在父目录 sub/ 下。
+    // 改主题会改目录名（task_dir 归任务）：重算目标路径并改名，随本次快照一并
+    // 落库；小任务没有自己的目录（共用主任务目录）。
     renameTaskFolder(env, team, task, oldDir);
     return { team, task };
   });
@@ -489,7 +501,7 @@ export async function finalizeCommissionTask(
         '问询发生在执行之前：收口（creating→ready）是开跑闸，未问询不得进「待开始」。',
       );
     }
-    const oldDir = task.workDir;
+    const oldDir = task.taskDir;
     if (params.subject.trim() !== '') task.subject = params.subject.trim();
     if (params.description !== undefined) task.description = params.description;
     if (params.contractMd !== undefined) task.contractMd = params.contractMd;
@@ -526,6 +538,10 @@ export async function finalizeCommissionTask(
  * writeMinutesFile）。目标路径已被其他任务占用（主题改回历史名等）或旧目录未
  * 物化时静默跳过——文档渲染会在新路径补齐。渲染不阻塞状态（docs/07.2），失败
  * 只留旧目录孤儿。
+ *
+ * 基址取任务自己的 `work_dir`（建任务时冻结的当前会话目录，2026-09-16 归属拆分）
+ * ——改主题这件事从哪个会话发起都一样，目录始终在任务自己的工作区里改名；
+ * 旧行（work_dir 为空/旧语义相对值）回退调用方工作区，与物化口径一致。
  */
 function renameTaskFolder(
   env: RuntimeEnv,
@@ -536,11 +552,12 @@ function renameTaskFolder(
   if (task.parentId !== null) return;
   const nextDir = taskRootDirRel(team, task);
   if (nextDir === oldDir) return;
-  if (team.tasks.some((t) => t.id !== task.id && t.workDir === nextDir)) return;
-  task.workDir = nextDir;
-  if (oldDir === undefined || !existsSync(join(env.workspace, oldDir))) return;
+  if (team.tasks.some((t) => t.id !== task.id && t.taskDir === nextDir)) return;
+  task.taskDir = nextDir;
+  const base = taskWorkRootOf(env.workspace, team, task);
+  if (oldDir === undefined || !existsSync(join(base, oldDir))) return;
   try {
-    renameSync(join(env.workspace, oldDir), join(env.workspace, nextDir));
+    renameSync(join(base, oldDir), join(base, nextDir));
   } catch (error) {
     env.ctx.logger.warn(`eteams: 任务文件夹重命名失败（不阻塞状态）：${String(error)}`);
   }

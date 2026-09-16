@@ -14,11 +14,10 @@ import { DOT_BASE_CLASS, DOT_TONE_CLASS } from '../../features/tasks/taskDisplay
 import { cn } from '../../lib/cn';
 import { relativeTime, type TeamSnapshot } from '../../lib/monitor';
 import { Card } from '../../components/ui/card';
-import { MUTED_CLASS, PANEL_CARD_CLASS, SECTION_TITLE_CLASS } from '../shared/styles';
+import { BOARD_PANEL_CARD_CLASS, MUTED_CLASS, SECTION_TITLE_CLASS } from '../shared/styles';
 
 /** 时间线可视区（用户 2026-09-15 看板等分布局）：原固定 max-h-[360px] 改
- * flex-1 吃卡内余高——动态卡与决策面板各占 1/2 看板余高，超出在这里内滚，
- * 不再撑出外层页面滚动条。 */
+ * flex-1 吃卡内余高——溢出在这里内滚，不再撑出外层页面滚动条。 */
 const TIMELINE_BODY_CLASS = 'min-h-0 flex-1 space-y-0.5 overflow-y-auto';
 
 /** 任务标签 chip（有主题时可点进详情）。 */
@@ -35,7 +34,10 @@ export function ActivityTimeline({
   const navigate = useNavigate();
   const rows = activityRowsOf(team);
   return (
-    <Card className={`flex min-h-0 flex-1 flex-col ${PANEL_CARD_CLASS}`}>
+    // 高度口径与决策面板同档（用户 2026-09-16「三个面板应该是占满整屏的……限制最小
+    // 高度」+「至少300px」）：flex 吃看板余高 + min-h-[300px] 下限（见
+    // BOARD_PANEL_CARD_CLASS）；余高不足时先压卡，溢出的行由 TIMELINE_BODY_CLASS 内滚。
+    <Card className={BOARD_PANEL_CARD_CLASS}>
       <div className={`shrink-0 ${SECTION_TITLE_CLASS}`}>动态</div>
       <div className={TIMELINE_BODY_CLASS}>
         {rows.map((r) => (

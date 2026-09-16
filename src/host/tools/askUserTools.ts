@@ -208,9 +208,11 @@ export function createAskUserTools(
           askingSessionId,
           askingName: caller.kind === 'member' ? caller.member.name : '领队',
           askingKind: caller.kind === 'member' ? 'member' : 'captain',
-          ...(caller.kind === 'member' && caller.member.mainTaskId !== null
-            ? { mainTaskId: caller.member.mainTaskId }
-            : {}),
+          // 任务锚一律落单（用户 2026-09-16「领队 的问答（1 问）没有显示任务
+          // ID」）：原先只在成员分支写 mainTaskId，领队分支算出的注册表任务锚
+          // 只用来查主会话、没进视图——问答单落库 main_task_id=NULL，看板
+          // 「决策面板」`#任务ID` 列就永远是占位符 `—`。
+          ...(mainTaskId !== null ? { mainTaskId } : {}),
           ...(mainSessionId !== undefined ? { mainSessionId } : {}),
         };
       } catch (error) {

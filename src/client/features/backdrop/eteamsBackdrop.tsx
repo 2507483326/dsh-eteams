@@ -41,6 +41,7 @@
  * @module dsh-eteams/client/eteamsBackdrop
  */
 import { useEffect, useRef, type ReactNode } from 'react';
+import { findScrollport } from '../layout/scrollportFit';
 import { recordClientDiag } from '../../lib/diagnostics';
 import {
   COMPOSITE_ALPHA_CAP,
@@ -119,16 +120,9 @@ export function EteamsBackdrop(): ReactNode {
     // scrollBody / overlay 裁剪层）代表真正可见的区域。
     const scopeEl =
       canvas.closest<HTMLElement>('.eteams-ui') ?? canvas.parentElement ?? document.body;
-    const findScrollHost = (el: HTMLElement): HTMLElement | null => {
-      let cur: HTMLElement | null = el.parentElement;
-      while (cur !== null) {
-        const oy = getComputedStyle(cur).overflowY;
-        if (oy === 'auto' || oy === 'scroll' || oy === 'hidden') return cur;
-        cur = cur.parentElement;
-      }
-      return null;
-    };
-    const scrollHost = findScrollHost(scopeEl);
+    // 滚动宿主 = 最近的滚动/裁剪祖先（D27 语义照旧）；查找逻辑收口在
+    // features/layout/scrollportFit（面板根定高用同一判据，避免两处各写一遍）。
+    const scrollHost = findScrollport(scopeEl);
 
     /** D20h：从作用域根采样宿主变量，缺省落官网兜底。 */
     const readVar = (name: string): string | null => {

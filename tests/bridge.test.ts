@@ -12,9 +12,11 @@ import {
   consumePendingGotoRoster,
   consumePendingGotoTask,
   consumePendingGotoTeam,
+  consumePendingLandingPath,
   consumePendingSelectTeam,
   ETEAMS_TAB_LABEL,
   GOTO_TASK_EVENT,
+  landingPathOf,
   openTask,
   requestCloseTeamsPage,
   stageTeamSignals,
@@ -233,6 +235,8 @@ describe('pending jump signals', () => {
     expect(consumePendingGotoTeam()).toBe(false);
     expect(consumePendingSelectTeam()).toBe(null);
     expect(consumePendingGotoTask()).toBe(null);
+    // the staged landing follows the entry semantics (task beats team)
+    expect(consumePendingLandingPath()).toBe('/tasks/7');
   });
 
   it('leaves flags untouched when the kind is not requested', () => {
@@ -242,6 +246,41 @@ describe('pending jump signals', () => {
     expect(consumePendingGotoTeam()).toBe(false);
     expect(consumePendingSelectTeam()).toBe(null);
     expect(consumePendingGotoTask()).toBe(null);
+    expect(consumePendingLandingPath()).toBe('/roster');
+  });
+});
+
+describe('panel landing path (入口落点)', () => {
+  afterEach(() => {
+    consumePendingLandingPath();
+  });
+
+  it('maps entry semantics onto panel routes', () => {
+    expect(landingPathOf({ team: true })).toBe('/team');
+    expect(landingPathOf({ roster: true })).toBe('/roster');
+    expect(landingPathOf({ memberBuilder: true })).toBe('/roster');
+    expect(landingPathOf({ taskId: 7 })).toBe('/tasks/7');
+    // 只选团队（没有指定域）的入口不留落点：由路由恢复持久页签。
+    expect(landingPathOf({ teamId: 't1' })).toBe(null);
+    expect(landingPathOf()).toBe(null);
+  });
+
+  it('is consumed once by the mounting router', () => {
+    stageTeamSignals({ team: true });
+    expect(consumePendingLandingPath()).toBe('/team');
+    expect(consumePendingLandingPath()).toBe(null);
+  });
+
+  it('keeps the newest entry intent while the panel has not mounted', () => {
+    // 用户 2026-09-16 导航漂移修复：落点不再由「谁先消费标记」决定。
+    stageTeamSignals({ team: true });
+    stageTeamSignals({ roster: true });
+    expect(consumePendingLandingPath()).toBe('/roster');
+  });
+
+  it('stages no landing for a team-selection-only signal', () => {
+    stageTeamSignals({ teamId: 't1' });
+    expect(consumePendingLandingPath()).toBe(null);
   });
 });
 
@@ -251,6 +290,7 @@ describe('openTask (window stub)', () => {
   afterEach(() => {
     globalWin.window = undefined;
     consumePendingGotoTask();
+    consumePendingLandingPath();
   });
 
   it('stages the task jump and activates the teams tab', () => {
@@ -279,6 +319,8 @@ describe('openTask (window stub)', () => {
       expect(dispatched[0]?.detail).toBe(7);
       // pending 标记供尚未挂载的面板消费。
       expect(consumePendingGotoTask()).toBe(7);
+      // 落点一并交给面板路由（用户 2026-09-16 导航漂移修复）。
+      expect(consumePendingLandingPath()).toBe('/tasks/7');
     } finally {
       restore();
     }

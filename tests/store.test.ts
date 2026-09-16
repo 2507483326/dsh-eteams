@@ -142,6 +142,10 @@ describe('team snapshots', () => {
 
   it('writeTeam persists the full snapshot（整存整取）and round-trips', async () => {
     const state = seedTeam('演示团队');
+    // v17 目录归属两列随快照整存整取：work_dir = 绝对会话目录，task_dir = 相对
+    // 任务目录（2026-09-16 拆分）。
+    state.tasks[0]!.workDir = 'C:/ws';
+    state.tasks[0]!.taskDir = 'teams/1-映射表';
     const before = Date.now();
     await writeTeam(root, state);
     // writeTeam 落库时统一刷新 update_time（内存镜像同步回填）。
@@ -154,6 +158,8 @@ describe('team snapshots', () => {
     expect(loaded?.tasks[0]?.subject).toBe('映射表');
     expect(loaded?.tasks[0]?.status).toBe('start');
     expect(loaded?.tasks[0]?.mainSessionId).toBe('cap-1');
+    expect(loaded?.tasks[0]?.workDir).toBe('C:/ws');
+    expect(loaded?.tasks[0]?.taskDir).toBe('teams/1-映射表');
     expect(loaded?.tasks[0]?.chain[0]?.member).toBe('Bob');
     expect(loaded?.pendingDecisions).toEqual([]);
     // 重写一次：同号覆盖（DELETE + 带原号重 INSERT），不产生重复行。
@@ -908,6 +914,129 @@ describe('v4→v5→v6 task/member session column migration', () => {
           main_session_id: string | null;
         }).main_session_id,
       ).toBe('cap-old');
+      closeDb(legacyRoot);
+    } finally {
+      cleanupTempWorkspace(legacyRoot);
+    }
+  });
+});
+
+// v16 数据步（任务行主会话快照的来源纠正 + NULL 回填，用户 2026-09-16）：
+// 快照一律登记**发起对话的主会话**——误记领队子会话的行（v16 前的落库口径）
+// 与 NULL 行都随本行所属大任务的快照纠正/补齐；大任务自己的快照也为空时保持
+// 原值（不把已盖章行洗成 NULL）；重开重跑幂等。
+describe('v16 主会话快照来源纠正 + NULL 回填', () => {
+  it('corrects leader-child snapshots and backfills NULLs from the container on connect', () => {
+    const legacyRoot = mkdtempSync(join(tmpdir(), 'eteams-mig-v16-'));
+    try {
+      mkdirSync(dbDirOf(legacyRoot), { recursive: true });
+      getDb(legacyRoot); // 建全形状（v16）新库
+      closeDb(legacyRoot);
+      const raw = new DatabaseSync(dbFileOf(legacyRoot));
+      const insTeam = raw.prepare(
+        'INSERT INTO team (team_id, team_name, has_leader, created_time, update_time) ' +
+          'VALUES (?, ?, 1, 10, 11)',
+      );
+      insTeam.run(1, '对话队');
+      insTeam.run(2, '无锚队');
+      const insTask = raw.prepare(
+        'INSERT INTO task (task_id, team_id, parent_id, subject, main_session_id, status, created_time, update_time) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, 10, 11)',
+      );
+      // 团队 1：大任务登记发起对话；小任务 2 误记领队子会话、小任务 3 未登记。
+      // 团队 2：大任务 5 自己也没快照，小任务 6 同样误记（同 id 的领队子会话，
+      // 顺带验证按 team_id 分域匹配）。
+      insTask.run(1, 1, null, '大任务', 'session-cap', 'start');
+      insTask.run(2, 1, 1, '小任务·误记子会话', 'lead-child', 'ready');
+      insTask.run(3, 1, 1, '小任务·未登记', null, 'ready');
+      insTask.run(5, 2, null, '无锚大任务', null, 'ready');
+      insTask.run(6, 2, 5, '小任务·锚为空', 'lead-child', 'ready');
+      const insRow = raw.prepare(
+        'INSERT INTO task_members (task_member_id, team_id, main_task_id, name, session_id, is_leader, status, created_time, update_time) ' +
+          "VALUES (?, ?, ?, '团队领队', 'lead-child', 1, 'staged', 10, 11)",
+      );
+      insRow.run(1, 1, 1);
+      insRow.run(2, 2, 5);
+      raw.close();
+
+      const db = getDb(legacyRoot);
+      const snapshots = (): Record<string, string | null> =>
+        Object.fromEntries(
+          (
+            db.prepare('SELECT task_id, main_session_id FROM task ORDER BY task_id').all() as Array<{
+              task_id: number;
+              main_session_id: string | null;
+            }>
+          ).map((r) => [r.task_id, r.main_session_id]),
+        );
+      expect(snapshots()).toEqual({
+        1: 'session-cap', // 大任务：自身即根，原值不变
+        2: 'session-cap', // 误记领队子会话 → 换回发起对话
+        3: 'session-cap', // NULL → 随大任务补齐
+        5: null, // 大任务没有快照：无从补起
+        6: 'lead-child', // 大任务快照为空 → 保持原值，不洗成 NULL
+      });
+
+      // 幂等：重开重跑结果不变（v16 后落库的行不再是领队子会话，只被动一次）。
+      closeDb(legacyRoot);
+      const again = getDb(legacyRoot);
+      expect(
+        again
+          .prepare('SELECT main_session_id FROM task ORDER BY task_id')
+          .all()
+          .map((r) => (r as { main_session_id: string | null }).main_session_id),
+      ).toEqual(['session-cap', 'session-cap', 'session-cap', null, 'lead-child']);
+      closeDb(legacyRoot);
+    } finally {
+      cleanupTempWorkspace(legacyRoot);
+    }
+  });
+});
+
+describe('v16→v17 task 目录归属拆分（work_dir=会话目录 / task_dir=任务目录）', () => {
+  it('补 task_dir 列但**不回填**旧 work_dir（用户口径「不管之前的任务」），重开幂等', () => {
+    const legacyRoot = mkdtempSync(join(tmpdir(), 'eteams-mig-v17-'));
+    try {
+      mkdirSync(dbDirOf(legacyRoot), { recursive: true });
+      getDb(legacyRoot); // 建当前全新库（含 task_dir）
+      closeDb(legacyRoot);
+      // 模拟 v16 旧库：DROP task_dir + 降版本号，留一条旧语义的任务行——旧库的
+      // work_dir 存的是**相对任务目录**（teams/<号>-slug），新语义下它是「绝对
+      // 会话目录」，两者不是同一种东西，所以迁移不搬不猜。
+      const legacy = new DatabaseSync(dbFileOf(legacyRoot));
+      legacy.exec('ALTER TABLE task DROP COLUMN task_dir');
+      legacy
+        .prepare(
+          'INSERT INTO task (task_id, team_id, parent_id, subject, work_dir, status, created_time, update_time) ' +
+            "VALUES (3, 1, NULL, '登录服务', 'teams/3-登录服务', 'ready', 10, 11)",
+        )
+        .run();
+      legacy.prepare("UPDATE schema_meta SET value = '16' WHERE key = 'db_schema_version'").run();
+      legacy.exec('PRAGMA user_version = 16');
+      legacy.close();
+
+      const db = getDb(legacyRoot);
+      const cols = (
+        db.prepare('PRAGMA table_info(task)').all() as Array<{ name: string }>
+      ).map((c) => c.name);
+      expect(cols).toContain('task_dir');
+      expect(cols).toContain('work_dir');
+      // 旧行原样：work_dir 不动、task_dir 保持 NULL —— 两列不齐即旧布局，由
+      // docs.isCurrentLayout 判旧、不参与物化（不迁移、不兼容旧任务）。
+      expect(db.prepare('SELECT task_id, work_dir, task_dir FROM task WHERE task_id = 3').get()).toEqual(
+        { task_id: 3, work_dir: 'teams/3-登录服务', task_dir: null },
+      );
+
+      // 幂等：重开重跑不报错、不重复补列/改写。
+      closeDb(legacyRoot);
+      const again = getDb(legacyRoot);
+      expect(
+        (
+          again.prepare('SELECT task_dir FROM task WHERE task_id = 3').get() as {
+            task_dir: string | null;
+          }
+        ).task_dir,
+      ).toBeNull();
       closeDb(legacyRoot);
     } finally {
       cleanupTempWorkspace(legacyRoot);

@@ -171,13 +171,16 @@ export async function createTeam(
 }
 
 /**
- * 幂等分配**主任务**工作目录（用户 2026-09-15 扁平化）：`teams/<主任务号>-slug`，
- * 主任务与其全部小任务共用这个根；小任务不再分配自己的 work_dir（taskDirRel
- * 上溯主任务）。任务号唯一 → 不需要撞名后缀。只算路径不建目录——目录随文档
- * 渲染物化。
+ * 幂等分配**主任务**目录（用户 2026-09-15 扁平化 + 2026-09-16 归属拆分）：
+ * `teams/<主任务号>-slug`（相对 task.work_dir），主任务与其全部小任务共用这个
+ * 根；小任务不再分配自己的目录（taskDirRel 上溯主任务）。任务号唯一 → 不需要
+ * 撞名后缀。只算路径不建目录——目录随文档渲染物化。
+ *
+ * 只管相对的任务目录；**当前会话目录**（绝对）由调用方在建任务时一并盖进
+ * `task.workDir`（见 assignment.createTask）——两者一起才构成绝对任务目录。
  */
-export function ensureGroupWorkDir(env: RuntimeEnv, team: TeamState, task: TaskRecord): string {
-  if (task.workDir !== undefined) return task.workDir;
+export function ensureGroupTaskDir(team: TeamState, task: TaskRecord): string {
+  if (task.taskDir !== undefined) return task.taskDir;
   return taskRootDirRel(team, task);
 }
 

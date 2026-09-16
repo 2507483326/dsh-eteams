@@ -94,6 +94,7 @@ import { errorMessageOf } from '../../lib/errors';
 import { ClientErrorBoundary, recordClientDiag } from '../../lib/diagnostics';
 import { Toaster } from '../../components/ui/toaster';
 import { EteamsBackdrop } from '../../features/backdrop/eteamsBackdrop';
+import { useScrollportFit } from '../../features/layout/scrollportFit';
 import { useActivityMonitor } from '../../lib/monitor';
 import { getApp, type RootState } from '../../store/app';
 import { FormErrorNote, PageHeader } from '../shared/components';
@@ -237,6 +238,13 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
     measure(el.clientWidth);
     return () => ro.disconnect();
   }, []);
+  // 面板根高度锚（用户 2026-09-16「三个面板应该是占满整屏的……不能超过屏幕出现
+  // 外部滚动条」）：宿主会话视图区在 active 相位按内容增高、没有确定高度，根上的
+  // `height:100%` 会解析成内容高（面板整体随之长高 → 宿主那列出外部滚动条，页内
+  // flex 分配与卡内滚动全部失效）。改由 useScrollportFit 量出「宿主滚动视口可见
+  // 高 − 顶部偏移 − 下方输入框占位」写回 px——面板恰好占满可见区，页内 flex 拿到
+  // 确定高度（整页覆盖层量出来与本来的 100% 等价）。详见 features/layout/scrollportFit。
+  const fitHeight = useScrollportFit(rootRef);
   useEffect(() => {
     const h = (): void => {
       // 已挂载路径由窗口事件处理；顺带消费 pending 标记，防止标记滞留到
@@ -365,7 +373,7 @@ function ETeamsViewBody(props: ConvViewProps): ReactNode {
   return (
     <div
       className="eteams-ui"
-      style={{ height: '100%', position: 'relative' }}
+      style={{ height: fitHeight ?? '100%', position: 'relative' }}
       data-eteams="view"
       ref={rootRef}
     >

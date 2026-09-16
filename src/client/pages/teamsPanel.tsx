@@ -32,11 +32,16 @@
  *
  * Pending jump signals (新增角色 / 新增团队 / select-team) are staged BEFORE
  * either surface opens, so the panel consumes them on mount — the same
- * mount-time consumption pattern as openMemberBuilder (docs/19.16).
+ * mount-time consumption pattern as openMemberBuilder (docs/19.16). The landing
+ * page itself no longer rides on those one-shot flags: {@link stageTeamSignals}
+ * also stages the entry's target path and the panel's MemoryRouter consumes it
+ * at mount（用户 2026-09-16「点击对话框上面的 标准模式 旁边的 团队，应该跳面板
+ * 页面」——先前落点只走一次性标记，被别的已挂载表面先消费就退化成「恢复上次
+ * 页签」，整页团队页因此落在别的页签）。
  * （新增团队只走「落团队页」信号、不自开新增弹窗——用户反馈 2026-09：一进
  * 团队页就弹新增弹窗很突兀，创建入口收敛为团队页头右上角的「＋ 新增团队」
- * 按钮。用户 2026-09-15「点新增团队没有跳到对应的团队卡片」补齐该导航信号：
- * 无信号时面板按 ui.activeNav 恢复上次页签，落点不是团队页。）
+ * 按钮。用户 2026-09-15「点新增团队没有跳到对应的团队卡片」补齐该导航信号；
+ * 2026-09-16 起同一条落点由路由直接消费，见 lib/bridge 的 pendingLandingPath。）
  *
  * S11 样式迁移（docs/21-client-ui-stack.md 21.6 / D19b/D19c）：全屏页的
  * inline style 迁 Tailwind 类。pane 矩形（left/top/width/height）是实时测量

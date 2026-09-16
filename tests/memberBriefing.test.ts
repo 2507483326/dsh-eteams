@@ -5,9 +5,10 @@
  * ②队伍留言板（绝对路径 + 读/写纪律）③本任务纪要（绝对路径 + 写在哪一段）
  * ④文档产出目录 ⑤领队（无领队=主会话）与三节点实时汇报（开工/遇问题/完成）。
  */
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { MEMBER_RULES, MEMBER_TOOL_SHEET, memberBriefing, memberWelcome } from '../src/host/prompts/spawn/member';
-import { assignmentMail, reportCompletedMail } from '../src/host/prompts/handoff/mails';
+import { assignmentMail, reportCompletedMail, reportFailedMail } from '../src/host/prompts/handoff/mails';
 import { taskBriefing } from '../src/host/runtime/members';
 import { boardFileAbs, minutesFileAbs } from '../src/host/runtime/docs';
 import type { RuntimeEnv } from '../src/host/runtime/base';
@@ -128,21 +129,33 @@ describe('taskBriefing（runtime 组装：有领队=领队名，无领队=主会
     expect(text).toContain('主会话（用户对话窗口）');
   });
 
+  it('工程根取任务自己的 work_dir，不随调用方会话目录漂移（用户 2026-09-16）', () => {
+    const team = teamOf(true);
+    // 任务绑定在 C:/own（建任务时冻结的当前会话目录）；env.workspace 是本次调用
+    // 的会话目录（别的工作区）——简报必须按任务走，否则成员照它写代码就写错地方。
+    const root = taskOf({ id: 3, workDir: 'C:/own', taskDir: 'teams/3-登录服务' });
+    team.tasks = [root];
+    const text = taskBriefing(env, team, root);
+    expect(text).toContain('本任务绑定的工作区');
+    expect(text).toContain('C:/own');
+    expect(text).not.toContain('C:/ws');
+  });
+
   it('小任务成员拿到的是主任务目录下的同一块留言板与自己的纪要（用户 2026-09-15）', () => {
     const team = teamOf(true);
-    const root = taskOf({ id: 3 });
+    const root = taskOf({ id: 3, workDir: 'C:/own', taskDir: 'teams/3-登录服务' });
     const sub = taskOf({
       id: 4,
       parentId: 3,
       subject: '小任务',
-      // 存量任务可能已落旧 work_dir：扁平化后小任务忽略它、统一回到主任务目录。
-      workDir: 'teams/甲队/tasks/3-登录服务/sub/4-小任务',
+      // 小任务两列恒空（共用主任务目录）：基址与目录都上溯主任务。
     });
     team.tasks = [root, sub];
     const text = taskBriefing(env, team, sub);
     const expectedBoard = boardFileAbs(env.workspace, team, sub);
     expect(expectedBoard).toContain('3-登录服务');
     expect(expectedBoard).toContain('留言板.md');
+    expect(expectedBoard).toContain(join('C:/own', 'teams'));
     expect(text).toContain(expectedBoard);
     // 纪要按**任务**命名但落主任务目录（一个主任务一个目录，小任务不再有目录）。
     const expectedMinutes = minutesFileAbs(env.workspace, team, sub);
@@ -194,6 +207,26 @@ describe('成员留言板与纪要纪律（用户 2026-09-14 / 2026-09-15）', (
   });
 });
 
+describe('成员被拒纪律（v16）：换法子 / 报缺口 / 拒 三分', () => {
+  it('常驻规则把三种判定写清，工具速查列出 eteams_report_gap', () => {
+    const rules = MEMBER_RULES.join('\n');
+    expect(rules).toContain('被拒');
+    expect(rules).toContain('eteams_report_gap');
+    // 「换法子能不能过」是分界线；过不去才报，报完停下等路线。
+    expect(rules).toContain('换法子能不能过');
+    expect(rules).toContain('停下这条路');
+    // 外发/凭据类永不请示授权。
+    expect(rules).toContain('verdict=refuse');
+    expect(MEMBER_TOOL_SHEET).toContain('eteams_report_gap');
+  });
+
+  it('简报「实时汇报」写明被拦住的走法（先报缺口、再报领队、然后停下）', () => {
+    const text = memberBriefing(BRIEFING_INPUT);
+    expect(text).toContain('eteams_report_gap');
+    expect(text).toContain('停下这条路');
+  });
+});
+
 describe('完成汇报邮件带未决项自检（用户 2026-09-13）', () => {
   it('提醒领队：产出含待用户确认项时先问清再推进', () => {
     const text = reportCompletedMail(taskOf(), {
@@ -204,5 +237,20 @@ describe('完成汇报邮件带未决项自检（用户 2026-09-13）', () => {
     });
     expect(text).toContain('未决项自检');
     expect(text).toContain('eteams_ask_user');
+  });
+
+  it('失败转待领队的邮件给出三条分诊路径（含能力缺口走 route_gap）', () => {
+    const text = reportFailedMail(taskOf(), {
+      member: 'Alice',
+      attemptId: 7,
+      error: '被沙箱拦住',
+      retryCount: 3,
+      maxRetries: 3,
+      willRetry: false,
+    });
+    expect(text).toContain('待领队分诊');
+    expect(text).toContain('eteams_reassign_task');
+    expect(text).toContain('eteams_escalate_task');
+    expect(text).toContain('eteams_route_gap');
   });
 });

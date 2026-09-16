@@ -129,7 +129,8 @@ export function reportFailedMail(
     `障碍：${opts.error}`,
     `自动重试已达上限（${opts.retryCount}/${opts.maxRetries}），任务转入 wait（待领队分诊）：`,
     '- 小 bug：直接 eteams_reassign_task 重新派人 loop（可同人续跑或换人），任务回 ready 再执行；',
-    '- 流程/环境问题：用 eteams_escalate_task 升级为「待用户」，把问题写进 report 问用户。',
+    '- 流程/环境问题：用 eteams_escalate_task 升级为「待用户」，把问题写进 report 问用户；',
+    '- 工具被拦住（能力缺口）：成员已 eteams_report_gap 上报（看板「能力缺口」）——用 eteams_route_gap 定路线，不要自己去跑那条命令。',
     `（attempt ${opts.attemptId}）`,
   ].join('\n');
 }

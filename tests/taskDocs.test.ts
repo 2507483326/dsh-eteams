@@ -1,11 +1,19 @@
 /**
- * 任务工作文档扁平化单测（用户 2026-09-15）：`teams/<主任务号>-slug>/` 一个主任务
- * 一个目录 —— 留言板一块、每任务一份 `<任务号>-slug.纪要.md`（上半段宿主幂等
- * 渲染、下半段纪要正文）、`计划/` 与 `文档/` 只建目录；存量旧布局（tasks/ 与
- * sub/）不迁移、不兼容。覆盖点：路径规则、幂等、create-only、改名不重复、旧
- * work_dir 跳过。
+ * 任务工作文档扁平化单测（用户 2026-09-15；2026-09-16 目录归属拆分）：
+ * `<work_dir>/teams/<主任务号>-slug>/` 一个主任务一个目录 —— 留言板一块、每任务
+ * 一份 `<任务号>-slug.纪要.md`（上半段宿主幂等渲染、下半段纪要正文）、`计划/`
+ * 与 `文档/` 只建目录；存量旧布局（tasks/ 与 sub/、或两列不齐）不迁移、不兼容。
+ * 覆盖点：路径规则、**目录归属钉在任务行上（不随调用方工作区漂移）**、幂等、
+ * create-only、改名不重复、旧行跳过。
  */
-import { existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -18,12 +26,19 @@ import {
   isCurrentLayout,
   minutesFileName,
   renderTeamDocs,
+  taskDirAbs,
   taskDirRel,
   taskRootDirRel,
+  taskWorkRootOf,
 } from '../src/host/runtime/docs';
 import type { TaskRecord, TeamState } from '../src/host/model/types';
 
 const T0 = 1_000;
+
+/** 一个工作区绝对路径（不必真实存在——物化会自己建）。 */
+function workspaceOf(): string {
+  return mkdtempSync(join(tmpdir(), 'eteams-taskdocs-'));
+}
 
 function taskOf(overrides: Partial<TaskRecord> = {}): TaskRecord {
   return {
@@ -42,6 +57,17 @@ function taskOf(overrides: Partial<TaskRecord> = {}): TaskRecord {
   };
 }
 
+/** 新布局主任务：两列齐备（work_dir 绝对 = 当前会话目录，task_dir 相对）。 */
+function currentGroup(workspace: string, overrides: Partial<TaskRecord> = {}): TaskRecord {
+  return taskOf({
+    id: 3,
+    subject: '登录服务',
+    workDir: workspace,
+    taskDir: 'teams/3-登录服务',
+    ...overrides,
+  });
+}
+
 /** 一个主任务 + 一个小任务的最小团队（不带成员，文档渲染不需要）。 */
 function teamOf(group: TaskRecord, subs: TaskRecord[] = []): TeamState {
   return {
@@ -57,35 +83,89 @@ function teamOf(group: TaskRecord, subs: TaskRecord[] = []): TeamState {
   } as unknown as TeamState;
 }
 
-function workspaceOf(): string {
-  return mkdtempSync(join(tmpdir(), 'eteams-taskdocs-'));
-}
-
 describe('路径规则（一个主任务一个目录，主任务与小任务共用）', () => {
   it('主任务目录 = teams/<主任务号>-slug；小任务与其同根', () => {
-    const group = taskOf({ id: 3, subject: '登录服务', workDir: 'teams/3-登录服务' });
+    const group = currentGroup('C:/ws');
     const sub = taskOf({ id: 4, parentId: 3, subject: '接口鉴权' });
     const team = teamOf(group, [sub]);
     expect(taskRootDirRel(team, group)).toBe('teams/3-登录服务');
     expect(taskRootDirRel(team, sub)).toBe('teams/3-登录服务');
+    expect(taskDirRel(team, group)).toBe('teams/3-登录服务');
+    // 小任务没有自己的两列，上溯主任务目录。
     expect(taskDirRel(team, sub)).toBe('teams/3-登录服务');
+    // 绝对任务目录 = 任务自己的 work_dir + task_dir。
+    expect(taskDirAbs('C:/other', team, group)).toBe(join('C:/ws', 'teams', '3-登录服务'));
+    expect(taskWorkRootOf('C:/other', team, group)).toBe('C:/ws');
     // 纪要按任务命名、落同一个主任务目录。
     expect(minutesFileName(sub)).toBe(`4-接口鉴权${MINUTES_SUFFIX}`);
   });
 
-  it('物化只认新布局：旧 work_dir（tasks/ 或 sub/）一律不算', () => {
+  it('物化只认新布局：缺列、旧 task_dir（tasks/ 或 sub/）一律不算', () => {
     const legacy = taskOf({ id: 3, workDir: 'teams/甲队/tasks/t3-登录服务' });
-    const legacySub = taskOf({ id: 4, parentId: 3, workDir: 'teams/甲队/tasks/t3-登录服务/sub/t4-接口鉴权' });
+    const legacySub = taskOf({
+      id: 4,
+      parentId: 3,
+      workDir: 'teams/甲队/tasks/t3-登录服务/sub/t4-接口鉴权',
+    });
+    // 旧行的 work_dir 是旧语义的相对值、且没有 task_dir → 旧布局。
     expect(isCurrentLayout(teamOf(legacy), legacy)).toBe(false);
     // 小任务永不参与物化（没有自己的目录）。
     expect(isCurrentLayout(teamOf(legacy, [legacySub]), legacySub)).toBe(false);
+    // 两列不齐（库里按「不管之前的任务」不回填）→ 旧布局。
+    expect(isCurrentLayout(teamOf(taskOf({ id: 3, workDir: 'C:/ws' })), taskOf({ id: 3, workDir: 'C:/ws' }))).toBe(
+      false,
+    );
+    expect(isCurrentLayout(teamOf(taskOf({ id: 3, taskDir: 'teams/3-登录服务' })), taskOf({ id: 3, taskDir: 'teams/3-登录服务' }))).toBe(
+      false,
+    );
+    // 两列齐备且 task_dir 与规则相符 → 新布局。
+    const group = currentGroup('C:/ws');
+    expect(isCurrentLayout(teamOf(group), group)).toBe(true);
+  });
+
+  it('旧行（work_dir 为空/相对值）回退调用方工作区，不会拼出怪路径', () => {
+    const legacy = taskOf({ id: 3, workDir: 'teams/3-登录服务' });
+    const team = teamOf(legacy);
+    expect(taskWorkRootOf('C:/caller', team, legacy)).toBe('C:/caller');
+    expect(taskDirAbs('C:/caller', team, legacy)).toBe(join('C:/caller', 'teams', '3-登录服务'));
+  });
+});
+
+describe('目录归属（钉在任务行上，不随调用方工作区漂移）', () => {
+  it('物化落在任务自己的 work_dir 下，调用方工作区分毫不进', () => {
+    const caller = workspaceOf();
+    const own = workspaceOf();
+    const group = currentGroup(own);
+    const team = teamOf(group);
+
+    expect(renderTeamDocs(caller, team)).toEqual([]);
+
+    // 目录长在任务自己的 work_dir 里……
+    const ownDir = join(own, 'teams', '3-登录服务');
+    expect(existsSync(join(ownDir, BOARD_FILE_NAME))).toBe(true);
+    expect(existsSync(join(ownDir, minutesFileName(group)))).toBe(true);
+    // ……调用方工作区下什么都不该生成。
+    expect(existsSync(join(caller, 'teams'))).toBe(false);
+  });
+
+  it('换个会话目录再触发物化，不会在第二个工作区多出一份', () => {
+    const first = workspaceOf();
+    const second = workspaceOf();
+    const group = currentGroup(first);
+    const team = teamOf(group);
+
+    renderTeamDocs(first, team);
+    renderTeamDocs(second, team);
+
+    expect(existsSync(join(first, 'teams', '3-登录服务', BOARD_FILE_NAME))).toBe(true);
+    expect(existsSync(join(second, 'teams'))).toBe(false);
   });
 });
 
 describe('物化（留言板 + 每任务纪要 + 计划/文档夹）', () => {
   it('落盘形态正确，且不再有 README / contract.md / notes.md', () => {
     const workspace = workspaceOf();
-    const group = taskOf({ id: 3, subject: '登录服务', workDir: 'teams/3-登录服务' });
+    const group = currentGroup(workspace);
     const sub = taskOf({ id: 4, parentId: 3, subject: '接口鉴权' });
     const team = teamOf(group, [sub]);
     expect(renderTeamDocs(workspace, team)).toEqual([]);
@@ -106,7 +186,7 @@ describe('物化（留言板 + 每任务纪要 + 计划/文档夹）', () => {
 
   it('上半段幂等重渲染、下半段纪要正文字字不动（create-only）', () => {
     const workspace = workspaceOf();
-    const group = taskOf({ id: 3, subject: '登录服务', workDir: 'teams/3-登录服务' });
+    const group = currentGroup(workspace);
     const team = teamOf(group);
     renderTeamDocs(workspace, team);
     const file = join(workspace, 'teams', '3-登录服务', minutesFileName(group));
@@ -128,7 +208,7 @@ describe('物化（留言板 + 每任务纪要 + 计划/文档夹）', () => {
 
   it('留言板 create-only：已存在的内容不被覆盖', () => {
     const workspace = workspaceOf();
-    const group = taskOf({ id: 3, subject: '登录服务', workDir: 'teams/3-登录服务' });
+    const group = currentGroup(workspace);
     const team = teamOf(group);
     renderTeamDocs(workspace, team);
     const board = join(workspace, 'teams', '3-登录服务', BOARD_FILE_NAME);
@@ -149,16 +229,20 @@ describe('物化（留言板 + 每任务纪要 + 计划/文档夹）', () => {
 describe('主题改写（纪要改名不产生重复文件）', () => {
   it('改主题后只剩新名纪要，且正文不丢', () => {
     const workspace = workspaceOf();
-    const group = taskOf({ id: 3, subject: '登录服务', workDir: 'teams/3-登录服务' });
+    const group = currentGroup(workspace);
     const team = teamOf(group);
     renderTeamDocs(workspace, team);
     const dir = join(workspace, 'teams', '3-登录服务');
     const oldName = minutesFileName(group);
-    writeFileSync(join(dir, oldName), `${readFileSync(join(dir, oldName), 'utf8')}### 结论\nok\n`, 'utf8');
+    writeFileSync(
+      join(dir, oldName),
+      `${readFileSync(join(dir, oldName), 'utf8')}### 结论\nok\n`,
+      'utf8',
+    );
 
     // 收口回写主题：宿主先把目录改名（assignment.renameTaskFolder），物化再把
     // 纪要改成新名——旧名不留。
-    const renamed = { ...group, subject: '登录服务（收口）', workDir: 'teams/3-登录服务-收口' };
+    const renamed = { ...group, subject: '登录服务（收口）', taskDir: 'teams/3-登录服务-收口' };
     renameSync(dir, join(workspace, 'teams', '3-登录服务-收口'));
     renderTeamDocs(workspace, teamOf(renamed));
     const newDir = join(workspace, 'teams', '3-登录服务-收口');
@@ -169,7 +253,7 @@ describe('主题改写（纪要改名不产生重复文件）', () => {
 
   it('小任务改主题：同目录内旧名纪要改名，不新增第二份', () => {
     const workspace = workspaceOf();
-    const group = taskOf({ id: 3, subject: '登录服务', workDir: 'teams/3-登录服务' });
+    const group = currentGroup(workspace);
     const sub = taskOf({ id: 4, parentId: 3, subject: '接口鉴权' });
     renderTeamDocs(workspace, teamOf(group, [sub]));
     const dir = join(workspace, 'teams', '3-登录服务');

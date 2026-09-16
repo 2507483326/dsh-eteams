@@ -91,7 +91,7 @@ export interface TaskView {
   kind: string;
   /** 父主任务 id（docs/26 拆解的小任务）；null = 顶层。 */
   parentId: number | null;
-  /** 专属任务文件夹（相对工作区）；null = 团队工作目录尚未分配。 */
+  /** 专属任务文件夹（相对 task.work_dir；宿主按任务自己的 work_dir 定位绝对路径）；null = 团队工作目录尚未分配。 */
   folder: string | null;
   /** 任务说明/合同摘要（docs/26 面板编辑弹窗回填）；null = 无。旧运行时缺省 null。 */
   description: string | null;

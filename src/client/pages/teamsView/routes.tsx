@@ -8,9 +8,10 @@
  * + /tasks/:taskId 详情（见 tasks/），M4 团队域 /team 列表 + /team/:teamId
  * 团队详情 + /team/:teamId/member/:name 成员详情（见 team/）。
  *
- * ui model 保留为持久层与观察面：initialEntries 挂载时由 ui.activeNav 推导
- * （宿主换页/刷新重挂后回到上次页签——刷新恢复；M3 起任务页签 +
- * drawerTaskId 非空回落 /tasks/:taskId 恢复详情）；location 变化单向 sync
+ * ui model 保留为持久层与观察面：initialEntries 挂载时优先取**入口落点**
+ * （bridge 的 consumePendingLandingPath，用户 2026-09-16 导航漂移修复），无落点
+ * 才由 ui.activeNav 推导（宿主换页/刷新重挂后回到上次页签——刷新恢复；M3 起任务
+ * 页签 + drawerTaskId 非空回落 /tasks/:taskId 恢复详情）；location 变化单向 sync
  * 回 store（ui/setNav + M3 起 /tasks 域的 ui/setDrawerTask），store 不反向
  * 驱动 location（防回环）。drawerTaskId 语义 = 任务详情页选中的任务 id
  * （八轮 DA21），/tasks 域外路径不触碰（ui model 独立键互不清空语义不变）。
@@ -24,6 +25,7 @@ import { useDispatch } from 'react-redux';
 import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import type { PrefillOutcome } from '../../lib/addPeople';
 import type { RosterMember } from '../../lib/api';
+import { consumePendingLandingPath } from '../../lib/bridge';
 import { navIdOfPath, navPathOfId } from '../../lib/status';
 import type { TeamSnapshot } from '../../lib/monitor';
 import { getApp } from '../../store/app';
@@ -96,16 +98,27 @@ function TaskDetailRoute({
 }
 
 /**
- * 面板路由根（每表面一棵，44.2.1）：内存历史挂载时由 ui model 持久值推导
- * 初始路径——刷新/宿主换页重挂后回到上次页签（持久层语义）。
+ * 面板路由根（每表面一棵，44.2.1）：内存历史挂载时由入口落点 / ui model 持久值
+ * 推导初始路径。
+ *
+ * 落点优先级（用户 2026-09-16「点击对话框上面的 标准模式 旁边的 团队，应该跳
+ * 面板页面」，实测为「面板出来了但落在别的页签」）：① 本次入口显式声明的落点
+ * （bridge 的 consumePendingLandingPath——入口语义转成的目标路径）由**路由自己**
+ * 在挂载时消费；② 没有落点才按 ui model 持久值恢复（刷新/宿主换页重挂回上次
+ * 页签）。先前落点只走桥的一次性 pending 标记、由「谁先挂载/谁先收到窗口事件」
+ * 的面板消费，被别的已挂载表面先吃掉后，新挂载的整页团队页就退化成 ② 而落在
+ * 上次页签——落点改由路由消费后，目标页随本次打开一起到达，不再参与竞争。
  */
 export function ETeamsRouter({ children }: { children: ReactNode }): ReactNode {
-  // initialEntries 只在挂载时求值一次（useState 惰性初始化）：读单例 store
-  // 的 ui model 持久值（activeNav → path，畸形值 navPathOfId 兜底 /board）。
-  // M3：任务页签 + drawerTaskId 非空回落 /tasks/:taskId 恢复详情——重挂恢复
-  // 口径与拆页前一致（壳曾把 ui.drawerTaskId 经 props 传给任务页作初始选中；
-  // 任务已删时详情页 not-found 自动回 /tasks，无死路径）。
+  // initialEntries 只在挂载时求值一次（useState 惰性初始化）：先取入口落点，
+  // 缺省再读单例 store 的 ui model 持久值（activeNav → path，畸形值
+  // navPathOfId 兜底 /board）。M3：任务页签 + drawerTaskId 非空回落
+  // /tasks/:taskId 恢复详情——重挂恢复口径与拆页前一致（壳曾把
+  // ui.drawerTaskId 经 props 传给任务页作初始选中；任务已删时详情页
+  // not-found 自动回 /tasks，无死路径）。
   const [initialEntries] = useState((): string[] => {
+    const landing = consumePendingLandingPath();
+    if (landing !== null) return [landing];
     const ui = getApp().store.getState().ui;
     if (ui.activeNav === 'tasks' && ui.drawerTaskId !== null) {
       return [`/tasks/${ui.drawerTaskId}`];

@@ -102,6 +102,27 @@ eteams-ui 字面量随 Card 根（S5 试点双保险）。M7-11：面三要素�
 CARD_SURFACE_CLASS（逐字同值，工具类序不影响级联）。 */
 export const PANEL_CARD_CLASS = `eteams-ui mb-3 min-w-0 px-4 py-4 ${CARD_SURFACE_CLASS}`;
 
+/** 看板两个面板卡（决策面板 / 动态时间线）的公共布局类（用户 2026-09-16「看板
+ * 决策面板和 动态怎么这么高了，给一个最小高度，然后不能超过屏幕出现外部滚动
+ * 条」→「决策面板和 动态 应该出现内部滚动条，避免超出出现外部滚动条」→「三个
+ * 面板应该是占满整屏的，和团队这种应该是一样的啊，使用flex布局，限制最小高
+ * 度」）：与团队/角色/任务页同款的「整页占满」档——
+ * ① `flex-1`：跟日历卡（shrink-0 定高）一起把看板余高吃满，三个面板合起来正好
+ *    占满整屏；
+ * ② `min-h-[300px]`：两卡共用的下限（余高充裕时两卡按 flex 等分、下限不生效；
+ *    余高紧张时先冻在这里）。用户 2026-09-16「决策面板 没有最小高度了」→
+ *    「最小高度太小了，至少300px 然后待决策中没有数据时，没有待决策的提示也没
+ *    有看见了」：160px 那档在宿主实际字体度量下只够卡身固定件（内距 + 标题 +
+ *    页签条），空态行/列表被下压到可视区外 → 看着既没下限、也丢了「暂无待决策」
+ *    提示；300px 保证固定件之下仍有空态行与几行列表的位置。改档只动这一个数。
+ * ③ 卡内列表区 `min-h-0 flex-1 overflow-y-auto` 承担溢出 → 内部滚动条优先；
+ * ④ overflow-hidden：下限之和仍超出余高的极矮面板兜底，裁在卡内不外溢。
+ * 前提是「面板根有确定高度」——由 features/layout/scrollportFit 量出宿主滚动
+ * 视口可见高写回根元素（宿主视图区在 active 相位按内容增高，没有确定高度时
+ * flex-1/min-h-0/自滚全部失效，那才是先前「改了卡内高度还是不行」的根因）。
+ * 下限与两卡的其他共性都收在这一个常量里，调档只动这里。 */
+export const BOARD_PANEL_CARD_CLASS = `flex flex-1 flex-col overflow-hidden min-h-[300px] ${PANEL_CARD_CLASS}`;
+
 /** shadcn Select 空选项哨兵（Radix SelectItem value 禁空串；映射回 ''/null）。 */
 export const SELECT_NONE = '__none__';
 /** 原 styles.formRow / styles.formLabel（表单行）：汇报页先用，S14 表单复用。 */

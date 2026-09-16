@@ -52,8 +52,9 @@ export function envForAgent(
   const cwd = agent.session?.header?.cwd ?? process.cwd();
   // 跨工作区团队对齐（docs/26）：band/面板按注册表全工作区定位，工具环境
   // 在此对齐——本会话身份对应的团队若在别的注册工作区（会话项目目录 ≠
-  // 团队工作区），env 重指到团队所在工作区：状态根、文档渲染、workDir 全部
-  // 以团队为准；resolveCaller 随后在重指后的根上按同一优先级解析。
+  // 团队工作区），env 重指到团队所在工作区：**状态根**以团队为准（任务目录与
+  // 文档渲染自 2026-09-16 起按任务自己的 work_dir 走，见 runtime/docs）；
+  // resolveCaller 随后在重指后的根上按同一优先级解析。
   const located = locateAgentTeam(
     config,
     ctx,

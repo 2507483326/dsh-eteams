@@ -1,8 +1,10 @@
 /**
  * Team work documents（用户 2026-09-15 扁平化）：
- * `<workspace>/teams/<主任务号>-slug>/` —— **一个主任务一个目录**，主任务与其
+ * `<work_dir>/teams/<主任务号>-slug>/` —— **一个主任务一个目录**，主任务与其
  * 全部小任务共用这个根（团队名不进路径：一块留言板 / 一个计划夹 / 一个文档夹
- * 是「一个主任务」的治理面）。目录下固定四样：
+ * 是「一个主任务」的治理面）。`work_dir` 是建任务时冻结的当前会话目录
+ * （task.work_dir，绝对路径），所以同一任务的目录不再随调用者在工作区间漂移。
+ * 目录下固定四样：
  *
  * - `留言板.md`：create-only，领队与全员共用一块板；
  * - `<任务号>-slug.纪要.md`：每个任务一份（含主任务自己）——上半段是宿主幂等
@@ -15,7 +17,7 @@
  *
  * 存量旧布局（`teams/<团队>/tasks/<任务>/sub/<小任务>/` + contract.md + notes.md）
  * **不迁移、不兼容**（用户 2026-09-15「完全不管旧任务，也不兼容旧任务」）：物化
- * 只认 work_dir 与当前规则相符的主任务，旧目录冻结不动。
+ * 只认 work_dir / task_dir 两列齐备且与当前规则相符的主任务，旧目录冻结不动。
  *
  * @module dsh-eteams/runtime/docs
  */
@@ -55,8 +57,27 @@ function rootTaskOf(team: TeamState, task: TaskRecord): TaskRecord {
   return team.tasks.find((t) => t.id === task.parentId) ?? task;
 }
 
+/** 绝对路径判据（盘符 / UNC / POSIX 根），与 base.stateRootFor 同口径。 */
+function isAbsolutePath(path: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(path) || path.startsWith('\\\\') || path.startsWith('/');
+}
+
 /**
- * 主任务目录（workspace-relative，新规则纯派生）：`teams/<主任务号>-<slug>`。
+ * 任务的工作根（绝对）：任务自带的 `work_dir` 就是建任务时冻结的**当前会话
+ * 目录**——任务目录挂在哪从此由任务行自己说了算，不再随之后是谁在调用而漂移
+ * （全局单库下同一个任务曾在多个工作区各物化一份的根因）。
+ *
+ * 旧行两列不齐（`work_dir` 是旧语义的相对值、或为空）时回退调用方工作区：这类
+ * 行不参与物化（{@link isCurrentLayout} 判旧），此处只给面板显示/删除一个不炸的
+ * 基址。
+ */
+export function taskWorkRootOf(workspace: string, team: TeamState, task: TaskRecord): string {
+  const dir = rootTaskOf(team, task).workDir;
+  return dir !== undefined && isAbsolutePath(dir) ? dir : workspace;
+}
+
+/**
+ * 主任务目录（**相对 work_dir**，新规则纯派生）：`teams/<主任务号>-<slug>`。
  * 小任务不再有自己的目录——主任务与小任务同根（用户 2026-09-15
  * 「不需要这么细」）。
  */
@@ -64,39 +85,42 @@ export function taskRootDirRel(team: TeamState, task: TaskRecord): string {
   return `${WORK_ROOT}/${taskSlug(rootTaskOf(team, task))}`;
 }
 
-/** Absolute 主任务目录（新规则）。 */
+/** Absolute 主任务目录（新规则：基址 = 任务自己的 work_dir）。 */
 export function taskRootDirAbs(workspace: string, team: TeamState, task: TaskRecord): string {
-  return join(workspace, taskRootDirRel(team, task));
+  return join(taskWorkRootOf(workspace, team, task), taskRootDirRel(team, task));
 }
 
 /**
- * 任务目录（面板显示 / 工具输出 / 打开文件夹）：已分配 work_dir 的按字面返回
- * （存量任务仍指向它自己的旧目录，面板照旧可打开），其余派生到主任务根。
+ * 任务目录（相对 work_dir，面板显示 / 工具输出 / 打开文件夹）：建任务时分配
+ * 的 `task_dir` 按字面返回（改主题后由 assignment.renameTaskFolder 重算），未
+ * 分配则派生到主任务根。小任务没有自己的目录，上溯主任务。
  */
 export function taskDirRel(team: TeamState, task: TaskRecord): string {
-  return task.workDir ?? taskRootDirRel(team, task);
+  const root = rootTaskOf(team, task);
+  return root.taskDir ?? taskRootDirRel(team, root);
 }
 
-/** Absolute task folder for one task. */
+/** Absolute task folder for one task（基址 = 任务自己的 work_dir）。 */
 export function taskDirAbs(workspace: string, team: TeamState, task: TaskRecord): string {
-  return join(workspace, taskDirRel(team, task));
+  return join(taskWorkRootOf(workspace, team, task), taskDirRel(team, task));
 }
 
 /**
- * 组目录（主任务目录）绝对路径——留言板 / 纪要 / 计划 / 文档都挂在这里。新任务
- * 按新规则；存量任务落到它已物化的旧目录（对在跑的旧任务零行为变化）。
+ * 组目录（主任务目录）绝对路径——留言板 / 纪要 / 计划 / 文档都挂在这里。
  */
 export function groupDirAbs(workspace: string, team: TeamState, task: TaskRecord): string {
   return taskDirAbs(workspace, team, rootTaskOf(team, task));
 }
 
 /**
- * 该任务是否参与物化：只有「主任务 + work_dir 与当前规则相符（或未分配）」才算。
- * 存量旧布局（`…/tasks/…`、`…/sub/…`）为 false —— 不建目录、不写文件、不迁移。
+ * 该任务是否参与物化：只有「主任务 + work_dir / task_dir 都已分配 + task_dir
+ * 与当前规则相符」才算。两列不齐（旧库按「不管之前的任务」不回填）与旧布局
+ * （`…/tasks/…`、`…/sub/…`）一律 false —— 不建目录、不写文件、不迁移。
  */
 export function isCurrentLayout(team: TeamState, task: TaskRecord): boolean {
   if (task.parentId !== null) return false;
-  return task.workDir === undefined || task.workDir === taskRootDirRel(team, task);
+  if (task.workDir === undefined || task.taskDir === undefined) return false;
+  return task.taskDir === taskRootDirRel(team, task);
 }
 
 /** 纪要文件名：`<任务号>-<slug>.纪要.md`。 */
@@ -236,7 +260,9 @@ export function renderTeamDocs(
   team: TeamState,
   log?: (msg: string) => void,
 ): string[] {
-  // 存量旧任务（work_dir 与当前规则不符）整块跳过：不建目录、不写文件、不迁移。
+  // 存量旧任务（两列不齐或 task_dir 与当前规则不符）整块跳过：不建目录、不写
+  // 文件、不迁移。workspace 参数对它们之外的每个主任务都退化为兜底——目录基址
+  // 取自任务自己的 work_dir（taskRootDirAbs → taskWorkRootOf）。
   const roots = team.tasks.filter((t) => isCurrentLayout(team, t));
   if (roots.length === 0) return [];
   const warnings: string[] = [];

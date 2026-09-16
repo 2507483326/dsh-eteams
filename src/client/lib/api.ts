@@ -444,7 +444,7 @@ export async function deleteTeamTask(teamId: string, taskId: number): Promise<vo
 }
 
 /** Open a task folder in the system file manager（十二轮 DA25：列表卡文件夹
- * 路径可点击；宿主以 workspacePath + 任务 work_dir 定位后拉起文件管理器）. */
+ * 路径可点击；宿主按任务自己的 work_dir + task_dir 定位后拉起文件管理器）. */
 export async function openTaskFolder(teamId: string, taskId: number): Promise<void> {
   await requestJson(
     `${API_BASE}/team/${encodeURIComponent(teamId)}/task/${taskId}/folder/open`,

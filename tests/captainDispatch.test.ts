@@ -706,6 +706,19 @@ describe('eteams_captain_guide (用户迭代 2026-09-10 领取完成流程)', ()
     expect(start).toContain('追加一行');
   });
 
+  it('领队能力缺口处置纪律（v16）：收到缺口 → 定路线，不自己去跑', () => {
+    // 成员被工具拦住换法子也过不去 → eteams_report_gap；处置权在领队（成员被
+    // MEMBER_DENIED_TOOLS 拒见 route_gap），路线三选一，且不许自己代跑。
+    expect(CAPTAIN_CHILD_PERSONA).toContain('能力缺口处置');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('eteams_report_gap');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('eteams_route_gap');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('main-executes');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('widen-and-redelegate');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('split-stage');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('不要自己去跑那条命令');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('memoize=true');
+  });
+
   it('returns turn=none with an empty latestMessage when nothing was dispatched', async () => {
     seedTeam({ leaderChild: 'sess-child-1' });
     const guide = findGuideTool();

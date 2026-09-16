@@ -9,7 +9,8 @@
  * 换算细则（docs/36 建议 6）：t1/a1/d1 文本号按映射换整数号（正文不换）；
  * events/inbox 的 per-team seq 丢弃换全库号；inbox 文件名 → box_key、
  * MailMessage.id 原样保留为 message_id；存量任务目录按字面路径进
- * task.work_dir（旧目录不迁移）；archive/ 目录跳过；工号 `ET-0001` → 整数
+ * task.task_dir（旧目录不迁移；task.work_dir 留空——旧文件里没有「当前会话
+ * 目录」这条信息）；archive/ 目录跳过；工号 `ET-0001` → 整数
  * （v7 表自增：按名重键——班底行落库拿到新自增号后，副本/邮箱/链站点按
  * 名字 join 换到新号）；
  * employee-seq.json 不导入。
@@ -254,9 +255,14 @@ function personaFromFields(
 }
 
 /**
- * 导入任务的工作目录（用户 2026-09-15 扁平化）：一个主任务一个目录
- * `teams/<任务号>-slug`（与 runtime/docs 的 taskRootDirRel 同规则）；小任务不落
- * work_dir——它们共用主任务目录，读取侧由 taskDirRel 上溯到主任务。
+ * 导入任务的**任务目录**（task.task_dir，用户 2026-09-15 扁平化 + 2026-09-16
+ * 目录归属拆分）：一个主任务一个目录 `teams/<任务号>-slug`（与 runtime/docs
+ * 的 taskRootDirRel 同规则）；小任务不落——它们共用主任务目录，读取侧由
+ * taskDirRel 上溯到主任务。
+ *
+ * task.work_dir 留空：它是「当前会话目录」（绝对路径），旧库/旧文件里没有
+ * 这条信息、也反推不出来（导入没有会话 cwd）。按用户口径「不管之前的任务」
+ * 不猜——两列不齐的行由 isCurrentLayout 判为旧布局、不参与物化。
  */
 function importedTaskDir(id: number, subject: string, parentId: number | null): string | null {
   if (parentId !== null) return null;
@@ -759,13 +765,13 @@ function importLegacyTeam(
     insertTaskMemberRow(tx, row);
   }
 
-  // ---- 任务 / 尝试（t1/a1 → 整数；work_dir 只有主任务有）----
+  // ---- 任务 / 尝试（t1/a1 → 整数；work_dir 恒空、task_dir 只有主任务有）----
   const insertTask = db.prepare(
     'INSERT INTO task (task_id, team_id, parent_id, subject, description, depend_tasks, ' +
       'member_chain_list, chain_cursor, status, current_member, current_member_id, ' +
       'main_session_id, retry_count, status_note, contract_md, idempotency_note, ' +
-      'blocked_from, work_dir, completed_time, created_time, update_time) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'blocked_from, work_dir, task_dir, completed_time, created_time, update_time) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)',
   );
   const insertAttempt = db.prepare(
     'INSERT INTO attempts (attempt_id, team_id, task_id, kind, member, status, token, ' +

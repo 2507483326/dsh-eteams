@@ -163,7 +163,9 @@ export function apply(ctx: Context): void {
   // 按钮，不再自开弹窗——用户反馈 2026-09）；对话未开始时宿主渲染不出标签环，
   // enterTeamsPanel 会改落整页团队页（teamsPanel 模块头有推理）。用户
   // 2026-09-15「点新增团队没有跳到对应的团队卡片」：无信号时面板按
-  // ui.activeNav 恢复上次页签，hero 按钮同款漂移一并收口。
+  // ui.activeNav 恢复上次页签；落点自 2026-09-16 起由面板路由直接消费
+  // （lib/bridge 的 pendingLandingPath），整页团队页与宿主页签两条路都按
+  // 入口声明的目标页打开。
   guard('hero.teams-button', () => installHeroTeamsButton(() => enterTeamsPanel({ team: true })));
 
   guard('conversation.chat.commandview', () =>

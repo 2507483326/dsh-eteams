@@ -28,6 +28,7 @@ import { PLUGIN_ID, PLUGIN_VERSION, STATE_SCHEMA_VERSION, TOOL_PREFIX } from './
 import { createCaptainTools } from './tools/captainTools.js';
 import { createCaptainDispatchTool } from './tools/captainDispatch.js';
 import { createAskUserTools } from './tools/askUserTools.js';
+import { createGapTools } from './tools/gapTools.js';
 import { createMemberTools } from './tools/memberTools.js';
 import { installUsageMeter } from './runtime/usage.js';
 import { installInterruptionWatcher } from './runtime/interruption.js';
@@ -72,6 +73,7 @@ export { ETeamsConfig };
 export { createCaptainTools } from './tools/captainTools.js';
 export { createCaptainDispatchTool } from './tools/captainDispatch.js';
 export { createAskUserTools } from './tools/askUserTools.js';
+export { createGapTools } from './tools/gapTools.js';
 export { createMemberTools } from './tools/memberTools.js';
 // eteams_approve_plan 已随审批环节重构下线（docs/35 §5#1），导出面随之撤销。
 export {
@@ -120,6 +122,13 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
   // 注册且不进任何 deny 列表——领队子代理、成员、构建师子代理都可见；DeepSeek
   // 原生弹窗直接弹在提问方的主对话（不在线退回提问会话自身，阻塞同回合继续）。
   for (const tool of createAskUserTools(config, ctx)) {
+    ctx.tools.register(tool);
+  }
+  // 1d) 能力缺口（v16）：两个工具同一个根作用域注册、可见性分流——
+  // eteams_report_gap 上报（不进任何 deny 列表，全体子代理被拒之后都走它）；
+  // eteams_route_gap 处置（领队面，成员在 spawn 时由 MEMBER_DENIED_TOOLS 拒见）。
+  // 宿主做确定性预筛（高风险与自判 refuse 拒收、命定常设路线按路线走、同操作去重）。
+  for (const tool of createGapTools(config, ctx)) {
     ctx.tools.register(tool);
   }
   log.info('eteams: captain tools registered');

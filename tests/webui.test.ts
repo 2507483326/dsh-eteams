@@ -1127,10 +1127,12 @@ describe('panel write routes (M5 first slice)', () => {
     const made = await post(`/eteams-api/team/${teamId}/task`, { subject: 'folder task' });
     const taskId = json<{ taskId: number }>(made.body).taskId;
 
-    // 建任务即分配 work_dir 并物化文档树（docs/35 §3#8）——路由打开的就是它。
+    // 建任务即分配目录两列并物化文档树——路由打开的就是它（基址 = 任务自己的
+    // work_dir；本用例没带 sessionId，面板退回定位到的工作区）。
     const task = readTeam(teamId).tasks.find((t) => t.id === taskId)!;
-    expect(task.workDir).toBeDefined();
-    const dir = join(workspace, task.workDir!);
+    expect(task.workDir).toBe(workspace);
+    expect(task.taskDir).toBeDefined();
+    const dir = join(task.workDir!, task.taskDir!);
     const openedOk = await post(`/eteams-api/team/${teamId}/task/${taskId}/folder/open`, {});
     expect(openedOk.code, openedOk.body).toBe(200);
     expect(json<{ ok: boolean; dir: string }>(openedOk.body)).toEqual({ ok: true, dir });
@@ -1400,15 +1402,15 @@ describe('conversation task workflow (docs/26)', () => {
     const group = team.tasks[0]!;
     expect(group.parentId).toBeNull();
     expect(submitted.taskId).toBe(group.id);
-    expect(submitted.folder).toBe(group.workDir);
+    expect(submitted.folder).toBe(group.taskDir);
     // 用户 2026-09-15 扁平化：一个主任务一个目录 —— 留言板 + 每任务一份纪要 +
     // 计划/、文档/ 两个夹；contract.md / notes.md 已并入纪要。
-    expect(existsSync(join(workspace, group.workDir!, minutesFileName(group)))).toBe(true);
-    expect(existsSync(join(workspace, group.workDir!, '计划'))).toBe(true);
-    expect(existsSync(join(workspace, group.workDir!, '文档'))).toBe(true);
-    expect(existsSync(join(workspace, group.workDir!, '留言板.md'))).toBe(true);
-    expect(existsSync(join(workspace, group.workDir!, 'contract.md'))).toBe(false);
-    expect(existsSync(join(workspace, group.workDir!, 'notes.md'))).toBe(false);
+    expect(existsSync(join(group.workDir!, group.taskDir!, minutesFileName(group)))).toBe(true);
+    expect(existsSync(join(group.workDir!, group.taskDir!, '计划'))).toBe(true);
+    expect(existsSync(join(group.workDir!, group.taskDir!, '文档'))).toBe(true);
+    expect(existsSync(join(group.workDir!, group.taskDir!, '留言板.md'))).toBe(true);
+    expect(existsSync(join(group.workDir!, group.taskDir!, 'contract.md'))).toBe(false);
+    expect(existsSync(join(group.workDir!, group.taskDir!, 'notes.md'))).toBe(false);
 
     // 1b. 收口：拆解完成后把「创建中」转「待开始」（收口前 startGroupTask 拒绝）。
     // 收口闸要求主任务下至少一个带「## 验收标准」的小任务——先建占位过闸，
@@ -1442,9 +1444,10 @@ describe('conversation task workflow (docs/26)', () => {
     team = readTeam(teamId);
     const subRec = team.tasks.find((t) => t.id === subId)!;
     expect(subRec.parentId).toBe(group.id);
-    // 小任务不再有自己的目录与 work_dir（共用主任务目录）。
+    // 小任务不再有自己的目录与两列（共用主任务目录）。
     expect(subRec.workDir).toBeUndefined();
-    expect(existsSync(join(workspace, group.workDir!, minutesFileName(subRec)))).toBe(true);
+    expect(subRec.taskDir).toBeUndefined();
+    expect(existsSync(join(group.workDir!, group.taskDir!, minutesFileName(subRec)))).toBe(true);
 
     // 3. 面板修改（主题 + 成员槽）与删除。
     const upd = await h.post(`/eteams-api/team/${teamId}/task/${subId}/update`, {
@@ -2357,8 +2360,8 @@ describe('panel task commission (docs/panelTaskCommission)', () => {
     expect(task.subject).toBe(firstLine.slice(0, 24));
     expect(task.mainSessionId).toBe('cap-conv');
     // 与对话建任务同口径：建任务即物化文档树（留言板 + 本任务纪要 + 计划/文档夹）。
-    expect(existsSync(join(workspace, task.workDir!, '留言板.md'))).toBe(true);
-    expect(existsSync(join(workspace, task.workDir!, minutesFileName(task)))).toBe(true);
+    expect(existsSync(join(task.workDir!, task.taskDir!, '留言板.md'))).toBe(true);
+    expect(existsSync(join(task.workDir!, task.taskDir!, minutesFileName(task)))).toBe(true);
 
     // 有领队 → dispatchCaptainCore 建立本任务的领队副本子代理（durable id
     // 落领队副本行——v8+ 主持行取消）。

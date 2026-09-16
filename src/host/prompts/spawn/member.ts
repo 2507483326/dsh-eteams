@@ -16,6 +16,8 @@ export const MEMBER_RULES = [
   '自审：完工前对照合同「验收标准」逐条核对并给出证据（能跑通/有复现方式，不是「文件存在」；试边界与错误路径），结论写进 complete 的 output。',
   '完成：交付完成 → eteams_complete_task（output 写清做了什么/改了哪些文件/如何验证——即上条自审结论）；同时把结论写进**你这份任务的纪要**（简报已给绝对路径，写在 `## 纪要正文` 之下）。**不得在以下情况标完成**：测试在失败、实现只做一半、有未解错误、找不到必要依赖；做不下去用 eteams_fail_task 说明障碍，不要硬撑完成。',
   '失败：做不下去 → eteams_fail_task（error 写具体障碍与已尝试方案）；自动重试超限后落待领队，由领队分诊（重新指派 loop 或升级用户）。',
+  '被拒（工具被沙箱/策略拦住，v16）：先自己判**换法子能不能过**——能（用 head 代替 cat、只做类型检查代替完整构建之类）就自己换，不打扰任何人；不能（越界写入、需要外部能力、被策略拒绝）才用 eteams_report_gap 报缺口：operation.argv 填**那条精确命令**（不是描述）、why 挂到具体验收标准、tried 填已试过确实不行的替代。报完**停下这条路**等领队定路线——不要重试原做法，也不要换个写法硬绕。',
+  '被拒的例外（永不请示授权）：涉及把数据送出去的操作（外发、上传、写凭据、绕过安全机制）被拒 → 用 eteams_report_gap verdict=refuse 上报，随后 eteams_fail_task 收尾——这一类不请示、不绕过、直接失败并说清风险。',
   '求助：需要决策/跨任务信息 → eteams_send_message 问领队；不要自行扩大范围。只有用户本人能定的问题（范围取舍、验收偏好、与既有决策冲突等）→ 视为**未决项**，用 eteams_ask_user 直接弹窗问用户，问清再继续。提问口径（用户 2026-09-14）：弹窗弹到主对话时用户只有问题本身——问题必须自包含（点名哪个任务/哪一步、为什么问）、说人话（无代号、缩写与行话，术语一句解释）、选项写清「选它会怎样」（禁止 A/B 式无信息量选项），推荐项放首位并标「（推荐）」。',
   '未决项：只有用户能定的问题不得自己填「推荐默认 / 待复核 / 推翻即改」硬推——那是把确认责任转嫁给后续；问询是迭代的，直到无未决项才完工。',
   '纪律：一个 attempt 一个 token；token 失效（被改派/取消）立即停止，重新等指派；空闲后等待领队调度。',
@@ -28,6 +30,7 @@ export const MEMBER_TOOL_SHEET = [
   '- eteams_append_progress { task_id, attempt_id, token, text }',
   '- eteams_complete_task { task_id, attempt_id, token, output, changed_paths? }',
   '- eteams_fail_task { task_id, attempt_id, token, error }',
+  '- eteams_report_gap { verdict, risk, operation, why?, next? } → 被工具拦住之后走它（换法子能过就别报，自己换）',
   '- eteams_task_board {} → 我的任务与状态',
   '- eteams_send_message { to, content } → 领队/成员',
   '- eteams_ask_user { questions } → 弹窗直接问用户（只有用户能定的未决项，问清再继续）',
@@ -47,7 +50,7 @@ export function memberBriefing(opts: {
   teamName: string;
   /** 汇报对象名：有领队 = 领队名；无领队 = 「主会话（用户对话窗口）」。 */
   leaderName: string;
-  /** 工程根绝对路径（工作区根，代码产出写这里）。 */
+  /** 工程根绝对路径（= 本任务 task.work_dir，建任务时冻结；代码产出写这里）。 */
   projectRoot: string;
   /** 任务目录绝对路径（留言板 / 纪要 / 计划 / 文档 都在这里）。 */
   taskDir: string;
@@ -60,7 +63,7 @@ export function memberBriefing(opts: {
 }): string {
   return [
     '## 你的工作目录',
-    `- 代码产出写工程根（= 会话当前目录）：${opts.projectRoot}`,
+    `- 代码产出写工程根（本任务绑定的工作区，**以这个路径为准**）：${opts.projectRoot}`,
     `- 任务目录（留言板 / 纪要 / 计划 / 文档 都在这里）：${opts.taskDir}`,
     '',
     '## 队伍留言板（领队与全员共用）',
@@ -80,7 +83,8 @@ export function memberBriefing(opts: {
     '## 实时汇报（必须发给领队）',
     '1. 开工即报：接取后 eteams_append_progress 记计划，并 eteams_send_message to="captain" 报「已开工 + 计划」。',
     '2. 遇问题即报：障碍 / 需决策 / 发现风险，立即 eteams_send_message to="captain"，不要静默硬扛；其中只有用户本人能定的问题用 eteams_ask_user 直接问用户——别自己填默认值、也别当成「待后续复核」带过。',
-    '3. 完成 / 失败必报：eteams_complete_task（产出/改动/验证）、eteams_fail_task（障碍），自动送达领队。',
+    '3. 被工具拦住（v16）：换法子能过的自己换、不打扰任何人；换法子也过不去 → 先 eteams_report_gap 报缺口（operation.argv 填那条精确命令），再把 gapId 与一句话摘要发给领队，然后**停下这条路**等路线——不要重试原做法、不要换个写法硬绕。',
+    '4. 完成 / 失败必报：eteams_complete_task（产出/改动/验证）、eteams_fail_task（障碍），自动送达领队。',
   ].join('\n');
 }
 
