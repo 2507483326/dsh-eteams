@@ -189,12 +189,20 @@ describe('D18 对话式新增成员', () => {
     expect(ROLE_BUILDER_PRESET.rules.join('\n')).not.toContain('emoji/color 按领域随机');
   });
 
-  it('build child prompt is one fetch-first sentence — everything else rides the guide tool (用户迭代 2026-09-10)', () => {
+  it('build child prompt is one fetch-first sentence + 工作目录块 — everything else rides the guide tool (用户迭代 2026-09-10；2026-09-16 增目录)', () => {
     // 用户钦定的一句话：构建对话里只此一段——播报纪律、回合任务、快照、
-    // 父会话等所需内容全部经规程/工具面获取，提示词一律不带。
-    const prompt = builderPhasePrompt();
+    // 父会话等所需内容全部经规程/工具面获取，提示词一律不带；工作目录 /
+    // 状态目录是按会话冻结的稳定值，随提示词写明（用户 2026-09-16「所有的
+    // 子agent提示词里面写清楚工作目录和团队目录」）。
+    const prompt = builderPhasePrompt({ workDir: 'C:/proj', stateDir: 'C:/proj/.eteams' });
     expect(prompt).toBe(
-      '你是「角色构建师」（后台持续构建子代理），使用eteams_build_guide 领取完整构建规程，请严格按规程执行。',
+      [
+        '你是「角色构建师」（后台持续构建子代理），使用eteams_build_guide 领取完整构建规程，请严格按规程执行。',
+        '',
+        '## 你的工作目录',
+        '- 工作目录（发起构建的对话所在目录，**以这个路径为准**）：C:/proj',
+        '- 构建状态目录（构建会话与访谈状态 rolebuilder.json 所在，由宿主管）：C:/proj/.eteams',
+      ].join('\n'),
     );
     expect(prompt).not.toContain('eteams_build_report');
     expect(prompt).not.toContain('【激活原文】');

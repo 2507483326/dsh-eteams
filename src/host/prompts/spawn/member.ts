@@ -6,6 +6,7 @@
  */
 import type { MemberRecord, TeamState } from '../../model/types.js';
 import { personaDigest, renderPersonaBlock } from '../personas/framework.js';
+import { workDirsBlock } from './workDirs.js';
 
 /** Member-facing standing rules (also rendered into contract handoffs). */
 export const MEMBER_RULES = [
@@ -62,9 +63,7 @@ export function memberBriefing(opts: {
   docDir: string;
 }): string {
   return [
-    '## 你的工作目录',
-    `- 代码产出写工程根（本任务绑定的工作区，**以这个路径为准**）：${opts.projectRoot}`,
-    `- 任务目录（留言板 / 纪要 / 计划 / 文档 都在这里）：${opts.taskDir}`,
+    workDirsBlock({ workDir: opts.projectRoot, taskDir: opts.taskDir }),
     '',
     '## 队伍留言板（领队与全员共用）',
     `- ${opts.boardFile}`,

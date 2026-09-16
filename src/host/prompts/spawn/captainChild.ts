@@ -30,6 +30,8 @@
  * @module dsh-eteams/prompts/spawn/captainChild
  */
 
+import { workDirsBlock } from './workDirs.js';
+
 /** 本回合任务种类（宿主派发前写 sidecar，eteams_captain_guide 读出）。 */
 export type CaptainTurnKind = 'dispatch' | 'commission' | 'start';
 
@@ -65,12 +67,22 @@ export const CAPTAIN_CHILD_PERSONA = [
  * 可见的回合提示词（用户迭代 2026-09-10「领取完成流程」钦定的一句话）：
  * 只介绍身份与领取动作——工作流程全文、本回合任务、团队现状、发起会话 id
  * 全部经 eteams_captain_guide 获取，提示词一律不带。
+ *
+ * 例外（用户 2026-09-16「所有的子agent提示词里面写清楚工作目录和团队目录」）：
+ * 工作目录与任务目录是**按任务冻结**的稳定值（不是每回合变化的现状），随提示
+ * 词写明成本为零、却省掉子代理自己去拼路径的出错面——故追加在工作目录块里
+ * （{@link workDirsBlock}），与成员简报同一个口径。
  */
 const CAPTAIN_TURN_BRIEF =
   '你是「领队」（团队工作流主持的持续子代理），使用eteams_captain_guide 领取完整工作流程、团队现状与本回合任务，请严格按规程执行。';
 
-export function captainTurnBrief(): string {
-  return CAPTAIN_TURN_BRIEF;
+export function captainTurnBrief(dirs: {
+  /** 工作目录绝对路径（= 本主任务的 task.work_dir，建任务时冻结）。 */
+  workDir: string;
+  /** 任务目录绝对路径（留言板 / 纪要 / 计划 / 文档都在这里）；缺省不渲染。 */
+  taskDir?: string;
+}): string {
+  return [CAPTAIN_TURN_BRIEF, '', workDirsBlock(dirs)].join('\n');
 }
 
 /**

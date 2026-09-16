@@ -142,18 +142,6 @@ export function employeeBadgeOf(employeeId: string | null | undefined): string |
 }
 
 /**
- * 成员是否已有实例化会话（用户 2026-09-14「如果已经实例化会话就加一个绿色
- * 小点，然后变成可以点击，点击进入到该成员的会话中」）：快照 `childId` 即
- * `task_members.session_id`（host webui 投影，未起会话为 null）——非空串 =
- * 该成员的子代理会话已随派发实例化，罗列条 chip 画绿点并可点击跳进它的对话；
- * null/空/缺省（旧快照）→ null（不画点、不可点）。
- */
-export function memberSessionIdOf(member: { childId?: string | null }): string | null {
-  const id = member.childId;
-  return typeof id === 'string' && id !== '' ? id : null;
-}
-
-/**
  * 只读框的展示成员（A.5.1 不可放置/只读行）：优先当前执行人 assignee；
  * 无 assignee 时取下一待执行站成员，越界（链已跑完）回退末站。
  * 均无（空链且未指派）→ null，框不渲染。

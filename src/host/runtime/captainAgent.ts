@@ -55,6 +55,7 @@ import {
   type CaptainTurnKind,
 } from '../prompts/spawn/captainChild.js';
 import { dispatchAck } from '../prompts/steering/dispatch.js';
+import { groupDirAbs, taskWorkRootOf } from './docs.js';
 import type { TaskMemberRecord, TeamState } from '../model/types.js';
 
 /** Label prefix identifying eteams captain children. */
@@ -367,7 +368,21 @@ export async function dispatchCaptainCore(
   // 回合 sidecar 先落盘再投递（eteams_captain_guide 的凭据，先写后投——
   // 子代理收到唤醒后第一步领规程就必须读得到本回合任务）。写失败不阻塞
   // 派发：guide 返回 turn=none 子代理收束回合，主对话可重派。
-  const prompt = captainTurnBrief();
+  //
+  // 可见 prompt = 一句话领规程 + 工作目录块（用户 2026-09-16「所有的子agent
+  // 提示词里面写清楚工作目录和团队目录」）：工作目录取**本主任务自己的
+  // work_dir**（建任务时冻结，taskWorkRootOf），任务目录取 work_dir+task_dir
+  // （groupDirAbs）——与成员简报同一个口径。任务行缺失（老任务/竞态）时
+  // 只给工作目录行，不猜任务目录。
+  const anchored = team.tasks.find((t) => t.id === taskId);
+  const prompt = captainTurnBrief(
+    anchored !== undefined
+      ? {
+          workDir: taskWorkRootOf(env.workspace, team, anchored),
+          taskDir: groupDirAbs(env.workspace, team, anchored),
+        }
+      : { workDir: env.workspace },
+  );
   try {
     await markCaptainTurn(root, taskKey, {
       turn: turn.kind,

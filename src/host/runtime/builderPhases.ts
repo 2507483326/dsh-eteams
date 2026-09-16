@@ -74,6 +74,17 @@ interface BuilderDispatchArgs {
 
 const BUILDER_LABEL = 'eteams-rolebuilder';
 
+/**
+ * 构建子代理的工作目录入参（用户 2026-09-16）：工作目录取**发起构建的对话
+ * 目录**（与 envForAgent 同款兜底——拿不到会话头就用进程 cwd），状态目录 =
+ * 本构建的 stateRoot。两个值在构建期内稳定，故写进提示词（不再让子代理
+ * 自己猜路径）。
+ */
+const builderDirs = (parent: Agent, stateRoot: string): { workDir: string; stateDir: string } => ({
+  workDir: parent.session?.header?.cwd ?? process.cwd(),
+  stateDir: stateRoot,
+});
+
 const failMessage = (stage: string, error: unknown): string =>
   `eteams: builder child ${stage} — ${
     error instanceof Error ? error.message : String(error)
@@ -167,7 +178,7 @@ export function startBuilderChild(args: BuilderDispatchArgs): void {
         label: BUILDER_LABEL,
         childId,
         request: {
-          prompt: textTurn(builderPhasePrompt()),
+          prompt: textTurn(builderPhasePrompt(builderDirs(parent, stateRoot))),
           parent,
           persona: ROLE_BUILDER_CHILD_PERSONA,
           toolFilter: builderToolFilter(),
@@ -235,7 +246,7 @@ export function wakeBuilderChild(args: {
       await markBuilderTurn(stateRoot, kind).catch((error) => {
         logger?.warn(failMessage('wake-kind write failed', error));
       });
-      const prompt = textTurn(builderPhasePrompt());
+      const prompt = textTurn(builderPhasePrompt(builderDirs(parent, stateRoot)));
       const childId = session?.builderChildId ?? '';
       if (childId !== '') {
         try {

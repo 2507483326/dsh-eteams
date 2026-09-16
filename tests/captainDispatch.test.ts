@@ -42,6 +42,7 @@ import { appendMail } from '../src/host/state/events';
 import { teamView } from '../src/host/runtime/teamOps';
 import { LEADER_NAME, upsertRosterMember } from '../src/host/runtime/roster';
 import { joinPath, resumeOptionsOf, type RuntimeEnv } from '../src/host/runtime/base';
+import { groupDirAbs, taskWorkRootOf } from '../src/host/runtime/docs';
 import type { MailMessage, TaskMemberRecord, TeamState } from '../src/host/model/types';
 import { cleanupTempWorkspace } from './support/tmpWorkspace';
 
@@ -214,6 +215,20 @@ function agentOf(id: string, cwd?: string): Agent {
   return { id, session: { header: { cwd: cwd ?? ws } } } as unknown as Agent;
 }
 
+/**
+ * 领队回合可见文本的期望值（用户 2026-09-16）：一句话领规程 + 工作目录块——
+ * 工作目录取**本主任务自己的 work_dir**（fixture 未分配两列 → 回退调用方
+ * 工作区），任务目录取 work_dir + task_dir。与派发核同一口径现算，不硬编码
+ * 分隔符（Windows/Linux 都能过）。
+ */
+function expectedCaptainPrompt(team: TeamState): string {
+  const task = team.tasks[0]!;
+  return captainTurnBrief({
+    workDir: taskWorkRootOf(ws, team, task),
+    taskDir: groupDirAbs(ws, team, task),
+  });
+}
+
 function envFor(workspace: string): RuntimeEnv {
   return {
     workspace,
@@ -265,10 +280,15 @@ describe('eteams_dispatch_captain', () => {
     expect(spec.request.parent).toBe(captain);
     expect(spec.request.prompt).toHaveLength(1);
     const promptText = spec.request.prompt.map((p) => p.text).join('\n');
-    // 可见 prompt 只剩一句话领规程（用户迭代 2026-09-10「领取完成流程」）：
-    // 转交内容写回合 sidecar，子代理经 eteams_captain_guide 自取——不随消息
-    // 组装（现状 JSON、手册原文、用户原话都不进 prompt）。
-    expect(promptText).toBe(captainTurnBrief());
+    // 可见 prompt = 一句话领规程 + 工作目录块（用户迭代 2026-09-10「领取完成
+    // 流程」；2026-09-16 增工作目录/任务目录）：转交内容写回合 sidecar，
+    // 子代理经 eteams_captain_guide 自取——不随消息组装（现状 JSON、手册原文、
+    // 用户原话都不进 prompt）；工作目录 / 任务目录是按任务冻结的稳定值，写明。
+    expect(promptText).toBe(expectedCaptainPrompt(seeded));
+    expect(promptText).toContain('## 你的工作目录');
+    // 工作目录（fixture 未分配 work_dir → 回退调用方工作区）与任务目录都在文里。
+    expect(promptText).toContain(ws);
+    expect(promptText).toContain('1-演示任务');
     expect(promptText).not.toContain('帮我做一个导出功能');
     expect(promptText).not.toContain('【团队现状】');
 
@@ -307,8 +327,8 @@ describe('eteams_dispatch_captain', () => {
     expect(runtime.starts).toHaveLength(0);
     expect(runtime.followups).toHaveLength(1);
     expect(runtime.followups[0]!.childId).toBe('sess-child-1');
-    // 续聊的可见文本同样是一句话领规程：转交内容只进回合 sidecar。
-    expect(runtime.followups[0]!.text).toBe(captainTurnBrief());
+    // 续聊的可见文本同样是「一句话领规程 + 工作目录块」：转交内容只进回合 sidecar。
+    expect(runtime.followups[0]!.text).toBe(expectedCaptainPrompt(seeded));
     expect(runtime.followups[0]!.text).not.toContain('改成导出 Excel');
     expect(readCaptainTurn(root, '1')).toEqual({
       turn: 'dispatch',

@@ -41,11 +41,12 @@
  * 嵌套 drop 只剩调序；以拖放时刻最新快照的 chain 为底改后整链重发，DA10 复用
  * updateTeamTask、非乐观更新）。
  *
- * 用户 2026-09-14「任务详情中的团队成员，如果已经实例化会话就加一个绿色小
- * 点，然后变成可以点击，点击进入到该成员的会话中」：罗列条成员 chip 在
- * `memberSessionIdOf` 命中（快照 childId 非空 = 会话已随派发实例化）时尾部
- * 画 6px 绿点（D22e 彩点唯一载体）并整块可点——`openSession` 把该成员会话
- * 选为当前（宿主布局切进它的对话），目标不在会话列表时 toast 明确告知。
+ * 用户 2026-09-16「去掉任务详情里面的团队成员的高亮和绿色的点」：撤掉
+ * 2026-09-14 的会话跳转特征——罗列条成员 chip 不再按 childId 判「会话已实例
+ * 化」、不再画 6px 绿点、不再可点击（绿点、cursor-pointer 可跳转签名
+ * STRIP_CHIP_LINK_CLASS、跳转失败 toast 与判据 memberSessionIdOf 一并整链
+ * 清掉），chip 回到「只可拖拽」的普通态。要看成员的会话改走任务页「跳转
+ * 会话」钮 / 团队徽章 hover 卡的会话成员 chip。
  *
  * 拖拽 item 类型 'eteams-member'（A.2）；类名全部完整字面量映射（E17/
  * 21.5.1 禁拼接纪律，tailwind content 扫描可检出）。触屏/键盘降级（A.7）：
@@ -71,12 +72,8 @@ import {
   employeeBadgeOf,
   insertionIndexOf,
   isAssignEditable,
-  memberSessionIdOf,
   readonlyStationMember,
 } from './taskAssignCore';
-import { DOT_BASE_CLASS, DOT_TONE_CLASS } from './taskDisplayStatus';
-import { openSession } from '../../lib/sessionState';
-import { toast } from '../../hooks/useToast';
 import { Button } from '../../components/ui/button';
 import { Popover, PopoverAnchor, PopoverContent } from '../../components/ui/popover';
 
@@ -271,11 +268,6 @@ const STRIP_CHIP_BASE_CLASS =
 const STRIP_CHIP_CLASS = `${STRIP_CHIP_BASE_CLASS} cursor-grab active:cursor-grabbing`;
 /** 罗列条 chip 只读签名（2026-09-13 创建中详情：成员照显但禁拖）。 */
 const STRIP_CHIP_STATIC_CLASS = `${STRIP_CHIP_BASE_CLASS} cursor-default`;
-/** 罗列条 chip 可跳转签名（用户 2026-09-14「如果已经实例化会话就加一个绿色
- * 小点，然后变成可以点击，点击进入到该成员的会话中」）：已有实例化会话的
- * 成员 chip 光标改 pointer 提示「点击进入会话」——拖拽仍可用（HTML5 DnD 不
- * 依赖光标，title 同时交代两件事），两变体共用同一份基类字面值防分叉。 */
-const STRIP_CHIP_LINK_CLASS = `${STRIP_CHIP_BASE_CLASS} cursor-pointer`;
 /** 领队 chip：中性底 + 虚线边（不可拖签名，A.5.2 草图 ╌╌ 口径；DA14 26→30、
  * DA16 30→32、DA18 圆角 4px）。 */
 const CAPTAIN_CHIP_CLASS = `inline-flex h-[32px] shrink-0 cursor-default items-center gap-1.5 rounded-[4px] border border-dashed bg-[color:var(--eteams-pill-bg)] px-2 text-xs font-medium text-[color:var(--eteams-pill-ink)] ${BORDER_TOKEN_CLASS}`;
@@ -285,19 +277,14 @@ const CHIP_TAG_CLASS = 'text-[10px] font-normal text-muted-foreground';
  * 徽章面——中性 pill 底 + token 边 + 10px medium，区别于 chip 主题色。 */
 const STRIP_BADGE_CLASS = `inline-flex items-center rounded-[3px] border border-solid bg-[color:var(--eteams-pill-bg)] ${BORDER_TOKEN_CLASS} px-1 text-[10px] font-medium leading-none text-muted-foreground`;
 
-/** 跳转失败统一提示（与任务页 jumpToSession / 看板 JumpConversationButton 同口径）。 */
-const JUMP_FAILED = { title: '无法跳转', description: '目标会话不在当前会话列表中。' };
-
 /** 成员罗列条 chip（A.3.2：可拖，源 chip 拖拽中半透明；头像渲染复用
  * Avatar；五轮 DA18：原「未启动」小字改工号数字徽章 STRIP_BADGE_CLASS；
  * 用户迭代 2026-09-10「成员没有状态」：原状态点随 memberTone 下线——成员
  * 只是工牌持有者，不挂状态）。2026-09-13 只读档：draggable=false（创建中
  * 详情）时禁拖、静态光标、提示退化为成员名。
- * 用户 2026-09-14「如果已经实例化会话就加一个绿色小点，然后变成可以点击，
- * 点击进入到该成员的会话中」：成员已有实例化会话（{@link memberSessionIdOf}）
- * 时 chip 尾部画 6px 绿点（D22e 彩点唯一载体 DOT_BASE_CLASS/DOT_TONE_CLASS.ok）
- * 并可点击——openSession 把该成员会话选为当前，宿主布局即切进它的对话；
- * 目标不在会话列表（已清理/未知结构）时 toast 明确告知，禁静默 no-op。 */
+ * 用户 2026-09-16「去掉任务详情里面的团队成员的高亮和绿色的点」：2026-09-14
+ * 的会话跳转特征（按 childId 画的 6px 绿点 + 可点击 + pointer 光标）整套撤除，
+ * chip 只剩「可拖拽指派 / 只读静态」两态。 */
 function MemberDragChip({
   member,
   draggable = true,
@@ -307,34 +294,16 @@ function MemberDragChip({
 }): ReactNode {
   const [{ isDragging }, dragRef] = useMemberDrag(memberRefOf(member), draggable);
   const badge = employeeBadgeOf(member.employeeId);
-  const sessionId = memberSessionIdOf(member);
-  const jump = (): void => {
-    if (sessionId !== null && !openSession(sessionId)) toast(JUMP_FAILED);
-  };
   return (
     <div
       ref={dragRef}
-      className={
-        sessionId !== null
-          ? STRIP_CHIP_LINK_CLASS
-          : draggable
-            ? STRIP_CHIP_CLASS
-            : STRIP_CHIP_STATIC_CLASS
-      }
+      className={draggable ? STRIP_CHIP_CLASS : STRIP_CHIP_STATIC_CLASS}
       style={isDragging ? { opacity: 0.5 } : undefined}
-      title={
-        sessionId !== null
-          ? `点击进入 ${member.name} 的会话${draggable ? '；拖拽成员到下方的成员卡槽完成指派' : ''}`
-          : draggable
-            ? '拖拽成员到下方的成员卡槽完成指派'
-            : member.name
-      }
-      onClick={sessionId !== null ? jump : undefined}
+      title={draggable ? '拖拽成员到下方的成员卡槽完成指派' : member.name}
     >
       <Avatar name={member.name} seed={member.avatar?.seed} salt={member.avatar?.salt} size={26} />
       <span>{member.name}</span>
       {badge && <span className={STRIP_BADGE_CLASS}>{badge}</span>}
-      {sessionId !== null && <span className={cn(DOT_BASE_CLASS, DOT_TONE_CLASS.ok)} />}
     </div>
   );
 }
