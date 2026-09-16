@@ -21,10 +21,17 @@
     "lib",
     "cordis.patch.yml",
     "README.md",
-    "NOTICE.md",
     "LICENSE"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/2507483326/eTeam.git"
+  },
+  "homepage": "https://github.com/2507483326/eTeam#readme",
+  "bugs": {
+    "url": "https://github.com/2507483326/eTeam/issues"
+  },
   "engines": {
     "node": "^22.19.0 || >=24"
   },

@@ -54,7 +54,7 @@ dsh plugin --profile desktop add dsh-eteams
 **方式三：本地源码（开发调试）**
 
 ```bash
-git clone <repo-url> && cd eTeam
+git clone https://github.com/2507483326/eTeam && cd eTeam
 pnpm install && pnpm build
 dsh plugin --profile desktop add C:\eTeam
 ```
