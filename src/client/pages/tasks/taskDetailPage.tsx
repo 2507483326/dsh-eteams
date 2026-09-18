@@ -286,13 +286,14 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
   // PageHeader onBack 槽，页头行最右图标钮）——原页顶文字返回条撤。M3 拆页：
   // 导航回 /tasks——drawerTaskId 由 routes.tsx 的 location sync 回写（持久
   // 层终态与拆页前逐位一致）。
-  // 详情页成员罗列条（八轮 DA21：编排收进详情，罗列条随编排走——仅
-  // 存在可放置任务（ready）时渲染，作为卡槽的拖拽源）。二十四轮
-  // DA37：指派提示拆出 StripAssignHint（与罗列条同判据另行渲染）。
-  // 2026-09-13 只读档：创建中详情仍显示罗列条（成员全程可见）但 chip 禁拖
-  // （readOnly 透传 TeamMemberStrip）。
-  const detailStrip = (show: boolean, readOnly: boolean): ReactNode =>
-    show ? <TeamMemberStrip team={team} readOnly={readOnly} /> : null;
+  // 详情页成员罗列条（八轮 DA21：编排收进详情，罗列条随编排走）。二十四轮
+  // DA37：指派提示拆出 StripAssignHint（另有判据）。用户 2026-09-18「不管
+  // 存在不存在都显示」：罗列条**常显**——原按「存在可放置任务（ready）」门控
+  // 的结果是任务开跑/收口后成员列表整条消失（用户报「成员列表怎么不见了」）；
+  // 只读档或没有可放置（ready）小任务时 chip 禁拖（无落点的拖拽是空操作）。
+  const detailStrip = (readOnly: boolean): ReactNode => (
+    <TeamMemberStrip team={team} readOnly={readOnly} />
+  );
 
   // 共用弹窗（详情页实例；列表页另有各挂各的）：编辑/新增 + 删除确认。
   // 瞬态 useState 不入 ui model；host 校验合同冻结（领取后），错误就地显示。
@@ -340,13 +341,14 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
     const mutable = !readOnly && selected.status === 'ready';
     // docs/29 B.2 组卡汇总：ready 且有小任务时叠加汇总 chip。
     const summary = selected.status === 'ready' && subs.length > 0 ? groupDisplayOf(subs) : null;
-    // 罗列条/指派提示块渲染判据（八轮 DA21 口径；用户迭代 2026-09-11：
-    // draft 并入 ready）：存在可放置任务（ready）才渲染，仍是卡槽拖拽源。
-    // docs/panelTaskCommission：creating 占位也显示罗列条（成员随完善全程
-    // 可见，仅展示无卡槽可放）；2026-09-13：只读档罗列条照显但 chip 禁拖，
-    // 指派提示块不渲染。
-    const stripShow = readOnly || subs.some((t) => t.status === 'ready');
-    const assignHintShow = !readOnly && subs.some((t) => t.status === 'ready');
+    // 罗列条/指派提示块判据（八轮 DA21 口径；用户迭代 2026-09-11：draft 并入
+    // ready）：罗列条常显（用户 2026-09-18「不管存在不存在都显示」），chip 可拖
+    // 与否只取决于「真有可放置（ready）小任务」且非只读档；指派提示块仍只在有
+    // 可放置小任务时渲染（无落点不该提示拖拽）。docs/panelTaskCommission：
+    // creating 占位也显示罗列条（成员随完善全程可见），只读档 chip 禁拖。
+    const hasReadySub = subs.some((t) => t.status === 'ready');
+    const stripReadOnly = readOnly || !hasReadySub;
+    const assignHintShow = !readOnly && hasReadySub;
     return (
       <TaskDndProvider>
         <div>
@@ -373,7 +375,7 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
                     <GroupSummaryChip summary={summary} />
                   </div>
                 )}
-                {detailStrip(stripShow, readOnly)}
+                {detailStrip(stripReadOnly)}
               </>
             }
             // 二十八轮 DA41：头部卡右端动作槽（自「任务列表」行上移）。
@@ -552,7 +554,10 @@ export function TaskDetailPage({ team, now }: TaskDetailPageProps): ReactNode {
         {startError !== null && startError.taskId === selected.taskId && (
           <FormErrorNote>{startError.message}</FormErrorNote>
         )}
-        {detailStrip(parent !== null && subMutable, readOnly)}
+        {/* 用户 2026-09-18「不管存在不存在都显示」：小任务详情的罗列条同样
+            常显（原判据 parent !== null && subMutable 会在任务开跑后藏起整条
+            成员列表）；只在自身可编排（subMutable）且非只读档时才可拖。 */}
+        {detailStrip(readOnly || !subMutable)}
         {parent !== null && subMutable && <StripAssignHint />}
         {dialogs}
       </div>

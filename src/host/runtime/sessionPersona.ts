@@ -36,6 +36,11 @@ export function clearSessionPersona(sessionId: string): void {
   personas.delete(sessionId);
 }
 
+/** The stored persona for one session, if any（常驻角色段判定「本会话以成员身份说话」用）。 */
+export function getSessionPersona(sessionId: string): SessionPersona | undefined {
+  return personas.get(sessionId);
+}
+
 /**
  * Read the agent id off an assembly scope. The scope is the agent object
  * itself; its string `id` is the sessionId for session agents and something

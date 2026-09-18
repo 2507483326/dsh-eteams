@@ -335,8 +335,13 @@ export async function wakeMember(
  * 汇报直接投给领队子代理；否则（无领队 / 领队子代理未起会话 / 投递失败）退
  * 回主会话 followup。parent 仍取主会话（领队子代理的直接父），投递按宿主
  * 能力探测分发（deliverToChild）。邮件落库由调用方负责。
+ *
+ * 导出（2026-09-18）：`sendMessage` 的 `to="captain"` 分支也复用它——那条路
+ * 原先自己单发一次「任务行快照的活代理」查询，拿不到就静默跳过（多任务团队
+ * 里快照多为已关闭的旧会话），领队与主会话双双收不到唤醒、成员空等卡死。
+ * 锚点解析统一收敛到本函数（多候选 + 面板心跳 + 冷恢复 + 失败留痕）。
  */
-async function wakeCaptain(
+export async function wakeCaptain(
   env: RuntimeEnv,
   team: TeamState,
   content: string,

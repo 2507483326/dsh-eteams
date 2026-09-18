@@ -3,24 +3,23 @@
  * 侧效应、意图访谈去向提示、构建步骤时间线、草稿确认表单与已放弃会话的
  * 续跑卡——自 membersTab 拆出（docs/44 M2，行为零变更），由
  * roster/rosterAddPage 消费；roster 列表页 / 详情页经 {@link
- * useBuildSession} 共用轮询与自动跳转。
+ * useBuildSession} 共用轮询。
  *
  * 轮询纪律（迁移前现状保持，docs/44 44.2.1）：1.5s interval 只在角色域活跃
  * 时跑——roster 三个路由页各自挂一轮（同屏只挂载一页，等效原 membersTab 的
  * 单轮询），离开角色域（路由卸载）即清；session 经 build model 读取，动作
  * 副作用在 model（dispatch `build/…`）。
  *
- * 自动跳转去重升为模块级：原组件内 useRef 的生命周期 = 角色 tab 挂载期，
- * 拆页后「确认页 → 返回列表」会清零 ref、把用户拽回确认页——模块级单例保住
- * 「以 startedAt 为会话键，用户手动离开后不反复强拉，状态再迁移才再次跳转」
- * 的原语义（去重窗口从「tab 挂载期」放宽为「面板运行期」，见 46 清单 M2
- * 验收注记）。
+ * 不再跨页自动跳转（用户 2026-09-18）：待确认草稿到达时保持当前页，列表页经
+ * 「待加入角色」按钮手动进入新增页；侧效应只在用户已处于新增页时把方式复位
+ * 到 ai。原「以 startedAt 为会话键」的去重单例保留——用户手动离开后不反复
+ * 强拉，状态再迁移（新会话）才再次复位。
  *
  * @module dsh-eteams/client/pages/roster/buildWorkbench
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import PenLine from 'lucide-react/dist/esm/icons/pen-line.mjs';
 import { IconPlusOutline16 } from '@deepseek-ai/dsh-client-ui-primitives';
 import type { BuildSession } from '../../lib/api';
@@ -53,9 +52,9 @@ import {
 /** ================================== 类型 ================================== */
 
 /**
- * 新增页跳转的 location.state 形状：初值由跳转方携带（构建会话自动跳转 /
- * 列表「待加入角色」= ai；列表「新增角色」不带 state = choose），页内
- * choose/ai/manual 三态切换不再走路由（docs/44 44.2.1 路由表注记）。
+ * 新增页跳转的 location.state 形状：初值由跳转方携带（列表「待加入角色」
+ * = ai；列表「新增角色」不带 state = choose），页内 choose/ai/manual 三态
+ * 切换不再走路由（docs/44 44.2.1 路由表注记）。
  */
 export interface RosterAddLocationState {
   addMode?: 'choose' | 'ai' | 'manual';
@@ -84,7 +83,7 @@ const BUILD_STEP_CLASS = 'flex items-center gap-2 py-0.5 text-sm leading-6';
 /**
  * 已消费「待确认」侧效应的会话键（模块级单例，原 seenReviewRef——生命周期
  * 依据见文件头）：用户手动离开后不反复强拉，状态再迁移（新会话 startedAt）
- * 才再次跳转/复位。
+ * 才再次复位。
  */
 let SEEN_REVIEW_STARTED_AT = 0;
 
@@ -100,15 +99,14 @@ let SEEN_REVIEW_STARTED_AT = 0;
  * 收口）：roster 域三个路由页各挂一轮——同屏只挂载一页，等效原「角色 tab
  * 活跃期单轮询」；路由卸载即清 interval，与原离开角色 tab 一致。
  *
- * 侧效应（原 useEffect 内联逻辑，零行为变更）：待确认草稿到达时以 startedAt
- * 为会话键去重自动跳转（docs/19.16）。不在新增页 → navigate 落新增页 ai 态；
- * 已在新增页 → 触发 onAwaitingConfirmation（原 setAddMode('ai') 模式复位——
- * 导航无处可去，复位交给宿主页）。
+ * 侧效应：待确认草稿到达时以 startedAt 为会话键去重（docs/19.16），且不再
+ * 跨页自动跳转（用户 2026-09-18）。仅在用户已处于新增页 /roster/add 时触发
+ * onAwaitingConfirmation（setAddMode('ai') 模式复位）；其余页面原地不动，
+ * 由列表页「待加入角色」按钮手动进入新增页。
  */
 export function useBuildSession(onAwaitingConfirmation?: () => void): BuildSession | null {
   const dispatch = useDispatch();
   const build = useSelector((s: RootState) => s.build.session);
-  const navigate = useNavigate();
   const location = useLocation();
   // 回调经 ref 透传：effect 消费最新闭包且不进依赖数组（回调 identity 每渲染
   // 都变，进依赖会让去重效应空转）。
@@ -127,19 +125,16 @@ export function useBuildSession(onAwaitingConfirmation?: () => void): BuildSessi
     // openMemberBuilder——强跳会把用户每次回面板都拽进 add 视图，导致
     // 「构建时进不去对话/看板」。（原 seenSessionRef 分支随该决策成空壳，
     // 拆页时删除。）
+    // 不再跨页自动跳转（用户 2026-09-18「进入角色列表页面就进入角色列表页面
+    // 不用自动跳转」）：待确认草稿到达时保持当前页，列表页经「待加入角色」
+    // 按钮手动进入新增页——避免把用户从列表/详情硬拽进新增工作台。
     if (build.status === 'awaiting_confirmation' && SEEN_REVIEW_STARTED_AT !== build.startedAt) {
       SEEN_REVIEW_STARTED_AT = build.startedAt;
-      // AI 创建流（用户迭代 2026-09-03）：草稿确认态属于 AI 创建路径，自动
-      // 跳转时顺带把新增页切到 ai 模式，避免回落到方式选择页。
-      if (location.pathname !== '/roster/add') {
-        navigate('/roster/add', {
-          state: { addMode: 'ai' } satisfies RosterAddLocationState,
-        });
-      } else {
-        onAwaitingRef.current?.();
-      }
+      // AI 创建流（用户迭代 2026-09-03）：草稿确认态属于 AI 创建路径，用户已在
+      // 新增页时把方式切到 ai，避免回落到方式选择页；其余页面原地不动。
+      if (location.pathname === '/roster/add') onAwaitingRef.current?.();
     }
-  }, [build, location.pathname, navigate]);
+  }, [build, location.pathname]);
   // 1.5s 订阅轮询（M7-8）：挂载即拉一次 + interval 重拉 + 卸载清理，收口
   // usePoll（refreshBuild 是 useCallback([dispatch]) 稳定身份，语义不变）。
   usePoll(refreshBuild, 1500);

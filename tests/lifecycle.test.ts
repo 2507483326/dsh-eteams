@@ -15,7 +15,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import { resolveConfig, type ETeamsResolvedConfig } from '../src/host/config';
 import { createCaptainTools } from '../src/host/tools/captainTools';
 import { createMemberTools } from '../src/host/tools/memberTools';
-import { addMember, setLeaderModel, setMemberModel } from '../src/host/runtime/teamOps';
+import { addMember, sendMessage, setLeaderModel, setMemberModel } from '../src/host/runtime/teamOps';
 import { minutesFileName } from '../src/host/runtime/docs';
 import {
   assignTask,
@@ -1842,6 +1842,92 @@ describe('大任务状态语义 + 依赖派发闸（用户迭代 2026-09-11 精�
     const delivered = await wakeMember(env, team, row, '【重发】指派信');
     expect(delivered).toBe(true);
     expect(runtime.deliveries.at(-1)!.text).toBe('【重发】指派信');
+  });
+
+  it('成员 to="captain" 的汇报直达领队子代理，不被陈旧主会话快照毒化（2026-09-18 回归）', async () => {
+    // 根因（docs/captainReportRoutingGap.md）：sendMessage 的 captain 分支原先
+    // 只单发一次「teamMainSessionOf 的活代理」查询且**没有 else**——多任务团队
+    // 里那条快照（全队任务号最小的那条）多为已关闭的旧会话，于是领队与主会话
+    // 双双收不到唤醒、成员子会话空等（用户报「主会话什么都没收到，卡死了」）。
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '汇报路由团队' });
+    const teamId = created.teamId;
+    const alice = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: 'Alice',
+      role: 'engineer',
+      teamId,
+    });
+    const task = await cap<{ taskId: number }>('eteams_create_task', {
+      subject: '做导出',
+      chain: [{ member: String(alice.employeeId), stageBrief: '实现' }],
+    });
+    // 领队副本行（建大任务即铺：is_leader=1 + mainTaskId=大任务）：给它一个已起
+    // 会话，并按派发契约登记它的**真实直接父**（主会话 cap-1）。
+    const leaderChild = 'sess-leader-child';
+    getDb(root)
+      .prepare(
+        'UPDATE task_members SET session_id = ? WHERE team_id = ? AND main_task_id = ? AND is_leader = 1',
+      )
+      .run(leaderChild, teamId, task.taskId);
+    registerCaptainChild(leaderChild, String(teamId), root, String(task.taskId), captain.id);
+    // 制造分歧：全队最早任务（= 本任务）的主会话快照指向早已关闭的旧会话——
+    // 旧实现只查这一个锚点，拿不到即静默跳过（谁都不唤醒）。
+    getDb(root)
+      .prepare('UPDATE task SET main_session_id = ? WHERE task_id = ?')
+      .run('offline-old-session', task.taskId);
+
+    const env = runtimeEnvFor();
+    const team = readTeam(teamId);
+    expect(team.tasks.find((t) => t.id === task.taskId)!.mainSessionId).toBe('offline-old-session');
+    const row = team.taskMembers.find(
+      (r) => r.mainTaskId === task.taskId && r.employeeId === alice.employeeId,
+    )!;
+    const followupsBefore = captain.followups.length;
+    await sendMessage(env, team, { kind: 'member', name: row.name }, 'captain', '【缺口】需要放宽沙箱', {
+      taskId: task.taskId,
+    });
+
+    // 唤醒落在领队子代理（不是主会话）：修复前这里是 0 次投递、主会话也没收到。
+    expect(runtime.deliveries.at(-1)!.childId).toBe(leaderChild);
+    expect(runtime.deliveries.at(-1)!.text).toContain('【缺口】需要放宽沙箱');
+    expect(captain.followups).toHaveLength(followupsBefore);
+    // 邮件照旧落领队箱（持久：收件人不在线也不丢）。
+    expect(readMailboxSync(root, teamId, 'captain').at(-1)!.content).toBe('【缺口】需要放宽沙箱');
+    unregisterCaptainChild(leaderChild);
+  });
+
+  it('成员用 eteams_send_message 不带 taskId 时按自己副本行的大任务兜底（2026-09-18 回归）', async () => {
+    // 领队定位要按 (大任务, is_leader) 找副本行，而成员报缺口通常不带 taskId；
+    // 工具层缺省即取 caller.member.mainTaskId，否则这条汇报只能落到主会话。
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: '兜底团队' });
+    const teamId = created.teamId;
+    const alice = await cap<{ employeeId: number }>('eteams_add_member', {
+      name: 'Alice',
+      role: 'engineer',
+      teamId,
+    });
+    const task = await cap<{ taskId: number }>('eteams_create_task', {
+      subject: '兜底任务',
+      chain: [{ member: String(alice.employeeId), stageBrief: '实现' }],
+    });
+    const env = runtimeEnvFor();
+    await assignTask(env, who(teamId), { taskId: task.taskId, member: alice.employeeId });
+
+    const leaderChild = 'sess-leader-child-2';
+    getDb(root)
+      .prepare(
+        'UPDATE task_members SET session_id = ? WHERE team_id = ? AND main_task_id = ? AND is_leader = 1',
+      )
+      .run(leaderChild, teamId, task.taskId);
+    registerCaptainChild(leaderChild, String(teamId), root, String(task.taskId), captain.id);
+
+    const row = readTeam(teamId).taskMembers.find(
+      (r) => r.mainTaskId === task.taskId && r.employeeId === alice.employeeId,
+    )!;
+    const member = memberAgent(row.sessionId);
+    // 不带 taskId：工具按 caller.member.mainTaskId 补齐，唤醒才能找到领队副本行。
+    await capAs(member, 'eteams_send_message', { to: 'captain', content: '【缺口】报一个' });
+    expect(runtime.deliveries.at(-1)!.childId).toBe(leaderChild);
+    unregisterCaptainChild(leaderChild);
   });
 
   it('主任务暂停/继续：在跑小任务挂起 + 容器 paused，再开始从原站续跑（2026-09-11）', async () => {

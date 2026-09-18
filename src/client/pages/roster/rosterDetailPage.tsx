@@ -1,8 +1,10 @@
 /**
  * 角色详情编辑页（docs/13.3 角色 / docs/19.6.2 构建师播报联动）：名称/头像/
- * 手册一处编辑 + 汇报时间线（MemberDialog）——自 membersTab 拆出（docs/44
- * M2，行为零变更），路由 /roster/:name，:name 路由参数即角色名（react-router
- * 自动解码；改名成功换参导航，详情跟随新名）。
+ * 手册一处编辑——自 membersTab 拆出（docs/44 M2，行为零变更），路由
+ * /roster/:name，:name 路由参数即角色名（react-router 自动解码；改名成功
+ * 换参导航，详情跟随新名）。用户迭代 2026-09-18：去掉汇报记录（原成员汇报
+ * 时间线 MemberDialog 及其取数上下文 team 撤；页内只剩名称/头像/手册一处
+ * 编辑）。
  *
  * The role detail handbook (用户反馈：去掉人设摘要，全部提炼到角色手册).
  * 用户迭代 2026-09-03：编辑钮挪到详情页头，名称/头像/手册一处编辑——保存
@@ -17,7 +19,6 @@ import { useDispatch } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
 import PenLine from 'lucide-react/dist/esm/icons/pen-line.mjs';
 import type { RosterMember } from '../../lib/api';
-import type { TeamSnapshot } from '../../lib/monitor';
 import { cn } from '../../lib/cn';
 import { errorMessageOf } from '../../lib/errors';
 import { ROSTER_DETAIL_SUBTITLE_META } from '../../lib/status';
@@ -29,7 +30,6 @@ import { Button } from '../../components/ui/button';
 import { Card } from '../../components/ui/card';
 import { Input } from '../../components/ui/input';
 import { handbookSeed } from './buildDraft';
-import { MemberDialog } from '../team/memberDialog';
 import { MarkdownDoc } from '../shared/markdownDoc';
 import { FormErrorNote } from '../shared/components';
 import {
@@ -47,8 +47,6 @@ import { useBuildSession } from './buildWorkbench';
 export interface RosterDetailPageProps {
   /** 角色库（:name 查条目 + 改名重名拦截，store roster.list 经壳传入）。 */
   members: RosterMember[];
-  /** 当前团队快照（成员汇报时间线的取数上下文，undefined=尚无团队）。 */
-  team: TeamSnapshot | undefined;
   /** 保存/改名回拉（roster/fetchRoster）。 */
   onDeleted: () => void;
 }
@@ -63,18 +61,16 @@ function detailHandbookText(detail: RosterMember): string {
 
 /**
  * 角色详情：页头卡（头像环 + 名称/副注 + 编辑/保存/取消）+ 手册卡（编辑器/
- * 只读渲染）+ 成员汇报时间线。编辑/只读切换观感与拆分前逐位一致。
+ * 只读渲染）。编辑/只读切换观感与拆分前逐位一致。
  */
-export function RosterDetailPage({ members, team, onDeleted }: RosterDetailPageProps): ReactNode {
+export function RosterDetailPage({ members, onDeleted }: RosterDetailPageProps): ReactNode {
   const dispatch = useDispatch();
   const navigate = useNavigate();
   // :name 路由参数即角色名（react-router 自动解码）。
   const { name } = useParams();
   const detail = members.find((m) => m.name === name) ?? null;
-  const detailMemberView =
-    detail === null ? null : (team?.members.find((m) => m.name === detail.name) ?? null);
   // 构建会话轮询照跑（「仅角色域活跃时轮询」现状保持）；待确认草稿到达时
-  // 经 useBuildSession 自动跳新增页——离开详情页与拆分前 setView('add') 同效。
+  // 不再自动跳新增页（用户 2026-09-18），详情页原地不动。
   useBuildSession();
 
   // —— 角色详情编辑（用户迭代 2026-09-03）——
@@ -295,9 +291,6 @@ export function RosterDetailPage({ members, team, onDeleted }: RosterDetailPageP
           <MarkdownDoc text={detailHandbookText(detail)} />
         )}
       </Card>
-      {team !== undefined && detailMemberView !== null && (
-        <MemberDialog team={team} member={detailMemberView} />
-      )}
     </div>
   );
 }

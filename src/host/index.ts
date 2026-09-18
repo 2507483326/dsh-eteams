@@ -38,7 +38,7 @@ import { leaderHandbookForChild } from './runtime/captainAgent.js';
 import { sessionPersonaSection, sessionIdOfScope } from './runtime/sessionPersona.js';
 import { rootPromptSection } from './runtime/rootPrompt.js';
 import { sessionTeamSection } from './runtime/sessionTeam.js';
-import { CAPTAIN_SECTION_SHORT } from './prompts/system/captain.js';
+import { standingSection } from './runtime/standingSection.js';
 import { composeCaptainPersona } from './prompts/personas/captain.js';
 import { personaDigest } from './prompts/personas/framework.js';
 import { ROLE_BUILDER_SECTION } from './prompts/system/roleBuilder.js';
@@ -165,12 +165,15 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
     log.warn('eteams: interruption watcher install failed: %s', String(error));
   }
 
-  // 3) Captain standing prompt (compact section, tools guidance band).
+  // 3) Standing role section (order 105): 领队段发给主对话，成员段发给成员面，
+  //    领队/构建师子代理静默——分流判据在 runtime/standingSection.ts（用户
+  //    2026-09-18「应该为成员构筑专属的提示词」：此前是静态字符串，领队口径
+  //    被无差别注入到每个 agent）。
   try {
     ctx.systemPrompt.section({
       name: 'eteams-captain',
       order: 105,
-      text: CAPTAIN_SECTION_SHORT,
+      text: (context) => standingSection(config, context.scope),
     });
     log.info('eteams: system prompt section registered');
   } catch (error) {

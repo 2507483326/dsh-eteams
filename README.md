@@ -7,7 +7,7 @@
 
 领队拆解目标，成员接力执行 —— DeepSeek Harness 的多智能体团队协作插件。
 
-[![Version](https://img.shields.io/badge/version-0.2.16-4B6BFB?style=flat-square)](package.json)
+[![Version](https://img.shields.io/badge/version-0.2.18-4B6BFB?style=flat-square)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-3DA639?style=flat-square)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-339933?style=flat-square)](package.json)
 [![Platform](https://img.shields.io/badge/DeepSeek%20Harness-plugin-6E56CF?style=flat-square)](https://github.com/deepseek-ai)

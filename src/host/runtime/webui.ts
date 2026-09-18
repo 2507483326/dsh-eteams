@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import type { ETeamsResolvedConfig } from '../config.js';
 import type { MemberRecord, TaskRecord, TaskStatus, TeamState } from '../model/types.js';
 import { chainActiveStations, chainDoneStations } from '../model/taskMachine.js';
-import { memberBoxKey, readEventsSync, readMailboxSync, recordEvent } from '../state/events.js';
+import { readEventsSync, recordEvent } from '../state/events.js';
 import { readPendingAsksSync, readRecentAsksSync } from '../state/asks.js';
 import { boardOverview } from '../state/queries.js';
 import { listTeamIds, readRecentResolvedDecisionsSync, readTeamSync } from '../state/store.js';
@@ -2397,17 +2397,6 @@ export function installWebSurface(
                 });
                 return;
               }
-              if (segments[2] === 'member' && segments[4] === 'dialog') {
-                // R4：对话框按工号定位成员（名字串旧口径回退）。
-                const member = rosterMemberByRef(team, segments[3]!);
-                if (member === undefined) {
-                  sendError(res, 404, `成员 ${segments[3]} 不存在`);
-                  return;
-                }
-                const after = Number(url.searchParams.get('after') ?? '0') || 0;
-                sendJson(res, 200, memberDialog(root, team, member, after));
-                return;
-              }
               // GET /team/<id>/usage/calendar?year=<y> — 每日 Token 消耗日历
               // （docs/28.4）：读取时聚合 usage.jsonl + 归档，全年零填充日格
               // （未来年同构返回零格，不 404）。year 缺省当年；非法值 400。
@@ -2593,65 +2582,3 @@ function readAvatarPair(value: unknown): { seed: number; salt: number } | undefi
   return { seed, salt };
 }
 
-/** Member dialog timeline (D15 read-only): mailbox rows + member events merged.
- * v7：邮箱按工号分箱（box_key = String(工号)，同名成员各收各箱）；进度按
- * 该成员副本行的 attempt 归属（attempt.task_member_id，旧行退按名）。 */
-function memberDialog(
-  root: string,
-  team: TeamState,
-  member: MemberRecord,
-  after: number,
-): Record<string, unknown> {
-  // 分箱键与写端 memberBoxKey 同口径：无号（异常/旧数据）退名字箱。
-  const box = member.employeeId !== undefined ? memberBoxKey(member.employeeId) : member.name;
-  const rowIds = new Set(
-    team.taskMembers
-      .filter((r) => member.employeeId !== undefined && r.employeeId === member.employeeId)
-      .map((r) => r.id),
-  );
-  type Item = { at: number; kind: string; text: string; taskId?: number; from?: string };
-  const items: Item[] = [];
-  for (const m of readMailboxSync(root, team.id, box)) {
-    if (m.seq <= after) continue;
-    items.push({
-      at: m.at,
-      kind: m.kind,
-      text: m.content,
-      taskId: m.taskId,
-      from: m.from.name ?? m.from.kind,
-    });
-  }
-  for (const task of team.tasks) {
-    for (const attempt of task.attempts) {
-      const mine =
-        attempt.taskMemberId !== undefined
-          ? rowIds.has(attempt.taskMemberId)
-          : attempt.member === member.name;
-      if (!mine) continue;
-      for (const note of attempt.progress) {
-        if (note.at <= after) continue;
-        items.push({
-          at: note.at,
-          kind: 'progress',
-          text: note.text,
-          taskId: task.id,
-          from: member.name,
-        });
-      }
-    }
-  }
-  items.sort((a, b) => a.at - b.at);
-  const currentTask = team.tasks.find((t) => {
-    if (!ACTIVE_STATUSES.includes(t.status)) return false;
-    const last = t.attempts.at(-1);
-    if (last === undefined) return t.assignee === member.name;
-    return last.taskMemberId !== undefined
-      ? rowIds.has(last.taskMemberId)
-      : last.member === member.name;
-  });
-  return {
-    currentTaskId: currentTask?.id ?? null,
-    items,
-    serverTime: Date.now(),
-  };
-}

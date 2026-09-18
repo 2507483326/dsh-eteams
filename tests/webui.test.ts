@@ -1532,18 +1532,6 @@ describe('conversation task workflow (docs/26)', () => {
     expect(trackBody.outcome).toContain('映射表完成');
     expect(trackBody.contract.subject).toBe('梳理新旧页面映射');
     expect(trackBody.contract.chain.map((s) => s.member)).toEqual(['Bob']);
-
-    // 8. 成员对话时间线：指派邮件 + 进度可见；完成后无当前任务。
-    const dialog = await h.get(`/eteams-api/team/${teamId}/member/Bob/dialog`);
-    expect(dialog.code).toBe(200);
-    const dialogBody = json<{
-      currentTaskId: number | null;
-      items: unknown[];
-    }>(dialog.body);
-    expect(dialogBody.currentTaskId).toBeNull();
-    expect(dialogBody.items.length).toBeGreaterThan(0);
-    const unknownDialog = await h.get(`/eteams-api/team/${teamId}/member/Ghost/dialog`);
-    expect(unknownDialog.code).toBe(404);
   });
 
   it('accepts numeric parentTaskId and rewrites dependencies via the update route (七轮 DA20)', async () => {

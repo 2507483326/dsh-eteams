@@ -229,7 +229,7 @@ export function ETeamsViewRoutes(props: ETeamsRoutesProps): ReactNode {
       <Route
         path="/roster/:name"
         element={
-          <RosterDetailPage members={props.roster} team={props.team} onDeleted={props.onDeleted} />
+          <RosterDetailPage members={props.roster} onDeleted={props.onDeleted} />
         }
       />
       {/* 任务域（M3 拆页）：/tasks 列表 + /tasks/:taskId 详情（:taskId 路由

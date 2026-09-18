@@ -188,10 +188,24 @@ export function rootRoleRow(
  * 这里只判会话绑没绑过副本行。
  */
 export function hasTaskMemberSession(db: DatabaseSync, sessionId: string): boolean {
-  return (
-    db.prepare('SELECT 1 FROM task_members WHERE session_id = ? LIMIT 1').get(sessionId) !==
-    undefined
-  );
+  return taskMemberSessionRole(db, sessionId) !== undefined;
+}
+
+/**
+ * 会话绑定的任务成员副本行**身份**（v12 注入分流读端，与上一条同源查询）：
+ * 单次查表同时回答「是不是副本行会话」与「是不是领队行」——常驻角色段据此
+ * 把成员面发给成员、对领队行静默（领队子代理的常驻面由人格段负责）。不在册
+ * （主对话 / 子代理未落行）返回 undefined。
+ */
+export function taskMemberSessionRole(
+  db: DatabaseSync,
+  sessionId: string,
+): 'leader' | 'member' | undefined {
+  const row = db
+    .prepare('SELECT is_leader FROM task_members WHERE session_id = ? LIMIT 1')
+    .get(sessionId) as { is_leader: number } | undefined;
+  if (row === undefined) return undefined;
+  return row.is_leader === 1 ? 'leader' : 'member';
 }
 
 /**

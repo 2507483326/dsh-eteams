@@ -6,7 +6,7 @@
 
 | 子目录 | 一句话定义 | 判定问句 |
 |---|---|---|
-| `system/` | systemPrompt section 文本：常驻段（captain / roleBuilder）+ 动态 band 文本组装（sessionPersona / sessionTeam / rootPrompt） | 这段文本会装进 systemPrompt 吗？ |
+| `system/` | systemPrompt section 文本：常驻角色段（captain / member / roleBuilder）+ 动态 band 文本组装（sessionPersona / sessionTeam / rootPrompt） | 这段文本会装进 systemPrompt 吗？ |
 | `spawn/` | 子代理 / 成员出生时刻注入的提示词：子代理人格、阶段任务提示词、成员欢迎包 | 这段文本在 spawn / startContinuable 建会话那一刻随请求注入吗？ |
 | `handoff/` | 任务流模板：指派、交接、汇报、婉拒、挂起、取消的邮件 / 通知文本 | 这段文本随任务流转投递吗？ |
 | `personas/` | 人设框架与角色手册：框架字段渲染 / 合并、角色模板（ROLE_TEMPLATES）、领队 / 角色构建师预设、逐字角色手册（ROLE_DOCS） | 这段内容是人设数据或角色手册吗？ |
@@ -23,7 +23,8 @@
 
 | 文件 | 内容 | 主要消费方 |
 |---|---|---|
-| system/captain.ts | 领队常驻段 CAPTAIN_SECTION_SHORT | host/index.ts（systemPrompt order 105） |
+| system/captain.ts | 领队常驻段 CAPTAIN_SECTION_SHORT | runtime/standingSection.ts（systemPrompt order 105，主对话面） |
+| system/member.ts | 成员常驻段 MEMBER_SECTION_SHORT（成员视角的常驻约束；全文口径在 spawn/member.ts 的 MEMBER_RULES） | runtime/standingSection.ts（order 105，成员面：成员子代理 / 被成员人设接管的会话） |
 | system/roleBuilder.ts | 角色构建师常驻段 ROLE_BUILDER_SECTION、激活前缀 ACTIVATION_PREFIX | host/index.ts（order 106）、commands/eteam.ts |
 | system/sessionPersona.ts | 角色接管 band 文本组装、neutralizeInterpolation | runtime/sessionPersona.ts 薄壳 |
 | system/sessionTeam.ts | 团队绑定 band 文本组装 | runtime/sessionTeam.ts 薄壳 |

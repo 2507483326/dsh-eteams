@@ -5,8 +5,8 @@
  * 行为零变更），路由 /roster/add。
  *
  * 初值经 location.state 携带（形状见 buildWorkbench RosterAddLocationState）：
- * 构建会话自动跳转与列表「待加入角色」带 ai，「新增角色」不带 state 落
- * choose——页内三态切换不再走路由（docs/44 44.2.1）。
+ * 列表「待加入角色」带 ai，「新增角色」不带 state 落 choose——页内三态切换
+ * 不再走路由（docs/44 44.2.1）。
  *
  * @module dsh-eteams/client/pages/roster/rosterAddPage
  */

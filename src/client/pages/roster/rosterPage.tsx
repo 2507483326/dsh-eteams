@@ -2,7 +2,8 @@
  * 角色列表页（docs/13.3 角色库 / D16）：搜索/分页/删除 + 新增入口——自
  * membersTab 拆出（docs/44 M2，行为零变更），路由 /roster。构建会话经
  * {@link useBuildSession} 轮询（仅角色域活跃时跑）：有未入库草稿时新增入口
- * 让位「待加入角色」，待确认草稿到达自动跳新增页。
+ * 让位「待加入角色」，由用户手动点进新增页——不再自动跳转（用户 2026-09-18
+ * 「进入角色列表页面就进入角色列表页面不用自动跳转」）。
  *
  * @module dsh-eteams/client/pages/roster/rosterPage
  */
@@ -79,7 +80,8 @@ export function RosterPage({
   const [page, setPage] = useState(0);
   // 构建会话（docs/19.6.2, D18-5）：S10 迁入 build model——session 经
   // useBuildSession 读取，轮询由它发 `build/fetchBuild`（仅角色域活跃时跑）；
-  // 待确认草稿到达时以会话键去重自动跳新增页（见 buildWorkbench）。
+  // 待确认草稿到达时只切换页头入口为「待加入角色」（不再自动跳新增页，
+  // 用户 2026-09-18——见 buildWorkbench）。
   const build = useBuildSession();
 
   const filtered = members.filter((m) => {

@@ -12,7 +12,6 @@ import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { JsonValue } from '@deepseek-ai/dsh-session';
 import { mergePersona } from '../prompts/personas/framework.js';
 import { defaultPersonaFor } from '../prompts/personas/presets.js';
-import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import type {
   Actor,
   MemberRecord,
@@ -56,6 +55,7 @@ import {
   readBox,
   requireMember,
   teamMainSessionOf,
+  wakeCaptain,
   wakeMember,
 } from './notifier.js';
 
@@ -809,35 +809,24 @@ export async function sendMessage(
   refs: { taskId?: number } = {},
 ): Promise<void> {
   const wakes: Array<() => Promise<boolean>> = [];
-  await withTeam(env, team.id, (fresh, root, tx) => {
+  await withTeam(env, team.id, (fresh, _root, tx) => {
     if (to === 'captain') {
       insertMailInTx(
         tx,
         fresh.id,
         'captain',
-        makeMail(
-          from,
-          { kind: 'captain', name: '领队' },
-          from.kind === 'user' ? 'user_message' : 'report',
-          content,
-          refs,
-        ),
+        makeMail(from, { kind: 'captain', name: '领队' }, 'report', content, refs),
       );
-      // 领队锚点（v6 派生）：任务行快照 + 心跳兜底。
-      const anchorId = teamMainSessionOf(fresh) || readBuildPresence(root)?.sessionId || '';
-      const captainAgent = anchorId !== '' ? env.ctx.agents.get(anchorId) : undefined;
-      if (captainAgent) {
-        try {
-          captainAgent.followup(
-            createUserMessage({
-              content: [{ type: 'text', text: `[来自 ${from.name ?? from.kind}] ${content}` }],
-              source: { kind: 'plugin', plugin: 'dsh-eteams' },
-            }),
-          );
-        } catch (error) {
-          env.ctx.logger.warn(`eteams: captain wake failed: ${String(error)}`);
-        }
-      }
+      // 唤醒领队（2026-09-18 修复，根因见 docs/captainReportRoutingGap.md）：
+      // 与 notifyCaptain 同一条路由——领队子代理优先，锚点按「真实直接父 → 本
+      // 任务快照 → 全队快照 → 面板心跳」逐个试、全离线冷恢复、失败留痕。原先
+      // 这里只单发一次「任务行快照的活代理」查询且无 else：多任务团队里那条快照
+      // 多为已关闭的旧会话 → 领队与主会话双双收不到唤醒，成员子会话空等（用户
+      // 2026-09-18「主会话什么都没收到，只有子对话一直在等」）。唤醒属异步 I/O，
+      // 排进 wakes 提交后执行（模块头纪律）。
+      wakes.push(() =>
+        wakeCaptain(env, fresh, `[来自 ${from.name ?? from.kind}] ${content}`, refs.taskId),
+      );
     } else {
       // v7 收件人按工号定位（同名不串箱）：to 允许工号十进制串（面板路由），
       // 也兼容旧成员名（无同名冲突时按名解析）。工牌已删的工号按「不存在」

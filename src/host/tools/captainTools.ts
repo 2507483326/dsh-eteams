@@ -1268,9 +1268,15 @@ export function createCaptainTools(
         // root 只能有 一个，成员/领队行为按 caller.kind 合一到本工具）。
         if (args.to.trim() === caller.member.name) throw new ETeamsError('不能给自己发消息');
       }
-      await sendMessage(env, caller.team, caller.actor, args.to, args.content, {
-        taskId: args.taskId,
-      });
+      // 任务号兜底（2026-09-18，docs/captainReportRoutingGap.md）：唤醒领队要按
+      // (大任务, is_leader) 定位领队子代理，而成员报缺口/汇报通常不带 taskId——
+      // 缺省即用该成员副本行锚定的大任务，否则这条汇报只能落到主会话。
+      const taskId =
+        args.taskId ??
+        (caller.kind === 'member' && caller.member.mainTaskId !== null
+          ? caller.member.mainTaskId
+          : undefined);
+      await sendMessage(env, caller.team, caller.actor, args.to, args.content, { taskId });
       return { ok: true as const, to: args.to };
     },
   });
