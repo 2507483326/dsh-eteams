@@ -286,6 +286,13 @@ function memberView(team: TeamState, m: MemberRecord) {
  * 无在办小任务是正常的，不能按陈旧 start 回落 `ready`（否则点击像没反应，
  * 面板仍显「待开始」）。故 `panelStarted` 为真时，无在办/挂起小任务也保持
  * `start`；真正的陈旧 start（无该事件）依旧回落，两侧口径不冲突。
+ *
+ * 用户 2026-09-18「点击开始没有反应」：挂起的容器点「开始」时，领队要先
+ * `resumeTask` 把挂起的小任务恢复，这中间有几十秒窗口——容器库里已是 `start`
+ * （markGroupStarted 落好了），但小任务仍是 `paused`。此前的判据顺序把「有挂起
+ * 小任务 → paused」排在 `panelStarted` **之前**，于是这几十秒面板继续显示「已挂起」，
+ * 点击就像没反应。故 `panelStarted` 必须排在挂起小任务判据之前（显式 paused 容器
+ * 仍由上面那条先拦住，用户主动「暂停」的语义不受影响）。
  */
 function containerStatusOf(t: TaskRecord, team: TeamState, panelStarted: boolean): TaskStatus {
   if (t.parentId !== null) return t.status;
@@ -297,9 +304,15 @@ function containerStatusOf(t: TaskRecord, team: TeamState, panelStarted: boolean
       s.attempts.some((a) => a.status === 'pending_accept' || a.status === 'running'),
   );
   if (active) return 'start';
+  // 显式挂起的容器（用户点「暂停」）保持 paused，不被下面任何推导冲掉。
   if (t.status === 'paused') return 'paused';
-  if (subs.some((s) => s.status === 'paused')) return 'paused';
+  // 面板显式开跑（markGroupStarted 已把容器置 start 并落 task.started
+  // {via:'panel.start'}）：这是「领队正在恢复挂起小任务」的过渡态——不能因为
+  // 此刻仍有小任务处于 paused 就回落 paused。用户 2026-09-18「点击开始没有反应」：
+  // 点击其实已被受理、库里 task.started 已落、领队稍后才 resumeTask，但这条
+  // 挂起判据排在前面，导致这 20~30s 里面板一直显示「已挂起」，看着像没反应。
   if (panelStarted) return 'start';
+  if (subs.some((s) => s.status === 'paused')) return 'paused';
   return 'ready';
 }
 

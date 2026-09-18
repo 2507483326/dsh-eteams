@@ -8,12 +8,16 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Context } from '@deepseek-ai/cordis';
 import { resolveConfig, type ETeamsResolvedConfig } from '../src/host/config';
 import { LEADER_NAME } from '../src/host/runtime/roster';
 import { joinPath } from '../src/host/runtime/base';
-import { reconcileDeadSessions, resetReconcilerForTests } from '../src/host/runtime/reconcile';
+import {
+  installDeadSessionReconciler,
+  reconcileDeadSessions,
+  resetReconcilerForTests,
+} from '../src/host/runtime/reconcile';
 import { readEventsSync } from '../src/host/state/events';
 import { insertTeamRow, readTeamSync, withTeamTx, writeTeamInTx } from '../src/host/state/store';
 import type { AttemptRecord, TaskMemberRecord, TeamState } from '../src/host/model/types';
@@ -220,5 +224,17 @@ describe('死会话对账（宿主重启后的在办 attempt）', () => {
     const paused = await reconcileDeadSessions(ctx, config, { graceMs: 0 });
     expect(paused).toBe(1);
     expect(readTeamSync(root, teamId)!.tasks.find((t) => t.id === SUB_TASK_ID)!.status).toBe('paused');
+  });
+
+  it('install 只排启动快扫、不设常驻周期（用户 2026-09-18「去掉轮询」）', () => {
+    const intervalSpy = vi.spyOn(globalThis, 'setInterval');
+    const timeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    installDeadSessionReconciler(fakeCtx([]), config);
+    // 启动快扫确实排了 timer（证明 spy 生效）……
+    expect(timeoutSpy).toHaveBeenCalled();
+    // ……但没有任何常驻周期扫描。
+    expect(intervalSpy).not.toHaveBeenCalled();
+    intervalSpy.mockRestore();
+    timeoutSpy.mockRestore();
   });
 });

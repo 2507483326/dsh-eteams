@@ -1723,6 +1723,20 @@ describe('conversation task workflow (docs/26)', () => {
       .prepare("UPDATE task SET status = 'paused' WHERE task_id = ?")
       .run(sub);
     expect(statusOf(group)).toBe('paused');
+
+    // 面板点「开始」后、领队尚未恢复挂起小任务的过渡窗口（用户 2026-09-18
+    // 「点击开始没有反应」）：容器已由 markGroupStarted 置 start 并落
+    // task.started{via:'panel.start'}，但小任务此刻仍是 paused——快照必须报
+    // 「执行中」，不能被「有挂起小任务 → paused」判据回落（否则这几十秒里
+    // 面板一直显示「已挂起」，点击看着像没反应）。
+    const panelAt = Date.now();
+    getDb(stateRoot())
+      .prepare(
+        "INSERT INTO events (team_id, event_time, actor_kind, actor_name, type, task_id, attempt_id, payload, created_time, update_time) VALUES (?, ?, 'user', '用户', 'task.started', ?, NULL, ?, ?, ?)",
+      )
+      .run(teamId, panelAt, group, JSON.stringify({ via: 'panel.start' }), panelAt, panelAt);
+    expect(statusOf(group)).toBe('start');
+
     getDb(stateRoot())
       .prepare("UPDATE task SET status = 'ready' WHERE task_id = ?")
       .run(sub);

@@ -166,11 +166,13 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
     log.warn('eteams: interruption watcher install failed: %s', String(error));
   }
 
-  // 2d) 死会话对账（用户 2026-09-18「应用重启后还一直是 执行中」）：启动跑一次
-  //     + 每 30s 一轮，只扫在办 attempt，用宿主活 agent 集合（ctx.agents.list()）
-  //     判断执行会话是否还在——不在即吊销尝试 → 小任务 paused → 容器派生同步，
-  //     补上「重启后中断观察者的内存注册表为空、崩溃也不再有 turn/end 事件」的
-  //     缺口。失败不外抛（绝不因对账影响会话或装机）。
+  // 2d) 死会话对账（用户 2026-09-18「应用重启后还一直是 执行中」）：**只在启动时**
+  //     跑一轮 + 启动后几秒内补几轮快扫（等工作区注册表就绪），只扫在办 attempt，用
+  //     宿主活 agent 集合（ctx.agents.list()）判断执行会话是否还在——不在即吊销尝试
+  //     → 小任务 paused → 容器派生同步，补上「重启后中断观察者的内存注册表为空、
+  //     崩溃也不再有 turn/end 事件」的缺口。不做常驻轮询（用户 2026-09-18 拍板）：
+  //     进程内的停止/异常结束都有 turn/end 事件、由中断观察者实时处置。失败不外抛
+  //     （绝不因对账影响会话或装机）。
   try {
     installDeadSessionReconciler(ctx, config);
     log.info('eteams: dead-session reconciler installed');

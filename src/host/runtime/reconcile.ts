@@ -6,12 +6,15 @@
  * 面板读侧兜底（webui.containerStatusOf）只要看到在办尝试就判容器 `start`，
  * 任务卡死在「执行中」，再也不会变。
  *
- * 本模块按宿主权威的**活 agent 集合**对账：启动跑一次 + 每 30s 一轮，只扫在办
- * attempt（走部分索引 idx_attempts_status），其执行会话不在 `ctx.agents.list()`
- * 里即视为「会话已死」→ `pauseTaskOnDeadSession`（吊销尝试 → 小任务 paused →
- * 容器派生同步 → 落 `task.suspended{via:'session.dead'}`）。**宽限期**（默认
- * 60s，按 `claimed_time ?? created_time` 起算）避开 spawn / 冷恢复途中的短暂
- * 不在册，防误杀。
+ * 本模块按宿主权威的**活 agent 集合**对账：**只在启动时**跑一轮 + 启动后几秒内补几轮
+ * 快扫（`BOOT_SWEEP_DELAYS_MS`，等 workspaceRegistry 就绪），只扫在办 attempt
+ * （走部分索引 idx_attempts_status），其执行会话不在 `ctx.agents.list()` 里即视为
+ * 「会话已死」→ `pauseTaskOnDeadSession`（吊销尝试 → 小任务 paused → 容器派生同步
+ * → 落 `task.suspended{via:'session.dead'}`）。**宽限期**（默认 60s，按
+ * `claimed_time ?? created_time` 起算）避开 spawn / 冷恢复途中的短暂不在册，防误杀。
+ *
+ * 不做常驻轮询（用户 2026-09-18 拍板）：进程内的「用户点停止 / 回合异常结束」都有
+ * `turn/end` 事件、由中断观察者实时处置；本模块只负责重启后没有事件可依的那批残留。
  *
  * 与中断观察者同款：root-scope 装机、失败只节流 warn，绝不外抛（对账绝不
  * 影响会话与装机）；扫描量由库里在办尝试数决定，无在办即零成本。
@@ -26,13 +29,22 @@ import { pauseTaskOnDeadSession } from './assignment.js';
 import { type RuntimeContext, type RuntimeEnv, type RuntimeLogger } from './base.js';
 import { collectRoots } from './workspaces.js';
 
-/** 周期 sweep 间隔（用户 2026-09-18 拍板 30s）。 */
-const SWEEP_INTERVAL_MS = 30_000;
+/**
+ * 启动快扫时刻（ms）：apply() 执行的瞬间工作区注册表往往还没就绪，`collectRoots`
+ * 返回空 → 装机时那次立即 sweep 会空跑，只能干等（实测重启后最长要等满一整轮）。
+ * 故启动后几秒内补几轮，注册表一就绪即生效（用户 2026-09-18「扫描的速度好像有点慢」）。
+ *
+ * **之后不再有周期扫描**（用户 2026-09-18「那个轮询感觉好像没有必要，去掉吧」）：
+ * 进程内的「用户点停止 / 回合异常结束」都有 `turn/end` 事件、由中断观察者
+ * （interruption.ts）实时处置；本模块只负责服务重启后**没有事件可依**的那批残留，
+ * 启动对账一次即可，无需常驻轮询。
+ */
+const BOOT_SWEEP_DELAYS_MS = [1_000, 3_000, 6_000, 10_000];
 /** 宽限期：在办时长不足此值不判死（给 spawn/冷恢复留窗口；用户 2026-09-18 拍板 60s）。 */
 const GRACE_MS = 60_000;
 
 let logger: RuntimeLogger | undefined;
-let timer: ReturnType<typeof setInterval> | undefined;
+let bootTimers: ReturnType<typeof setTimeout>[] = [];
 let lastWarnAt = 0;
 
 function warnThrottled(message: string): void {
@@ -123,35 +135,35 @@ export async function reconcileDeadSessions(
   return paused;
 }
 
-/** Install the dead-session reconciler (root-scope, index.ts apply). */
+/** Install the dead-session reconciler (root-scope, index.ts apply, 启动一次). */
 export function installDeadSessionReconciler(ctx: Context, config: ETeamsResolvedConfig): void {
   logger = (ctx as unknown as { logger: RuntimeLogger }).logger;
-  stopTimer();
-  // 启动即对账一次（宿主刚起来，重启前的会话全不在册）。此刻 workspaceRegistry
-  // 可能尚未就绪 → collectRoots 返回空、本轮 no-op，首个周期 tick 自然补上。
-  void reconcileDeadSessions(ctx, config).catch((error) =>
-    warnThrottled(`eteams reconcile: 启动对账失败（不影响会话）：${String(error)}`),
-  );
-  const handle = setInterval(() => {
+  clearBootTimers();
+  const run = (): void => {
     void reconcileDeadSessions(ctx, config).catch((error) =>
-      warnThrottled(`eteams reconcile: 周期对账失败（不影响会话）：${String(error)}`),
+      warnThrottled(`eteams reconcile: 对账失败（不影响会话）：${String(error)}`),
     );
-  }, SWEEP_INTERVAL_MS);
-  // 绝不影响宿主退出：宿主进程不因这个 timer 被拖着不走。
-  (handle as { unref?: () => void }).unref?.();
-  timer = handle;
-}
-
-function stopTimer(): void {
-  if (timer !== undefined) {
-    clearInterval(timer);
-    timer = undefined;
+  };
+  // 启动立即跑一轮（重启前的会话全不在册）；此时 workspaceRegistry 往往未就绪 →
+  // collectRoots 返回空、本轮 no-op，故紧接着补几轮快扫（见 BOOT_SWEEP_DELAYS_MS），
+  // 注册表一就绪即生效。此后不再排期——进程内的中断由中断观察者按事件处置。
+  run();
+  for (const delay of BOOT_SWEEP_DELAYS_MS) {
+    const handle = setTimeout(run, delay);
+    // 绝不影响宿主退出：宿主进程不因这些 timer 被拖着不走。
+    (handle as { unref?: () => void }).unref?.();
+    bootTimers.push(handle);
   }
 }
 
-/** Tests-only：停周期 sweep、清模块级 logger 与节流窗口（vitest 隔离）。 */
+function clearBootTimers(): void {
+  for (const handle of bootTimers) clearTimeout(handle);
+  bootTimers = [];
+}
+
+/** Tests-only：停启动快扫 timer、清模块级 logger 与节流窗口（vitest 隔离）。 */
 export function resetReconcilerForTests(): void {
-  stopTimer();
+  clearBootTimers();
   logger = undefined;
   lastWarnAt = 0;
 }
