@@ -940,6 +940,51 @@ export async function listTeamIds(stateRoot: string): Promise<number[]> {
   return rows.map((row) => row.team_id);
 }
 
+/** 一条在办尝试的定位行（会话存活对账用，见 runtime/reconcile.ts）。 */
+export interface InFlightAttemptRow {
+  teamId: number;
+  taskId: number;
+  attemptId: number;
+  /** 执行副本行 id（attempts.task_member_id，v7）；NULL = 旧数据退按名兜底。 */
+  taskMemberId: number | null;
+  member: string;
+  /** 在办起点 = claimed_time ?? created_time（宽限期判据）。 */
+  since: number;
+}
+
+/**
+ * 所有在办（`pending_accept` / `running`）尝试（用户 2026-09-18「应用重启后
+ * 还一直是 执行中」）：走部分索引 idx_attempts_status（schema.sql），只取对账
+ * 需要的定位列，不含团队/任务全文。
+ */
+export function listInFlightAttempts(stateRoot: string): InFlightAttemptRow[] {
+  const db = getDb(stateRoot);
+  ensureWorkspaceReady(stateRoot, db);
+  const rows = db
+    .prepare(
+      `SELECT team_id, task_id, attempt_id, task_member_id, member,
+              COALESCE(claimed_time, created_time) AS since
+         FROM attempts
+        WHERE status IN ('pending_accept','running')`,
+    )
+    .all() as Array<{
+    team_id: number;
+    task_id: number;
+    attempt_id: number;
+    task_member_id: number | null;
+    member: string;
+    since: number;
+  }>;
+  return rows.map((row) => ({
+    teamId: row.team_id,
+    taskId: row.task_id,
+    attemptId: row.attempt_id,
+    taskMemberId: row.task_member_id,
+    member: row.member,
+    since: row.since,
+  }));
+}
+
 /** Load every team (UI listing; 最新更新在前，走 idx_team_update_time). */
 export async function listTeams(stateRoot: string): Promise<TeamState[]> {
   const db = getDb(stateRoot);

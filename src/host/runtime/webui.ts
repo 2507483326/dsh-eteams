@@ -98,6 +98,7 @@ import {
 } from '../prompts/steering/dispatch.js';
 import { readUsageCalendar, readAppUsageCalendar } from './usage.js';
 import {
+  collectRoots,
   findRosterMemberAcrossWorkspaces,
   locateTeamAcrossWorkspaces,
   workspaceRegistryOf,
@@ -571,25 +572,8 @@ export function teamSnapshot(
 // summarizeEvent/eventTone 已迁至 runtime/activity.ts（v14）；本模块顶部再导出
 // summarizeEvent 保持既有 import 路径。
 
-/**
- * Read every unarchived team across all registered workspaces. 全局单库
- * （用户迭代 2026-09-04，stateDir 绝对路径）下所有工作区解析到同一个状态
- * 根——按根去重、每个根只收一遍（否则同一团队按工作区数重复出现在面板），
- * 并记住每个根的代表工作区供 teamSnapshot 用。
- */
-function collectRoots(
-  ctx: Context,
-  config: ETeamsResolvedConfig,
-): { root: string; workspacePath: string }[] {
-  const registry = workspaceRegistryOf(ctx);
-  if (!registry) return [];
-  const byRoot = new Map<string, string>();
-  for (const workspace of registry.list()) {
-    const root = stateRootFor(config, workspace.path);
-    if (!byRoot.has(root)) byRoot.set(root, workspace.path);
-  }
-  return [...byRoot].map(([root, workspacePath]) => ({ root, workspacePath }));
-}
+// collectRoots（跨工作区按状态根去重）已迁至 runtime/workspaces.ts，供快照与
+// 会话存活对账（runtime/reconcile.ts）共用（2026-09-18）。
 
 async function collectTeams(
   ctx: Context,

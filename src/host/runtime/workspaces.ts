@@ -51,6 +51,25 @@ export interface LocatedTeam {
   readonly workspacePath: string;
 }
 
+/**
+ * State roots to scan, one entry per distinct root (全局单库下所有工作区解析到同一
+ * 个根——按根去重、每个根只收一遍), remembering a representative workspace path.
+ * Shared by the panel snapshot (webui) and the dead-session reconciler.
+ */
+export function collectRoots(
+  ctx: unknown,
+  config: ETeamsResolvedConfig,
+): { root: string; workspacePath: string }[] {
+  const registry = workspaceRegistryOf(ctx);
+  if (!registry) return [];
+  const byRoot = new Map<string, string>();
+  for (const workspace of registry.list()) {
+    const root = stateRootFor(config, workspace.path);
+    if (!byRoot.has(root)) byRoot.set(root, workspace.path);
+  }
+  return [...byRoot].map(([root, workspacePath]) => ({ root, workspacePath }));
+}
+
 /** Live team ids under one state root（team 表自增号升序，docs/27）。 */
 function listTeamIdsSync(stateRoot: string): number[] {
   try {

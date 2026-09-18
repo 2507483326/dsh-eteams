@@ -32,6 +32,7 @@ import { createGapTools } from './tools/gapTools.js';
 import { createMemberTools } from './tools/memberTools.js';
 import { installUsageMeter } from './runtime/usage.js';
 import { installInterruptionWatcher } from './runtime/interruption.js';
+import { installDeadSessionReconciler } from './runtime/reconcile.js';
 import { installWebSurface, locateTeam } from './runtime/webui.js';
 import { stateRootFor } from './runtime/base.js';
 import { leaderHandbookForChild } from './runtime/captainAgent.js';
@@ -146,8 +147,8 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
 
   // 2b) Usage meter（docs/28.2.3 方案 A / E18 同型先例）：root-scope firehose
   //     监听 session/event 采集 assistant/message 的 usage，写
-  //     <workspace>/.eteams/usage.jsonl；冷恢复靠 session/created 对账 +
-  //     ctx.sessions.list() 装机补折。失败不外抛（计量绝不影响会话）。
+  //     <workspace>/.eteams/usage.jsonl。失败不外抛（计量绝不影响会话）。
+  //     （无水位对账：重启前的历史不回补——见 runtime/usage.ts 模块头。）
   try {
     installUsageMeter(ctx, config);
     log.info('eteams: usage meter installed');
@@ -163,6 +164,18 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
     log.info('eteams: interruption watcher installed');
   } catch (error) {
     log.warn('eteams: interruption watcher install failed: %s', String(error));
+  }
+
+  // 2d) 死会话对账（用户 2026-09-18「应用重启后还一直是 执行中」）：启动跑一次
+  //     + 每 30s 一轮，只扫在办 attempt，用宿主活 agent 集合（ctx.agents.list()）
+  //     判断执行会话是否还在——不在即吊销尝试 → 小任务 paused → 容器派生同步，
+  //     补上「重启后中断观察者的内存注册表为空、崩溃也不再有 turn/end 事件」的
+  //     缺口。失败不外抛（绝不因对账影响会话或装机）。
+  try {
+    installDeadSessionReconciler(ctx, config);
+    log.info('eteams: dead-session reconciler installed');
+  } catch (error) {
+    log.warn('eteams: dead-session reconciler install failed: %s', String(error));
   }
 
   // 3) Standing role section (order 105): 领队段发给主对话，成员段发给成员面，

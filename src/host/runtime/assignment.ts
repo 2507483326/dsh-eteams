@@ -1516,6 +1516,48 @@ export async function pauseTaskOnInterrupt(
 }
 
 /**
+ * 执行会话已不存在 → 挂起任务（用户 2026-09-18「应用重启后还一直是 执行中，
+ * 执行中的好像没有获取状态」）。
+ *
+ * 与 {@link pauseTaskOnInterrupt} 同一落笔（吊销在办尝试 → 任务 paused → 容器
+ * 派生同步），差别只在触发源与定位方式：中断路径由宿主 `turn/end` 事件驱动、
+ * 靠进程内会话注册表反查会话；本函数由 reconcile sweep（runtime/reconcile.ts）
+ * 按库里在办尝试驱动——宿主重启后注册表全空、崩溃也不会有 turn/end 事件再来，
+ * 库里只剩 pending_accept/running 残值，故对账侧直接在库里按 taskId 定位。
+ * actor 用插件身份；查不到/非 ready|start/无在办尝试一律 no-op（与中断路径同
+ * 守卫，已被自愈路径处理过的团队不会误伤）。
+ */
+export async function pauseTaskOnDeadSession(
+  env: RuntimeEnv,
+  teamId: TeamKey,
+  taskId: number,
+): Promise<number | undefined> {
+  const out = await withTeam(env, teamId, (team, _root, tx) => {
+    const task = team.tasks.find((t) => t.id === taskId);
+    if (task === undefined) return { changed: false as const };
+    if (task.status !== 'ready' && task.status !== 'start') return { changed: false as const };
+    const live = task.attempts.find(
+      (a) => a.status === 'pending_accept' || a.status === 'running',
+    );
+    if (live === undefined) return { changed: false as const };
+    revokeCurrentAttempt(tx, team, PLUGIN_ACTOR, task, 'session.dead');
+    applyTransition(task, 'paused', tx.now);
+    task.statusNote = '宿主重启后执行会话已不存在，任务已挂起（点「开始」继续）';
+    freeMember(team, task);
+    emit(tx, team.id, PLUGIN_ACTOR, 'task.suspended', {
+      taskId: task.id,
+      payload: { via: 'session.dead', attemptId: live.id },
+    });
+    // 容器同步：与中断路径同口径——吊销的是容器里最后一个在办小任务时，
+    // 容器立刻退回 ready（面板「开始」钮出现），不停在 start。
+    syncGroupOfSubtaskInTx(tx, team, task);
+    return { changed: true as const, taskId: task.id, team };
+  });
+  if (out.changed) renderTeamDocs(env.workspace, out.team, (msg) => env.ctx.logger.warn(msg));
+  return out.changed ? out.taskId : undefined;
+}
+
+/**
  * 领队子代理回合被中断 → **按中断类型分流**（用户迭代 2026-09-14）：与成员中断
  * 的 {@link pauseTaskOnInterrupt} 对称，补齐 captainChildren 这条此前无人消费
  * 的路径。宿主以 `turn/end{reason.kind}` 收尾被中断的回合：`aborted` = 有人主动
