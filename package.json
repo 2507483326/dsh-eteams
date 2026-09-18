@@ -26,11 +26,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/2507483326/eTeam.git"
+    "url": "git+https://github.com/2507483326/dsh-eteams.git"
   },
-  "homepage": "https://github.com/2507483326/eTeam#readme",
+  "homepage": "https://github.com/2507483326/dsh-eteams#readme",
   "bugs": {
-    "url": "https://github.com/2507483326/eTeam/issues"
+    "url": "https://github.com/2507483326/dsh-eteams/issues"
   },
   "engines": {
     "node": "^22.19.0 || >=24"

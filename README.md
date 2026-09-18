@@ -54,9 +54,9 @@ dsh plugin --profile desktop add dsh-eteams
 **方式三：本地源码（开发调试）**
 
 ```bash
-git clone <repo-url> && cd eTeam
+git clone https://github.com/2507483326/dsh-eteams.git && cd dsh-eteams
 pnpm install && pnpm build
-dsh plugin --profile desktop add C:\eTeam
+dsh plugin --profile desktop add .
 ```
 
 安装后核对装配结果，并重载客户端：
@@ -65,4 +65,3 @@ dsh plugin --profile desktop add C:\eTeam
 dsh --profile desktop --dump-config
 ```
 
-**验证是否就绪**：对话区头部出现「团队」页签、输入区工具行出现「团队」按钮；在任意对话里发一句 `eteams_ping`，能收到回执就说明通路正常。
