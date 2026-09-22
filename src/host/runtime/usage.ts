@@ -103,6 +103,14 @@ export function lookupMemberSession(childId: string): MemberSessionRecord | unde
   return memberSessions.get(childId);
 }
 
+/**
+ * 撤一条成员登记：spawn 失败时把预留 childId 的预登记撤掉（先登记后 spawn
+ * 的代价——见 members.spawnMember），不撤会在册子上留一个不存在的成员会话。
+ */
+export function unregisterMemberSession(childId: string): void {
+  memberSessions.delete(childId);
+}
+
 // ---------- 路线折叠缓存（28.3.3/E4） ----------
 
 const routeCache = new Map<string, { provider: string; model: string }>();

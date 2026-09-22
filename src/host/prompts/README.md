@@ -25,13 +25,14 @@
 |---|---|---|
 | system/captain.ts | 领队常驻段 CAPTAIN_SECTION_SHORT | runtime/standingSection.ts（systemPrompt order 105，主对话面） |
 | system/member.ts | 成员常驻段 MEMBER_SECTION_SHORT（成员视角的常驻约束；全文口径在 spawn/member.ts 的 MEMBER_RULES） | runtime/standingSection.ts（order 105，成员面：成员子代理 / 被成员人设接管的会话） |
-| system/roleBuilder.ts | 角色构建师常驻段 ROLE_BUILDER_SECTION、激活前缀 ACTIVATION_PREFIX | host/index.ts（order 106）、commands/eteam.ts |
+| system/roleBuilder.ts | 角色构建师常驻段 ROLE_BUILDER_SECTION、激活前缀 ACTIVATION_PREFIX | runtime/standingSection.ts（systemPrompt order 106，只主对话面）、commands/eteam.ts |
 | system/sessionPersona.ts | 角色接管 band 文本组装、neutralizeInterpolation | runtime/sessionPersona.ts 薄壳 |
 | system/sessionTeam.ts | 团队绑定 band 文本组装 | runtime/sessionTeam.ts 薄壳 |
 | system/rootPrompt.ts | 主对话注入 band 文本组装（角色库保留角色 system 的手册 MD 逐字嵌入，8000 字截断自述） | runtime/rootPrompt.ts 薄壳 |
 | spawn/captainChild.ts | 领队子代理人格（含回合决策表，经 persona 系统段 + eteams_captain_guide 的 render 模型通道同文返回）+ 一句话回合提示词 captainTurnBrief（任务/现状/父会话等所需内容全部经规程与工具面获取；工作目录 / 任务目录按任务冻结，随提示词写明）+ 手册拼装 | tools/captainDispatch.ts、tools/captainTools.ts、runtime/captainAgent.ts |
 | spawn/builderPhases.ts | 构建回合提示词（全相位同一句「身份 + 调 eteams_build_guide 领规程」+ 工作目录块（工作目录 / 构建状态目录）——任务/快照/父会话等所需内容全部经规程与工具面获取，docs/19.16 持续构建子代理） | runtime/builderPhases.ts |
 | spawn/workDirs.ts | 子代理共用的工作目录块 workDirsBlock（工作目录 = 工程根 + 任务目录，宿主算好绝对路径下发，用户 2026-09-16 统一口径） | prompts/spawn（member / captainChild）、runtime |
+| spawn/noteFiles.ts | 领队 / 成员共用的「按文件追加留言 / 纪要」纪律 NOTE_APPEND_DISCIPLINE（读改相邻、锚点取尾、报错重读、日期别猜；复盘 2026-09-22 的 file changed / old_string not found 双报错） | prompts/spawn（member / captainChild） |
 | spawn/member.ts | 成员欢迎包（通用简报 memberBriefing：工作目录块（workDirsBlock）/队伍留言板/本任务纪要/文档目录 + 领队 + 三节点汇报 + 规则 + 工具表） | runtime/members.ts |
 | handoff/mails.ts | 指派 / 汇报 / 婉拒 / 挂起 / 取消模板 | runtime/assignment.ts、runtime/members.ts、runtime/docs.ts、tools/memberTools.ts |
 | personas/framework.ts | 人设框架（字段渲染 / 合并 / 摘要 / 回退执行提示） | state/、runtime/、prompts 内部 |

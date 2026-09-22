@@ -1,9 +1,10 @@
 /**
  * 通用成员提示词模板单测（用户迭代 2026-09-11；2026-09-14 增队伍留言板；
- * 2026-09-15 扁平化增「任务目录 / 纪要 / 文档目录」）：每个任务成员的出生包与
- * 每次指派信都由 memberBriefing 包住，固定写明 ①工程根与任务目录（绝对路径）
- * ②队伍留言板（绝对路径 + 读/写纪律）③本任务纪要（绝对路径 + 写在哪一段）
- * ④文档产出目录 ⑤领队（无领队=主会话）与三节点实时汇报（开工/遇问题/完成）。
+ * 2026-09-15 扁平化增「任务目录 / 纪要 / 文档目录」；2026-09-22 增「追加纪律」）：
+ * 每个任务成员的出生包与每次指派信都由 memberBriefing 包住，固定写明 ①工程根与
+ * 任务目录（绝对路径）②队伍留言板（绝对路径 + 读/写纪律）③本任务纪要（绝对路径 +
+ * 写在哪一段）④追加纪律（写文件怎么改才不撞编辑闸）⑤文档产出目录 ⑥领队（无领队=
+ * 主会话）与三节点实时汇报（开工/遇问题/完成）。
  */
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -204,6 +205,18 @@ describe('成员留言板与纪要纪律（用户 2026-09-14 / 2026-09-15）', (
     const text = assignmentMail(taskOf(), { attemptId: 7, isStation: false });
     expect(text).toContain('纪要');
     expect(text).not.toContain('notes.md');
+  });
+
+  it('简报写明追加纪律：读改相邻、锚点取尾、报错重读（复盘 2026-09-22）', () => {
+    // 实况：领队收口后追留言板，先报 file changed since it was read、凭记忆重试
+    // 又报 old_string was not found——两跳都是「拿早先读到的快照去 Edit」。留言板
+    // 由全员并发追加、纪要上半段随状态被宿主重写，所以纪律必须写清怎么改才不撞闸。
+    const text = memberBriefing(BRIEFING_INPUT);
+    expect(text).toContain('## 追加纪律（留言板与纪要共守）');
+    expect(text).toContain('读和改挨着做');
+    expect(text).toContain('刚读到的最后一行');
+    expect(text).toContain('file changed since it was read');
+    expect(text).toContain('old_string was not found');
   });
 });
 

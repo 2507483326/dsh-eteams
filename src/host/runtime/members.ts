@@ -9,6 +9,7 @@
  *
  * @module dsh-eteams/runtime/members
  */
+import { randomUUID } from 'node:crypto';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { SessionId } from '@deepseek-ai/dsh-session';
 import type { MemberRecord, TaskMemberRecord, TaskRecord, TeamState } from '../model/types.js';
@@ -20,7 +21,7 @@ import { assignmentMail } from '../prompts/handoff/mails.js';
 import { fallbackTeamMemberPersona } from '../prompts/personas/framework.js';
 import { memberBriefing, memberWelcome } from '../prompts/spawn/member.js';
 import { neutralizeInterpolation } from './sessionPersona.js';
-import { registerMemberSession } from './usage.js';
+import { registerMemberSession, unregisterMemberSession } from './usage.js';
 import { boardFileAbs, docDirAbs, groupDirAbs, minutesFileAbs, taskWorkRootOf } from './docs.js';
 import { taskMemberBadge } from './roster.js';
 
@@ -182,33 +183,51 @@ export async function spawnMember(
           ...(route.reasoningEffort ? { reasoningEffort: route.reasoningEffort } : {}),
         }
       : sessionDefaultRouteOf(env.ctx);
-  const start = await env.ctx.subagents.startContinuable({
-    provider: env.config.memberProvider,
-    // 标签 = 显示名（宿主会话头部读 label）：名字在前，工牌后缀带 (任务, 工号)
-    // 作用域——副本行 = (工号, 大任务)，同名成员各是各的子会话。
-    label: buildMemberLabel(row.mainTaskId ?? 0, row.employeeId ?? 0, row.name),
-    request: {
-      prompt: [
-        {
-          type: 'text',
-          text: memberWelcome(team, row.name, template, taskBriefing(env, team, task)),
-        },
-      ],
-      parent: captain,
-      persona: personaText,
-      toolFilter: { deny: [...MEMBER_DENIED_TOOLS] },
-      ...(agentOptions !== undefined ? { agentOptions } : {}),
-    },
-    // 0.1.2 的入口对 signal 无保护调用 throwIfAborted()——env 缺 signal
-    // （面板路径）时兜底成永不中止的信号。
-    signal: env.signal ?? new AbortController().signal,
-  });
-  registerMemberSession(String(start.childId), {
+  // childId 由调用方预留、**先登记后 spawn**（用户 2026-09-22「领队的文本出现
+  // 在了子成员中」）：子代理首次装配早于 startContinuable 兑现，登记滞后的窗
+  // 口里常驻段判定查不到成员身份，成员首轮装配就会拿到主对话的领队段（领队子
+  // 代理路径同款修法，见 captainAgent 的 dispatchCaptain）。预留 id 直接交给
+  // 运行时，故登记键与真身一致；spawn 失败撤掉预登记再原样抛（调用方尚未改任
+  // 何状态，见模块头）。
+  const childId = randomUUID();
+  const identity = {
     teamId: String(team.id),
     memberName: row.name,
     employeeId: row.employeeId,
     parentSessionId: String(captain.id),
-  });
+  };
+  registerMemberSession(childId, identity);
+  let start: { childId: string; messageId: unknown };
+  try {
+    start = await env.ctx.subagents.startContinuable({
+      provider: env.config.memberProvider,
+      childId,
+      // 标签 = 显示名（宿主会话头部读 label）：名字在前，工牌后缀带 (任务, 工号)
+      // 作用域——副本行 = (工号, 大任务)，同名成员各是各的子会话。
+      label: buildMemberLabel(row.mainTaskId ?? 0, row.employeeId ?? 0, row.name),
+      request: {
+        prompt: [
+          {
+            type: 'text',
+            text: memberWelcome(team, row.name, template, taskBriefing(env, team, task)),
+          },
+        ],
+        parent: captain,
+        persona: personaText,
+        toolFilter: { deny: [...MEMBER_DENIED_TOOLS] },
+        ...(agentOptions !== undefined ? { agentOptions } : {}),
+      },
+      // 0.1.2 的入口对 signal 无保护调用 throwIfAborted()——env 缺 signal
+      // （面板路径）时兜底成永不中止的信号。
+      signal: env.signal ?? new AbortController().signal,
+    });
+  } catch (error) {
+    unregisterMemberSession(childId);
+    throw error;
+  }
+  // 兑现的 id 再登一次（幂等）；运行时若没采纳预留 id，把预留键撤掉别留幽灵条目。
+  if (String(start.childId) !== childId) unregisterMemberSession(childId);
+  registerMemberSession(String(start.childId), identity);
   return String(start.childId);
 }
 

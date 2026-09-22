@@ -438,6 +438,27 @@ export async function deliverToChild(
   });
 }
 
+/**
+ * 装配 scope 是否为一个**子代理会话**（用户 2026-09-22「领队的文本出现在了子
+ * 成员中」）：判据取宿主建会话时写进 `session.header` 的 `origin: 'subagent'`
+ * / `delegationDepth >= 1`（dsh-subagent 的 childSessionMeta）——它在子代理
+ * **首次装配之前**就已存在，故不受注册表/副本行的登记竞态影响。
+ *
+ * 为什么不能用 `parentSession` 单独判：用户 fork 出来的会话也带父会话 id（种子
+ * 血缘），但它仍是用户敲字的主对话窗口；`delegationDepth`（父深度 +1）与
+ * `origin` 只被子代理写。
+ */
+export function isSubagentScope(scope: unknown): boolean {
+  if (typeof scope !== 'object' || scope === null) return false;
+  const header = (scope as { session?: { header?: unknown } }).session?.header as
+    | { origin?: unknown; delegationDepth?: unknown }
+    | undefined;
+  if (header === undefined || header === null) return false;
+  if (header.origin === 'subagent') return true;
+  const depth = header.delegationDepth;
+  return typeof depth === 'number' && Number.isFinite(depth) && depth >= 1;
+}
+
 /** Tool-layer error carrying an actionable Chinese hint. */
 export class ETeamsError extends Error {
   readonly hint?: string;

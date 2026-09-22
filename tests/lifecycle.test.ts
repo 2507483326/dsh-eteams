@@ -34,6 +34,7 @@ import { getDb } from '../src/host/state/db';
 import { readTeamSync } from '../src/host/state/store';
 import { readEventsSync, readMailboxSync } from '../src/host/state/events';
 import { wakeMember } from '../src/host/runtime/notifier';
+import { lookupMemberSession } from '../src/host/runtime/usage';
 import {
   registerCaptainChild,
   unregisterCaptainChild,
@@ -72,6 +73,10 @@ function fakeAgent(id: string, cwd: string, parent?: string): FakeAgent {
 function fakeRuntime(_workspace: string) {
   const children: {
     childId: string;
+    /** 调用方预留的 childId（先登记后 spawn）；缺省 undefined = 运行时自派。 */
+    reservedChildId?: string;
+    /** startContinuable 被调用的那一刻，预留 id 是否已在成员登记册上。 */
+    preRegistered?: boolean;
     label: string;
     request: {
       parent: FakeAgent;
@@ -80,20 +85,43 @@ function fakeRuntime(_workspace: string) {
       agentOptions?: Record<string, unknown>;
     };
   }[] = [];
+  /** 每次 startContinuable 尝试的预留 id（含随后失败的那次）。 */
+  const spawnAttempts: string[] = [];
   const deliveries: { childId: string; text: string }[] = [];
   const interrupts: string[] = [];
   const captains = new Map<string, FakeAgent>();
   let childCounter = 0;
+  /** 注入一次 spawn 失败（下一通 startContinuable 抛，然后自动复位）。 */
+  let failNextSpawn = false;
 
   const ctx = {
     logger: { info: () => undefined, warn: (m: string) => console.warn(`[warn] ${m}`) },
     subagents: {
       async startContinuable(spec: {
+        provider?: string;
         label: string;
+        childId?: string;
         request: { parent: FakeAgent; toolFilter?: { deny: string[] } };
       }) {
+        if (spec.childId !== undefined) spawnAttempts.push(spec.childId);
+        if (failNextSpawn) {
+          failNextSpawn = false;
+          throw new Error('fake 注入的 spawn 失败');
+        }
+        // 运行时自派 id（真宿主采纳 spec.childId，此处刻意不采纳——两种分支
+        // 都要被测到：兑现 id ≠ 预留 id 时预留键必须撤掉）。
         const childId = `sess-child-${++childCounter}`;
-        children.push({ childId, label: spec.label, request: spec.request });
+        children.push({
+          childId,
+          ...(spec.childId !== undefined
+            ? {
+                reservedChildId: spec.childId,
+                preRegistered: lookupMemberSession(spec.childId) !== undefined,
+              }
+            : {}),
+          label: spec.label,
+          request: spec.request,
+        });
         return { childId, messageId: 'm-fake' };
       },
       async followup(_parent: unknown, childId: string, content: { type: string; text: string }[]) {
@@ -125,11 +153,16 @@ function fakeRuntime(_workspace: string) {
   const runtime = {
     ctx,
     children,
+    spawnAttempts,
     deliveries,
     interrupts,
     captains,
     addChild(agent: FakeAgent) {
       captains.set(agent.id, agent);
+    },
+    /** 下一通 startContinuable 抛错（spawn 失败回滚用例）。 */
+    failNextSpawn() {
+      failNextSpawn = true;
     },
   };
   return runtime;
@@ -1479,6 +1512,50 @@ describe('主会话锚定（用户迭代 2026-09-12：子代理不挂在领队�
     }
     // captainFor 按注册表把子会话换回主会话父——成员子代理不挂到领队子代理下。
     expect(childByEmployee(member.employeeId).request.parent.id).toBe('cap-1');
+  });
+});
+
+describe('成员 spawn 身份预登记（用户 2026-09-22「领队的文本出现在了子成员中」）', () => {
+  /** 建队 → 拉一人 → 建 ready 主任务 → 指派（走真派发路径，落成员子会话）。 */
+  async function assignOne(name: string, teamName: string) {
+    const created = await cap<{ teamId: number }>('eteams_create_team', { name: teamName });
+    const teamId = created.teamId;
+    const member = await cap<{ employeeId: number }>('eteams_add_member', { name, role: 'engineer', teamId });
+    const group = await submitReady(`${teamName}主任务`);
+    const sub = await cap<{ taskId: number }>('eteams_create_task', {
+      subject: `${teamName}小任务`,
+      parentTaskId: group.taskId,
+      contractMd: '## 验收标准\n1. 交付',
+    });
+    return { teamId, member, sub };
+  }
+
+  it('先登记后 spawn：spawn 那一刻预留 childId 已在册（首轮装配能认出成员）', async () => {
+    const { member, sub } = await assignOne('预登记员', '预登记团队');
+    await cap('eteams_assign_task', { taskId: sub.taskId, member: String(member.employeeId) });
+    const child = childByEmployee(member.employeeId);
+    // 预留 id 交给了运行时，登记发生在 startContinuable 之前——子代理首次装配
+    // 早于 startContinuable 兑现，登记滞后正是成员首轮拿到领队段的成因。
+    expect(child.reservedChildId).toBeTruthy();
+    expect(child.preRegistered).toBe(true);
+    // 兑现 id 也登记（幂等再登）；fake 不采纳预留 id，故预留键必须被撤掉，
+    // 册子上不留一个不存在的成员会话（否则成员面判定会命中幽灵）。
+    expect(lookupMemberSession(child.childId)?.memberName).toBe('预登记员');
+    expect(lookupMemberSession(child.reservedChildId!)).toBeUndefined();
+  });
+
+  it('spawn 失败：撤掉预登记后原样抛（无幽灵成员会话，调用方状态未改）', async () => {
+    const { teamId, member, sub } = await assignOne('失败员', '失败团队');
+    runtime.failNextSpawn();
+    await expect(
+      cap('eteams_assign_task', { taskId: sub.taskId, member: String(member.employeeId) }),
+    ).rejects.toThrow(/启动失败/);
+    const attempted = runtime.spawnAttempts.at(-1);
+    expect(attempted).toBeTruthy();
+    expect(lookupMemberSession(attempted!)).toBeUndefined();
+    // 没起来的成员：副本行不留会话锚（下次指派照常起新会话）。
+    const row = readTeam(teamId).taskMembers.find((r) => r.employeeId === member.employeeId)!;
+    expect(row.sessionId).toBe('');
   });
 });
 

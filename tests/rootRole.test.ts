@@ -3,7 +3,8 @@
  * /迁移与注入段过滤——播种即空 MD + 提示简介；upsert 默认拒、面板 allowRoot
  * 放行且原文逐字落库（不烘 personaToMd）；拒删；旧库 v12 迁移补列回填；
  * rootPromptSection 只对非 eteams 子代理的会话贡献 band（领队注册表/
- * task_members 副本行/构建器 childId 三路过滤），MD 空贡献 ''（空段语义）。
+ * task_members 副本行/构建器 childId 三路过滤 + 会话头 origin/delegationDepth
+ * 的结构兜底），MD 空贡献 ''（空段语义）。
  *
  * @module dsh-eteams/tests/rootRole
  */
@@ -166,5 +167,28 @@ describe('主对话注入段过滤（rootPromptSection）', () => {
     await reportBuildProgress(sr, { request: '建角色', step: '收到需求' });
     await markBuilderChild(sr, 's-builder');
     expect(rootPromptSection(config, mainScope('s-builder'))).toBe('');
+  });
+
+  it('stays silent for any subagent scope, even with no eteams registration yet', async () => {
+    await ensurePresetMembers(stateRoot());
+    await upsertRosterMember(
+      stateRoot(),
+      { name: ROOT_ROLE_NAME, role: 'system', personaMd: '注入内容' },
+      { allowRoot: true },
+    );
+    // 结构兜底（用户 2026-09-22「领队的文本出现在了子成员中」）：身份登记还没
+    // 跟上的 spawn 窗口里，子代理会话头已带 origin/delegationDepth —— 主对话
+    // 的注入手册不发（含没有任何 eteams 登记的陌生子代理）。
+    const child = (header: Record<string, unknown>): unknown => ({
+      id: 's-unknown-child',
+      session: { header: { cwd: root, ...header } },
+    });
+    expect(rootPromptSection(config, child({ origin: 'subagent' }))).toBe('');
+    expect(rootPromptSection(config, child({ delegationDepth: 1 }))).toBe('');
+    // 用户 fork 的会话仍是主对话面（parentSession 血缘 / depth 0 不算子代理）。
+    expect(
+      rootPromptSection(config, child({ parentSession: 'main-sess', seedLength: 10 })),
+    ).not.toBe('');
+    expect(rootPromptSection(config, child({ delegationDepth: 0 }))).not.toBe('');
   });
 });

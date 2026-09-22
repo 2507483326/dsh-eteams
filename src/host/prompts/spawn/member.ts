@@ -6,6 +6,7 @@
  */
 import type { MemberRecord, TeamState } from '../../model/types.js';
 import { personaDigest, renderPersonaBlock } from '../personas/framework.js';
+import { NOTE_APPEND_DISCIPLINE } from './noteFiles.js';
 import { workDirsBlock } from './workDirs.js';
 
 /** Member-facing standing rules (also rendered into contract handoffs). */
@@ -40,12 +41,13 @@ export const MEMBER_TOOL_SHEET = [
 
 /**
  * 通用成员简报（用户迭代 2026-09-11；2026-09-14 增「队伍留言板」；2026-09-15
- * 扁平化改「工程根 + 任务目录 + 纪要」）：每个任务成员的出生包与每次指派信都
- * 由本模板包住，固定写明五件事——①工程根（代码产出写这里）与任务目录②队伍
- * 留言板（绝对路径 + 读/写纪律）③本任务的纪要（绝对路径 + 写在哪一段）④文档
- * 产出目录⑤领队（无领队=主会话）与三节点实时汇报（开工/遇问题/完成）。抽成
- * 纯文本函数供两路复用，避免字面值双轨（runtime 侧组装好值后传参，本函数不
- * 读盘）。
+ * 扁平化改「工程根 + 任务目录 + 纪要」；2026-09-22 增「追加纪律」）：每个任务
+ * 成员的出生包与每次指派信都由本模板包住，固定写明六件事——①工程根（代码产出
+ * 写这里）与任务目录②队伍留言板（绝对路径 + 读/写纪律）③本任务的纪要（绝对
+ * 路径 + 写在哪一段）④追加纪律（noteFiles 的 NOTE_APPEND_DISCIPLINE：读改相邻 /
+ * 锚点取尾 / 报错重读，2026-09-22 复盘）⑤文档产出目录⑥领队（无领队=主会话）与
+ * 三节点实时汇报（开工/遇问题/完成）。抽成纯文本函数供两路复用，避免字面值双轨
+ * （runtime 侧组装好值后传参，本函数不读盘）。
  */
 export function memberBriefing(opts: {
   teamName: string;
@@ -72,6 +74,10 @@ export function memberBriefing(opts: {
     '## 你这份任务的纪要',
     `- ${opts.minutesFile}`,
     '- 在你这份文件末尾的 `## 纪要正文` 之下写：做了什么 / 改了哪些文件 / 如何验证 / 遗留。上半段是宿主自动渲染的合同视图，**不要手工编辑、也不要另建纪要文件**。',
+    '',
+    '## 追加纪律（留言板与纪要共守）',
+    `- ${NOTE_APPEND_DISCIPLINE}`,
+    '- 完工顺序照这个来：**读纪要 → 写纪要 → 再调 eteams_complete_task**——别把 complete 夹在读和写中间（它会让宿主重写纪要上半段，你的读就过期了）。',
     '',
     '## 文档产出',
     `- 交付说明 / 验收结论 / 调研笔记这类文档写进：${opts.docDir}（文件名自定）。`,

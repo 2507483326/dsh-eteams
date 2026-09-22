@@ -5,7 +5,10 @@
  * registry 丢弃）。判定用排除法：装配 scope 是会话代理（sessionIdOfScope
  * 命中）且不是 eteams 子代理 → 即主对话——领队子代理（captainChildren
  * 注册表）、成员/领队副本行（task_members.session_id，持久）、构建器子
- * 代理（rolebuilder.json builderChildId）一律静默。全程吞错（空串最多让
+ * 代理（rolebuilder.json builderChildId）一律静默，**再加一层结构兜底**（会话
+ * 头 origin/delegationDepth，用户 2026-09-22「领队的文本出现在了子成员中」同
+ * 源竞态）——登记还没跟上的 spawn 窗口里，任何子代理都不拿主对话的注入段。
+ * 全程吞错（空串最多让
  * 注入段为空，绝不让装配失败——leaderHandbookForChild 同纪律）。
  *
  * @module dsh-eteams/host/runtime/rootPrompt
@@ -14,7 +17,7 @@ import type { ETeamsResolvedConfig } from '../config.js';
 import { rootPromptBand } from '../prompts/system/rootPrompt.js';
 import { getDb } from '../state/db.js';
 import { hasTaskMemberSession, rootRoleRow } from '../state/store.js';
-import { stateRootFor } from './base.js';
+import { isSubagentScope, stateRootFor } from './base.js';
 import { captainChildTeamOf } from './captainChildRegistry.js';
 import { readBuildSession } from './roleBuilder.js';
 import { sessionIdOfScope } from './sessionPersona.js';
@@ -43,6 +46,10 @@ export function rootPromptSection(config: ETeamsResolvedConfig, scope: unknown):
     if (hasTaskMemberSession(db, sessionId)) return '';
     // 构建器子代理（rolebuilder.json 的 builderChildId）静默。
     if (readBuildSession(stateRoot)?.builderChildId === sessionId) return '';
+    // 结构兜底（用户 2026-09-22「领队的文本出现在了子成员中」同源竞态）：子
+    // 代理会话头自带 origin/delegationDepth，早于首次装配——登记还没跟上的
+    // 窗口里，子代理不该拿主对话的注入手册。
+    if (isSubagentScope(scope)) return '';
     const md = rootRoleRow(db)?.persona_md ?? '';
     if (md.trim() === '') return '';
     return rootPromptBand(md);

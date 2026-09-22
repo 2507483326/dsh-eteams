@@ -17,6 +17,10 @@ export const ACTIVATION_PREFIX = 'eTeam --add-people';
  * Compact standing section (order 106, next to the captain band) — the
  * direct-call contract (docs/19.8.1): the `eTeam --add-people` prefix makes
  * the session agent BE the Role Builder for that turn.
+ *
+ * 发给谁由 runtime/standingSection.ts 的 roleBuilderSection 分流（用户
+ * 2026-09-22「为什么角色构建的文本会出现在领队中？」）：**只有主对话面**
+ * 拿本段，领队/构建师子代理与成员面给 `''`——本段文本本身不带作用域判断。
  */
 export const ROLE_BUILDER_SECTION = [
   '## 角色构建师（eteams，D18）',

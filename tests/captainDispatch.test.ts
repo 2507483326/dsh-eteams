@@ -726,6 +726,27 @@ describe('eteams_captain_guide (用户迭代 2026-09-10 领取完成流程)', ()
     expect(start).toContain('追加一行');
   });
 
+  it('领队按文件追加纪律：读改相邻 / 锚点取尾 / 报错重读（复盘 2026-09-22）', () => {
+    // 实况：#18 收口后追留言板，先报 file changed since it was read、凭记忆重试又
+    // 报 old_string was not found。留言板由全员并发追加、纪要上半段随状态被宿主
+    // 重写（renderTeamDocs），所以「怎么改才不撞闸」必须写进规程，不能只写「追加一行」。
+    expect(CAPTAIN_CHILD_PERSONA).toContain('按文件追加纪律');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('读和改挨着做');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('刚读到的最后一行');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('file changed since it was read');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('old_string was not found');
+    // 收口/改主题会重排任务目录名（renameTaskFolder）→ 旧快照路径失效，写文件前重取。
+    expect(CAPTAIN_CHILD_PERSONA).toContain('收口前拿到的路径随之失效');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('eteams_captain_guide 取最新快照路径');
+  });
+
+  it('拆解必带 parentTaskId 写在最前（#43–#45 与本回双次事故）', () => {
+    // 实况反复：漏传 parentTaskId 被宿主拒（runtime/assignment.ts createTask 守卫），
+    // 白跑一轮重发。故决策表（dispatch/commission 两条拆解路径）与拆解条都点名参数。
+    expect(CAPTAIN_CHILD_PERSONA).toContain('必带 parentTaskId=主任务 id');
+    expect(CAPTAIN_CHILD_PERSONA).toContain('必带 parentTaskId=snapshot.taskId');
+  });
+
   it('领队能力缺口处置纪律（v16）：收到缺口 → 定路线，不自己去跑', () => {
     // 成员被工具拦住换法子也过不去 → eteams_report_gap；处置权在领队（成员被
     // MEMBER_DENIED_TOOLS 拒见 route_gap），路线三选一，且不许自己代跑。

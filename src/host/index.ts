@@ -39,10 +39,9 @@ import { leaderHandbookForChild } from './runtime/captainAgent.js';
 import { sessionPersonaSection, sessionIdOfScope } from './runtime/sessionPersona.js';
 import { rootPromptSection } from './runtime/rootPrompt.js';
 import { sessionTeamSection } from './runtime/sessionTeam.js';
-import { standingSection } from './runtime/standingSection.js';
+import { roleBuilderSection, standingSection } from './runtime/standingSection.js';
 import { composeCaptainPersona } from './prompts/personas/captain.js';
 import { personaDigest } from './prompts/personas/framework.js';
-import { ROLE_BUILDER_SECTION } from './prompts/system/roleBuilder.js';
 import { registerCommands } from './commands/index.js';
 
 /**
@@ -198,11 +197,14 @@ export function apply(ctx: Context, config: ETeamsResolvedConfig): void {
   // 3b) Role Builder standing section (docs/19.8.1, D18): conversational
   // member building — the `eTeam --add-people` prefix makes the session
   // agent BE the 角色构建师 for that turn (no captain relay, no subagent).
+  // 与 105 同一条分流（用户 2026-09-22「为什么角色构建的文本会出现在领队
+  // 中？」）：本段此前是静态字符串，领队子代理/成员面也被注入；只有主对话面
+  // 才拿——前缀路由留在模型侧（装配上下文读不到本轮消息）。
   try {
     ctx.systemPrompt.section({
       name: 'eteams-role-builder',
       order: 106,
-      text: ROLE_BUILDER_SECTION,
+      text: (context) => roleBuilderSection(config, context.scope),
     });
     log.info('eteams: role builder section registered');
   } catch (error) {
